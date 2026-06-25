@@ -41,6 +41,21 @@ Near-term work:
 - define permissions and execution boundaries
 - document production deployment
 
+## Public Repository Safety
+
+This repository is being extracted from a working private prototype in small, reviewed commits.
+
+Before code or docs are copied here, they should be checked for private deployment details, secrets, credentials, local paths, real hostnames, and real IP addresses.
+
+Public examples should use only safe placeholder values:
+
+- `127.0.0.1` for localhost examples
+- `192.0.2.0/24`, `198.51.100.0/24`, or `203.0.113.0/24` for documentation IPs
+- `example.com`, `example.net`, or `example.org` for documentation domains
+- `.env.example` for configuration shape, never real `.env` values
+
+Do not commit real LAN IPs, cloud IPs, customer hostnames, API tokens, private URLs, personal filesystem paths, or deployment-specific station names.
+
 ## DBBASIC Scroll
 
 DBBASIC Scroll is the companion app for connecting to an object server, browsing objects, executing them, inspecting source/state/logs/versions/files, and managing the system.
@@ -49,4 +64,4 @@ Scroll will remain optional: the object server should be usable through HTTP and
 
 ## License
 
-License details will be added before the first packaged release.
+MIT License. See `LICENSE`.
