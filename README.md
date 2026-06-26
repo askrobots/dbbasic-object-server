@@ -34,6 +34,8 @@ Set `DBBASIC_OBJECTS_DIR` to point at a custom object source directory during mi
 
 See `docs/runtime-contract.md` for the daemon-facing runtime contract that future implementation commits should preserve.
 
+Read `SECURITY.md` and `CONTRIBUTING.md` before copying code or documentation from private prototypes into this repository.
+
 ## Status
 
 Early public assembly.
