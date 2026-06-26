@@ -32,6 +32,8 @@ New DBBASIC object source should live under `objects/`.
 
 Set `DBBASIC_OBJECTS_DIR` to point at a custom object source directory during migration or deployment.
 
+See `docs/runtime-contract.md` for the daemon-facing runtime contract that future implementation commits should preserve.
+
 ## Status
 
 Early public assembly.
