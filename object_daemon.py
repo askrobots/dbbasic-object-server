@@ -11,17 +11,19 @@ Usage:
     python object_daemon.py
     python object_daemon.py --interval 5   # poll every 5 seconds
 """
+from __future__ import annotations
+
 import json
-import os
 import signal
-import sys
 import time
-import urllib.request
 import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from dbbasic_object_core.runtime.object_runtime import ObjectRuntime
+if TYPE_CHECKING:
+    from dbbasic_object_core.runtime.object_runtime import ObjectRuntime
 
 try:
     from croniter import croniter
@@ -380,6 +382,7 @@ def shutdown(signum, frame):
 
 def main():
     import argparse
+    from dbbasic_object_core.runtime.object_runtime import ObjectRuntime
 
     parser = argparse.ArgumentParser(description="Object Primitive Daemon")
     parser.add_argument("--interval", type=float, default=1.0,
