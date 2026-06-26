@@ -24,7 +24,13 @@ This repository currently contains:
 
 - `object_daemon.py` - background worker for scheduler, queue, events, and cleanup
 
-It does not yet contain the full object server, API handlers, object runtime, examples, package system, or production deployment files.
+It does not yet contain the full object server, API handlers, object runtime, sample applications, package system, or production deployment files.
+
+## Object Source Directories
+
+New DBBASIC object source should live under `objects/`.
+
+Set `DBBASIC_OBJECTS_DIR` to point at a custom object source directory during migration or deployment.
 
 ## Status
 
@@ -47,9 +53,9 @@ This repository is being extracted from a working private prototype in small, re
 
 Before code or docs are copied here, they should be checked for private deployment details, secrets, credentials, local paths, real hostnames, and real IP addresses.
 
-Public examples should use only safe placeholder values:
+Public sample configuration should use only safe placeholder values:
 
-- `127.0.0.1` for localhost examples
+- `127.0.0.1` for localhost samples
 - `192.0.2.0/24`, `198.51.100.0/24`, or `203.0.113.0/24` for documentation IPs
 - `example.com`, `example.net`, or `example.org` for documentation domains
 - `.env.example` for configuration shape, never real `.env` values

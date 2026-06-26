@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import signal
 import time
 import urllib.error
@@ -33,6 +34,7 @@ except ImportError:
 
 # Daemon state
 _running = True
+DEFAULT_OBJECTS_DIR = "objects"
 
 
 def log(msg, level='INFO'):
@@ -40,12 +42,29 @@ def log(msg, level='INFO'):
     print(f"[{ts}] [{level}] {msg}")
 
 
+def _object_roots() -> list[Path]:
+    """Return object source roots in lookup order."""
+    configured = os.environ.get("DBBASIC_OBJECTS_DIR")
+    if configured:
+        return [Path(configured)]
+    return [Path(DEFAULT_OBJECTS_DIR)]
+
+
+def _find_trigger_file(trigger_name: str) -> Path | None:
+    """Find a trigger object in the configured object roots."""
+    for root in _object_roots():
+        path = root / 'triggers' / f'{trigger_name}.py'
+        if path.exists():
+            return path
+    return None
+
+
 # --- Scheduler ---
 
 def process_scheduler(runtime: ObjectRuntime):
     """Check scheduler for due tasks and execute them."""
-    scheduler_file = Path('examples/triggers/scheduler.py')
-    if not scheduler_file.exists():
+    scheduler_file = _find_trigger_file('scheduler')
+    if scheduler_file is None:
         return
 
     obj = runtime.load_object(scheduler_file)  # ID = 'scheduler' (filename stem)
@@ -135,8 +154,8 @@ def _calculate_next_run(task, after=None):
 
 def process_queue(runtime: ObjectRuntime, max_messages=10):
     """Dequeue messages and execute target objects."""
-    queue_file = Path('examples/triggers/queue.py')
-    if not queue_file.exists():
+    queue_file = _find_trigger_file('queue')
+    if queue_file is None:
         return
 
     obj = runtime.load_object(queue_file)  # ID = 'queue' (filename stem)
@@ -215,8 +234,8 @@ def process_queue(runtime: ObjectRuntime, max_messages=10):
 
 def process_events(runtime: ObjectRuntime):
     """Deliver events to subscribers via callback URLs."""
-    events_file = Path('examples/triggers/events.py')
-    if not events_file.exists():
+    events_file = _find_trigger_file('events')
+    if events_file is None:
         return
 
     obj = runtime.load_object(events_file)  # ID = 'events' (filename stem)
@@ -345,29 +364,31 @@ def _execute_target(runtime: ObjectRuntime, object_id: str, method: str, payload
 
 def _find_object_file(object_id: str) -> Path | None:
     """Find the .py file for an object ID."""
-    examples_dir = Path('examples')
-
     # User objects: u_{user_id}_{name}
     if object_id.startswith('u_'):
         import re
         match = re.match(r'^u_(\d+)_(.+)$', object_id)
         if match:
             user_id, name = match.group(1), match.group(2)
-            path = examples_dir / 'users' / user_id / f'{name}.py'
-            if path.exists():
-                return path
+            for root in _object_roots():
+                path = root / 'users' / user_id / f'{name}.py'
+                if path.exists():
+                    return path
         return None
 
-    # System objects: category_name -> examples/category/name.py
-    for py_file in examples_dir.rglob('*.py'):
-        if py_file.name == '__init__.py' or '__pycache__' in str(py_file):
+    # System objects: category_name -> objects/category/name.py
+    for root in _object_roots():
+        if not root.exists():
             continue
-        rel = py_file.relative_to(examples_dir)
-        if str(rel).startswith('users/'):
-            continue
-        derived_id = str(rel).replace('.py', '').replace('/', '_')
-        if derived_id == object_id:
-            return py_file
+        for py_file in root.rglob('*.py'):
+            if py_file.name == '__init__.py' or '__pycache__' in str(py_file):
+                continue
+            rel = py_file.relative_to(root)
+            if str(rel).startswith('users/'):
+                continue
+            derived_id = str(rel).replace('.py', '').replace('/', '_')
+            if derived_id == object_id:
+                return py_file
 
     return None
 
@@ -396,9 +417,10 @@ def main():
     print("Object Primitive Daemon")
     print("=" * 60)
     print(f"Poll interval: {args.interval}s")
-    print(f"Scheduler: {'enabled' if Path('examples/triggers/scheduler.py').exists() else 'no scheduler object'}")
-    print(f"Queue: {'enabled' if Path('examples/triggers/queue.py').exists() else 'no queue object'}")
-    print(f"Events: {'enabled' if Path('examples/triggers/events.py').exists() else 'no events object'}")
+    print(f"Object roots: {', '.join(str(root) for root in _object_roots())}")
+    print(f"Scheduler: {'enabled' if _find_trigger_file('scheduler') else 'no scheduler object'}")
+    print(f"Queue: {'enabled' if _find_trigger_file('queue') else 'no queue object'}")
+    print(f"Events: {'enabled' if _find_trigger_file('events') else 'no events object'}")
     print(f"Croniter: {'available' if croniter else 'NOT installed (cron tasks disabled)'}")
     print(f"Rate limit cleanup: {'enabled' if Path('data/ratelimit').exists() else 'no ratelimit dir yet'}")
     print()

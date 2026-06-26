@@ -108,8 +108,8 @@ def test_cleanup_ratelimit_removes_expired_and_corrupt_files(tmp_path, monkeypat
 
 def test_process_queue_completes_pending_message(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    write_object(tmp_path / "examples" / "triggers" / "queue.py")
-    write_object(tmp_path / "examples" / "basics" / "target.py")
+    write_object(tmp_path / "objects" / "triggers" / "queue.py")
+    write_object(tmp_path / "objects" / "basics" / "target.py")
 
     runtime = FakeRuntime()
     queue = runtime.add("queue", FakeObject())
@@ -148,7 +148,7 @@ def test_process_queue_completes_pending_message(tmp_path, monkeypatch):
 
 def test_process_queue_marks_expired_message(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    write_object(tmp_path / "examples" / "triggers" / "queue.py")
+    write_object(tmp_path / "objects" / "triggers" / "queue.py")
 
     runtime = FakeRuntime()
     queue = runtime.add("queue", FakeObject())
@@ -179,10 +179,32 @@ def test_process_queue_marks_expired_message(tmp_path, monkeypatch):
     assert updated["status"] == "expired"
 
 
+def test_find_object_file_honors_configured_objects_dir(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    custom_root = tmp_path / "custom_objects"
+    custom_path = write_object(custom_root / "basics" / "counter.py")
+    write_object(tmp_path / "objects" / "basics" / "counter.py")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(custom_root))
+
+    found = object_daemon._find_object_file("basics_counter")
+
+    assert found == custom_path
+
+
+def test_find_object_file_resolves_user_object_from_objects_dir(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    user_path = write_object(tmp_path / "objects" / "users" / "42" / "deals.py")
+
+    found = object_daemon._find_object_file("u_42_deals")
+
+    assert found is not None
+    assert found.resolve() == user_path.resolve()
+
+
 def test_process_queue_requeues_failed_message(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    write_object(tmp_path / "examples" / "triggers" / "queue.py")
-    write_object(tmp_path / "examples" / "basics" / "target.py")
+    write_object(tmp_path / "objects" / "triggers" / "queue.py")
+    write_object(tmp_path / "objects" / "basics" / "target.py")
 
     runtime = FakeRuntime()
     queue = runtime.add("queue", FakeObject())
@@ -218,7 +240,7 @@ def test_process_queue_requeues_failed_message(tmp_path, monkeypatch):
 
 def test_process_events_delivers_matching_event(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    write_object(tmp_path / "examples" / "triggers" / "events.py")
+    write_object(tmp_path / "objects" / "triggers" / "events.py")
 
     runtime = FakeRuntime()
     events = runtime.add("events", FakeObject())
