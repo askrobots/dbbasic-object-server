@@ -90,6 +90,39 @@ This is part of the `100x dev loop`: execute an object, inspect the structured
 error and traceback, patch the source, and keep the version trail close to the
 runtime feedback.
 
+## Object Versions
+
+Public code should use `object_versions.py` for source version storage. The
+storage format intentionally matches the working prototype:
+
+```text
+data/versions/{object_id}/metadata.tsv
+data/versions/{object_id}/v1.txt
+data/versions/{object_id}/v2.txt
+```
+
+`metadata.tsv` fields are:
+
+- `version_id`
+- `timestamp`
+- `author`
+- `message`
+- `hash`
+
+History is returned newest first and does not include source content. Fetching a
+specific version returns metadata plus `content`.
+
+Rollback is non-destructive. Rolling back to version `N` creates a new latest
+version containing the old content, preserving the full history.
+
+The future runtime should keep the prototype behavior:
+
+- save an initial version when an object is first loaded and no history exists
+- on source update, save the new code as a version, write it to the source file,
+  reload the object, and log the update
+- on rollback, create the rollback version, write it to the source file, reload
+  the object, and log the rollback
+
 ## State Manager Interface
 
 The daemon expects trigger objects to expose a state manager with:

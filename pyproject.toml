@@ -64,6 +64,7 @@ py-modules = [
     "object_daemon",
     "object_execution",
     "object_namespace",
+    "object_versions",
 ]
 
 [tool.ruff]

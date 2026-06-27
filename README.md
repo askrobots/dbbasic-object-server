@@ -24,6 +24,7 @@ This repository currently contains:
 
 - `object_namespace.py` - object source discovery and object ID resolution
 - `object_execution.py` - structured object execution results and error capture
+- `object_versions.py` - source version metadata, content snapshots, and rollback
 - `object_daemon.py` - background worker for scheduler, queue, events, and cleanup
 
 It does not yet contain the full object server, API handlers, object runtime, sample applications, package system, or production deployment files.
@@ -40,11 +41,13 @@ The current public slice defines the object namespace and execution contracts be
 
 - `object_namespace.py` is the shared source of truth for object source lookup
 - `object_execution.py` is the shared result shape for object execution success and failure
+- `object_versions.py` preserves the prototype version format: `metadata.tsv` plus `vN.txt` files
 - `object_daemon.py` uses that resolver instead of keeping separate path rules
 - system object IDs such as `basics_counter` resolve under `objects/basics/counter.py`
 - user object IDs such as `u_42_deals` resolve under `objects/users/42/deals.py`
 - trigger objects resolve under `objects/triggers/`
 - execution failures are captured as structured error data with traceback text
+- rollbacks are non-destructive and create a new version containing old content
 - the old prototype source directory name is intentionally not a public default
 
 This matters because the future ASGI server, daemon, Scroll integration, tests, and migration tools should all use the same object ID rules instead of drifting into separate routing systems.
