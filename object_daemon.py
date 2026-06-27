@@ -14,7 +14,6 @@ Usage:
 from __future__ import annotations
 
 import json
-import os
 import signal
 import time
 import urllib.error
@@ -31,10 +30,11 @@ try:
 except ImportError:
     croniter = None
 
+from object_namespace import find_trigger_file, get_object_roots, resolve_object_id
+
 
 # Daemon state
 _running = True
-DEFAULT_OBJECTS_DIR = "objects"
 
 
 def log(msg, level='INFO'):
@@ -44,19 +44,12 @@ def log(msg, level='INFO'):
 
 def _object_roots() -> list[Path]:
     """Return object source roots in lookup order."""
-    configured = os.environ.get("DBBASIC_OBJECTS_DIR")
-    if configured:
-        return [Path(configured)]
-    return [Path(DEFAULT_OBJECTS_DIR)]
+    return get_object_roots()
 
 
 def _find_trigger_file(trigger_name: str) -> Path | None:
     """Find a trigger object in the configured object roots."""
-    for root in _object_roots():
-        path = root / 'triggers' / f'{trigger_name}.py'
-        if path.exists():
-            return path
-    return None
+    return find_trigger_file(trigger_name)
 
 
 # --- Scheduler ---
@@ -364,33 +357,7 @@ def _execute_target(runtime: ObjectRuntime, object_id: str, method: str, payload
 
 def _find_object_file(object_id: str) -> Path | None:
     """Find the .py file for an object ID."""
-    # User objects: u_{user_id}_{name}
-    if object_id.startswith('u_'):
-        import re
-        match = re.match(r'^u_(\d+)_(.+)$', object_id)
-        if match:
-            user_id, name = match.group(1), match.group(2)
-            for root in _object_roots():
-                path = root / 'users' / user_id / f'{name}.py'
-                if path.exists():
-                    return path
-        return None
-
-    # System objects: category_name -> objects/category/name.py
-    for root in _object_roots():
-        if not root.exists():
-            continue
-        for py_file in root.rglob('*.py'):
-            if py_file.name == '__init__.py' or '__pycache__' in str(py_file):
-                continue
-            rel = py_file.relative_to(root)
-            if str(rel).startswith('users/'):
-                continue
-            derived_id = str(rel).replace('.py', '').replace('/', '_')
-            if derived_id == object_id:
-                return py_file
-
-    return None
+    return resolve_object_id(object_id)
 
 
 # --- Main ---

@@ -2,7 +2,7 @@
 
 DBBASIC Object Server is a Python runtime for live, versioned application objects.
 
-This repository is being assembled from an existing working prototype. The first public commit contains the object daemon: a background worker for scheduled tasks, queue processing, event delivery, and runtime cleanup.
+This repository is being assembled from an existing working prototype. The public codebase is intentionally moving in small reviewed slices so each piece can be tested, documented, and checked for private deployment details before release.
 
 The rest of the server will move here as it is cleaned up for release.
 
@@ -22,6 +22,7 @@ The goal is to make small web and business applications easier to build, inspect
 
 This repository currently contains:
 
+- `object_namespace.py` - object source discovery and object ID resolution
 - `object_daemon.py` - background worker for scheduler, queue, events, and cleanup
 
 It does not yet contain the full object server, API handlers, object runtime, sample applications, package system, or production deployment files.
@@ -31,6 +32,23 @@ It does not yet contain the full object server, API handlers, object runtime, sa
 New DBBASIC object source should live under `objects/`.
 
 Set `DBBASIC_OBJECTS_DIR` to point at a custom object source directory during migration or deployment.
+
+## Current Extraction Slice
+
+The current public slice defines the object namespace contract before the full server is copied over:
+
+- `object_namespace.py` is the shared source of truth for object source lookup
+- `object_daemon.py` uses that resolver instead of keeping separate path rules
+- system object IDs such as `basics_counter` resolve under `objects/basics/counter.py`
+- user object IDs such as `u_42_deals` resolve under `objects/users/42/deals.py`
+- trigger objects resolve under `objects/triggers/`
+- the old prototype source directory name is intentionally not a public default
+
+This matters because the future ASGI server, daemon, Scroll integration, tests, and migration tools should all use the same object ID rules instead of drifting into separate routing systems.
+
+The larger design target is to keep the direct CGI-style mental model while using ASGI to avoid classic CGI's fork-per-request cost. The object loop then adds the part normal frameworks usually do not keep together: source, state, logs, versions, runtime errors, and execution feedback. That combination should make it practical for humans and AI tools to run an object, inspect the failure, patch the source, and keep a version trail without making Git the inner development loop.
+
+This namespace slice comes first so the later ASGI server can sit on top of a clean object model instead of re-growing framework routing complexity.
 
 See `docs/runtime-contract.md` for the daemon-facing runtime contract that future implementation commits should preserve.
 

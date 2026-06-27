@@ -38,6 +38,8 @@ The daemon-facing object ID rules are:
 - `u_{user_id}_{name}` resolves to `objects/users/{user_id}/{name}.py`
 - trigger objects live under `objects/triggers/`
 
+Public code should use `object_namespace.py` for object source lookup rather than reimplementing these rules in each server, daemon, or tool surface.
+
 Current trigger object names:
 
 - `scheduler`
