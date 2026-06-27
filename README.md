@@ -1,42 +1,65 @@
 # DBBASIC Object Server
 
-DBBASIC Object Server is a Python runtime for live, versioned application objects.
+DBBASIC Object Server runs live, versioned Python application objects.
 
 This repository is being assembled from an existing working prototype. The public codebase is intentionally moving in small reviewed slices so each piece can be tested, documented, and checked for private deployment details before release.
 
 The rest of the server will move here as it is cleaned up for release.
 
-## What DBBASIC Objects Are
+## The Core Idea
 
-A DBBASIC object is a small unit of application behavior. In the current prototype, objects are Python files that can expose HTTP behavior, keep local state, write logs, attach files, and retain versions.
+A DBBASIC object is one small Python file that can do useful application work.
 
-The goal is to make small web and business applications easier to build, inspect, operate, and evolve:
+An object can be an API endpoint, page, report, worker, webhook, admin action,
+scheduled job, or business record handler. It can also keep state, write logs,
+store files, and keep old source versions.
 
-- code, data, state, logs, files, and versions live close together
-- objects can be executed through HTTP endpoints
-- state and logs are stored in simple file-backed formats
-- background work runs through daemon-managed scheduler, queue, and event loops
-- companion tools such as DBBASIC Scroll can inspect and operate the runtime
+The point is to keep the things needed for development close together:
 
-## Object-Centered, Not MVC-Centered
+- source
+- state
+- logs
+- files
+- versions
+- runtime errors
+- execution output
 
-DBBASIC does not require applications to fit one framework shape. MVC-style
-objects can be built when that pattern is useful, but MVC is not the primitive.
-
-The primitive is:
+That gives DBBASIC a short loop:
 
 ```text
-object + method + payload + state + logs + files + versions + permissions
+edit one object -> run it -> see output/logs/state/errors -> fix it -> keep the version trail
 ```
 
-HTTP routes, admin screens, scheduled jobs, queue messages, webhooks, object-to-
-object calls, and future WebSocket/session surfaces can all be invocation paths
-over the same object model.
+This is the `100x dev loop` this project is trying to protect.
 
-This is different from conventional web frameworks where a small behavior change
-often moves through the whole app deployment path. DBBASIC is designed around a
-tighter loop: update one object, keep its version trail, execute it, inspect its
-state/logs/errors, and roll back when needed.
+## Why It Is Different
+
+DBBASIC is not trying to copy Rails, Django, or a normal MVC framework.
+
+Those patterns can still be built with objects when they are useful, but they
+are not required. The server starts with the object itself.
+
+The old CGI model had a simple idea: a request could map directly to code. The
+problem was speed, because classic CGI started a new process for every request.
+
+DBBASIC keeps the direct mental model but uses ASGI so the server stays running.
+Then it adds the missing parts: source, state, logs, files, versions, runtime
+errors, and rollback all belong near the object.
+
+That makes the system useful for humans and AI tools:
+
+- change one object without redeploying the whole app
+- execute it immediately
+- inspect what happened
+- patch the source
+- keep or roll back the version
+
+## What Objects Can Do
+
+- handle HTTP requests
+- run from queues, schedules, events, or tools
+- state and logs are stored in simple file-backed formats
+- companion tools such as DBBASIC Scroll can inspect and operate the runtime
 
 ## Current Public Contents
 
@@ -57,24 +80,20 @@ Set `DBBASIC_OBJECTS_DIR` to point at a custom object source directory during mi
 
 ## Current Extraction Slice
 
-The current public slice defines the object namespace and execution contracts before the full server is copied over:
+The current public slice is not the whole server yet. It defines the first shared
+rules the rest of the server will use:
 
-- `object_namespace.py` is the shared source of truth for object source lookup
-- `object_execution.py` is the shared result shape for object execution success and failure
-- `object_versions.py` preserves the prototype version format: `metadata.tsv` plus `vN.txt` files
-- `object_daemon.py` uses that resolver instead of keeping separate path rules
-- system object IDs such as `basics_counter` resolve under `objects/basics/counter.py`
-- user object IDs such as `u_42_deals` resolve under `objects/users/42/deals.py`
-- trigger objects resolve under `objects/triggers/`
-- execution failures are captured as structured error data with traceback text
-- rollbacks are non-destructive and create a new version containing old content
+- `object_namespace.py` maps object IDs to files under `objects/`
+- `object_execution.py` returns success or error results from object runs
+- `object_versions.py` keeps source history as `metadata.tsv` plus `vN.txt` files
+- `object_daemon.py` runs scheduled, queued, and event work
+- `basics_counter` maps to `objects/basics/counter.py`
+- `u_42_deals` maps to `objects/users/42/deals.py`
+- rollbacks create a new version instead of deleting history
 - the old prototype source directory name is intentionally not a public default
 
-This matters because the future ASGI server, daemon, Scroll integration, tests, and migration tools should all use the same object ID rules instead of drifting into separate routing systems.
-
-This is the first public piece of the `100x dev loop`: keep the direct CGI-style mental model while using ASGI to avoid classic CGI's fork-per-request cost. The object loop then adds the part normal frameworks usually do not keep together: source, state, logs, versions, runtime errors, and execution feedback. That combination should make it practical for humans and AI tools to run an object, inspect the failure, patch the source, and keep a version trail without making Git the inner development loop.
-
-This namespace slice comes first so the later ASGI server can sit on top of a clean object model instead of re-growing framework routing complexity.
+These pieces come first so the ASGI server, daemon, Scroll, tests, and migration
+tools all agree on the same object rules.
 
 See `docs/runtime-contract.md` for the daemon-facing runtime contract that future implementation commits should preserve.
 
