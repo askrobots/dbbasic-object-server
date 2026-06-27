@@ -18,6 +18,26 @@ The goal is to make small web and business applications easier to build, inspect
 - background work runs through daemon-managed scheduler, queue, and event loops
 - companion tools such as DBBASIC Scroll can inspect and operate the runtime
 
+## Object-Centered, Not MVC-Centered
+
+DBBASIC does not require applications to fit one framework shape. MVC-style
+objects can be built when that pattern is useful, but MVC is not the primitive.
+
+The primitive is:
+
+```text
+object + method + payload + state + logs + files + versions + permissions
+```
+
+HTTP routes, admin screens, scheduled jobs, queue messages, webhooks, object-to-
+object calls, and future WebSocket/session surfaces can all be invocation paths
+over the same object model.
+
+This is different from conventional web frameworks where a small behavior change
+often moves through the whole app deployment path. DBBASIC is designed around a
+tighter loop: update one object, keep its version trail, execute it, inspect its
+state/logs/errors, and roll back when needed.
+
 ## Current Public Contents
 
 This repository currently contains:
