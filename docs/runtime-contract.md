@@ -63,6 +63,33 @@ obj.state_manager
 obj.execute(method, payload)
 ```
 
+## Object Execution Result
+
+Public code should use `object_execution.py` for the shared execution result shape.
+The future ASGI server, daemon, Scroll execute button, and AI repair loop should
+all be able to depend on the same fields:
+
+- `object_id`
+- `method`
+- `path`
+- `ok`
+- `result`
+- `error`
+- `started_at`
+- `finished_at`
+- `duration_ms`
+
+Execution failures should be captured as data instead of being flattened into
+plain strings. Error data includes:
+
+- `type`
+- `message`
+- `traceback`
+
+This is part of the `100x dev loop`: execute an object, inspect the structured
+error and traceback, patch the source, and keep the version trail close to the
+runtime feedback.
+
 ## State Manager Interface
 
 The daemon expects trigger objects to expose a state manager with:

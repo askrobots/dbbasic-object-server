@@ -30,6 +30,7 @@ try:
 except ImportError:
     croniter = None
 
+from object_execution import ObjectExecutionFailure, ObjectExecutionRequest, execute_object
 from object_namespace import find_trigger_file, get_object_roots, resolve_object_id
 
 
@@ -347,12 +348,13 @@ def cleanup_ratelimit(max_age=120):
 
 def _execute_target(runtime: ObjectRuntime, object_id: str, method: str, payload: dict):
     """Load and execute a target object."""
-    object_file = _find_object_file(object_id)
-    if not object_file:
-        raise FileNotFoundError(f"Object not found: {object_id}")
-
-    obj = runtime.load_object(object_file, object_id)
-    obj.execute(method, payload)
+    request = ObjectExecutionRequest(object_id=object_id, method=method, payload=payload)
+    result = execute_object(runtime, request)
+    if not result.ok:
+        if result.error and result.error.type == "ObjectNotFoundError":
+            raise FileNotFoundError(result.error.message)
+        raise ObjectExecutionFailure(result)
+    return result.result
 
 
 def _find_object_file(object_id: str) -> Path | None:

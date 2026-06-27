@@ -62,6 +62,7 @@ addopts = [
 [tool.setuptools]
 py-modules = [
     "object_daemon",
+    "object_execution",
     "object_namespace",
 ]
 
