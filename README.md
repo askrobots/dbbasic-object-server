@@ -46,7 +46,7 @@ The current public slice defines the object namespace contract before the full s
 
 This matters because the future ASGI server, daemon, Scroll integration, tests, and migration tools should all use the same object ID rules instead of drifting into separate routing systems.
 
-The larger design target is to keep the direct CGI-style mental model while using ASGI to avoid classic CGI's fork-per-request cost. The object loop then adds the part normal frameworks usually do not keep together: source, state, logs, versions, runtime errors, and execution feedback. That combination should make it practical for humans and AI tools to run an object, inspect the failure, patch the source, and keep a version trail without making Git the inner development loop.
+This is the first public piece of the `100x dev loop`: keep the direct CGI-style mental model while using ASGI to avoid classic CGI's fork-per-request cost. The object loop then adds the part normal frameworks usually do not keep together: source, state, logs, versions, runtime errors, and execution feedback. That combination should make it practical for humans and AI tools to run an object, inspect the failure, patch the source, and keep a version trail without making Git the inner development loop.
 
 This namespace slice comes first so the later ASGI server can sit on top of a clean object model instead of re-growing framework routing complexity.
 

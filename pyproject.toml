@@ -59,6 +59,12 @@ addopts = [
     "-v",
 ]
 
+[tool.setuptools]
+py-modules = [
+    "object_daemon",
+    "object_namespace",
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"
