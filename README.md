@@ -67,6 +67,7 @@ This repository currently contains:
 
 - `object_namespace.py` - object source discovery and object ID resolution
 - `object_execution.py` - structured object execution results and error capture
+- `object_source.py` - source read, update, version, and rollback operations
 - `object_versions.py` - source version metadata, content snapshots, and rollback
 - `object_daemon.py` - background worker for scheduler, queue, events, and cleanup
 
@@ -85,6 +86,7 @@ rules the rest of the server will use:
 
 - `object_namespace.py` maps object IDs to files under `objects/`
 - `object_execution.py` returns success or error results from object runs
+- `object_source.py` reads, updates, versions, and rolls back source files
 - `object_versions.py` keeps source history as `metadata.tsv` plus `vN.txt` files
 - `object_daemon.py` runs scheduled, queued, and event work
 - `basics_counter` maps to `objects/basics/counter.py`

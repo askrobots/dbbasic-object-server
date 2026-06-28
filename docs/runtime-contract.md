@@ -123,6 +123,10 @@ The future runtime should keep the prototype behavior:
 - on rollback, create the rollback version, write it to the source file, reload
   the object, and log the rollback
 
+Public server/runtime code should use `object_source.py` for the source file
+read, update, and rollback steps so source writes and version storage do not
+drift into separate implementations.
+
 ## State Manager Interface
 
 The daemon expects trigger objects to expose a state manager with:
