@@ -93,9 +93,10 @@ Set `DBBASIC_OBJECTS_DIR` to point at a custom object source directory during mi
 ## Minimal Server
 
 The current public ASGI server can list objects, return source for an existing
-object, execute an object's `GET(request)` function, and update source when the
-explicit source-write gate is enabled. It can also list source versions, read a
-specific version, and roll back source through the same write gate.
+object, execute object `GET`, `POST`, `PUT`, and `DELETE` methods, and update
+source when the explicit source-write gate is enabled. It can also list source
+versions, read a specific version, and roll back source through the same write
+gate.
 
 ```bash
 python -m pip install -e '.[server,test]'
@@ -107,6 +108,9 @@ Current endpoints:
 - `GET /health`
 - `GET /objects?format=json`
 - `GET /objects/{object_id}`
+- `POST /objects/{object_id}`
+- `PUT /objects/{object_id}`
+- `DELETE /objects/{object_id}`
 - `GET /objects/{object_id}?source=true&format=json`
 - `GET /objects/{object_id}?versions=true&limit=10`
 - `GET /objects/{object_id}?version=1`
@@ -137,7 +141,7 @@ rules the rest of the server will use:
 - `object_server.py` exposes the first ASGI endpoints
 - `python_object_runtime.py` loads simple Python objects for early execution tests
 - `object_namespace.py` maps object IDs to files under `objects/`
-- `object_execution.py` returns success or error results from object runs
+- `object_execution.py` returns success or error results from object method runs
 - `object_source.py` reads, updates, versions, and rolls back source files
 - `object_versions.py` keeps source history as `metadata.tsv` plus `vN.txt` files
 - `object_daemon.py` runs scheduled, queued, and event work

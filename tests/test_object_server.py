@@ -525,6 +525,152 @@ def test_rollback_returns_404_for_missing_version(tmp_path, monkeypatch):
     }
 
 
+def test_post_object_execution_runs_post_method_with_json_body_and_query_merge(
+    tmp_path,
+    monkeypatch,
+):
+    root = tmp_path / "objects"
+    write_source(
+        root / "basics" / "echo.py",
+        "def POST(request):\n    return {'request': request}\n",
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+
+    status, _, payload = request(
+        "/objects/basics_echo",
+        method="POST",
+        query_string="name=query&mode=test",
+        body=json.dumps({"name": "body", "count": 2}).encode(),
+    )
+
+    assert status == 200
+    assert payload == {"request": {"name": "body", "count": 2, "mode": "test"}}
+
+
+def test_post_object_execution_passes_raw_body_for_non_json(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(
+        root / "basics" / "raw.py",
+        "def POST(request):\n"
+        "    return {'body_size': len(request['body']), 'mode': request['mode']}\n",
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+
+    status, _, payload = request(
+        "/objects/basics_raw",
+        method="POST",
+        query_string="mode=raw",
+        body=b"not-json",
+    )
+
+    assert status == 200
+    assert payload == {"body_size": 8, "mode": "raw"}
+
+
+def test_post_object_execution_rejects_non_object_json(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(root / "basics" / "poster.py", "def POST(request):\n    return {}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+
+    status, _, payload = request(
+        "/objects/basics_poster",
+        method="POST",
+        body=json.dumps(["not", "an", "object"]).encode(),
+    )
+
+    assert status == 400
+    assert payload == {"status": "error", "error": "JSON body must be an object"}
+
+
+def test_post_object_execution_returns_405_when_post_is_missing(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(root / "basics" / "getter.py", "def GET(request):\n    return {'ok': True}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+
+    status, _, payload = request("/objects/basics_getter", method="POST", body=b"{}")
+
+    assert status == 405
+    assert payload["status"] == "error"
+    assert payload["error"].startswith("Execution failed: Method POST not supported")
+
+
+def test_put_object_execution_runs_put_method_with_json_body(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(
+        root / "basics" / "profile.py",
+        "def PUT(request):\n    return {'request': request}\n",
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+
+    status, _, payload = request(
+        "/objects/basics_profile",
+        method="PUT",
+        query_string="query_value=ignored",
+        body=json.dumps({"name": "Alice"}).encode(),
+    )
+
+    assert status == 200
+    assert payload == {"request": {"name": "Alice"}}
+
+
+def test_put_object_execution_uses_query_params_when_body_is_empty(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(
+        root / "basics" / "profile.py",
+        "def PUT(request):\n    return {'request': request}\n",
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+
+    status, _, payload = request(
+        "/objects/basics_profile",
+        method="PUT",
+        query_string="name=Alice",
+    )
+
+    assert status == 200
+    assert payload == {"request": {"name": "Alice"}}
+
+
+def test_put_object_execution_rejects_invalid_json(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(root / "basics" / "profile.py", "def PUT(request):\n    return {}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+
+    status, _, payload = request("/objects/basics_profile", method="PUT", body=b"{")
+
+    assert status == 400
+    assert payload == {"status": "error", "error": "Invalid JSON body"}
+
+
+def test_delete_object_execution_runs_delete_method_with_json_body(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(
+        root / "basics" / "items.py",
+        "def DELETE(request):\n    return {'deleted': request['id']}\n",
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+
+    status, _, payload = request(
+        "/objects/basics_items",
+        method="DELETE",
+        body=json.dumps({"id": "item-1"}).encode(),
+    )
+
+    assert status == 200
+    assert payload == {"deleted": "item-1"}
+
+
+def test_delete_object_execution_rejects_invalid_json(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(root / "basics" / "items.py", "def DELETE(request):\n    return {}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+
+    status, _, payload = request("/objects/basics_items", method="DELETE", body=b"{")
+
+    assert status == 400
+    assert payload == {"status": "error", "error": "Invalid JSON body"}
+
+
 def test_object_execution_runs_get_method(tmp_path, monkeypatch):
     root = tmp_path / "objects"
     write_source(root / "basics" / "counter.py", "def GET(request):\n    return {'count': 1}\n")
@@ -587,7 +733,7 @@ def test_object_execution_returns_405_when_get_is_missing(tmp_path, monkeypatch)
     assert payload["error"].startswith("Execution failed: Method GET not supported")
 
 
-def test_non_get_methods_are_rejected_for_now():
+def test_collection_non_get_methods_are_rejected():
     status, _, payload = request("/objects", method="POST", body=b"{}")
 
     assert status == 405

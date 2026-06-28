@@ -97,6 +97,15 @@ DELETE /objects/{object_id}
 `GET` passes query parameters to the object. `POST`, `PUT`, and `DELETE` pass a
 JSON body when present.
 
+Compatibility details from the working prototype:
+
+- `POST` merges query parameters into the JSON body without overriding body keys.
+- `POST` with a non-JSON body passes raw bytes as the `body` field plus query
+  parameters.
+- `PUT` and `DELETE` reject invalid JSON bodies with `400`.
+- `POST` with `{"action": "rollback"}` is reserved for rollback.
+- `PUT /objects/{object_id}?source=true` is reserved for source updates.
+
 Example:
 
 ```http

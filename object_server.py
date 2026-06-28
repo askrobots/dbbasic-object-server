@@ -72,11 +72,19 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
             return
 
         if method == "POST":
-            await _handle_object_post(send, object_id, body, headers)
+            await _handle_object_post(send, object_id, body, query, headers)
             return
 
         if method == "PUT" and query.get("source") == "true":
             await _handle_object_source_put(send, object_id, body, headers)
+            return
+
+        if method == "PUT":
+            await _handle_object_body_method(send, object_id, "PUT", body, query)
+            return
+
+        if method == "DELETE":
+            await _handle_object_body_method(send, object_id, "DELETE", body, query)
             return
 
         await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
@@ -122,20 +130,7 @@ async def _handle_object_get(send, object_id: str, query: dict[str, str]) -> Non
         )
         return
 
-    result = object_execution.execute_object(
-        _runtime,
-        object_execution.ObjectExecutionRequest(
-            object_id=object_id,
-            method="GET",
-            payload=query,
-        ),
-    )
-
-    if result.ok:
-        await _send_json(send, result.result)
-        return
-
-    await _send_execution_error(send, result)
+    await _execute_object_method(send, object_id, "GET", query)
 
 
 async def _handle_object_versions_get(
@@ -209,6 +204,7 @@ async def _handle_object_post(
     send,
     object_id: str,
     body: bytes,
+    query: dict[str, str],
     headers: dict[str, str],
 ) -> None:
     if "@" in object_id:
@@ -220,16 +216,40 @@ async def _handle_object_post(
         return
 
     try:
-        payload = _parse_json_body(body)
+        payload = _parse_post_payload(body, query)
     except ValueError as exc:
         await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
         return
 
-    if payload.get("action") != "rollback":
-        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+    if payload.get("action") == "rollback":
+        await _handle_object_rollback_post(send, object_id, payload, headers)
         return
 
-    await _handle_object_rollback_post(send, object_id, payload, headers)
+    await _execute_object_method(send, object_id, "POST", payload)
+
+
+async def _handle_object_body_method(
+    send,
+    object_id: str,
+    method: str,
+    body: bytes,
+    query: dict[str, str],
+) -> None:
+    if "@" in object_id:
+        await _send_json(
+            send,
+            {"status": "error", "error": "Station routing is not available in this server"},
+            status=400,
+        )
+        return
+
+    try:
+        payload = _parse_json_body(body) if body.strip() else dict(query)
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    await _execute_object_method(send, object_id, method, payload)
 
 
 async def _handle_object_rollback_post(
@@ -344,6 +364,28 @@ async def _handle_object_source_put(
     )
 
 
+async def _execute_object_method(
+    send,
+    object_id: str,
+    method: str,
+    payload: dict[str, Any],
+) -> None:
+    result = object_execution.execute_object(
+        _runtime,
+        object_execution.ObjectExecutionRequest(
+            object_id=object_id,
+            method=method,
+            payload=payload,
+        ),
+    )
+
+    if result.ok:
+        await _send_json(send, result.result)
+        return
+
+    await _send_execution_error(send, result)
+
+
 def _list_objects_payload() -> dict[str, Any]:
     objects = [_object_source_payload(source) for source in iter_object_sources()]
     return {
@@ -393,6 +435,24 @@ def _parse_json_body(body: bytes) -> dict[str, Any]:
 
     if not isinstance(payload, dict):
         raise ValueError("JSON body must be an object")
+
+    return payload
+
+
+def _parse_post_payload(body: bytes, query: dict[str, str]) -> dict[str, Any]:
+    if not body.strip():
+        return dict(query)
+
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {**query, "body": body}
+
+    if not isinstance(payload, dict):
+        raise ValueError("JSON body must be an object")
+
+    for key, value in query.items():
+        payload.setdefault(key, value)
 
     return payload
 
