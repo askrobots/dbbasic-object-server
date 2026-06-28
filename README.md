@@ -170,7 +170,9 @@ See `docs/README.md` for the documentation map,
 `docs/runtime-contract.md` for the daemon-facing runtime contract,
 `docs/http-api-contract.md` for the HTTP API shape that existing clients expect,
 `docs/asgi-realtime-direction.md` for the ASGI/realtime direction, and
-`docs/rest-and-object-messages.md` for the resource/message split.
+`docs/rest-and-object-messages.md` for the resource/message split. See
+`docs/single-vm-deployment.md` for the first conservative staging deployment
+shape.
 
 Read `SECURITY.md` and `CONTRIBUTING.md` before copying code or documentation from private prototypes into this repository.
 

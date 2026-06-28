@@ -12,6 +12,7 @@ flowchart TD
     A --> C["HTTP API contract"]
     A --> D["ASGI and realtime direction"]
     A --> E["REST and object messages"]
+    A --> L["Single VM deployment"]
 
     B --> F["Object namespace"]
     B --> G["Execution result shape"]
@@ -32,6 +33,8 @@ flowchart TD
   WebSocket/SSE object events fit the direction.
 - `rest-and-object-messages.md` - how DBBASIC separates RESTful resources from
   object behavior messages and realtime streams.
+- `single-vm-deployment.md` - conservative staging deployment on one VM with
+  systemd, localhost uvicorn, separate object/data paths, and backup notes.
 
 ## Documentation Rules
 
@@ -50,7 +53,6 @@ Useful next docs:
 - object method reference
 - source/state/log/version examples
 - permissions model
-- deployment guide
 - backup and restore guide
 - AI repair loop guide
 - realtime event contract
