@@ -79,6 +79,9 @@ This repository currently contains:
 - `object_namespace.py` - object source discovery and object ID resolution
 - `object_execution.py` - structured object execution results and error capture
 - `object_source.py` - source read, update, version, and rollback operations
+- `object_state.py` - TSV-backed object state reads
+- `object_logs.py` - TSV-backed object log reads
+- `object_metadata.py` - conservative object metadata summaries
 - `object_versions.py` - source version metadata, content snapshots, and rollback
 - `object_daemon.py` - background worker for scheduler, queue, events, and cleanup
 
@@ -95,8 +98,8 @@ Set `DBBASIC_OBJECTS_DIR` to point at a custom object source directory during mi
 The current public ASGI server can list objects, return source for an existing
 object, execute object `GET`, `POST`, `PUT`, and `DELETE` methods, and update
 source when the explicit source-write gate is enabled. It can also list source
-versions, read a specific version, read object state, read object logs, and roll
-back source through the same write gate.
+versions, read a specific version, read object state, read object logs, read
+object metadata, and roll back source through the same write gate.
 
 ```bash
 python -m pip install -e '.[server,test]'
@@ -113,6 +116,7 @@ Current endpoints:
 - `DELETE /objects/{object_id}`
 - `GET /objects/{object_id}?state=true`
 - `GET /objects/{object_id}?logs=true&limit=100`
+- `GET /objects/{object_id}?metadata=true`
 - `GET /objects/{object_id}?source=true&format=json`
 - `GET /objects/{object_id}?versions=true&limit=10`
 - `GET /objects/{object_id}?version=1`
@@ -147,6 +151,7 @@ rules the rest of the server will use:
 - `object_source.py` reads, updates, versions, and rolls back source files
 - `object_state.py` reads TSV-backed object state
 - `object_logs.py` reads TSV-backed object logs
+- `object_metadata.py` summarizes source, state, logs, and versions
 - `object_versions.py` keeps source history as `metadata.tsv` plus `vN.txt` files
 - `object_daemon.py` runs scheduled, queued, and event work
 - `basics_counter` maps to `objects/basics/counter.py`

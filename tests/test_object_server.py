@@ -332,6 +332,69 @@ def test_get_logs_rejects_invalid_object_id(tmp_path, monkeypatch):
     assert payload == {"status": "error", "error": "Invalid object ID: bad.id"}
 
 
+def test_get_metadata_summarizes_object_storage(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    source = write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")
+    state_file = data_dir / "state" / "basics_counter" / "state.tsv"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text("key\tvalue\ttimestamp\ncount\t3\t1710000000.1\n")
+    log_file = data_dir / "logs" / "basics_counter" / "log.tsv"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    log_file.write_text(
+        "entry_id\ttimestamp\tlevel\tmessage\n"
+        "a1\t2026-01-01T00:00:00\tINFO\tstarted\n"
+    )
+    object_versions.VersionManager(data_dir).save_version(
+        "basics_counter",
+        "def GET(request):\n    return {}\n",
+        author="test",
+        message="first",
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+
+    status, _, payload = request("/objects/basics_counter", query_string="metadata=true")
+
+    assert status == 200
+    assert payload == {
+        "status": "ok",
+        "object_id": "basics_counter",
+        "metadata": {
+            "object_id": "basics_counter",
+            "source_path": "basics/counter.py",
+            "owner": "system",
+            "kind": "system",
+            "last_modified": source.stat().st_mtime,
+            "state_count": 1,
+            "state_keys": ["count"],
+            "log_count": 1,
+            "version_count": 1,
+        },
+    }
+
+
+def test_get_metadata_returns_404_for_missing_object(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(tmp_path / "objects"))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+
+    status, _, payload = request("/objects/missing_object", query_string="metadata=true")
+
+    assert status == 404
+    assert payload == {"status": "error", "error": "Object source not found: missing_object"}
+
+
+def test_get_metadata_rejects_invalid_object_id(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+
+    status, _, payload = request("/objects/bad.id", query_string="metadata=true")
+
+    assert status == 400
+    assert payload == {"status": "error", "error": "Invalid object ID: bad.id"}
+
+
 def test_source_update_is_disabled_by_default(tmp_path, monkeypatch):
     root = tmp_path / "objects"
     source_path = write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")

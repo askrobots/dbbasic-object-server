@@ -15,6 +15,7 @@ from typing import Any
 import http_api_contract
 import object_execution
 import object_logs
+import object_metadata
 import object_source
 import object_state
 import object_versions
@@ -120,6 +121,10 @@ async def _handle_object_get(send, object_id: str, query: dict[str, str]) -> Non
         await _handle_object_logs_get(send, object_id, query)
         return
 
+    if query.get("metadata") == "true":
+        await _handle_object_metadata_get(send, object_id)
+        return
+
     if query.get("source") == "true":
         try:
             source = object_source.get_object_source(object_id)
@@ -160,6 +165,26 @@ async def _handle_object_state_get(send, object_id: str) -> None:
             "status": "ok",
             "object_id": object_id,
             "state": state,
+        },
+    )
+
+
+async def _handle_object_metadata_get(send, object_id: str) -> None:
+    try:
+        metadata = object_metadata.get_object_metadata(object_id, base_dir=_data_dir())
+    except InvalidObjectIdError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_source.ObjectSourceNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "object_id": object_id,
+            "metadata": metadata,
         },
     )
 

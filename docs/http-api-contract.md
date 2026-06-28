@@ -240,13 +240,21 @@ Response:
   "object_id": "basics_counter",
   "metadata": {
     "object_id": "basics_counter",
+    "source_path": "basics/counter.py",
+    "owner": "system",
+    "kind": "system",
+    "last_modified": 1760000000.0,
+    "state_count": 1,
+    "state_keys": ["count"],
+    "log_count": 3,
     "version_count": 2
   }
 }
 ```
 
-Metadata may grow over time. Existing clients expect the top-level `metadata`
-field.
+The public server reports source paths relative to the object source root, not
+absolute local filesystem paths. Metadata may grow over time. Existing clients
+expect the top-level `metadata` field.
 
 ## Logs
 

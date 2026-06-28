@@ -129,6 +129,7 @@ def test_http_contract_doc_mentions_required_compatibility_surface():
         "DELETE /objects/{object_id}?destroy=true",
         "source=true",
         "state=true",
+        "metadata=true",
         "versions=true",
         "action=rollback",
         "version_id",
