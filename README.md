@@ -126,7 +126,8 @@ tools all agree on the same object rules.
 
 See `docs/runtime-contract.md` for the daemon-facing runtime contract,
 `docs/http-api-contract.md` for the HTTP API shape that existing clients expect,
-and `docs/asgi-realtime-direction.md` for the ASGI/realtime direction.
+`docs/asgi-realtime-direction.md` for the ASGI/realtime direction, and
+`docs/rest-and-object-messages.md` for the resource/message split.
 
 Read `SECURITY.md` and `CONTRIBUTING.md` before copying code or documentation from private prototypes into this repository.
 
