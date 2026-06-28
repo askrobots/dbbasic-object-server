@@ -61,6 +61,7 @@ addopts = [
 
 [tool.setuptools]
 py-modules = [
+    "http_api_contract",
     "object_daemon",
     "object_execution",
     "object_namespace",
