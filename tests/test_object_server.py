@@ -132,15 +132,66 @@ def test_get_source_returns_404_for_missing_object(tmp_path, monkeypatch):
     assert payload["error"] == "Object source not found: missing_object"
 
 
-def test_object_execution_is_not_implemented_yet(tmp_path, monkeypatch):
+def test_object_execution_runs_get_method(tmp_path, monkeypatch):
     root = tmp_path / "objects"
-    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {'count': 1}\n")
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
 
     status, _, payload = request("/objects/basics_counter")
 
-    assert status == 501
-    assert payload == {"status": "error", "error": "Object execution is not implemented yet"}
+    assert status == 200
+    assert payload == {"count": 1}
+
+
+def test_object_execution_passes_query_params_as_payload(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(
+        root / "basics" / "echo.py",
+        "def GET(request):\n    return {'query': request}\n",
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+
+    status, _, payload = request("/objects/basics_echo", query_string="name=dan&mode=test")
+
+    assert status == 200
+    assert payload == {"query": {"name": "dan", "mode": "test"}}
+
+
+def test_object_execution_returns_404_for_missing_object(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(tmp_path / "objects"))
+
+    status, _, payload = request("/objects/missing_object")
+
+    assert status == 404
+    assert payload == {"status": "error", "error": "Object not found: missing_object"}
+
+
+def test_object_execution_returns_json_error_for_object_exception(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(
+        root / "basics" / "broken.py",
+        "def GET(request):\n    raise RuntimeError('boom')\n",
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+
+    status, _, payload = request("/objects/basics_broken")
+
+    assert status == 500
+    assert payload["status"] == "error"
+    assert payload["error"].startswith("Execution failed: GET failed for object basics_broken")
+    assert "RuntimeError: boom" in payload["error"]
+
+
+def test_object_execution_returns_405_when_get_is_missing(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(root / "basics" / "poster.py", "def POST(request):\n    return {'ok': True}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+
+    status, _, payload = request("/objects/basics_poster")
+
+    assert status == 405
+    assert payload["status"] == "error"
+    assert payload["error"].startswith("Execution failed: Method GET not supported")
 
 
 def test_non_get_methods_are_rejected_for_now():

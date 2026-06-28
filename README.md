@@ -75,6 +75,7 @@ That makes the system useful for humans and AI tools:
 This repository currently contains:
 
 - `object_server.py` - minimal read-only ASGI server slice
+- `python_object_runtime.py` - minimal direct Python object loader for early execution tests
 - `object_namespace.py` - object source discovery and object ID resolution
 - `object_execution.py` - structured object execution results and error capture
 - `object_source.py` - source read, update, version, and rollback operations
@@ -91,8 +92,8 @@ Set `DBBASIC_OBJECTS_DIR` to point at a custom object source directory during mi
 
 ## Minimal Server
 
-The current public ASGI server is read-only. It can list objects and return
-source for an existing object.
+The current public ASGI server can list objects, return source for an existing
+object, and execute an object's `GET(request)` function.
 
 ```bash
 python -m pip install -e '.[server,test]'
@@ -103,14 +104,20 @@ Current endpoints:
 
 - `GET /health`
 - `GET /objects?format=json`
+- `GET /objects/{object_id}`
 - `GET /objects/{object_id}?source=true&format=json`
+
+Execution currently uses `python_object_runtime.py`, a direct Python loader. It
+is useful for proving the loop, but it is not the production sandbox or security
+boundary.
 
 ## Current Extraction Slice
 
 The current public slice is not the whole server yet. It defines the first shared
 rules the rest of the server will use:
 
-- `object_server.py` exposes the first read-only ASGI endpoints
+- `object_server.py` exposes the first ASGI endpoints
+- `python_object_runtime.py` loads simple Python objects for early execution tests
 - `object_namespace.py` maps object IDs to files under `objects/`
 - `object_execution.py` returns success or error results from object runs
 - `object_source.py` reads, updates, versions, and rolls back source files
@@ -124,7 +131,8 @@ rules the rest of the server will use:
 These pieces come first so the ASGI server, daemon, Scroll, tests, and migration
 tools all agree on the same object rules.
 
-See `docs/runtime-contract.md` for the daemon-facing runtime contract,
+See `docs/README.md` for the documentation map,
+`docs/runtime-contract.md` for the daemon-facing runtime contract,
 `docs/http-api-contract.md` for the HTTP API shape that existing clients expect,
 `docs/asgi-realtime-direction.md` for the ASGI/realtime direction, and
 `docs/rest-and-object-messages.md` for the resource/message split.

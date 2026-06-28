@@ -11,9 +11,14 @@ import urllib.parse
 from typing import Any
 
 import http_api_contract
+import object_execution
 import object_source
 from object_namespace import iter_object_sources, parse_user_object_id
 from object_versions import InvalidObjectIdError
+from python_object_runtime import MethodNotSupportedError, PythonObjectRuntime
+
+
+_runtime = PythonObjectRuntime()
 
 
 async def app(scope: dict[str, Any], receive, send) -> None:
@@ -88,11 +93,20 @@ async def _handle_object_get(send, object_id: str, query: dict[str, str]) -> Non
         )
         return
 
-    await _send_json(
-        send,
-        {"status": "error", "error": "Object execution is not implemented yet"},
-        status=501,
+    result = object_execution.execute_object(
+        _runtime,
+        object_execution.ObjectExecutionRequest(
+            object_id=object_id,
+            method="GET",
+            payload=query,
+        ),
     )
+
+    if result.ok:
+        await _send_json(send, result.result)
+        return
+
+    await _send_execution_error(send, result)
 
 
 def _list_objects_payload() -> dict[str, Any]:
@@ -140,7 +154,7 @@ async def _read_body(receive) -> bytes:
             return body
 
 
-async def _send_json(send, payload: dict[str, Any], status: int = 200) -> None:
+async def _send_json(send, payload: Any, status: int = 200) -> None:
     body = json.dumps(payload).encode("utf-8")
     await send(
         {
@@ -150,6 +164,35 @@ async def _send_json(send, payload: dict[str, Any], status: int = 200) -> None:
         }
     )
     await send({"type": "http.response.body", "body": body})
+
+
+async def _send_execution_error(
+    send,
+    result: object_execution.ObjectExecutionResult,
+) -> None:
+    error = result.error
+    error_message = "Object execution failed"
+    status = 500
+
+    if error is not None:
+        error_message = error.message
+        if error.type == "ObjectNotFoundError":
+            status = 404
+        elif error.type == MethodNotSupportedError.__name__:
+            status = 405
+
+    prefix = "Execution failed: "
+    if status == 404:
+        prefix = ""
+
+    await _send_json(
+        send,
+        {
+            "status": "error",
+            "error": f"{prefix}{error_message}",
+        },
+        status=status,
+    )
 
 
 async def _handle_lifespan(receive, send) -> None:
