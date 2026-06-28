@@ -80,7 +80,7 @@ This repository currently contains:
 - `object_execution.py` - structured object execution results and error capture
 - `object_source.py` - source read, update, version, and rollback operations
 - `object_state.py` - TSV-backed object state reads and runtime writes
-- `object_logs.py` - TSV-backed object log reads and appends
+- `object_logs.py` - TSV-backed object log reads, appends, and runtime logger helper
 - `object_metadata.py` - conservative object metadata summaries
 - `object_versions.py` - source version metadata, content snapshots, and rollback
 - `object_daemon.py` - background worker for scheduler, queue, events, and cleanup
@@ -150,7 +150,7 @@ rules the rest of the server will use:
 - `object_execution.py` returns success or error results from object method runs
 - `object_source.py` reads, updates, versions, and rolls back source files
 - `object_state.py` reads and writes runtime-owned TSV-backed object state
-- `object_logs.py` reads and appends TSV-backed object logs
+- `object_logs.py` reads and appends TSV-backed object logs and provides `_logger`
 - `object_metadata.py` summarizes source, state, logs, and versions
 - `object_versions.py` keeps source history as `metadata.tsv` plus `vN.txt` files
 - `object_daemon.py` runs scheduled, queued, and event work

@@ -149,6 +149,34 @@ def test_append_object_log_extends_existing_header(tmp_path):
     assert logs[1]["error_type"] == "RuntimeError"
 
 
+def test_object_logger_writes_object_owned_logs(tmp_path):
+    logger = object_logs.ObjectLogger("basics_counter", base_dir=tmp_path / "data")
+
+    logger.info("Counter incremented", user_id="user-1", count=2)
+    logger.error("Counter failed", error_code="E_COUNTER")
+
+    logs = logger.get_logs()
+
+    assert [entry["level"] for entry in logs] == ["INFO", "ERROR"]
+    assert logs[0]["message"] == "Counter incremented"
+    assert logs[0]["user_id"] == "user-1"
+    assert logs[0]["count"] == "2"
+    assert logs[1]["error_code"] == "E_COUNTER"
+
+
+def test_object_logger_filters_logs(tmp_path):
+    logger = object_logs.ObjectLogger("basics_counter", base_dir=tmp_path / "data")
+
+    logger.debug("first")
+    logger.error("second", status="error")
+    logger.error("third", status="error")
+
+    logs = logger.get_logs(level="ERROR", limit=1, status="error")
+
+    assert len(logs) == 1
+    assert logs[0]["message"] == "second"
+
+
 @pytest.mark.parametrize(
     "object_id",
     [

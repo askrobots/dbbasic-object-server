@@ -35,6 +35,62 @@ DEFAULT_LOG_FIELDS = [
 ]
 
 
+class ObjectLogger:
+    """Runtime logger injected into object modules as ``_logger``."""
+
+    def __init__(self, object_id: str, base_dir: Path | str = DEFAULT_DATA_DIR):
+        self.object_id = object_id
+        self.base_dir = Path(base_dir)
+
+    def log(self, level: str, message: str, **fields: Any) -> dict[str, Any]:
+        """Append one object-owned log entry."""
+        return append_object_log(
+            self.object_id,
+            str(level).upper(),
+            str(message),
+            base_dir=self.base_dir,
+            **fields,
+        )
+
+    def debug(self, message: str, **fields: Any) -> dict[str, Any]:
+        """Log a DEBUG message."""
+        return self.log("DEBUG", message, **fields)
+
+    def info(self, message: str, **fields: Any) -> dict[str, Any]:
+        """Log an INFO message."""
+        return self.log("INFO", message, **fields)
+
+    def warning(self, message: str, **fields: Any) -> dict[str, Any]:
+        """Log a WARNING message."""
+        return self.log("WARNING", message, **fields)
+
+    def error(self, message: str, **fields: Any) -> dict[str, Any]:
+        """Log an ERROR message."""
+        return self.log("ERROR", message, **fields)
+
+    def critical(self, message: str, **fields: Any) -> dict[str, Any]:
+        """Log a CRITICAL message."""
+        return self.log("CRITICAL", message, **fields)
+
+    def get_logs(
+        self,
+        *,
+        level: str | Iterable[str] | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+        **filters: str,
+    ) -> list[dict[str, Any]]:
+        """Read logs for this object."""
+        return get_object_logs(
+            self.object_id,
+            base_dir=self.base_dir,
+            level=level,
+            limit=limit,
+            offset=offset,
+            **filters,
+        )
+
+
 def append_object_log(
     object_id: str,
     level: str,

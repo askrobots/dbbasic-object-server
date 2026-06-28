@@ -951,6 +951,32 @@ def test_object_execution_state_manager_persists_state(tmp_path, monkeypatch):
     }
 
 
+def test_object_execution_logger_writes_object_logs(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(
+        root / "basics" / "counter.py",
+        "_logger = None\n"
+        "def GET(request):\n"
+        "    _logger.info('Counter was read', event='counter_read')\n"
+        "    return {'ok': True}\n",
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+
+    status, _, payload = request("/objects/basics_counter")
+
+    assert status == 200
+    assert payload == {"ok": True}
+
+    status, _, payload = request("/objects/basics_counter", query_string="logs=true")
+
+    assert status == 200
+    messages = [entry["message"] for entry in payload["logs"]]
+    assert "Counter was read" in messages
+    assert "GET completed successfully" in messages
+
+
 def test_object_execution_passes_query_params_as_payload(tmp_path, monkeypatch):
     root = tmp_path / "objects"
     write_source(

@@ -14,6 +14,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+import object_logs
 import object_state
 from object_versions import DEFAULT_DATA_DIR
 
@@ -59,7 +60,9 @@ class PythonObject:
         self.path = Path(path)
         self.object_id = object_id or self.path.stem
         self.state_manager = object_state.ObjectStateManager(self.object_id, base_dir=base_dir)
+        self.logger = object_logs.ObjectLogger(self.object_id, base_dir=base_dir)
         self.module = _load_module(self.path, self.object_id)
+        self.module._logger = self.logger
         self.module._state_manager = self.state_manager
 
     def execute(self, method: str, payload: dict[str, Any]) -> Any:

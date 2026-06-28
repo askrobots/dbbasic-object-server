@@ -1,5 +1,6 @@
 import pytest
 
+import object_logs
 import object_state
 import python_object_runtime
 
@@ -114,3 +115,34 @@ def test_python_object_runtime_injects_state_manager(tmp_path):
     assert object_state.get_object_state("basics_counter", base_dir=tmp_path / "data") == {
         "count": 2
     }
+
+
+def test_python_object_runtime_injects_logger(tmp_path):
+    source = write_source(
+        tmp_path / "objects" / "basics" / "counter.py",
+        "_logger = None\n"
+        "def GET(request):\n"
+        "    _logger.info('Counter read', user_id=request.get('user_id'))\n"
+        "    return {'ok': True}\n",
+    )
+    runtime = python_object_runtime.PythonObjectRuntime(base_dir=tmp_path / "data")
+
+    obj = runtime.load_object(source, object_id="basics_counter")
+
+    assert obj.execute("GET", {"user_id": "user-1"}) == {"ok": True}
+    logs = object_logs.get_object_logs("basics_counter", base_dir=tmp_path / "data")
+
+    assert logs == [
+        {
+            "entry_id": logs[0]["entry_id"],
+            "timestamp": logs[0]["timestamp"],
+            "level": "INFO",
+            "message": "Counter read",
+            "method": "",
+            "status": "",
+            "duration_ms": "",
+            "error_type": "",
+            "error": "",
+            "user_id": "user-1",
+        }
+    ]

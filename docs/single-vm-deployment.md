@@ -293,6 +293,23 @@ curl https://dbbasic.example.com/objects
 The first three should return JSON from the object server. The full `/objects`
 route should stay blocked by Caddy in this early staging mode.
 
+## Public Code Execution Controls
+
+In the early staging deployment, do not expose the full object server API
+directly to the internet.
+
+Use all of these controls together:
+
+- keep uvicorn bound to `127.0.0.1`
+- expose only specific routes through Caddy
+- keep `DBBASIC_ENABLE_SOURCE_WRITES=false`
+- do not add a public object-create route until permissions are enforced
+- keep live object source and data out of the git checkout
+
+With that shape, outside users can only run the explicitly proxied objects. They
+cannot list every object, read source, write source, roll back source, or create
+new runnable code through the public hostname.
+
 ## Backup
 
 The minimum backup set is:

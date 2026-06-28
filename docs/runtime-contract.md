@@ -59,12 +59,14 @@ runtime.load_object(path, object_id=None)
 The returned object must expose:
 
 ```python
+obj.logger
 obj.state_manager
 obj.execute(method, payload)
 ```
 
-Loaded object modules receive `_state_manager`. The current public runtime
-injects a minimal manager with `get`, `set`, `get_all`, and `reload`.
+Loaded object modules receive `_logger` and `_state_manager`. The current public
+runtime injects a minimal state manager with `get`, `set`, `get_all`, and
+`reload`.
 
 ## Object Execution Result
 
@@ -197,9 +199,23 @@ and `limit`.
 
 The public ASGI execution path appends one log entry after each object method
 run. Successful runs use `DEBUG` with `status=success`; failed runs use `ERROR`
-with `status=error`, `error_type`, and `error`. A future runtime logger helper
-should use the same storage path and field rules instead of creating a second
-log format.
+with `status=error`, `error_type`, and `error`.
+
+Loaded object modules also receive `_logger`. The public logger helper writes to
+the same per-object TSV path and exposes:
+
+```python
+_logger.log(level, message, **fields)
+_logger.debug(message, **fields)
+_logger.info(message, **fields)
+_logger.warning(message, **fields)
+_logger.error(message, **fields)
+_logger.critical(message, **fields)
+_logger.get_logs(level=None, limit=None, offset=0, **filters)
+```
+
+This keeps object-owned application logs and runtime execution logs together
+without creating a second logging format.
 
 ## Scheduler State
 
