@@ -7,6 +7,59 @@ The goal is not to claim the public runtime is production-ready. The goal is to
 keep a clean staging server running so install, restart, logs, object storage,
 and the edit/run/inspect loop are tested on a real machine.
 
+## Verified Baseline
+
+The first staging install was verified on:
+
+- Ubuntu 24.04.4 LTS
+- Python 3.12.3
+- Git 2.43.0
+- Caddy 2.11.4
+- systemd with the DBBASIC service and Caddy running as separate units
+
+Record the baseline on each new VM. Run the Caddy commands after Caddy is
+installed, if the VM does not already have it.
+
+```bash
+lsb_release -a
+python3 --version
+git --version
+caddy version
+systemctl is-active dbbasic-object-server caddy
+cd /opt/dbbasic-object-server
+sudo -u dbbasic git rev-parse --short HEAD
+```
+
+Do not commit the VM's real IP address, hostname, or provider-specific details
+to this repository.
+
+## System Updates
+
+Before using a new VM for staging, apply normal OS updates and reboot if Ubuntu
+requests it:
+
+```bash
+sudo apt update
+apt list --upgradable
+sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
+sudo DEBIAN_FRONTEND=noninteractive apt-get autoremove -y
+test -f /var/run/reboot-required && cat /var/run/reboot-required || true
+```
+
+If packages are kept back because they need new dependencies, install them
+explicitly when they are normal platform packages:
+
+```bash
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y fwupd
+```
+
+After a reboot, verify the services and endpoint again:
+
+```bash
+sudo systemctl is-active dbbasic-object-server caddy
+curl https://dbbasic.example.com/
+```
+
 ## Layout
 
 Use separate paths for server code, object source, and runtime data:
@@ -164,6 +217,12 @@ sudo journalctl -u dbbasic-object-server -f
 For a public or staging hostname, put Caddy or nginx in front of uvicorn and keep
 uvicorn bound to `127.0.0.1`.
 
+Install Caddy if the VM does not already have a reverse proxy:
+
+```bash
+sudo apt install -y caddy
+```
+
 Example Caddyfile using documentation domains:
 
 ```caddyfile
@@ -174,6 +233,65 @@ dbbasic.example.com {
 
 Replace `dbbasic.example.com` only on the VM. Do not commit real deployment
 hostnames into this repository.
+
+If Caddy was already installed, inspect what it is serving before taking over
+the hostname:
+
+```bash
+sudo systemctl status caddy --no-pager
+sudo sed -n '1,220p' /etc/caddy/Caddyfile
+sudo find /usr/share/caddy -maxdepth 3 -type f -printf '%p\t%s bytes\n'
+```
+
+Back up the old config before changing it:
+
+```bash
+sudo cp -a /etc/caddy/Caddyfile /etc/caddy/Caddyfile.before-dbbasic
+```
+
+For the earliest public staging endpoint, expose only the hello object and
+health check until auth, permissions, and source visibility are ready:
+
+```caddyfile
+dbbasic.example.com {
+    handle / {
+        rewrite * /objects/site_home
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    handle /health {
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    handle /objects/site_home* {
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    handle {
+        respond "Not found" 404
+    }
+}
+```
+
+Validate and reload:
+
+```bash
+sudo caddy fmt --overwrite /etc/caddy/Caddyfile
+sudo caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl reload caddy
+```
+
+Then test:
+
+```bash
+curl https://dbbasic.example.com/
+curl https://dbbasic.example.com/health
+curl https://dbbasic.example.com/objects/site_home
+curl https://dbbasic.example.com/objects
+```
+
+The first three should return JSON from the object server. The full `/objects`
+route should stay blocked by Caddy in this early staging mode.
 
 ## Backup
 
