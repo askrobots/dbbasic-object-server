@@ -140,6 +140,23 @@ state_manager.set(key, value)
 
 Values used by scheduler, queue, and events are JSON strings stored by key.
 
+State storage intentionally matches the working prototype:
+
+```text
+data/state/{object_id}/state.tsv
+```
+
+Rows are either:
+
+```text
+key<TAB>value
+key<TAB>value<TAB>timestamp
+```
+
+The public state reader skips an optional `key<TAB>value<TAB>timestamp` header,
+ignores malformed rows, and coerces values to `int`, then `float`, otherwise
+keeps strings. State writes remain owned by the runtime for now.
+
 ## Scheduler State
 
 Scheduler state keys begin with:

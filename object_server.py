@@ -15,6 +15,7 @@ from typing import Any
 import http_api_contract
 import object_execution
 import object_source
+import object_state
 import object_versions
 from object_namespace import iter_object_sources, parse_user_object_id
 from object_versions import InvalidObjectIdError
@@ -110,6 +111,10 @@ async def _handle_object_get(send, object_id: str, query: dict[str, str]) -> Non
         await _handle_object_version_get(send, object_id, query)
         return
 
+    if query.get("state") == "true":
+        await _handle_object_state_get(send, object_id)
+        return
+
     if query.get("source") == "true":
         try:
             source = object_source.get_object_source(object_id)
@@ -131,6 +136,27 @@ async def _handle_object_get(send, object_id: str, query: dict[str, str]) -> Non
         return
 
     await _execute_object_method(send, object_id, "GET", query)
+
+
+async def _handle_object_state_get(send, object_id: str) -> None:
+    try:
+        _ensure_object_source_exists(object_id)
+        state = object_state.get_object_state(object_id, base_dir=_data_dir())
+    except InvalidObjectIdError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_source.ObjectSourceNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "object_id": object_id,
+            "state": state,
+        },
+    )
 
 
 async def _handle_object_versions_get(
@@ -546,9 +572,11 @@ def _env_enabled(name: str) -> bool:
 
 
 def _version_manager() -> object_versions.VersionManager:
-    return object_versions.VersionManager(
-        os.environ.get(DATA_DIR_ENV, object_versions.DEFAULT_DATA_DIR)
-    )
+    return object_versions.VersionManager(_data_dir())
+
+
+def _data_dir() -> str:
+    return os.environ.get(DATA_DIR_ENV, object_versions.DEFAULT_DATA_DIR)
 
 
 async def _read_body(receive) -> bytes:

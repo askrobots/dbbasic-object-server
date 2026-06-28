@@ -211,10 +211,19 @@ Response:
   "status": "ok",
   "object_id": "basics_counter",
   "state": {
-    "count": "3"
+    "count": 3
   }
 }
 ```
+
+State is currently read from:
+
+```text
+data/state/{object_id}/state.tsv
+```
+
+Rows may be `key<TAB>value` or `key<TAB>value<TAB>timestamp`. The public server
+currently exposes state read-only.
 
 ## Metadata
 
