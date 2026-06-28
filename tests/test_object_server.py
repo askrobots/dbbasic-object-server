@@ -2,6 +2,7 @@ import asyncio
 import json
 
 import object_server
+import object_versions
 
 
 def write_source(path, content):
@@ -10,11 +11,19 @@ def write_source(path, content):
     return path
 
 
-def request(path, method="GET", query_string="", body=b""):
-    return asyncio.run(asgi_request(path, method=method, query_string=query_string, body=body))
+def request(path, method="GET", query_string="", body=b"", headers=None):
+    return asyncio.run(
+        asgi_request(
+            path,
+            method=method,
+            query_string=query_string,
+            body=body,
+            headers=headers,
+        )
+    )
 
 
-async def asgi_request(path, method="GET", query_string="", body=b""):
+async def asgi_request(path, method="GET", query_string="", body=b"", headers=None):
     messages = []
     request_sent = False
 
@@ -28,12 +37,20 @@ async def asgi_request(path, method="GET", query_string="", body=b""):
     async def send(message):
         messages.append(message)
 
+    scope_headers = [(b"accept", b"application/json")]
+    for name, value in headers or []:
+        if isinstance(name, str):
+            name = name.encode("latin-1")
+        if isinstance(value, str):
+            value = value.encode("latin-1")
+        scope_headers.append((name, value))
+
     scope = {
         "type": "http",
         "method": method,
         "path": path,
         "query_string": query_string.encode("utf-8"),
-        "headers": [(b"accept", b"application/json")],
+        "headers": scope_headers,
     }
     await object_server.app(scope, receive, send)
 
@@ -130,6 +147,156 @@ def test_get_source_returns_404_for_missing_object(tmp_path, monkeypatch):
     assert status == 404
     assert payload["status"] == "error"
     assert payload["error"] == "Object source not found: missing_object"
+
+
+def test_source_update_is_disabled_by_default(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    source_path = write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.delenv("DBBASIC_ENABLE_SOURCE_WRITES", raising=False)
+    monkeypatch.setenv("DBBASIC_ADMIN_TOKEN", "local-dev-token")
+
+    status, _, payload = request(
+        "/objects/basics_counter",
+        method="PUT",
+        query_string="source=true",
+        body=json.dumps({"code": "def GET(request):\n    return {'count': 1}\n"}).encode(),
+        headers=[("authorization", "Token local-dev-token")],
+    )
+
+    assert status == 403
+    assert payload["status"] == "error"
+    assert payload["error"].startswith("Source writes are disabled")
+    assert source_path.read_text() == "def GET(request):\n    return {}\n"
+
+
+def test_source_update_requires_admin_token_configuration(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    source_path = write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_ENABLE_SOURCE_WRITES", "true")
+    monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)
+
+    status, _, payload = request(
+        "/objects/basics_counter",
+        method="PUT",
+        query_string="source=true",
+        body=json.dumps({"code": "def GET(request):\n    return {'count': 1}\n"}).encode(),
+    )
+
+    assert status == 403
+    assert payload == {"status": "error", "error": "Source writes require DBBASIC_ADMIN_TOKEN."}
+    assert source_path.read_text() == "def GET(request):\n    return {}\n"
+
+
+def test_source_update_requires_authorization_header(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    source_path = write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_ENABLE_SOURCE_WRITES", "true")
+    monkeypatch.setenv("DBBASIC_ADMIN_TOKEN", "local-dev-token")
+
+    status, _, payload = request(
+        "/objects/basics_counter",
+        method="PUT",
+        query_string="source=true",
+        body=json.dumps({"code": "def GET(request):\n    return {'count': 1}\n"}).encode(),
+    )
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
+    assert source_path.read_text() == "def GET(request):\n    return {}\n"
+
+
+def test_source_update_rejects_invalid_json_body(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    source_path = write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_ENABLE_SOURCE_WRITES", "true")
+    monkeypatch.setenv("DBBASIC_ADMIN_TOKEN", "local-dev-token")
+
+    status, _, payload = request(
+        "/objects/basics_counter",
+        method="PUT",
+        query_string="source=true",
+        body=b"{",
+        headers=[("authorization", "Token local-dev-token")],
+    )
+
+    assert status == 400
+    assert payload == {"status": "error", "error": "Invalid JSON body"}
+    assert source_path.read_text() == "def GET(request):\n    return {}\n"
+
+
+def test_source_update_requires_code_string(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_ENABLE_SOURCE_WRITES", "true")
+    monkeypatch.setenv("DBBASIC_ADMIN_TOKEN", "local-dev-token")
+
+    status, _, payload = request(
+        "/objects/basics_counter",
+        method="PUT",
+        query_string="source=true",
+        body=json.dumps({"source": "wrong field"}).encode(),
+        headers=[("authorization", "Token local-dev-token")],
+    )
+
+    assert status == 400
+    assert payload == {
+        "status": "error",
+        "error": "Request JSON field 'code' must be a string",
+    }
+
+
+def test_source_update_versions_source_and_immediately_runs_new_code(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    source_path = write_source(
+        root / "basics" / "counter.py",
+        "def GET(request):\n    return {'count': 1}\n",
+    )
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("DBBASIC_ENABLE_SOURCE_WRITES", "true")
+    monkeypatch.setenv("DBBASIC_ADMIN_TOKEN", "local-dev-token")
+    new_code = "def GET(request):\n    return {'count': 2}\n"
+
+    status, _, payload = request(
+        "/objects/basics_counter",
+        method="PUT",
+        query_string="source=true",
+        body=json.dumps(
+            {
+                "code": new_code,
+                "author": "test-api",
+                "message": "Update counter",
+            }
+        ).encode(),
+        headers=[("authorization", "Token local-dev-token")],
+    )
+
+    assert status == 200
+    assert payload == {
+        "status": "ok",
+        "message": "Code updated to version 1",
+        "version_id": 1,
+        "object_id": "basics_counter",
+    }
+    assert source_path.read_text() == new_code
+
+    manager = object_versions.VersionManager(data_dir)
+    saved = manager.get_version("basics_counter", 1)
+    assert saved is not None
+    assert saved["content"] == new_code
+    assert saved["author"] == "test-api"
+    assert saved["message"] == "Update counter"
+
+    status, _, payload = request("/objects/basics_counter")
+
+    assert status == 200
+    assert payload == {"count": 2}
 
 
 def test_object_execution_runs_get_method(tmp_path, monkeypatch):

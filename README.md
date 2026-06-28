@@ -93,7 +93,8 @@ Set `DBBASIC_OBJECTS_DIR` to point at a custom object source directory during mi
 ## Minimal Server
 
 The current public ASGI server can list objects, return source for an existing
-object, and execute an object's `GET(request)` function.
+object, execute an object's `GET(request)` function, and update source when the
+explicit source-write gate is enabled.
 
 ```bash
 python -m pip install -e '.[server,test]'
@@ -106,10 +107,23 @@ Current endpoints:
 - `GET /objects?format=json`
 - `GET /objects/{object_id}`
 - `GET /objects/{object_id}?source=true&format=json`
+- `PUT /objects/{object_id}?source=true`
 
 Execution currently uses `python_object_runtime.py`, a direct Python loader. It
 is useful for proving the loop, but it is not the production sandbox or security
 boundary.
+
+Source updates are disabled by default. For local development only:
+
+```bash
+export DBBASIC_ENABLE_SOURCE_WRITES=true
+export DBBASIC_ADMIN_TOKEN=replace-with-a-local-dev-token
+export DBBASIC_DATA_DIR=./data
+```
+
+Then send `Authorization: Token <token>` with the update request. Production
+auth and permissions still need to replace this temporary gate before general
+use.
 
 ## Current Extraction Slice
 
@@ -126,6 +140,8 @@ rules the rest of the server will use:
 - `basics_counter` maps to `objects/basics/counter.py`
 - `u_42_deals` maps to `objects/users/42/deals.py`
 - rollbacks create a new version instead of deleting history
+- source updates through HTTP require `DBBASIC_ENABLE_SOURCE_WRITES=true` and an
+  admin token
 - the old prototype source directory name is intentionally not a public default
 
 These pieces come first so the ASGI server, daemon, Scroll, tests, and migration

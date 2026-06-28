@@ -177,6 +177,17 @@ Response:
 The update must save a source version, write the source file, and leave enough
 information for clients to show the new version number.
 
+The current public server keeps this endpoint closed by default. Local
+development source writes require:
+
+```bash
+DBBASIC_ENABLE_SOURCE_WRITES=true
+DBBASIC_ADMIN_TOKEN=replace-with-a-local-dev-token
+```
+
+Production code should replace that temporary gate with the real auth and
+permission system before this endpoint is exposed to users.
+
 ## State
 
 ```http

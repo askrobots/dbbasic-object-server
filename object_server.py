@@ -1,22 +1,30 @@
 """Minimal ASGI app for DBBASIC Object Server.
 
-This is the first public server slice. It intentionally implements only
-read-only endpoints while the runtime, auth, and mutation paths are extracted.
+This is the first public server slice. Source writes are disabled by default
+while the production auth and mutation paths are extracted.
 """
 
 from __future__ import annotations
 
+import hmac
 import json
+import os
 import urllib.parse
 from typing import Any
 
 import http_api_contract
 import object_execution
 import object_source
+import object_versions
 from object_namespace import iter_object_sources, parse_user_object_id
 from object_versions import InvalidObjectIdError
 from python_object_runtime import MethodNotSupportedError, PythonObjectRuntime
 
+
+SOURCE_WRITES_ENV = "DBBASIC_ENABLE_SOURCE_WRITES"
+ADMIN_TOKEN_ENV = "DBBASIC_ADMIN_TOKEN"
+DATA_DIR_ENV = "DBBASIC_DATA_DIR"
+TRUE_VALUES = {"1", "true", "yes", "on"}
 
 _runtime = PythonObjectRuntime()
 
@@ -38,27 +46,36 @@ async def app(scope: dict[str, Any], receive, send) -> None:
 
 
 async def _handle_http(scope: dict[str, Any], receive, send) -> None:
-    await _read_body(receive)
+    body = await _read_body(receive)
 
     method = scope.get("method", "GET").upper()
     path = scope.get("path", "/")
     query = _parse_query(scope.get("query_string", b""))
+    headers = _parse_headers(scope.get("headers", []))
 
     if path == "/health":
         await _send_json(send, {"status": "ok"})
         return
 
-    if method != "GET":
-        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
-        return
-
     if path == http_api_contract.OBJECTS_PATH:
-        await _send_json(send, _list_objects_payload())
+        if method == "GET":
+            await _send_json(send, _list_objects_payload())
+            return
+
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
         return
 
     if path.startswith(f"{http_api_contract.OBJECTS_PATH}/"):
         object_id = path.removeprefix(f"{http_api_contract.OBJECTS_PATH}/")
-        await _handle_object_get(send, object_id, query)
+        if method == "GET":
+            await _handle_object_get(send, object_id, query)
+            return
+
+        if method == "PUT" and query.get("source") == "true":
+            await _handle_object_source_put(send, object_id, body, headers)
+            return
+
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
         return
 
     await _send_json(send, {"status": "error", "error": "Not found"}, status=404)
@@ -109,6 +126,70 @@ async def _handle_object_get(send, object_id: str, query: dict[str, str]) -> Non
     await _send_execution_error(send, result)
 
 
+async def _handle_object_source_put(
+    send,
+    object_id: str,
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    if "@" in object_id:
+        await _send_json(
+            send,
+            {"status": "error", "error": "Station routing is not available in this server"},
+            status=400,
+        )
+        return
+
+    gate_error = _source_write_gate_error(headers)
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    try:
+        payload = _parse_json_body(body)
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    code = payload.get("code")
+    if not isinstance(code, str):
+        await _send_json(
+            send,
+            {"status": "error", "error": "Request JSON field 'code' must be a string"},
+            status=400,
+        )
+        return
+
+    author = _payload_text(payload, "author", "api")
+    message = _payload_text(payload, "message", "Updated via API")
+
+    try:
+        version_id = object_source.update_object_source(
+            object_id=object_id,
+            new_code=code,
+            author=author,
+            message=message,
+            version_manager=_version_manager(),
+        )
+    except InvalidObjectIdError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_source.ObjectSourceNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "message": f"Code updated to version {version_id}",
+            "version_id": version_id,
+            "object_id": object_id,
+        },
+    )
+
+
 def _list_objects_payload() -> dict[str, Any]:
     objects = [_object_source_payload(source) for source in iter_object_sources()]
     return {
@@ -138,6 +219,71 @@ def _parse_query(query_string: bytes | str) -> dict[str, str]:
     if isinstance(query_string, bytes):
         query_string = query_string.decode("utf-8")
     return dict(urllib.parse.parse_qsl(query_string))
+
+
+def _parse_headers(headers: list[tuple[bytes, bytes]]) -> dict[str, str]:
+    parsed = {}
+    for name, value in headers:
+        parsed[name.decode("latin-1").lower()] = value.decode("latin-1")
+    return parsed
+
+
+def _parse_json_body(body: bytes) -> dict[str, Any]:
+    if not body.strip():
+        return {}
+
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Invalid JSON body") from exc
+
+    if not isinstance(payload, dict):
+        raise ValueError("JSON body must be an object")
+
+    return payload
+
+
+def _payload_text(payload: dict[str, Any], key: str, default: str) -> str:
+    value = payload.get(key, default)
+    if not isinstance(value, str) or not value.strip():
+        return default
+    return value
+
+
+def _source_write_gate_error(headers: dict[str, str]) -> tuple[int, str] | None:
+    if not _env_enabled(SOURCE_WRITES_ENV):
+        return (
+            403,
+            f"Source writes are disabled. Set {SOURCE_WRITES_ENV}=true and {ADMIN_TOKEN_ENV}.",
+        )
+
+    admin_token = os.environ.get(ADMIN_TOKEN_ENV, "")
+    if not admin_token:
+        return (403, f"Source writes require {ADMIN_TOKEN_ENV}.")
+
+    request_token = _authorization_token(headers)
+    if request_token is None or not hmac.compare_digest(request_token, admin_token):
+        return (401, "Unauthorized")
+
+    return None
+
+
+def _authorization_token(headers: dict[str, str]) -> str | None:
+    authorization = headers.get("authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() not in {"token", "bearer"} or not token:
+        return None
+    return token
+
+
+def _env_enabled(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in TRUE_VALUES
+
+
+def _version_manager() -> object_versions.VersionManager:
+    return object_versions.VersionManager(
+        os.environ.get(DATA_DIR_ENV, object_versions.DEFAULT_DATA_DIR)
+    )
 
 
 async def _read_body(receive) -> bytes:
