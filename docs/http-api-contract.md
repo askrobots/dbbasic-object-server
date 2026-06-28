@@ -331,6 +331,7 @@ Response:
   "status": "ok",
   "message": "Rolled back to version 1",
   "version_id": 1,
+  "new_version_id": 3,
   "object_id": "u_42_deals"
 }
 ```
@@ -341,6 +342,17 @@ the old source, write that source to the object file, and preserve history.
 The historical response reports the requested rollback version in `version_id`.
 Future responses may add `new_version_id`, but must not remove `version_id`
 without a client migration.
+
+The current public server supports `new_version_id` and uses the same temporary
+source-write gate as source updates:
+
+```bash
+DBBASIC_ENABLE_SOURCE_WRITES=true
+DBBASIC_ADMIN_TOKEN=replace-with-a-local-dev-token
+```
+
+Production code should replace that temporary gate with the real auth and
+permission system before rollback is exposed to users.
 
 ## Destroy Object
 

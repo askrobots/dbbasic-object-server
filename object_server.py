@@ -71,6 +71,10 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
             await _handle_object_get(send, object_id, query)
             return
 
+        if method == "POST":
+            await _handle_object_post(send, object_id, body, headers)
+            return
+
         if method == "PUT" and query.get("source") == "true":
             await _handle_object_source_put(send, object_id, body, headers)
             return
@@ -88,6 +92,14 @@ async def _handle_object_get(send, object_id: str, query: dict[str, str]) -> Non
             {"status": "error", "error": "Station routing is not available in this server"},
             status=400,
         )
+        return
+
+    if query.get("versions") == "true":
+        await _handle_object_versions_get(send, object_id, query)
+        return
+
+    if "version" in query:
+        await _handle_object_version_get(send, object_id, query)
         return
 
     if query.get("source") == "true":
@@ -124,6 +136,148 @@ async def _handle_object_get(send, object_id: str, query: dict[str, str]) -> Non
         return
 
     await _send_execution_error(send, result)
+
+
+async def _handle_object_versions_get(
+    send,
+    object_id: str,
+    query: dict[str, str],
+) -> None:
+    try:
+        _ensure_object_source_exists(object_id)
+        limit = _query_int(query, "limit", default=10, minimum=1, maximum=100)
+        versions = _version_manager().get_history(object_id, limit=limit)
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except InvalidObjectIdError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_source.ObjectSourceNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "object_id": object_id,
+            "versions": versions,
+            "count": len(versions),
+        },
+    )
+
+
+async def _handle_object_version_get(
+    send,
+    object_id: str,
+    query: dict[str, str],
+) -> None:
+    try:
+        _ensure_object_source_exists(object_id)
+        version_id = _query_int(query, "version", minimum=1)
+        version = _version_manager().get_version(object_id, version_id)
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except InvalidObjectIdError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_source.ObjectSourceNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+
+    if version is None:
+        await _send_json(
+            send,
+            {"status": "error", "error": f"Version {version_id} not found for object {object_id}"},
+            status=404,
+        )
+        return
+
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "object_id": object_id,
+            "version": version,
+        },
+    )
+
+
+async def _handle_object_post(
+    send,
+    object_id: str,
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    if "@" in object_id:
+        await _send_json(
+            send,
+            {"status": "error", "error": "Station routing is not available in this server"},
+            status=400,
+        )
+        return
+
+    try:
+        payload = _parse_json_body(body)
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    if payload.get("action") != "rollback":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    await _handle_object_rollback_post(send, object_id, payload, headers)
+
+
+async def _handle_object_rollback_post(
+    send,
+    object_id: str,
+    payload: dict[str, Any],
+    headers: dict[str, str],
+) -> None:
+    gate_error = _source_write_gate_error(headers)
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    try:
+        version_id = _payload_int(payload, "version_id", minimum=1)
+        author = _payload_text(payload, "author", "api")
+        message = _payload_text(payload, "message", f"Rollback to version {version_id}")
+        new_version_id = object_source.rollback_object_source(
+            object_id=object_id,
+            to_version=version_id,
+            author=author,
+            message=message,
+            version_manager=_version_manager(),
+        )
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except InvalidObjectIdError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_source.ObjectSourceNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+    except object_versions.VersionNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "message": f"Rolled back to version {version_id}",
+            "version_id": version_id,
+            "new_version_id": new_version_id,
+            "object_id": object_id,
+        },
+    )
 
 
 async def _handle_object_source_put(
@@ -248,6 +402,57 @@ def _payload_text(payload: dict[str, Any], key: str, default: str) -> str:
     if not isinstance(value, str) or not value.strip():
         return default
     return value
+
+
+def _payload_int(payload: dict[str, Any], key: str, *, minimum: int | None = None) -> int:
+    if key not in payload:
+        raise ValueError(f"Request JSON field '{key}' is required")
+
+    value = payload[key]
+    if isinstance(value, bool):
+        raise ValueError(f"Request JSON field '{key}' must be an integer")
+
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Request JSON field '{key}' must be an integer") from exc
+
+    if minimum is not None and parsed < minimum:
+        raise ValueError(f"Request JSON field '{key}' must be at least {minimum}")
+
+    return parsed
+
+
+def _query_int(
+    query: dict[str, str],
+    key: str,
+    *,
+    default: int | None = None,
+    minimum: int | None = None,
+    maximum: int | None = None,
+) -> int:
+    value = query.get(key)
+    if value is None:
+        if default is None:
+            raise ValueError(f"Query parameter '{key}' is required")
+        parsed = default
+    else:
+        try:
+            parsed = int(value)
+        except ValueError as exc:
+            raise ValueError(f"Query parameter '{key}' must be an integer") from exc
+
+    if minimum is not None and parsed < minimum:
+        raise ValueError(f"Query parameter '{key}' must be at least {minimum}")
+
+    if maximum is not None and parsed > maximum:
+        raise ValueError(f"Query parameter '{key}' must be at most {maximum}")
+
+    return parsed
+
+
+def _ensure_object_source_exists(object_id: str) -> None:
+    object_source.get_object_source(object_id)
 
 
 def _source_write_gate_error(headers: dict[str, str]) -> tuple[int, str] | None:

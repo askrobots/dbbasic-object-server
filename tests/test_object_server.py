@@ -64,6 +64,33 @@ async def asgi_request(path, method="GET", query_string="", body=b"", headers=No
     return start["status"], dict(start["headers"]), json.loads(payload)
 
 
+def enable_source_writes(monkeypatch, root, data_dir):
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("DBBASIC_ENABLE_SOURCE_WRITES", "true")
+    monkeypatch.setenv("DBBASIC_ADMIN_TOKEN", "local-dev-token")
+
+
+def auth_headers():
+    return [("authorization", "Token local-dev-token")]
+
+
+def update_source(object_id, code, *, author="test-api", message="Update source"):
+    return request(
+        f"/objects/{object_id}",
+        method="PUT",
+        query_string="source=true",
+        body=json.dumps(
+            {
+                "code": code,
+                "author": author,
+                "message": message,
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+
 def test_health_endpoint_returns_ok():
     status, headers, payload = request("/health")
 
@@ -297,6 +324,205 @@ def test_source_update_versions_source_and_immediately_runs_new_code(tmp_path, m
 
     assert status == 200
     assert payload == {"count": 2}
+
+
+def test_versions_endpoint_lists_history_newest_first_without_content(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {'count': 0}\n")
+    data_dir = tmp_path / "data"
+    enable_source_writes(monkeypatch, root, data_dir)
+
+    update_source(
+        "basics_counter",
+        "def GET(request):\n    return {'count': 1}\n",
+        message="first",
+    )
+    update_source(
+        "basics_counter",
+        "def GET(request):\n    return {'count': 2}\n",
+        message="second",
+    )
+
+    status, _, payload = request(
+        "/objects/basics_counter",
+        query_string="versions=true&limit=10",
+    )
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["object_id"] == "basics_counter"
+    assert payload["count"] == 2
+    assert [version["version_id"] for version in payload["versions"]] == [2, 1]
+    assert [version["message"] for version in payload["versions"]] == ["second", "first"]
+    assert all("content" not in version for version in payload["versions"])
+
+    status, _, payload = request(
+        "/objects/basics_counter",
+        query_string="versions=true&limit=1",
+    )
+
+    assert status == 200
+    assert payload["count"] == 1
+    assert [version["version_id"] for version in payload["versions"]] == [2]
+
+
+def test_versions_endpoint_rejects_bad_limit(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {'count': 0}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+
+    status, _, payload = request(
+        "/objects/basics_counter",
+        query_string="versions=true&limit=0",
+    )
+
+    assert status == 400
+    assert payload == {"status": "error", "error": "Query parameter 'limit' must be at least 1"}
+
+
+def test_specific_version_endpoint_returns_content(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {'count': 0}\n")
+    data_dir = tmp_path / "data"
+    enable_source_writes(monkeypatch, root, data_dir)
+    v1_code = "def GET(request):\n    return {'count': 1}\n"
+
+    update_source("basics_counter", v1_code, message="first")
+
+    status, _, payload = request("/objects/basics_counter", query_string="version=1")
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["object_id"] == "basics_counter"
+    assert payload["version"]["version_id"] == 1
+    assert payload["version"]["content"] == v1_code
+    assert payload["version"]["message"] == "first"
+
+
+def test_specific_version_endpoint_returns_404_for_missing_version(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {'count': 0}\n")
+    data_dir = tmp_path / "data"
+    enable_source_writes(monkeypatch, root, data_dir)
+
+    status, _, payload = request("/objects/basics_counter", query_string="version=99")
+
+    assert status == 404
+    assert payload == {
+        "status": "error",
+        "error": "Version 99 not found for object basics_counter",
+    }
+
+
+def test_specific_version_endpoint_rejects_bad_version_id(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {'count': 0}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+
+    status, _, payload = request("/objects/basics_counter", query_string="version=bad")
+
+    assert status == 400
+    assert payload == {"status": "error", "error": "Query parameter 'version' must be an integer"}
+
+
+def test_rollback_requires_source_write_gate(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    source_path = write_source(
+        root / "basics" / "counter.py",
+        "def GET(request):\n    return {'count': 0}\n",
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.delenv("DBBASIC_ENABLE_SOURCE_WRITES", raising=False)
+    monkeypatch.setenv("DBBASIC_ADMIN_TOKEN", "local-dev-token")
+
+    status, _, payload = request(
+        "/objects/basics_counter",
+        method="POST",
+        body=json.dumps({"action": "rollback", "version_id": 1}).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 403
+    assert payload["status"] == "error"
+    assert payload["error"].startswith("Source writes are disabled")
+    assert source_path.read_text() == "def GET(request):\n    return {'count': 0}\n"
+
+
+def test_rollback_versions_source_and_immediately_runs_old_code(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    source_path = write_source(
+        root / "basics" / "counter.py",
+        "def GET(request):\n    return {'count': 0}\n",
+    )
+    data_dir = tmp_path / "data"
+    enable_source_writes(monkeypatch, root, data_dir)
+    v1_code = "def GET(request):\n    return {'count': 1}\n"
+    v2_code = "def GET(request):\n    return {'count': 2}\n"
+
+    update_source("basics_counter", v1_code, message="first")
+    update_source("basics_counter", v2_code, message="second")
+
+    status, _, payload = request("/objects/basics_counter")
+
+    assert status == 200
+    assert payload == {"count": 2}
+
+    status, _, payload = request(
+        "/objects/basics_counter",
+        method="POST",
+        body=json.dumps(
+            {
+                "action": "rollback",
+                "version_id": 1,
+                "author": "test-api",
+                "message": "Rollback to first",
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload == {
+        "status": "ok",
+        "message": "Rolled back to version 1",
+        "version_id": 1,
+        "new_version_id": 3,
+        "object_id": "basics_counter",
+    }
+    assert source_path.read_text() == v1_code
+
+    status, _, payload = request("/objects/basics_counter")
+
+    assert status == 200
+    assert payload == {"count": 1}
+
+    manager = object_versions.VersionManager(data_dir)
+    assert [row["version_id"] for row in manager.get_history("basics_counter")] == [3, 2, 1]
+    latest = manager.get_version("basics_counter")
+    assert latest is not None
+    assert latest["content"] == v1_code
+    assert latest["message"] == "Rollback to first"
+
+
+def test_rollback_returns_404_for_missing_version(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {'count': 0}\n")
+    data_dir = tmp_path / "data"
+    enable_source_writes(monkeypatch, root, data_dir)
+
+    status, _, payload = request(
+        "/objects/basics_counter",
+        method="POST",
+        body=json.dumps({"action": "rollback", "version_id": 99}).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 404
+    assert payload == {
+        "status": "error",
+        "error": "Version 99 not found for object basics_counter",
+    }
 
 
 def test_object_execution_runs_get_method(tmp_path, monkeypatch):

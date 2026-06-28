@@ -94,7 +94,8 @@ Set `DBBASIC_OBJECTS_DIR` to point at a custom object source directory during mi
 
 The current public ASGI server can list objects, return source for an existing
 object, execute an object's `GET(request)` function, and update source when the
-explicit source-write gate is enabled.
+explicit source-write gate is enabled. It can also list source versions, read a
+specific version, and roll back source through the same write gate.
 
 ```bash
 python -m pip install -e '.[server,test]'
@@ -107,7 +108,10 @@ Current endpoints:
 - `GET /objects?format=json`
 - `GET /objects/{object_id}`
 - `GET /objects/{object_id}?source=true&format=json`
+- `GET /objects/{object_id}?versions=true&limit=10`
+- `GET /objects/{object_id}?version=1`
 - `PUT /objects/{object_id}?source=true`
+- `POST /objects/{object_id}` with `{"action": "rollback", "version_id": 1}`
 
 Execution currently uses `python_object_runtime.py`, a direct Python loader. It
 is useful for proving the loop, but it is not the production sandbox or security
@@ -121,9 +125,9 @@ export DBBASIC_ADMIN_TOKEN=replace-with-a-local-dev-token
 export DBBASIC_DATA_DIR=./data
 ```
 
-Then send `Authorization: Token <token>` with the update request. Production
-auth and permissions still need to replace this temporary gate before general
-use.
+Then send `Authorization: Token <token>` with source update and rollback
+requests. Production auth and permissions still need to replace this temporary
+gate before general use.
 
 ## Current Extraction Slice
 
@@ -142,6 +146,8 @@ rules the rest of the server will use:
 - rollbacks create a new version instead of deleting history
 - source updates through HTTP require `DBBASIC_ENABLE_SOURCE_WRITES=true` and an
   admin token
+- HTTP version history makes the loop visible: update source, inspect versions,
+  rollback, and run the object again
 - the old prototype source directory name is intentionally not a public default
 
 These pieces come first so the ASGI server, daemon, Scroll, tests, and migration
