@@ -42,6 +42,9 @@ dev = [
 test = [
     "pytest>=7.4.0",
 ]
+server = [
+    "uvicorn>=0.30.0",
+]
 
 [project.urls]
 Homepage = "https://dbbasic.com"
@@ -65,6 +68,7 @@ py-modules = [
     "object_daemon",
     "object_execution",
     "object_namespace",
+    "object_server",
     "object_source",
     "object_versions",
 ]

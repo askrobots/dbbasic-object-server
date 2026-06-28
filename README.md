@@ -26,8 +26,13 @@ The point is to keep the things needed for development close together:
 
 That gives DBBASIC a short loop:
 
-```text
-edit one object -> run it -> see output/logs/state/errors -> fix it -> keep the version trail
+```mermaid
+flowchart TD
+    A["Edit one object"] --> B["Run it"]
+    B --> C["See output, logs, state, and errors"]
+    C --> D["Fix source"]
+    D --> E["Keep version trail"]
+    E --> A
 ```
 
 This is the `100x dev loop` this project is trying to protect.
@@ -65,6 +70,7 @@ That makes the system useful for humans and AI tools:
 
 This repository currently contains:
 
+- `object_server.py` - minimal read-only ASGI server slice
 - `object_namespace.py` - object source discovery and object ID resolution
 - `object_execution.py` - structured object execution results and error capture
 - `object_source.py` - source read, update, version, and rollback operations
@@ -79,11 +85,28 @@ New DBBASIC object source should live under `objects/`.
 
 Set `DBBASIC_OBJECTS_DIR` to point at a custom object source directory during migration or deployment.
 
+## Minimal Server
+
+The current public ASGI server is read-only. It can list objects and return
+source for an existing object.
+
+```bash
+python -m pip install -e '.[server,test]'
+uvicorn object_server:app --host 127.0.0.1 --port 8001
+```
+
+Current endpoints:
+
+- `GET /health`
+- `GET /objects?format=json`
+- `GET /objects/{object_id}?source=true&format=json`
+
 ## Current Extraction Slice
 
 The current public slice is not the whole server yet. It defines the first shared
 rules the rest of the server will use:
 
+- `object_server.py` exposes the first read-only ASGI endpoints
 - `object_namespace.py` maps object IDs to files under `objects/`
 - `object_execution.py` returns success or error results from object runs
 - `object_source.py` reads, updates, versions, and rolls back source files
@@ -97,8 +120,9 @@ rules the rest of the server will use:
 These pieces come first so the ASGI server, daemon, Scroll, tests, and migration
 tools all agree on the same object rules.
 
-See `docs/runtime-contract.md` for the daemon-facing runtime contract and
-`docs/http-api-contract.md` for the HTTP API shape that existing clients expect.
+See `docs/runtime-contract.md` for the daemon-facing runtime contract,
+`docs/http-api-contract.md` for the HTTP API shape that existing clients expect,
+and `docs/asgi-realtime-direction.md` for the ASGI/realtime direction.
 
 Read `SECURITY.md` and `CONTRIBUTING.md` before copying code or documentation from private prototypes into this repository.
 
