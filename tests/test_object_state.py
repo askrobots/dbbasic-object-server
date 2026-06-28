@@ -58,6 +58,54 @@ def test_get_object_state_ignores_blank_and_malformed_rows(tmp_path):
     assert state == {"valid": "value"}
 
 
+def test_object_state_manager_sets_and_persists_values(tmp_path):
+    manager = object_state.ObjectStateManager("basics_counter", base_dir=tmp_path / "data")
+
+    manager.set("count", 1)
+    manager.set("name", "counter")
+
+    assert manager.get("count") == 1
+    assert manager.get("missing", "default") == "default"
+    assert manager.get_all() == {"count": 1, "name": "counter"}
+    assert object_state.get_object_state("basics_counter", base_dir=tmp_path / "data") == {
+        "count": 1,
+        "name": "counter",
+    }
+
+
+def test_object_state_manager_reload_reads_fresh_state(tmp_path):
+    first = object_state.ObjectStateManager("basics_counter", base_dir=tmp_path / "data")
+    second = object_state.ObjectStateManager("basics_counter", base_dir=tmp_path / "data")
+
+    first.set("count", 2)
+
+    assert second.get("count") is None
+    second.reload()
+    assert second.get("count") == 2
+
+
+def test_object_state_manager_writes_timestamp_format(tmp_path):
+    manager = object_state.ObjectStateManager("basics_counter", base_dir=tmp_path / "data")
+
+    manager.set("count", 3)
+
+    state_file = tmp_path / "data" / "state" / "basics_counter" / "state.tsv"
+    fields = state_file.read_text().strip().split("\t")
+    assert fields[0] == "count"
+    assert fields[1] == "3"
+    assert float(fields[2]) > 0
+
+
+def test_object_state_manager_rejects_invalid_keys(tmp_path):
+    manager = object_state.ObjectStateManager("basics_counter", base_dir=tmp_path / "data")
+
+    with pytest.raises(ValueError, match="State key must be a non-empty string"):
+        manager.set("", 1)
+
+    with pytest.raises(ValueError, match="Invalid state key"):
+        manager.set("bad\tkey", 1)
+
+
 @pytest.mark.parametrize(
     "object_id",
     [

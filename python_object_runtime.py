@@ -7,11 +7,18 @@ production sandbox.
 
 from __future__ import annotations
 
+import os
 import re
 import traceback
 from pathlib import Path
 from types import ModuleType
 from typing import Any
+
+import object_state
+from object_versions import DEFAULT_DATA_DIR
+
+
+DATA_DIR_ENV = "DBBASIC_DATA_DIR"
 
 
 class PythonObjectRuntimeError(Exception):
@@ -33,17 +40,27 @@ class ObjectMethodExecutionError(PythonObjectRuntimeError):
 class PythonObjectRuntime:
     """Load Python object files for direct execution."""
 
+    def __init__(self, base_dir: Path | str | None = None):
+        self.base_dir = Path(base_dir) if base_dir is not None else None
+
     def load_object(self, path: Path, object_id: str | None = None) -> "PythonObject":
-        return PythonObject(path=path, object_id=object_id)
+        return PythonObject(path=path, object_id=object_id, base_dir=self._base_dir())
+
+    def _base_dir(self) -> Path:
+        if self.base_dir is not None:
+            return self.base_dir
+        return Path(os.environ.get(DATA_DIR_ENV, DEFAULT_DATA_DIR))
 
 
 class PythonObject:
     """Executable wrapper around a loaded Python object module."""
 
-    def __init__(self, path: Path, object_id: str | None = None):
+    def __init__(self, path: Path, object_id: str | None = None, base_dir: Path | str = DEFAULT_DATA_DIR):
         self.path = Path(path)
         self.object_id = object_id or self.path.stem
+        self.state_manager = object_state.ObjectStateManager(self.object_id, base_dir=base_dir)
         self.module = _load_module(self.path, self.object_id)
+        self.module._state_manager = self.state_manager
 
     def execute(self, method: str, payload: dict[str, Any]) -> Any:
         method_name = method.upper()

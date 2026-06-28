@@ -924,6 +924,33 @@ def test_object_execution_appends_success_log(tmp_path, monkeypatch):
     assert float(log["duration_ms"]) >= 0
 
 
+def test_object_execution_state_manager_persists_state(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(
+        root / "basics" / "counter.py",
+        "_state_manager = None\n"
+        "def GET(request):\n"
+        "    count = _state_manager.get('count', 0) + 1\n"
+        "    _state_manager.set('count', count)\n"
+        "    return {'count': count}\n",
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+
+    assert request("/objects/basics_counter")[2] == {"count": 1}
+    assert request("/objects/basics_counter")[2] == {"count": 2}
+
+    status, _, payload = request("/objects/basics_counter", query_string="state=true")
+
+    assert status == 200
+    assert payload == {
+        "status": "ok",
+        "object_id": "basics_counter",
+        "state": {"count": 2},
+    }
+
+
 def test_object_execution_passes_query_params_as_payload(tmp_path, monkeypatch):
     root = tmp_path / "objects"
     write_source(

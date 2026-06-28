@@ -1,4 +1,4 @@
-"""Read-only object state storage.
+"""Object state storage.
 
 The working prototype stores object state in plain TSV files:
 
@@ -11,6 +11,7 @@ conflict handling in the full runtime.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,36 @@ from object_versions import DEFAULT_DATA_DIR, InvalidObjectIdError
 
 
 STATE_FILE = "state.tsv"
+
+
+class ObjectStateManager:
+    """Runtime-owned object state manager."""
+
+    def __init__(self, object_id: str, base_dir: Path | str = DEFAULT_DATA_DIR):
+        self.object_id = object_id
+        self.base_dir = Path(base_dir)
+        self.state_file = object_state_file(object_id, base_dir)
+        self.state_file.parent.mkdir(parents=True, exist_ok=True)
+        self._state = get_object_state(object_id, base_dir)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Return one state value."""
+        return self._state.get(key, default)
+
+    def set(self, key: str, value: Any) -> None:
+        """Set one state value and persist the object state file."""
+        _validate_state_key(key)
+        self._state = get_object_state(self.object_id, self.base_dir)
+        self._state[key] = value
+        _write_object_state(self.state_file, self._state, timestamp=time.time())
+
+    def get_all(self) -> dict[str, Any]:
+        """Return all loaded state values."""
+        return dict(self._state)
+
+    def reload(self) -> None:
+        """Reload state from disk."""
+        self._state = get_object_state(self.object_id, self.base_dir)
 
 
 def get_object_state(object_id: str, base_dir: Path | str = DEFAULT_DATA_DIR) -> dict[str, Any]:
@@ -67,6 +98,24 @@ def _parse_state_row(line: str) -> tuple[str, str] | None:
         return None
 
     return parts[0], parts[1]
+
+
+def _write_object_state(state_file: Path, state: dict[str, Any], timestamp: float) -> None:
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = state_file.with_name(f".{state_file.name}.tmp")
+
+    with temp_path.open("w") as f:
+        for key, value in sorted(state.items()):
+            f.write(f"{key}\t{value}\t{timestamp}\n")
+
+    temp_path.replace(state_file)
+
+
+def _validate_state_key(key: str) -> None:
+    if not isinstance(key, str) or not key:
+        raise ValueError("State key must be a non-empty string")
+    if any(char in key for char in "\t\r\n"):
+        raise ValueError(f"Invalid state key: {key!r}")
 
 
 def _coerce_value(value: str) -> Any:

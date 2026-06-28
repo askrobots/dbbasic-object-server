@@ -79,7 +79,7 @@ This repository currently contains:
 - `object_namespace.py` - object source discovery and object ID resolution
 - `object_execution.py` - structured object execution results and error capture
 - `object_source.py` - source read, update, version, and rollback operations
-- `object_state.py` - TSV-backed object state reads
+- `object_state.py` - TSV-backed object state reads and runtime writes
 - `object_logs.py` - TSV-backed object log reads and appends
 - `object_metadata.py` - conservative object metadata summaries
 - `object_versions.py` - source version metadata, content snapshots, and rollback
@@ -149,7 +149,7 @@ rules the rest of the server will use:
 - `object_namespace.py` maps object IDs to files under `objects/`
 - `object_execution.py` returns success or error results from object method runs
 - `object_source.py` reads, updates, versions, and rolls back source files
-- `object_state.py` reads TSV-backed object state
+- `object_state.py` reads and writes runtime-owned TSV-backed object state
 - `object_logs.py` reads and appends TSV-backed object logs
 - `object_metadata.py` summarizes source, state, logs, and versions
 - `object_versions.py` keeps source history as `metadata.tsv` plus `vN.txt` files

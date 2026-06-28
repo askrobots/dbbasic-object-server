@@ -63,6 +63,9 @@ obj.state_manager
 obj.execute(method, payload)
 ```
 
+Loaded object modules receive `_state_manager`. The current public runtime
+injects a minimal manager with `get`, `set`, `get_all`, and `reload`.
+
 ## Object Execution Result
 
 Public code should use `object_execution.py` for the shared execution result shape.
@@ -155,7 +158,16 @@ key<TAB>value<TAB>timestamp
 
 The public state reader skips an optional `key<TAB>value<TAB>timestamp` header,
 ignores malformed rows, and coerces values to `int`, then `float`, otherwise
-keeps strings. State writes remain owned by the runtime for now.
+keeps strings.
+
+The public runtime-owned state manager writes sorted rows in timestamp format:
+
+```text
+key<TAB>value<TAB>timestamp
+```
+
+There is still no public HTTP state-write endpoint. Object code writes state
+through `_state_manager`.
 
 ## Log Storage
 
