@@ -469,6 +469,7 @@ async def _execute_object_method(
             payload=payload,
         ),
     )
+    _append_execution_log(result)
 
     if result.ok:
         await _send_json(send, result.result)
@@ -500,6 +501,41 @@ def _object_owner(object_id: str) -> str:
         return "system"
     user_id, _ = parsed
     return str(user_id)
+
+
+def _append_execution_log(result: object_execution.ObjectExecutionResult) -> None:
+    if result.path is None:
+        return
+
+    try:
+        if result.ok:
+            object_logs.append_object_log(
+                result.object_id,
+                "DEBUG",
+                f"{result.method} completed successfully",
+                base_dir=_data_dir(),
+                method=result.method,
+                status="success",
+                duration_ms=result.duration_ms,
+            )
+            return
+
+        error_type = result.error.type if result.error is not None else None
+        error = result.error.message if result.error is not None else None
+        object_logs.append_object_log(
+            result.object_id,
+            "ERROR",
+            f"{result.method} failed: {error}",
+            base_dir=_data_dir(),
+            method=result.method,
+            status="error",
+            duration_ms=result.duration_ms,
+            error_type=error_type,
+            error=error,
+        )
+    except Exception:
+        # Logging is feedback for the dev loop; it should not change the object response.
+        pass
 
 
 def _parse_query(query_string: bytes | str) -> dict[str, str]:

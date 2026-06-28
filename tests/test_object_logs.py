@@ -93,6 +93,62 @@ def test_get_object_logs_reads_current_then_rotated_files(tmp_path):
     assert [entry["entry_id"] for entry in logs] == ["current", "old1", "old2"]
 
 
+def test_append_object_log_creates_tsv_entry(tmp_path):
+    entry = object_logs.append_object_log(
+        "basics_counter",
+        "DEBUG",
+        "GET completed successfully",
+        base_dir=tmp_path / "data",
+        method="GET",
+        status="success",
+        duration_ms=1.25,
+    )
+
+    logs = object_logs.get_object_logs("basics_counter", base_dir=tmp_path / "data")
+
+    assert entry["entry_id"]
+    assert logs == [
+        {
+            "entry_id": entry["entry_id"],
+            "timestamp": entry["timestamp"],
+            "level": "DEBUG",
+            "message": "GET completed successfully",
+            "method": "GET",
+            "status": "success",
+            "duration_ms": "1.25",
+            "error_type": "",
+            "error": "",
+        }
+    ]
+
+
+def test_append_object_log_extends_existing_header(tmp_path):
+    write_log(
+        tmp_path / "data" / "logs" / "basics_counter" / "log.tsv",
+        "entry_id\ttimestamp\tlevel\tmessage\n"
+        "a1\t2026-01-01T00:00:00\tINFO\told\n",
+    )
+
+    object_logs.append_object_log(
+        "basics_counter",
+        "ERROR",
+        "GET failed: boom",
+        base_dir=tmp_path / "data",
+        method="GET",
+        status="error",
+        error_type="RuntimeError",
+        error="boom",
+    )
+
+    logs = object_logs.get_object_logs("basics_counter", base_dir=tmp_path / "data")
+
+    assert logs[0]["message"] == "old"
+    assert logs[0]["status"] == ""
+    assert logs[1]["method"] == "GET"
+    assert logs[1]["status"] == "error"
+    assert logs[1]["error_type"] == "RuntimeError"
+
+
 @pytest.mark.parametrize(
     "object_id",
     [

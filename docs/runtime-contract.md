@@ -172,11 +172,22 @@ Rows are TSV with a header. The default fields are:
 - `timestamp`
 - `level`
 - `message`
+- `method`
+- `status`
+- `duration_ms`
+- `error_type`
+- `error`
 
 Object code may add extra fields such as `method`, `user_id`, or request
 metadata. The public log reader returns the current `log.tsv` first, then
 rotated `log-*.tsv` files in sorted order, and supports exact `level` filtering
-and `limit`. Log writes remain owned by the runtime for now.
+and `limit`.
+
+The public ASGI execution path appends one log entry after each object method
+run. Successful runs use `DEBUG` with `status=success`; failed runs use `ERROR`
+with `status=error`, `error_type`, and `error`. A future runtime logger helper
+should use the same storage path and field rules instead of creating a second
+log format.
 
 ## Scheduler State
 

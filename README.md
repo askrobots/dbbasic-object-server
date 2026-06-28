@@ -74,13 +74,13 @@ That makes the system useful for humans and AI tools:
 
 This repository currently contains:
 
-- `object_server.py` - minimal read-only ASGI server slice
+- `object_server.py` - minimal ASGI server slice
 - `python_object_runtime.py` - minimal direct Python object loader for early execution tests
 - `object_namespace.py` - object source discovery and object ID resolution
 - `object_execution.py` - structured object execution results and error capture
 - `object_source.py` - source read, update, version, and rollback operations
 - `object_state.py` - TSV-backed object state reads
-- `object_logs.py` - TSV-backed object log reads
+- `object_logs.py` - TSV-backed object log reads and appends
 - `object_metadata.py` - conservative object metadata summaries
 - `object_versions.py` - source version metadata, content snapshots, and rollback
 - `object_daemon.py` - background worker for scheduler, queue, events, and cleanup
@@ -150,7 +150,7 @@ rules the rest of the server will use:
 - `object_execution.py` returns success or error results from object method runs
 - `object_source.py` reads, updates, versions, and rolls back source files
 - `object_state.py` reads TSV-backed object state
-- `object_logs.py` reads TSV-backed object logs
+- `object_logs.py` reads and appends TSV-backed object logs
 - `object_metadata.py` summarizes source, state, logs, and versions
 - `object_versions.py` keeps source history as `metadata.tsv` plus `vN.txt` files
 - `object_daemon.py` runs scheduled, queued, and event work

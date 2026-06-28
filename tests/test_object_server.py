@@ -901,6 +901,29 @@ def test_object_execution_runs_get_method(tmp_path, monkeypatch):
     assert payload == {"count": 1}
 
 
+def test_object_execution_appends_success_log(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {'count': 1}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+
+    status, _, payload = request("/objects/basics_counter")
+    assert status == 200
+    assert payload == {"count": 1}
+
+    status, _, payload = request("/objects/basics_counter", query_string="logs=true")
+
+    assert status == 200
+    assert payload["count"] == 1
+    log = payload["logs"][0]
+    assert log["level"] == "DEBUG"
+    assert log["message"] == "GET completed successfully"
+    assert log["method"] == "GET"
+    assert log["status"] == "success"
+    assert float(log["duration_ms"]) >= 0
+
+
 def test_object_execution_passes_query_params_as_payload(tmp_path, monkeypatch):
     root = tmp_path / "objects"
     write_source(
@@ -938,6 +961,33 @@ def test_object_execution_returns_json_error_for_object_exception(tmp_path, monk
     assert payload["status"] == "error"
     assert payload["error"].startswith("Execution failed: GET failed for object basics_broken")
     assert "RuntimeError: boom" in payload["error"]
+
+
+def test_object_execution_appends_error_log(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(
+        root / "basics" / "broken.py",
+        "def GET(request):\n    raise RuntimeError('boom')\n",
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+
+    status, _, payload = request("/objects/basics_broken")
+    assert status == 500
+    assert "RuntimeError: boom" in payload["error"]
+
+    status, _, payload = request("/objects/basics_broken", query_string="logs=true")
+
+    assert status == 200
+    assert payload["count"] == 1
+    log = payload["logs"][0]
+    assert log["level"] == "ERROR"
+    assert log["message"].startswith("GET failed:")
+    assert log["method"] == "GET"
+    assert log["status"] == "error"
+    assert log["error_type"] == "ObjectMethodExecutionError"
+    assert "RuntimeError: boom" in log["error"]
 
 
 def test_object_execution_returns_405_when_get_is_missing(tmp_path, monkeypatch):

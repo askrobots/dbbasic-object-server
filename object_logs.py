@@ -1,4 +1,4 @@
-"""Read-only object log storage.
+"""Object log storage.
 
 The working prototype stores object logs in TSV files:
 
@@ -12,14 +12,51 @@ from __future__ import annotations
 
 import csv
 from collections.abc import Iterable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from object_namespace import validate_object_id
 from object_versions import DEFAULT_DATA_DIR, InvalidObjectIdError
 
 
 LOG_FILE = "log.tsv"
+DEFAULT_LOG_FIELDS = [
+    "entry_id",
+    "timestamp",
+    "level",
+    "message",
+    "method",
+    "status",
+    "duration_ms",
+    "error_type",
+    "error",
+]
+
+
+def append_object_log(
+    object_id: str,
+    level: str,
+    message: str,
+    base_dir: Path | str = DEFAULT_DATA_DIR,
+    **fields: Any,
+) -> dict[str, Any]:
+    """Append one entry to ``data/logs/{object_id}/log.tsv``."""
+    log_dir = object_log_dir(object_id, base_dir)
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    entry = {
+        "entry_id": uuid4().hex[:16],
+        "timestamp": _utc_timestamp(),
+        "level": level,
+        "message": message,
+        **fields,
+    }
+    entry = {key: value for key, value in entry.items() if value is not None}
+
+    _append_log_entry(log_dir / LOG_FILE, entry)
+    return entry
 
 
 def get_object_logs(
@@ -94,6 +131,56 @@ def _clean_entry(row: dict[str | None, Any]) -> dict[str, Any]:
     return {key: value for key, value in row.items() if key is not None}
 
 
+def _append_log_entry(log_file: Path, entry: dict[str, Any]) -> None:
+    fieldnames = _append_fieldnames(log_file, entry)
+    is_new_file = not log_file.exists() or log_file.stat().st_size == 0
+
+    with log_file.open("a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter="\t")
+        if is_new_file:
+            writer.writeheader()
+        writer.writerow(entry)
+
+
+def _append_fieldnames(log_file: Path, entry: dict[str, Any]) -> list[str]:
+    existing = _existing_fieldnames(log_file)
+    fieldnames = _merged_fieldnames(existing, entry.keys())
+
+    if existing and fieldnames != existing:
+        _rewrite_log_file(log_file, fieldnames)
+
+    return fieldnames
+
+
+def _existing_fieldnames(log_file: Path) -> list[str]:
+    if not log_file.exists() or log_file.stat().st_size == 0:
+        return []
+
+    with log_file.open("r", newline="") as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        return list(reader.fieldnames or [])
+
+
+def _merged_fieldnames(existing: list[str], entry_keys: Iterable[str]) -> list[str]:
+    fieldnames: list[str] = []
+    for field in [*existing, *DEFAULT_LOG_FIELDS, *entry_keys]:
+        if field not in fieldnames:
+            fieldnames.append(field)
+    return fieldnames
+
+
+def _rewrite_log_file(log_file: Path, fieldnames: list[str]) -> None:
+    entries = _read_log_file(log_file)
+    temp_path = log_file.with_name(f".{log_file.name}.tmp")
+
+    with temp_path.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter="\t")
+        writer.writeheader()
+        writer.writerows(entries)
+
+    temp_path.replace(log_file)
+
+
 def _filter_entries(
     entries: list[dict[str, Any]],
     *,
@@ -108,3 +195,7 @@ def _filter_entries(
         entries = [entry for entry in entries if entry.get(key) == value]
 
     return entries
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")

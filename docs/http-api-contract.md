@@ -273,9 +273,11 @@ Response:
     {
       "entry_id": "a1",
       "timestamp": "2026-01-01T00:00:00",
-      "level": "INFO",
-      "message": "GET completed",
-      "method": "GET"
+      "level": "DEBUG",
+      "message": "GET completed successfully",
+      "method": "GET",
+      "status": "success",
+      "duration_ms": "1.25"
     }
   ],
   "count": 1
@@ -296,7 +298,12 @@ data/logs/{object_id}/log-*.tsv
 
 The TSV header defines the fields. The normal fields are `entry_id`,
 `timestamp`, `level`, and `message`; object code may add extra columns such as
-`method` or `user_id`. The public server currently exposes logs read-only.
+`method`, `status`, `duration_ms`, `error_type`, `error`, or `user_id`.
+
+The public ASGI server appends one execution log entry after each object method
+run. Successful runs use `level=DEBUG` and `status=success`; failed runs use
+`level=ERROR`, `status=error`, and include error fields. The endpoint itself
+remains read-only.
 
 ## Versions
 
