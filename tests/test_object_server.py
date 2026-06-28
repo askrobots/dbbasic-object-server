@@ -242,6 +242,96 @@ def test_get_state_rejects_invalid_object_id(tmp_path, monkeypatch):
     assert payload == {"status": "error", "error": "Invalid object ID: bad.id"}
 
 
+def test_get_logs_returns_empty_logs_for_object_without_log_file(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+
+    status, _, payload = request("/objects/basics_counter", query_string="logs=true")
+
+    assert status == 200
+    assert payload == {
+        "status": "ok",
+        "object_id": "basics_counter",
+        "logs": [],
+        "count": 0,
+    }
+
+
+def test_get_logs_reads_tsv_logs_with_level_and_limit(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")
+    log_file = data_dir / "logs" / "basics_counter" / "log.tsv"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    log_file.write_text(
+        "entry_id\ttimestamp\tlevel\tmessage\tmethod\n"
+        "a1\t2026-01-01T00:00:00\tINFO\tstarted\tGET\n"
+        "a2\t2026-01-01T00:00:01\tERROR\tboom\tGET\n"
+        "a3\t2026-01-01T00:00:02\tERROR\tstill bad\tGET\n"
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+
+    status, _, payload = request(
+        "/objects/basics_counter",
+        query_string="logs=true&level=ERROR&limit=1",
+    )
+
+    assert status == 200
+    assert payload == {
+        "status": "ok",
+        "object_id": "basics_counter",
+        "logs": [
+            {
+                "entry_id": "a2",
+                "timestamp": "2026-01-01T00:00:01",
+                "level": "ERROR",
+                "message": "boom",
+                "method": "GET",
+            }
+        ],
+        "count": 1,
+    }
+
+
+def test_get_logs_rejects_bad_limit(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+
+    status, _, payload = request("/objects/basics_counter", query_string="logs=true&limit=0")
+
+    assert status == 400
+    assert payload == {
+        "status": "error",
+        "error": "Query parameter 'limit' must be at least 1",
+    }
+
+
+def test_get_logs_returns_404_for_missing_object(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(tmp_path / "objects"))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+
+    status, _, payload = request("/objects/missing_object", query_string="logs=true")
+
+    assert status == 404
+    assert payload == {"status": "error", "error": "Object source not found: missing_object"}
+
+
+def test_get_logs_rejects_invalid_object_id(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+
+    status, _, payload = request("/objects/bad.id", query_string="logs=true")
+
+    assert status == 400
+    assert payload == {"status": "error", "error": "Invalid object ID: bad.id"}
+
+
 def test_source_update_is_disabled_by_default(tmp_path, monkeypatch):
     root = tmp_path / "objects"
     source_path = write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")

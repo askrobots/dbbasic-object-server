@@ -261,15 +261,34 @@ Response:
 {
   "status": "ok",
   "object_id": "basics_counter",
-  "logs": [],
-  "count": 0
+  "logs": [
+    {
+      "entry_id": "a1",
+      "timestamp": "2026-01-01T00:00:00",
+      "level": "INFO",
+      "message": "GET completed",
+      "method": "GET"
+    }
+  ],
+  "count": 1
 }
 ```
 
 Optional query parameters:
 
-- `level`
-- `limit`
+- `level` filters by exact log level, such as `INFO` or `ERROR`.
+- `limit` defaults to `100` in the public ASGI server.
+
+Logs are currently read from:
+
+```text
+data/logs/{object_id}/log.tsv
+data/logs/{object_id}/log-*.tsv
+```
+
+The TSV header defines the fields. The normal fields are `entry_id`,
+`timestamp`, `level`, and `message`; object code may add extra columns such as
+`method` or `user_id`. The public server currently exposes logs read-only.
 
 ## Versions
 

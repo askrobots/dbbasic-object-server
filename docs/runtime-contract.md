@@ -157,6 +157,27 @@ The public state reader skips an optional `key<TAB>value<TAB>timestamp` header,
 ignores malformed rows, and coerces values to `int`, then `float`, otherwise
 keeps strings. State writes remain owned by the runtime for now.
 
+## Log Storage
+
+Log storage intentionally matches the working prototype:
+
+```text
+data/logs/{object_id}/log.tsv
+data/logs/{object_id}/log-*.tsv
+```
+
+Rows are TSV with a header. The default fields are:
+
+- `entry_id`
+- `timestamp`
+- `level`
+- `message`
+
+Object code may add extra fields such as `method`, `user_id`, or request
+metadata. The public log reader returns the current `log.tsv` first, then
+rotated `log-*.tsv` files in sorted order, and supports exact `level` filtering
+and `limit`. Log writes remain owned by the runtime for now.
+
 ## Scheduler State
 
 Scheduler state keys begin with:
