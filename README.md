@@ -37,6 +37,10 @@ flowchart TD
 
 This is the `100x dev loop` this project is trying to protect.
 
+The loop is meant to happen inside the running object server, not through a full
+CI, build, and deployment cycle, so small object changes can be tested and
+repaired much faster than normal application releases.
+
 ## Why It Is Different
 
 DBBASIC is not trying to copy Rails, Django, or a normal MVC framework.
