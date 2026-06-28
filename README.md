@@ -95,7 +95,8 @@ rules the rest of the server will use:
 These pieces come first so the ASGI server, daemon, Scroll, tests, and migration
 tools all agree on the same object rules.
 
-See `docs/runtime-contract.md` for the daemon-facing runtime contract that future implementation commits should preserve.
+See `docs/runtime-contract.md` for the daemon-facing runtime contract and
+`docs/http-api-contract.md` for the HTTP API shape that existing clients expect.
 
 Read `SECURITY.md` and `CONTRIBUTING.md` before copying code or documentation from private prototypes into this repository.
 
