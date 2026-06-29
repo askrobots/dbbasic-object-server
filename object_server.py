@@ -39,11 +39,13 @@ MAX_CONCURRENT_EXECUTIONS_ENV = "DBBASIC_MAX_CONCURRENT_EXECUTIONS"
 RATE_LIMIT_REQUESTS_ENV = "DBBASIC_RATE_LIMIT_REQUESTS"
 RATE_LIMIT_WINDOW_SECONDS_ENV = "DBBASIC_RATE_LIMIT_WINDOW_SECONDS"
 RATE_LIMIT_TRUST_PROXY_HEADERS_ENV = "DBBASIC_RATE_LIMIT_TRUST_PROXY_HEADERS"
+OBJECT_TIMEOUT_SECONDS_ENV = "DBBASIC_OBJECT_TIMEOUT_SECONDS"
 DEFAULT_MAX_REQUEST_BYTES = 1_048_576
 DEFAULT_MAX_CONCURRENT_REQUESTS = 64
 DEFAULT_MAX_CONCURRENT_EXECUTIONS = 8
 DEFAULT_RATE_LIMIT_REQUESTS = 0
 DEFAULT_RATE_LIMIT_WINDOW_SECONDS = 60
+DEFAULT_OBJECT_TIMEOUT_SECONDS = 0.0
 TRUE_VALUES = {"1", "true", "yes", "on"}
 SENSITIVE_GET_FLAGS = {"source", "state", "logs", "metadata", "versions"}
 
@@ -391,6 +393,7 @@ def _health_payload(*, include_metrics: bool) -> dict[str, Any]:
             "rate_limit_requests": _rate_limit_requests(),
             "rate_limit_window_seconds": _rate_limit_window_seconds(),
             "rate_limit_trust_proxy_headers": _env_enabled(RATE_LIMIT_TRUST_PROXY_HEADERS_ENV),
+            "object_timeout_seconds": _object_timeout_seconds(),
         },
         "checks": {
             "storage": storage_check,
@@ -794,15 +797,21 @@ async def _execute_object_method(
         )
         return
 
+    execution_request = object_execution.ObjectExecutionRequest(
+        object_id=object_id,
+        method=method,
+        payload=payload,
+    )
+    timeout_seconds = _object_timeout_seconds()
+
     try:
-        result = object_execution.execute_object(
-            _runtime,
-            object_execution.ObjectExecutionRequest(
-                object_id=object_id,
-                method=method,
-                payload=payload,
-            ),
-        )
+        if timeout_seconds > 0:
+            result = object_execution.execute_python_object_subprocess(
+                execution_request,
+                timeout_seconds=timeout_seconds,
+            )
+        else:
+            result = object_execution.execute_object(_runtime, execution_request)
         _append_execution_log(result)
     finally:
         execution_token.release()
@@ -1221,6 +1230,13 @@ def _rate_limit_window_seconds() -> int:
     return seconds
 
 
+def _object_timeout_seconds() -> float:
+    seconds = _env_float(OBJECT_TIMEOUT_SECONDS_ENV, DEFAULT_OBJECT_TIMEOUT_SECONDS)
+    if seconds < 0:
+        return DEFAULT_OBJECT_TIMEOUT_SECONDS
+    return seconds
+
+
 def _rate_limit_dir() -> str:
     return os.path.join(_data_dir(), "ratelimit")
 
@@ -1232,6 +1248,17 @@ def _env_int(name: str, default: int) -> int:
 
     try:
         return int(value)
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return default
+
+    try:
+        return float(value)
     except ValueError:
         return default
 
@@ -1463,6 +1490,8 @@ async def _send_execution_error(
             status = 404
         elif error.type == MethodNotSupportedError.__name__:
             status = 405
+        elif error.type == object_execution.TIMEOUT_ERROR_TYPE:
+            status = 504
 
     prefix = "Execution failed: "
     if status == 404:

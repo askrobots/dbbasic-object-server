@@ -167,3 +167,39 @@ def test_execute_object_can_use_explicit_path(tmp_path):
     assert result.ok
     assert result.path == source
     assert runtime.loaded == [(source, "detached_counter")]
+
+
+def test_execute_python_object_subprocess_returns_success(tmp_path):
+    root = tmp_path / "objects"
+    source = root / "basics" / "worker.py"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("def GET(request):\n    return {'value': request['value']}\n")
+
+    result = object_execution.execute_python_object_subprocess(
+        object_execution.ObjectExecutionRequest("basics_worker", payload={"value": 7}),
+        roots=[root],
+        timeout_seconds=2,
+    )
+
+    assert result.ok
+    assert result.path == source
+    assert result.result == {"value": 7}
+
+
+def test_execute_python_object_subprocess_returns_timeout(tmp_path):
+    root = tmp_path / "objects"
+    source = root / "basics" / "slow.py"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("import time\n\ndef GET(request):\n    time.sleep(5)\n    return {'ok': True}\n")
+
+    result = object_execution.execute_python_object_subprocess(
+        object_execution.ObjectExecutionRequest("basics_slow"),
+        roots=[root],
+        timeout_seconds=0.5,
+    )
+
+    assert not result.ok
+    assert result.path == source
+    assert result.error is not None
+    assert result.error.type == object_execution.TIMEOUT_ERROR_TYPE
+    assert result.error.message == "GET timed out for object basics_slow after 0.5 seconds"

@@ -125,6 +125,38 @@ Retry-After: 30
 }
 ```
 
+## Object Execution Timeout
+
+Object execution timeout is opt-in:
+
+```text
+DBBASIC_OBJECT_TIMEOUT_SECONDS=5
+```
+
+The default `0` keeps local development on the direct in-process execution path.
+When the value is above zero, object methods run in a short-lived worker process.
+If the object does not finish before the wall-clock timeout, the server
+terminates the worker and returns:
+
+```http
+504 Gateway Timeout
+```
+
+```json
+{
+  "status": "error",
+  "error": "Execution failed: GET timed out for object basics_slow after 5 seconds"
+}
+```
+
+Timeout failures are written to the object log with
+`ObjectExecutionTimeoutError`, so Scroll and operators can see which object
+timed out.
+
+This boundary is intentionally narrow. It stops hung object work and releases
+the execution slot, but it is not the final sandbox. CPU quotas, memory limits,
+and a longer-lived worker pool are still future hardening steps.
+
 ## Capacity Health
 
 `GET /health` stays public and cheap:
@@ -175,6 +207,7 @@ For the first public staging VM:
 DBBASIC_MAX_REQUEST_BYTES=1048576
 DBBASIC_MAX_CONCURRENT_REQUESTS=64
 DBBASIC_MAX_CONCURRENT_EXECUTIONS=8
+DBBASIC_OBJECT_TIMEOUT_SECONDS=5
 DBBASIC_RATE_LIMIT_REQUESTS=1000
 DBBASIC_RATE_LIMIT_WINDOW_SECONDS=60
 DBBASIC_RATE_LIMIT_TRUST_PROXY_HEADERS=true
@@ -212,8 +245,9 @@ read in place with normal Unix tools such as `gzip -cd`.
 
 ## Next Limits
 
-The request, concurrency, and rate-limit caps are only the first boundaries. The
-next production-hardening steps are:
+The request, concurrency, rate-limit, and timeout caps are only the first
+boundaries. The next production-hardening steps are:
 
-- execution wall-clock timeout
 - CPU and memory isolation for untrusted object code
+- a longer-lived worker pool so timeout-enabled execution does not need a new
+  process per request

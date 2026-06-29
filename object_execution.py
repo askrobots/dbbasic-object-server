@@ -11,6 +11,8 @@ import time
 import traceback
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from multiprocessing import get_context
+from multiprocessing.connection import Connection
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Protocol
 
@@ -107,6 +109,10 @@ class ObjectExecutionFailure(RuntimeError):
         super().__init__(message)
 
 
+TIMEOUT_ERROR_TYPE = "ObjectExecutionTimeoutError"
+WORKER_ERROR_TYPE = "ObjectWorkerError"
+
+
 def execute_object(
     runtime: ObjectRuntimeProtocol,
     request: ObjectExecutionRequest,
@@ -166,6 +172,92 @@ def execute_object(
     )
 
 
+def execute_python_object_subprocess(
+    request: ObjectExecutionRequest,
+    roots: Iterable[Path] | None = None,
+    *,
+    timeout_seconds: float,
+    raise_on_error: bool = False,
+) -> ObjectExecutionResult:
+    """Execute a Python object in a subprocess with a wall-clock timeout."""
+    if timeout_seconds <= 0:
+        from python_object_runtime import PythonObjectRuntime
+
+        return execute_object(
+            PythonObjectRuntime(),
+            request,
+            roots,
+            raise_on_error=raise_on_error,
+        )
+
+    started_perf = time.perf_counter()
+    started_at = _utc_timestamp()
+    method = request.normalized_method()
+    roots_list = list(roots) if roots is not None else None
+    resolved_request = _request_with_resolved_path(request, roots_list)
+
+    context = get_context("spawn")
+    parent_conn, child_conn = context.Pipe(duplex=False)
+    process = context.Process(
+        target=_execute_python_object_child,
+        args=(child_conn, resolved_request, roots_list),
+        daemon=True,
+    )
+    process.start()
+    child_conn.close()
+    process.join(timeout_seconds)
+
+    if process.is_alive():
+        process.terminate()
+        process.join(1)
+        if process.is_alive():
+            process.kill()
+            process.join(1)
+        parent_conn.close()
+        result = _finish_error(
+            request=resolved_request,
+            method=method,
+            path=resolved_request.path,
+            error=ObjectExecutionError(
+                type=TIMEOUT_ERROR_TYPE,
+                message=(
+                    f"{method} timed out for object {resolved_request.object_id} "
+                    f"after {_format_seconds(timeout_seconds)} seconds"
+                ),
+            ),
+            started_at=started_at,
+            started_perf=started_perf,
+        )
+        if raise_on_error:
+            raise ObjectExecutionFailure(result)
+        return result
+
+    try:
+        if parent_conn.poll():
+            result = parent_conn.recv()
+        else:
+            result = _finish_error(
+                request=resolved_request,
+                method=method,
+                path=resolved_request.path,
+                error=ObjectExecutionError(
+                    type=WORKER_ERROR_TYPE,
+                    message=(
+                        f"Object worker exited without a result "
+                        f"(exit code {process.exitcode})"
+                    ),
+                ),
+                started_at=started_at,
+                started_perf=started_perf,
+            )
+    finally:
+        parent_conn.close()
+
+    if raise_on_error and not result.ok:
+        raise ObjectExecutionFailure(result)
+    return result
+
+
 def _finish_success(
     *,
     request: ObjectExecutionRequest,
@@ -210,6 +302,52 @@ def _finish_error(
     )
 
 
+def _request_with_resolved_path(
+    request: ObjectExecutionRequest,
+    roots: Iterable[Path] | None,
+) -> ObjectExecutionRequest:
+    if request.path is not None:
+        return request
+
+    return ObjectExecutionRequest(
+        object_id=request.object_id,
+        method=request.method,
+        payload=request.payload,
+        path=resolve_object_id(request.object_id, roots),
+    )
+
+
+def _execute_python_object_child(
+    connection: Connection,
+    request: ObjectExecutionRequest,
+    roots: list[Path] | None,
+) -> None:
+    try:
+        from python_object_runtime import PythonObjectRuntime
+
+        result = execute_object(PythonObjectRuntime(), request, roots)
+        connection.send(result)
+    except BaseException as exc:
+        error_result = _finish_error(
+            request=request,
+            method=request.normalized_method(),
+            path=request.path,
+            error=ObjectExecutionError(
+                type=WORKER_ERROR_TYPE,
+                message=f"Object worker failed: {type(exc).__name__}: {exc}",
+                traceback="".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
+            ),
+            started_at=_utc_timestamp(),
+            started_perf=time.perf_counter(),
+        )
+        try:
+            connection.send(error_result)
+        except BaseException:
+            pass
+    finally:
+        connection.close()
+
+
 def _error_from_exception(exc: Exception) -> ObjectExecutionError:
     return ObjectExecutionError(
         type=exc.__class__.__name__,
@@ -224,3 +362,7 @@ def _duration_ms(started_perf: float) -> float:
 
 def _utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _format_seconds(seconds: float) -> str:
+    return f"{seconds:g}"

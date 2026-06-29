@@ -1,6 +1,7 @@
 import asyncio
 import json
 
+import object_execution
 import object_server
 import object_versions
 
@@ -1562,6 +1563,39 @@ def test_object_execution_returns_json_error_for_object_exception(tmp_path, monk
     assert payload["status"] == "error"
     assert payload["error"].startswith("Execution failed: GET failed for object basics_broken")
     assert "RuntimeError: boom" in payload["error"]
+
+
+def test_object_execution_timeout_returns_504_and_logs(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(
+        root / "basics" / "slow.py",
+        "import time\n\ndef GET(request):\n    time.sleep(5)\n    return {'ok': True}\n",
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.OBJECT_TIMEOUT_SECONDS_ENV, "0.5")
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/objects/basics_slow")
+
+    assert status == 504
+    assert payload == {
+        "status": "error",
+        "error": "Execution failed: GET timed out for object basics_slow after 0.5 seconds",
+    }
+
+    status, _, payload = request(
+        "/objects/basics_slow",
+        query_string="logs=true",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["count"] == 1
+    assert payload["logs"][0]["level"] == "ERROR"
+    assert payload["logs"][0]["error_type"] == object_execution.TIMEOUT_ERROR_TYPE
+    assert payload["logs"][0]["status"] == "error"
 
 
 def test_execution_concurrency_limit_releases_after_object_error(tmp_path, monkeypatch):

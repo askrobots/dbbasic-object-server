@@ -150,6 +150,7 @@ export DBBASIC_DATA_DIR=./data
 export DBBASIC_MAX_REQUEST_BYTES=1048576
 export DBBASIC_MAX_CONCURRENT_REQUESTS=64
 export DBBASIC_MAX_CONCURRENT_EXECUTIONS=8
+export DBBASIC_OBJECT_TIMEOUT_SECONDS=5
 export DBBASIC_RATE_LIMIT_REQUESTS=1000
 export DBBASIC_RATE_LIMIT_WINDOW_SECONDS=60
 ```
@@ -194,6 +195,7 @@ rules the rest of the server will use:
 - traffic over `DBBASIC_RATE_LIMIT_REQUESTS` per `DBBASIC_RATE_LIMIT_WINDOW_SECONDS`
   returns `429 Too Many Requests`
 - full request and object execution slots return `503 Service Unavailable`
+- object execution over `DBBASIC_OBJECT_TIMEOUT_SECONDS` returns `504 Gateway Timeout`
 - `basics_counter` maps to `objects/basics/counter.py`
 - `u_42_deals` maps to `objects/users/42/deals.py`
 - rollbacks create a new version instead of deleting history

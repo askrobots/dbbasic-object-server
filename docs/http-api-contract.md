@@ -206,6 +206,7 @@ Compatibility details from the working prototype:
 - request bodies over `DBBASIC_MAX_REQUEST_BYTES` are rejected with `413`.
 - rate-limited requests are rejected with `429`.
 - full request or object execution capacity is rejected with `503`.
+- object executions over `DBBASIC_OBJECT_TIMEOUT_SECONDS` are rejected with `504`.
 - `POST` with `{"action": "rollback"}` is reserved for rollback.
 - `PUT /objects/{object_id}?source=true` is reserved for source updates.
 
@@ -261,6 +262,24 @@ On server-side execution failure, return a non-2xx status with:
 
 Future structured error fields may be added, but existing clients must still be
 able to read the `error` field.
+
+If `DBBASIC_OBJECT_TIMEOUT_SECONDS` is set above zero, the public ASGI server
+runs object methods in a subprocess. When the timeout expires, the worker is
+terminated and the client receives:
+
+```http
+504 Gateway Timeout
+```
+
+```json
+{
+  "status": "error",
+  "error": "Execution failed: GET timed out for object basics_slow after 5 seconds"
+}
+```
+
+The timeout is a wall-clock boundary. It is not a complete CPU or memory
+sandbox.
 
 ## Source
 
