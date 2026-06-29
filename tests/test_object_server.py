@@ -715,6 +715,201 @@ def test_collection_record_routes_reject_non_get_methods(tmp_path, monkeypatch):
     assert detail_payload == {"status": "error", "error": "Method not allowed"}
 
 
+def test_collection_records_enforcement_denies_default_policy(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\n1\tAlice\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+
+    status, _, payload = request("/collections/contacts/records")
+
+    assert status == 403
+    assert payload == {"status": "error", "error": "no matching role rule", "code": "forbidden"}
+    entries = object_permission_audit.get_permission_audit(data_dir)
+    assert entries[-1]["action"] == "read"
+    assert entries[-1]["collection"] == "contacts"
+    assert entries[-1]["object_id"] is None
+    assert entries[-1]["decision"]["allowed"] is False
+
+
+def test_collection_records_enforcement_filters_rows_for_trusted_subject(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(
+        data_dir,
+        "contacts",
+        "id\tname\towner_id\tsecret\n1\tAlice\t7\tred\n2\tBob\t8\tblue\n3\tCarol\t7\tgreen\n",
+    )
+    save_permission_policy(
+        data_dir,
+        {
+            "access_mode": "role_based",
+            "rules": [
+                {
+                    "effect": "allow",
+                    "principal": "role:sales",
+                    "actions": ["read"],
+                    "collection": "contacts",
+                    "row_filter": {"owner_id": "$user_id"},
+                    "denied_fields": ["secret"],
+                    "reason": "sales can read own contacts",
+                }
+            ],
+        },
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+    monkeypatch.setenv(object_server.PERMISSION_TRUST_HEADERS_ENV, "true")
+
+    status, _, payload = request(
+        "/collections/contacts/records",
+        headers=[
+            ("x-dbbasic-user-id", "7"),
+            ("x-dbbasic-roles", "sales"),
+        ],
+    )
+
+    assert status == 200
+    assert payload == {
+        "status": "ok",
+        "collection": "contacts",
+        "records": [
+            {"id": "1", "name": "Alice", "owner_id": "7"},
+            {"id": "3", "name": "Carol", "owner_id": "7"},
+        ],
+        "count": 2,
+        "total": 2,
+        "limit": 100,
+        "offset": 0,
+        "has_more": False,
+    }
+    entry = object_permission_audit.get_permission_audit(data_dir)[-1]
+    assert entry["decision"]["allowed"] is True
+    assert entry["decision"]["row_filter"] == {"owner_id": "$user_id"}
+
+
+def test_collection_records_enforcement_paginates_after_row_filter(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(
+        data_dir,
+        "contacts",
+        "id\tname\towner_id\n1\tAlice\t7\n2\tBob\t8\n3\tCarol\t7\n4\tDana\t7\n",
+    )
+    save_permission_policy(
+        data_dir,
+        {
+            "access_mode": "role_based",
+            "rules": [
+                {
+                    "effect": "allow",
+                    "principal": "role:sales",
+                    "actions": ["read"],
+                    "collection": "contacts",
+                    "row_filter": {"owner_id": "$user_id"},
+                }
+            ],
+        },
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+    monkeypatch.setenv(object_server.PERMISSION_TRUST_HEADERS_ENV, "true")
+
+    status, _, payload = request(
+        "/collections/contacts/records",
+        query_string="limit=1&offset=1",
+        headers=[
+            ("x-dbbasic-user-id", "7"),
+            ("x-dbbasic-roles", "sales"),
+        ],
+    )
+
+    assert status == 200
+    assert payload["records"] == [{"id": "3", "name": "Carol", "owner_id": "7"}]
+    assert payload["count"] == 1
+    assert payload["total"] == 3
+    assert payload["has_more"] is True
+
+
+def test_collection_record_detail_enforces_row_filter_and_fields(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(
+        data_dir,
+        "contacts",
+        "id\tname\towner_id\tsecret\n1\tAlice\t7\tred\n2\tBob\t8\tblue\n",
+    )
+    save_permission_policy(
+        data_dir,
+        {
+            "access_mode": "role_based",
+            "rules": [
+                {
+                    "effect": "allow",
+                    "principal": "role:sales",
+                    "actions": ["read"],
+                    "collection": "contacts",
+                    "row_filter": {"owner_id": "$user_id"},
+                    "fields": ["id", "name", "owner_id"],
+                }
+            ],
+        },
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+    monkeypatch.setenv(object_server.PERMISSION_TRUST_HEADERS_ENV, "true")
+    headers = [("x-dbbasic-user-id", "7"), ("x-dbbasic-roles", "sales")]
+
+    allowed_status, _, allowed_payload = request(
+        "/collections/contacts/records/1",
+        headers=headers,
+    )
+    denied_status, _, denied_payload = request(
+        "/collections/contacts/records/2",
+        headers=headers,
+    )
+
+    assert allowed_status == 200
+    assert allowed_payload == {
+        "status": "ok",
+        "collection": "contacts",
+        "record": {"id": "1", "name": "Alice", "owner_id": "7"},
+    }
+    assert denied_status == 403
+    assert denied_payload == {"status": "error", "error": "no matching role rule", "code": "forbidden"}
+
+
+def test_collection_records_enforcement_returns_payment_required(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "reports", "id\ttitle\n1\tRevenue\n")
+    save_permission_policy(data_dir, {"access_mode": "subscription"})
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+    monkeypatch.setenv(object_server.PERMISSION_TRUST_HEADERS_ENV, "true")
+
+    status, _, payload = request(
+        "/collections/reports/records",
+        headers=[("x-dbbasic-user-id", "7")],
+    )
+
+    assert status == 402
+    assert payload == {"status": "error", "error": "subscription required", "code": "payment_required"}
+
+
+def test_collection_records_audit_mode_logs_without_filtering(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\n1\tAlice\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_AUDIT_ENV, "true")
+
+    status, _, payload = request("/collections/contacts/records")
+
+    assert status == 200
+    assert payload["records"] == [{"id": "1", "name": "Alice"}]
+    entry = object_permission_audit.get_permission_audit(data_dir)[-1]
+    assert entry["collection"] == "contacts"
+    assert entry["action"] == "read"
+    assert entry["decision"]["allowed"] is False
+    assert entry["enforced"] is False
+
+
 def test_schema_list_requires_admin_token_configuration(tmp_path, monkeypatch):
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(tmp_path / "objects"))
     monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)

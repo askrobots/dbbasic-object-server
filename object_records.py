@@ -52,7 +52,30 @@ def list_collection_records(
     _ensure_collection_known(collection, base_dir=base_dir, roots=roots)
     _validate_page(limit=limit, offset=offset)
 
-    records = _read_collection_records(collection, base_dir=base_dir)
+    records = read_collection_records(collection, base_dir=base_dir, roots=roots)
+    return collection_records_payload(collection, records, limit=limit, offset=offset)
+
+
+def read_collection_records(
+    collection: str,
+    *,
+    base_dir: Path | str = DEFAULT_DATA_DIR,
+    roots: Iterable[Path] | None = None,
+) -> list[dict[str, str]]:
+    """Return all records for one known collection."""
+    _ensure_collection_known(collection, base_dir=base_dir, roots=roots)
+    return _read_collection_records(collection, base_dir=base_dir)
+
+
+def collection_records_payload(
+    collection: str,
+    records: list[dict[str, str]],
+    *,
+    limit: int = DEFAULT_RECORD_LIMIT,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Return the standard paginated record-list payload shape."""
+    _validate_page(limit=limit, offset=offset)
     total = len(records)
     window = records[offset:offset + limit]
     return {

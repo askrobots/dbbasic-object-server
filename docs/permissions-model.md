@@ -144,15 +144,16 @@ windows.
 
 ## Route Enforcement
 
-The public server can enforce the persisted policy against object routes, but it
-is intentionally opt-in while auth and Scroll editing mature.
+The public server can enforce the persisted policy against object routes and
+collection-record routes, but it is intentionally opt-in while auth and Scroll
+editing mature.
 
 ```text
 DBBASIC_ENABLE_PERMISSION_ENFORCEMENT=true
 ```
 
-When enforcement is enabled, object routes call the same decision engine before
-serving or executing an object:
+When enforcement is enabled, protected routes call the same decision engine
+before serving or executing data:
 
 ```mermaid
 flowchart LR
@@ -161,7 +162,7 @@ flowchart LR
     C --> D["load data/permissions/policy.json"]
     D --> E["check_permission"]
     E --> F{"allowed?"}
-    F -- yes --> G["serve object route"]
+    F -- yes --> G["serve route"]
     F -- no --> H["return 401 / 402 / 403"]
     E --> I["append data/permissions/audit.jsonl"]
 ```
@@ -177,6 +178,14 @@ Route actions currently map like this:
 - `?logs=true` -> `logs`
 - `?versions=true` or `?version=N` -> `versions`
 - `?metadata=true` -> `read`
+- `GET /collections/{collection}/records` -> `read`
+- `GET /collections/{collection}/records/{record_id}` -> `read`
+
+Collection record lists apply row filters before pagination. Record detail
+checks include the selected record, so owner, account, subscription, temporary
+access, row-filter, and field-redaction rules can all be enforced by the server.
+By default the collection record routes are admin-token gated; when permission
+audit or enforcement is enabled, they use the active policy instead.
 
 Audit-only mode logs decisions without blocking the request:
 

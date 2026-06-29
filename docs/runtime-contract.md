@@ -375,13 +375,18 @@ record API is read-only:
 
 ```python
 list_collection_records(collection, base_dir="data", limit=100, offset=0)
+read_collection_records(collection, base_dir="data")
 get_collection_record(collection, record_id, base_dir="data")
 ```
 
 Values are returned as strings. Schema metadata can tell tools how to render or
-validate fields, but the raw TSV reader does not coerce types yet. Record writes
-are intentionally not public until server-enforced permissions, audit logs, and
-migration rules exist.
+validate fields, but the raw TSV reader does not coerce types yet.
+
+The HTTP record routes are admin-gated by default. When permission audit or
+enforcement is enabled, those routes use the server permission policy. Record
+lists apply row filters before pagination; record detail checks evaluate the
+selected row and can redact fields. Record writes are intentionally not public
+until write permissions, audit logs, and migration rules exist.
 
 ## Collection Schemas
 

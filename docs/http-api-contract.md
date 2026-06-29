@@ -248,15 +248,16 @@ When a paid entitlement is missing, the decision can include:
 
 ## Permission Route Enforcement
 
-Permission policy checks can be applied to object routes when explicitly enabled:
+Permission policy checks can be applied to object and collection-record routes
+when explicitly enabled:
 
 ```text
 DBBASIC_ENABLE_PERMISSION_ENFORCEMENT=true
 ```
 
-When enforcement is enabled, denied object route checks return the
+When enforcement is enabled, denied route checks return the
 `http_status`, `reason`, and `code` from the permission decision before object
-source, state, logs, versions, or execution work runs.
+source, state, logs, versions, execution, or collection-record data work runs.
 
 Audit-only mode records the same decisions without changing responses:
 
@@ -279,6 +280,11 @@ DBBASIC_PERMISSION_TRUST_HEADERS=true
 
 Supported headers are `X-DBBASIC-User-Id`, `X-DBBASIC-Account-Id`,
 `X-DBBASIC-Roles`, and `X-DBBASIC-Subscriptions`.
+
+Collection record routes use the same `read` action. In enforcement mode the
+server applies row filters before pagination, evaluates detail requests against
+the selected record, and redacts `fields` / `denied_fields` from returned
+records. That is the first server-side path for Scroll's collection tables.
 
 Operators and Scroll can read recent audit entries through an admin-gated
 endpoint:
@@ -428,8 +434,9 @@ does not store a separate collection table yet. This keeps the existing
 `/objects` contract stable while giving tools such as Scroll a cleaner grouping
 API.
 
-The public server keeps collection routes read-only and admin-token gated for
-now. Missing collections return `404`; unsafe collection names return `400`.
+The public server keeps collection summary routes read-only and admin-token
+gated for now. Missing collections return `404`; unsafe collection names return
+`400`.
 
 ## Collection Records
 
@@ -439,6 +446,13 @@ List records:
 GET /collections/{collection}/records?limit=100&offset=0
 Authorization: Token <token>
 ```
+
+By default this route is admin-token gated. If
+`DBBASIC_ENABLE_PERMISSION_AUDIT=true` or
+`DBBASIC_ENABLE_PERMISSION_ENFORCEMENT=true` is set, the route uses the
+persisted permission policy instead. Enforcement uses the `read` action with the
+collection name, applies row filters before `limit` / `offset`, and redacts
+fields according to the matching decision.
 
 Response:
 
@@ -468,6 +482,11 @@ GET /collections/{collection}/records/{record_id}
 Authorization: Token <token>
 ```
 
+The detail route is also admin-token gated by default. With permission
+enforcement enabled, the server loads the record, checks the same `read`
+permission against that record, and then applies field allow/deny rules before
+returning it.
+
 Response:
 
 ```json
@@ -491,7 +510,8 @@ data/collections/{collection}/records.tsv
 The TSV file must have a header row and an `id` column. Values are returned as
 strings. Collection records are read-only through the current public HTTP
 surface. Missing collections or records return `404`; unsafe collection or
-record names return `400`.
+record names return `400`. Missing subscription entitlements can return
+`402 Payment Required` when the active policy requires them.
 
 ## Schemas
 

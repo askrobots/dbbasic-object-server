@@ -1350,22 +1350,31 @@ async def _handle_collection_records(
         await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
         return
 
-    gate_error = _admin_token_gate_error(
-        headers,
-        f"Collection records require {ADMIN_TOKEN_ENV}.",
-    )
-    if gate_error is not None:
-        status, message = gate_error
-        await _send_json(send, {"status": "error", "error": message}, status=status)
-        return
+    permission_check = None
+    if _permission_checks_enabled():
+        permission_check = await _collection_permission_check(
+            send,
+            headers,
+            object_permissions.READ,
+            collection=collection,
+            method="GET",
+        )
+        if permission_check is None:
+            return
+    else:
+        gate_error = _admin_token_gate_error(
+            headers,
+            f"Collection records require {ADMIN_TOKEN_ENV}.",
+        )
+        if gate_error is not None:
+            status, message = gate_error
+            await _send_json(send, {"status": "error", "error": message}, status=status)
+            return
 
     try:
-        records_payload = object_records.list_collection_records(
-            collection,
-            base_dir=_data_dir(),
-            limit=_query_int(query, "limit", default=100, minimum=1, maximum=1000),
-            offset=_query_int(query, "offset", default=0, minimum=0),
-        )
+        limit = _query_int(query, "limit", default=100, minimum=1, maximum=1000)
+        offset = _query_int(query, "offset", default=0, minimum=0)
+        records = object_records.read_collection_records(collection, base_dir=_data_dir())
     except object_collections.InvalidCollectionNameError as exc:
         await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
         return
@@ -1376,6 +1385,20 @@ async def _handle_collection_records(
         await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
         return
 
+    if permission_check is not None and permission_check["enforced"]:
+        records = _filter_records_for_permission(
+            records,
+            collection=collection,
+            subject=permission_check["subject"],
+            policy=permission_check["policy"],
+        )
+
+    records_payload = object_records.collection_records_payload(
+        collection,
+        records,
+        limit=limit,
+        offset=offset,
+    )
     await _send_json(send, {"status": "ok", **records_payload})
 
 
@@ -1390,14 +1413,15 @@ async def _handle_collection_record_get(
         await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
         return
 
-    gate_error = _admin_token_gate_error(
-        headers,
-        f"Collection record detail requires {ADMIN_TOKEN_ENV}.",
-    )
-    if gate_error is not None:
-        status, message = gate_error
-        await _send_json(send, {"status": "error", "error": message}, status=status)
-        return
+    if not _permission_checks_enabled():
+        gate_error = _admin_token_gate_error(
+            headers,
+            f"Collection record detail requires {ADMIN_TOKEN_ENV}.",
+        )
+        if gate_error is not None:
+            status, message = gate_error
+            await _send_json(send, {"status": "error", "error": message}, status=status)
+            return
 
     try:
         record = object_records.get_collection_record(
@@ -1417,6 +1441,20 @@ async def _handle_collection_record_get(
     except ValueError as exc:
         await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
         return
+
+    if _permission_checks_enabled():
+        permission_check = await _collection_permission_check(
+            send,
+            headers,
+            object_permissions.READ,
+            collection=collection,
+            method="GET",
+            record=record,
+        )
+        if permission_check is None:
+            return
+        if permission_check["enforced"]:
+            record = _apply_record_field_policy(record, permission_check["decision"])
 
     await _send_json(
         send,
@@ -1986,6 +2024,114 @@ async def _send_permission_denied_if_needed(
     return True
 
 
+async def _collection_permission_check(
+    send,
+    headers: dict[str, str],
+    action: str,
+    *,
+    collection: str,
+    method: str,
+    record: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    subject = _permission_subject(headers)
+    enforced = _permission_enforcement_enabled()
+
+    try:
+        policy = object_permission_store.load_policy(_data_dir())
+        decision = object_permissions.check_permission(
+            subject,
+            action,
+            policy=policy,
+            collection=collection,
+            record=record,
+        )
+    except ValueError as exc:
+        _append_permission_audit_entry(
+            action=action,
+            object_id=None,
+            collection=collection,
+            method=method,
+            subject=subject,
+            enforced=enforced,
+            error=f"Permission policy is invalid: {exc}",
+        )
+        if enforced:
+            await _send_json(
+                send,
+                {"status": "error", "error": f"Permission policy is invalid: {exc}"},
+                status=500,
+            )
+            return None
+        return {
+            "subject": subject,
+            "policy": object_permissions.PermissionPolicy(access_mode="public"),
+            "decision": object_permissions.PermissionDecision.deny(str(exc)),
+            "enforced": enforced,
+        }
+
+    _append_permission_audit_entry(
+        action=action,
+        object_id=None,
+        collection=collection,
+        method=method,
+        subject=subject,
+        enforced=enforced,
+        decision=decision,
+    )
+
+    if enforced and not decision.allowed:
+        await _send_json(
+            send,
+            {
+                "status": "error",
+                "error": decision.reason,
+                "code": decision.code,
+            },
+            status=decision.http_status,
+        )
+        return None
+
+    return {
+        "subject": subject,
+        "policy": policy,
+        "decision": decision,
+        "enforced": enforced,
+    }
+
+
+def _filter_records_for_permission(
+    records: list[dict[str, str]],
+    *,
+    collection: str,
+    subject: object_permissions.PermissionSubject,
+    policy: object_permissions.PermissionPolicy,
+) -> list[dict[str, str]]:
+    allowed_records: list[dict[str, str]] = []
+    for record in records:
+        decision = object_permissions.check_permission(
+            subject,
+            object_permissions.READ,
+            policy=policy,
+            collection=collection,
+            record=record,
+        )
+        if decision.allowed:
+            allowed_records.append(_apply_record_field_policy(record, decision))
+    return allowed_records
+
+
+def _apply_record_field_policy(
+    record: dict[str, str],
+    decision: object_permissions.PermissionDecision,
+) -> dict[str, str]:
+    filtered = dict(record)
+    if decision.fields is not None:
+        filtered = {key: value for key, value in filtered.items() if key in decision.fields}
+    for field in decision.denied_fields:
+        filtered.pop(field, None)
+    return filtered
+
+
 def _permission_checks_enabled() -> bool:
     return _permission_enforcement_enabled() or _permission_audit_enabled()
 
@@ -2036,7 +2182,7 @@ def _csv_header(value: str) -> tuple[str, ...]:
 def _append_permission_audit_entry(
     *,
     action: str,
-    object_id: str,
+    object_id: str | None,
     collection: str | None,
     method: str,
     subject: object_permissions.PermissionSubject,

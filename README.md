@@ -203,6 +203,11 @@ the persisted `data/permissions/policy.json` policy to return `401`, `402`, or
 unless `DBBASIC_PERMISSION_TRUST_HEADERS=true` is set behind a proxy that strips
 client-supplied copies.
 
+Collection record routes are admin-token gated by default. When permission audit
+or enforcement is enabled, they use the same persisted policy with the `read`
+action. Enforcement applies row filters before pagination and redacts allowed or
+denied fields before returning records.
+
 Production user/session auth still needs to replace the temporary admin-token
 gate before general use.
 
