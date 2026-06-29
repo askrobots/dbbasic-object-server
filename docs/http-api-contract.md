@@ -110,6 +110,7 @@ Compatibility details from the working prototype:
 - `POST` with a non-JSON body passes raw bytes as the `body` field plus query
   parameters.
 - `PUT` and `DELETE` reject invalid JSON bodies with `400`.
+- request bodies over `DBBASIC_MAX_REQUEST_BYTES` are rejected with `413`.
 - `POST` with `{"action": "rollback"}` is reserved for rollback.
 - `PUT /objects/{object_id}?source=true` is reserved for source updates.
 

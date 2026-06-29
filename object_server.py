@@ -23,14 +23,24 @@ from object_namespace import iter_object_sources, parse_user_object_id
 from object_versions import InvalidObjectIdError
 from python_object_runtime import MethodNotSupportedError, PythonObjectRuntime
 
-
 SOURCE_WRITES_ENV = "DBBASIC_ENABLE_SOURCE_WRITES"
 ADMIN_TOKEN_ENV = "DBBASIC_ADMIN_TOKEN"
 DATA_DIR_ENV = "DBBASIC_DATA_DIR"
+MAX_REQUEST_BYTES_ENV = "DBBASIC_MAX_REQUEST_BYTES"
+DEFAULT_MAX_REQUEST_BYTES = 1_048_576
 TRUE_VALUES = {"1", "true", "yes", "on"}
 SENSITIVE_GET_FLAGS = {"source", "state", "logs", "metadata", "versions"}
 
 _runtime = PythonObjectRuntime()
+
+
+class RequestBodyTooLargeError(ValueError):
+    """Raised when an inbound HTTP request body exceeds the configured cap."""
+
+    def __init__(self, *, max_bytes: int, actual_bytes: int):
+        self.max_bytes = max_bytes
+        self.actual_bytes = actual_bytes
+        super().__init__("Request body too large")
 
 
 async def app(scope: dict[str, Any], receive, send) -> None:
@@ -50,12 +60,16 @@ async def app(scope: dict[str, Any], receive, send) -> None:
 
 
 async def _handle_http(scope: dict[str, Any], receive, send) -> None:
-    body = await _read_body(receive)
-
     method = scope.get("method", "GET").upper()
     path = scope.get("path", "/")
     query = _parse_query(scope.get("query_string", b""))
     headers = _parse_headers(scope.get("headers", []))
+
+    try:
+        body = await _read_body(receive, headers=headers)
+    except RequestBodyTooLargeError as exc:
+        await _send_request_too_large(send, exc)
+        return
 
     if path == "/health":
         await _send_json(send, {"status": "ok"})
@@ -719,18 +733,73 @@ def _data_dir() -> str:
     return os.environ.get(DATA_DIR_ENV, object_versions.DEFAULT_DATA_DIR)
 
 
-async def _read_body(receive) -> bytes:
-    body = b""
+def _max_request_bytes() -> int:
+    value = os.environ.get(MAX_REQUEST_BYTES_ENV, "").strip()
+    if not value:
+        return DEFAULT_MAX_REQUEST_BYTES
+
+    try:
+        max_bytes = int(value)
+    except ValueError:
+        return DEFAULT_MAX_REQUEST_BYTES
+
+    if max_bytes < 0:
+        return DEFAULT_MAX_REQUEST_BYTES
+
+    return max_bytes
+
+
+def _content_length(headers: dict[str, str]) -> int | None:
+    value = headers.get("content-length")
+    if value is None:
+        return None
+
+    try:
+        length = int(value)
+    except ValueError:
+        return None
+
+    if length < 0:
+        return None
+
+    return length
+
+
+async def _read_body(receive, *, headers: dict[str, str]) -> bytes:
+    max_bytes = _max_request_bytes()
+    content_length = _content_length(headers)
+    if content_length is not None and content_length > max_bytes:
+        raise RequestBodyTooLargeError(max_bytes=max_bytes, actual_bytes=content_length)
+
+    body_parts = []
+    body_size = 0
     while True:
         message = await receive()
         if message["type"] == "http.disconnect":
-            return body
+            return b"".join(body_parts)
         if message["type"] != "http.request":
             continue
 
-        body += message.get("body", b"")
+        chunk = message.get("body", b"")
+        body_size += len(chunk)
+        if body_size > max_bytes:
+            raise RequestBodyTooLargeError(max_bytes=max_bytes, actual_bytes=body_size)
+
+        body_parts.append(chunk)
         if not message.get("more_body", False):
-            return body
+            return b"".join(body_parts)
+
+
+async def _send_request_too_large(send, error: RequestBodyTooLargeError) -> None:
+    await _send_json(
+        send,
+        {
+            "status": "error",
+            "error": str(error),
+            "max_bytes": error.max_bytes,
+        },
+        status=413,
+    )
 
 
 async def _send_json(send, payload: Any, status: int = 200) -> None:

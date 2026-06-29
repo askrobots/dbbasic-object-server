@@ -162,6 +162,7 @@ DBBASIC_OBJECTS_DIR=/var/lib/dbbasic-object-server/objects
 DBBASIC_DATA_DIR=/var/lib/dbbasic-object-server/data
 DBBASIC_ENABLE_SOURCE_WRITES=false
 DBBASIC_ADMIN_TOKEN=replace-with-a-generated-token
+DBBASIC_MAX_REQUEST_BYTES=1048576
 DBBASIC_LOG_MAX_BYTES=10485760
 DBBASIC_LOG_COMPRESS_ROTATED=true
 DBBASIC_LOG_KEEP_ROTATED=32
@@ -221,6 +222,28 @@ Errors should be fixed before exposing routes publicly. Warnings usually mean a
 runtime path is visible to other local users. On a single-purpose staging VM
 that may not break anything, but the safer default is `750` for object and data
 directories.
+
+## Traffic Limits
+
+Keep the public server narrow while it is staging.
+
+`DBBASIC_MAX_REQUEST_BYTES` limits inbound HTTP request bodies before JSON
+parsing or object execution. The default is 1 MiB:
+
+```text
+DBBASIC_MAX_REQUEST_BYTES=1048576
+```
+
+Configure the same or smaller request body limit in the reverse proxy so Caddy
+or nginx can reject oversized traffic before Python handles it. The app-level
+limit stays in place because proxy configuration can drift.
+
+Future production hardening still needs rate limits, request concurrency caps,
+object execution concurrency caps, and execution timeouts. Under overload, the
+server should fail fast with `429` or `503` rather than queueing unlimited work
+on a small VM.
+
+See `traffic-limits.md` for the operating model.
 
 ## Log Maintenance
 
@@ -548,7 +571,7 @@ Known limits:
 - the current direct Python loader is not a production sandbox
 - source writes still use a temporary admin token gate
 - object permissions are not enforced yet
-- request body size and execution timeout limits are not complete
+- execution timeout, rate, and concurrency limits are not complete
 - WebSocket/SSE runtime behavior is still design-stage
 
 That is still useful. A clean VM lets DBBASIC prove that install, restart,

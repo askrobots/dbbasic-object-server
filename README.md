@@ -145,6 +145,7 @@ Object listing, source, state, logs, metadata, and versions require:
 ```bash
 export DBBASIC_ADMIN_TOKEN=replace-with-a-local-dev-token
 export DBBASIC_DATA_DIR=./data
+export DBBASIC_MAX_REQUEST_BYTES=1048576
 ```
 
 The value above is a placeholder. Each real deployment must generate its own
@@ -176,6 +177,7 @@ rules the rest of the server will use:
 - `object_backup.py` archives and safely restores object source plus runtime data
 - `object_daemon.py` runs scheduled, queued, and event work
 - `deployment_checks.py` checks the single-VM filesystem layout before public exposure
+- request bodies over `DBBASIC_MAX_REQUEST_BYTES` return `413 Payload Too Large`
 - `basics_counter` maps to `objects/basics/counter.py`
 - `u_42_deals` maps to `objects/users/42/deals.py`
 - rollbacks create a new version instead of deleting history
@@ -195,6 +197,7 @@ See `docs/README.md` for the documentation map,
 `docs/object-authoring.md` for the current object authoring shape and
 object-first storage/schema loop,
 `docs/backup-restore.md` for runtime backup and restore,
+`docs/traffic-limits.md` for request-size and high-traffic operating limits,
 `docs/asgi-realtime-direction.md` for the ASGI/realtime direction, and
 `docs/rest-and-object-messages.md` for the resource/message split. See
 `docs/single-vm-deployment.md` for the first conservative staging deployment
@@ -219,7 +222,7 @@ Near-term work:
 
 - move the hardened core runtime and sandbox into this repository
 - enforce authentication, permissions, and row/object access rules in the server
-- add CPU, memory, wall-clock, and request-size limits around execution
+- add CPU, memory, wall-clock, rate, and concurrency limits around execution
 - wire scheduled backup retention and Scroll backup controls to `object_backup.py`
 - keep the HTTP contract compatible with Scroll and existing tools
 - add deployment scripts after the manual single-VM path stays boring

@@ -15,6 +15,7 @@ flowchart TD
     A --> E["REST and object messages"]
     A --> L["Single VM deployment"]
     A --> N["Backup and restore"]
+    A --> O["Traffic limits"]
 
     B --> F["Object namespace"]
     B --> G["Execution result shape"]
@@ -43,6 +44,8 @@ flowchart TD
   provider monitoring, and backup notes.
 - `backup-restore.md` - runtime archive format, verification, safe restore, and
   what stays out of portable backups.
+- `traffic-limits.md` - request-size limits, high-traffic safety layers, and
+  the next rate/concurrency/execution boundaries.
 
 ## Documentation Rules
 

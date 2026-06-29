@@ -13,18 +13,19 @@ def write_source(path, content):
     return path
 
 
-def request(path, method="GET", query_string="", body=b"", headers=None):
+def request(path, method="GET", query_string="", body=b"", headers=None, body_chunks=None):
     status, headers, payload = raw_request(
         path,
         method=method,
         query_string=query_string,
         body=body,
         headers=headers,
+        body_chunks=body_chunks,
     )
     return status, headers, json.loads(payload.decode("utf-8"))
 
 
-def raw_request(path, method="GET", query_string="", body=b"", headers=None):
+def raw_request(path, method="GET", query_string="", body=b"", headers=None, body_chunks=None):
     return asyncio.run(
         asgi_request(
             path,
@@ -32,19 +33,33 @@ def raw_request(path, method="GET", query_string="", body=b"", headers=None):
             query_string=query_string,
             body=body,
             headers=headers,
+            body_chunks=body_chunks,
         )
     )
 
 
-async def asgi_request(path, method="GET", query_string="", body=b"", headers=None):
+async def asgi_request(
+    path,
+    method="GET",
+    query_string="",
+    body=b"",
+    headers=None,
+    body_chunks=None,
+):
     messages = []
-    request_sent = False
+    chunks = body_chunks if body_chunks is not None else [body]
+    chunk_index = 0
 
     async def receive():
-        nonlocal request_sent
-        if not request_sent:
-            request_sent = True
-            return {"type": "http.request", "body": body, "more_body": False}
+        nonlocal chunk_index
+        if chunk_index < len(chunks):
+            chunk = chunks[chunk_index]
+            chunk_index += 1
+            return {
+                "type": "http.request",
+                "body": chunk,
+                "more_body": chunk_index < len(chunks),
+            }
         return {"type": "http.disconnect"}
 
     async def send(message):
@@ -919,6 +934,80 @@ def test_post_object_execution_passes_raw_body_for_non_json(tmp_path, monkeypatc
 
     assert status == 200
     assert payload == {"body_size": 8, "mode": "raw"}
+
+
+def test_request_body_limit_allows_body_at_configured_limit(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(
+        root / "basics" / "echo.py",
+        "def POST(request):\n    return {'request': request}\n",
+    )
+    body = json.dumps({"name": "body"}).encode()
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv(object_server.MAX_REQUEST_BYTES_ENV, str(len(body)))
+
+    status, _, payload = request("/objects/basics_echo", method="POST", body=body)
+
+    assert status == 200
+    assert payload == {"request": {"name": "body"}}
+
+
+def test_request_body_limit_rejects_oversized_json_body(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(root / "basics" / "echo.py", "def POST(request):\n    return {'ok': True}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv(object_server.MAX_REQUEST_BYTES_ENV, "7")
+
+    status, _, payload = request(
+        "/objects/basics_echo",
+        method="POST",
+        body=json.dumps({"name": "body"}).encode(),
+    )
+
+    assert status == 413
+    assert payload == {
+        "status": "error",
+        "error": "Request body too large",
+        "max_bytes": 7,
+    }
+
+
+def test_request_body_limit_rejects_large_content_length(monkeypatch):
+    monkeypatch.setenv(object_server.MAX_REQUEST_BYTES_ENV, "2")
+
+    status, _, payload = request(
+        "/objects/basics_echo",
+        method="POST",
+        body=b"{}",
+        headers=[("content-length", "3")],
+    )
+
+    assert status == 413
+    assert payload == {
+        "status": "error",
+        "error": "Request body too large",
+        "max_bytes": 2,
+    }
+
+
+def test_request_body_limit_rejects_oversized_chunked_body(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(root / "basics" / "raw.py", "def POST(request):\n    return {'ok': True}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv(object_server.MAX_REQUEST_BYTES_ENV, "8")
+
+    status, _, payload = request(
+        "/objects/basics_raw",
+        method="POST",
+        body_chunks=[b"not-json", b"-oversized"],
+    )
+
+    assert status == 413
+    assert payload == {
+        "status": "error",
+        "error": "Request body too large",
+        "max_bytes": 8,
+    }
 
 
 def test_post_object_execution_rejects_non_object_json(tmp_path, monkeypatch):
