@@ -120,6 +120,10 @@ sudo mkdir -p /opt/dbbasic-object-server
 sudo mkdir -p /var/lib/dbbasic-object-server/objects
 sudo mkdir -p /var/lib/dbbasic-object-server/data
 sudo chown -R dbbasic:dbbasic /opt/dbbasic-object-server /var/lib/dbbasic-object-server
+sudo chmod 755 /opt/dbbasic-object-server
+sudo chmod 750 /var/lib/dbbasic-object-server
+sudo chmod 750 /var/lib/dbbasic-object-server/objects
+sudo chmod 750 /var/lib/dbbasic-object-server/data
 ```
 
 Clone and install the server:
@@ -166,6 +170,39 @@ DBBASIC_ENABLE_SOURCE_WRITES=true
 
 Do not commit real tokens, VM hostnames, private URLs, or deployment-specific
 paths to this repository.
+
+After creating the file, keep it readable by root and the service group only:
+
+```bash
+sudo chown root:dbbasic /etc/dbbasic-object-server.env
+sudo chmod 640 /etc/dbbasic-object-server.env
+```
+
+## Filesystem Check
+
+The public package includes a small single-VM layout checker. Run it after
+installing the server and after changing ownership or deployment paths:
+
+```bash
+cd /opt/dbbasic-object-server
+set -a
+. /etc/dbbasic-object-server.env
+set +a
+.venv/bin/python -m deployment_checks
+```
+
+The checker validates the normal Unix boundary:
+
+- server code under `/opt/dbbasic-object-server`
+- live object source under `/var/lib/dbbasic-object-server/objects`
+- runtime data under `/var/lib/dbbasic-object-server/data`
+- deployment secrets under `/etc/dbbasic-object-server.env`
+- systemd unit under `/etc/systemd/system/dbbasic-object-server.service`
+
+Errors should be fixed before exposing routes publicly. Warnings usually mean a
+runtime path is visible to other local users. On a single-purpose staging VM
+that may not break anything, but the safer default is `750` for object and data
+directories.
 
 ## Log Maintenance
 

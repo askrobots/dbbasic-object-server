@@ -84,6 +84,7 @@ This repository currently contains:
 - `object_metadata.py` - conservative object metadata summaries
 - `object_versions.py` - source version metadata, content snapshots, and rollback
 - `object_daemon.py` - background worker for scheduler, queue, events, and cleanup
+- `deployment_checks.py` - single-VM filesystem ownership and permission checks
 
 It does not yet contain the full object server, API handlers, object runtime, sample applications, package system, or production deployment files.
 
@@ -170,6 +171,7 @@ rules the rest of the server will use:
 - `object_metadata.py` summarizes source, state, logs, and versions
 - `object_versions.py` keeps source history as `metadata.tsv` plus `vN.txt` files
 - `object_daemon.py` runs scheduled, queued, and event work
+- `deployment_checks.py` checks the single-VM filesystem layout before public exposure
 - `basics_counter` maps to `objects/basics/counter.py`
 - `u_42_deals` maps to `objects/users/42/deals.py`
 - rollbacks create a new version instead of deleting history

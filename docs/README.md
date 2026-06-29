@@ -37,7 +37,8 @@ flowchart TD
 - `rest-and-object-messages.md` - how DBBASIC separates RESTful resources from
   object behavior messages and realtime streams.
 - `single-vm-deployment.md` - conservative staging deployment on one VM with
-  systemd, localhost uvicorn, separate object/data paths, and backup notes.
+  systemd, localhost uvicorn, separate object/data paths, filesystem checks,
+  provider monitoring, and backup notes.
 
 ## Documentation Rules
 
