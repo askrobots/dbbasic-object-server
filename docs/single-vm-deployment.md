@@ -165,6 +165,9 @@ DBBASIC_ADMIN_TOKEN=replace-with-a-generated-token
 DBBASIC_MAX_REQUEST_BYTES=1048576
 DBBASIC_MAX_CONCURRENT_REQUESTS=64
 DBBASIC_MAX_CONCURRENT_EXECUTIONS=8
+DBBASIC_RATE_LIMIT_REQUESTS=1000
+DBBASIC_RATE_LIMIT_WINDOW_SECONDS=60
+DBBASIC_RATE_LIMIT_TRUST_PROXY_HEADERS=true
 DBBASIC_LOG_MAX_BYTES=10485760
 DBBASIC_LOG_COMPRESS_ROTATED=true
 DBBASIC_LOG_KEEP_ROTATED=32
@@ -244,7 +247,11 @@ limit stays in place because proxy configuration can drift.
 
 The concurrency limits are per process. Under overload, the server returns
 `503` rather than queueing unlimited work on a small VM. Future production
-hardening still needs rate limits and execution timeouts.
+hardening still needs execution timeouts and CPU/memory isolation.
+The rate limit values above return `429` with `Retry-After` when one IP or
+valid admin token exceeds the configured window.
+`DBBASIC_RATE_LIMIT_TRUST_PROXY_HEADERS` is appropriate only because uvicorn is
+bound to `127.0.0.1` behind Caddy.
 
 See `traffic-limits.md` for the operating model.
 

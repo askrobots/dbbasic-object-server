@@ -13,7 +13,15 @@ def write_source(path, content):
     return path
 
 
-def request(path, method="GET", query_string="", body=b"", headers=None, body_chunks=None):
+def request(
+    path,
+    method="GET",
+    query_string="",
+    body=b"",
+    headers=None,
+    body_chunks=None,
+    client=None,
+):
     status, headers, payload = raw_request(
         path,
         method=method,
@@ -21,11 +29,20 @@ def request(path, method="GET", query_string="", body=b"", headers=None, body_ch
         body=body,
         headers=headers,
         body_chunks=body_chunks,
+        client=client,
     )
     return status, headers, json.loads(payload.decode("utf-8"))
 
 
-def raw_request(path, method="GET", query_string="", body=b"", headers=None, body_chunks=None):
+def raw_request(
+    path,
+    method="GET",
+    query_string="",
+    body=b"",
+    headers=None,
+    body_chunks=None,
+    client=None,
+):
     return asyncio.run(
         asgi_request(
             path,
@@ -34,6 +51,7 @@ def raw_request(path, method="GET", query_string="", body=b"", headers=None, bod
             body=body,
             headers=headers,
             body_chunks=body_chunks,
+            client=client,
         )
     )
 
@@ -45,6 +63,7 @@ async def asgi_request(
     body=b"",
     headers=None,
     body_chunks=None,
+    client=None,
 ):
     messages = []
     chunks = body_chunks if body_chunks is not None else [body]
@@ -79,6 +98,7 @@ async def asgi_request(
         "path": path,
         "query_string": query_string.encode("utf-8"),
         "headers": scope_headers,
+        "client": client or ("127.0.0.1", 12345),
     }
     await object_server.app(scope, receive, send)
 
@@ -263,6 +283,74 @@ def test_request_concurrency_limit_releases_after_error(monkeypatch):
     assert first_payload == {"status": "error", "error": "Not found"}
     assert second_status == 404
     assert second_payload == {"status": "error", "error": "Not found"}
+
+
+def test_rate_limit_returns_429_with_retry_after(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path / "data"))
+    monkeypatch.setenv(object_server.RATE_LIMIT_REQUESTS_ENV, "1")
+    monkeypatch.setenv(object_server.RATE_LIMIT_WINDOW_SECONDS_ENV, "60")
+    client = ("198.51.100.10", 54321)
+
+    first_status, _, first_payload = request("/missing", client=client)
+    second_status, second_headers, second_payload = request("/missing", client=client)
+
+    assert first_status == 404
+    assert first_payload == {"status": "error", "error": "Not found"}
+    assert second_status == 429
+    assert second_headers[b"retry-after"].isdigit()
+    assert second_payload["status"] == "error"
+    assert second_payload["error"] == "Rate limit exceeded"
+    assert second_payload["limit"] == 1
+    assert second_payload["window_seconds"] == 60
+
+
+def test_plain_health_bypasses_rate_limit(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path / "data"))
+    monkeypatch.setenv(object_server.RATE_LIMIT_REQUESTS_ENV, "1")
+    client = ("198.51.100.10", 54321)
+
+    assert request("/health", client=client)[2] == {"status": "ok"}
+    assert request("/health", client=client)[2] == {"status": "ok"}
+
+
+def test_admin_token_uses_separate_rate_limit_bucket(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path / "data"))
+    monkeypatch.setenv(object_server.RATE_LIMIT_REQUESTS_ENV, "1")
+    monkeypatch.setenv(object_server.RATE_LIMIT_WINDOW_SECONDS_ENV, "60")
+    enable_admin_token(monkeypatch)
+    client = ("198.51.100.10", 54321)
+
+    assert request("/missing", client=client)[0] == 404
+    status, _, payload = request(
+        "/health",
+        query_string="capacity=true",
+        headers=auth_headers(),
+        client=client,
+    )
+
+    assert status == 200
+    assert payload["status"] == "ok"
+
+
+def test_rate_limit_can_trust_proxy_headers_when_configured(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path / "data"))
+    monkeypatch.setenv(object_server.RATE_LIMIT_REQUESTS_ENV, "1")
+    monkeypatch.setenv(object_server.RATE_LIMIT_TRUST_PROXY_HEADERS_ENV, "true")
+    proxy_client = ("127.0.0.1", 54321)
+
+    first_status = request(
+        "/missing",
+        headers=[("x-forwarded-for", "198.51.100.10")],
+        client=proxy_client,
+    )[0]
+    second_status = request(
+        "/missing",
+        headers=[("x-forwarded-for", "198.51.100.11")],
+        client=proxy_client,
+    )[0]
+
+    assert first_status == 404
+    assert second_status == 404
 
 
 def test_object_list_returns_existing_contract_shape(tmp_path, monkeypatch):

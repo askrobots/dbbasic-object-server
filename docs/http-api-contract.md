@@ -99,6 +99,35 @@ Response:
 and recent HTTP errors. This preserves the older dashboard/Scroll direction
 without exposing those details through the public liveness route.
 
+## Rate Limits
+
+When `DBBASIC_RATE_LIMIT_REQUESTS` is set above zero, the server rate-limits
+non-health traffic before reading request bodies or running object code. Plain
+`GET /health` is excluded so load balancers and uptime checks keep working under
+pressure.
+
+The current public server uses a valid admin token as the rate-limit identity
+for admin requests. Other requests use the client IP address. Proxy headers such
+as `X-Forwarded-For` are ignored unless `DBBASIC_RATE_LIMIT_TRUST_PROXY_HEADERS`
+is enabled on a server that is only reachable through a trusted reverse proxy.
+
+Limit response:
+
+```http
+429 Too Many Requests
+Retry-After: 30
+```
+
+```json
+{
+  "status": "error",
+  "error": "Rate limit exceeded",
+  "retry_after": 30,
+  "limit": 1000,
+  "window_seconds": 60
+}
+```
+
 ## Object List
 
 ```http
@@ -175,6 +204,7 @@ Compatibility details from the working prototype:
   parameters.
 - `PUT` and `DELETE` reject invalid JSON bodies with `400`.
 - request bodies over `DBBASIC_MAX_REQUEST_BYTES` are rejected with `413`.
+- rate-limited requests are rejected with `429`.
 - full request or object execution capacity is rejected with `503`.
 - `POST` with `{"action": "rollback"}` is reserved for rollback.
 - `PUT /objects/{object_id}?source=true` is reserved for source updates.

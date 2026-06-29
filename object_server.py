@@ -6,6 +6,7 @@ while the production auth and mutation paths are extracted.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import os
@@ -21,6 +22,7 @@ import http_api_contract
 import object_execution
 import object_logs
 import object_metadata
+import object_rate_limit
 import object_source
 import object_state
 import object_versions
@@ -34,9 +36,14 @@ DATA_DIR_ENV = "DBBASIC_DATA_DIR"
 MAX_REQUEST_BYTES_ENV = "DBBASIC_MAX_REQUEST_BYTES"
 MAX_CONCURRENT_REQUESTS_ENV = "DBBASIC_MAX_CONCURRENT_REQUESTS"
 MAX_CONCURRENT_EXECUTIONS_ENV = "DBBASIC_MAX_CONCURRENT_EXECUTIONS"
+RATE_LIMIT_REQUESTS_ENV = "DBBASIC_RATE_LIMIT_REQUESTS"
+RATE_LIMIT_WINDOW_SECONDS_ENV = "DBBASIC_RATE_LIMIT_WINDOW_SECONDS"
+RATE_LIMIT_TRUST_PROXY_HEADERS_ENV = "DBBASIC_RATE_LIMIT_TRUST_PROXY_HEADERS"
 DEFAULT_MAX_REQUEST_BYTES = 1_048_576
 DEFAULT_MAX_CONCURRENT_REQUESTS = 64
 DEFAULT_MAX_CONCURRENT_EXECUTIONS = 8
+DEFAULT_RATE_LIMIT_REQUESTS = 0
+DEFAULT_RATE_LIMIT_WINDOW_SECONDS = 60
 TRUE_VALUES = {"1", "true", "yes", "on"}
 SENSITIVE_GET_FLAGS = {"source", "state", "logs", "metadata", "versions"}
 
@@ -230,7 +237,12 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
     headers = _parse_headers(scope.get("headers", []))
 
     if path == "/health":
+        if _is_detailed_health(query) and await _send_rate_limit_if_needed(scope, headers, send):
+            return
         await _handle_health(send, query, headers)
+        return
+
+    if await _send_rate_limit_if_needed(scope, headers, send):
         return
 
     request_limit = _max_concurrent_requests()
@@ -320,6 +332,32 @@ def _is_detailed_health(query: dict[str, str]) -> bool:
     return query.get("capacity") == "true" or query.get("metrics") == "true"
 
 
+async def _send_rate_limit_if_needed(
+    scope: dict[str, Any],
+    headers: dict[str, str],
+    send,
+) -> bool:
+    limit = _rate_limit_requests()
+    if limit <= 0:
+        return False
+
+    try:
+        result = object_rate_limit.check_rate_limit(
+            directory=_rate_limit_dir(),
+            identity=_rate_limit_identity(scope, headers),
+            limit=limit,
+            window_seconds=_rate_limit_window_seconds(),
+        )
+    except OSError:
+        return False
+
+    if result.allowed:
+        return False
+
+    await _send_rate_limit_error(send, result)
+    return True
+
+
 def _health_payload(*, include_metrics: bool) -> dict[str, Any]:
     metrics = _metrics.snapshot()
     storage_check = _storage_check()
@@ -350,6 +388,9 @@ def _health_payload(*, include_metrics: bool) -> dict[str, Any]:
             "max_request_bytes": _max_request_bytes(),
             "max_concurrent_requests": _max_concurrent_requests(),
             "max_concurrent_executions": _max_concurrent_executions(),
+            "rate_limit_requests": _rate_limit_requests(),
+            "rate_limit_window_seconds": _rate_limit_window_seconds(),
+            "rate_limit_trust_proxy_headers": _env_enabled(RATE_LIMIT_TRUST_PROXY_HEADERS_ENV),
         },
         "checks": {
             "storage": storage_check,
@@ -848,6 +889,36 @@ def _station_id() -> str:
     return os.environ.get("DBBASIC_STATION_ID") or os.environ.get("STATION_ID") or "standalone"
 
 
+def _rate_limit_identity(scope: dict[str, Any], headers: dict[str, str]) -> str:
+    token = _authorization_token(headers)
+    admin_token = os.environ.get(ADMIN_TOKEN_ENV, "")
+    if token and admin_token and hmac.compare_digest(token, admin_token):
+        return f"token:{_hash_identity(token)}"
+
+    return f"ip:{_client_ip(scope, headers)}"
+
+
+def _hash_identity(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:32]
+
+
+def _client_ip(scope: dict[str, Any], headers: dict[str, str]) -> str:
+    if _env_enabled(RATE_LIMIT_TRUST_PROXY_HEADERS_ENV):
+        forwarded = headers.get("x-forwarded-for", "")
+        if forwarded:
+            return forwarded.split(",", 1)[0].strip()
+
+        real_ip = headers.get("x-real-ip", "")
+        if real_ip:
+            return real_ip.strip()
+
+    client = scope.get("client")
+    if isinstance(client, (list, tuple)) and client:
+        return str(client[0])
+
+    return "127.0.0.1"
+
+
 def _storage_check() -> dict[str, str]:
     check_path = os.path.join(_data_dir(), ".health_check")
     try:
@@ -1136,6 +1207,24 @@ def _max_request_bytes() -> int:
     return max_bytes
 
 
+def _rate_limit_requests() -> int:
+    requests = _env_int(RATE_LIMIT_REQUESTS_ENV, DEFAULT_RATE_LIMIT_REQUESTS)
+    if requests < 0:
+        return DEFAULT_RATE_LIMIT_REQUESTS
+    return requests
+
+
+def _rate_limit_window_seconds() -> int:
+    seconds = _env_int(RATE_LIMIT_WINDOW_SECONDS_ENV, DEFAULT_RATE_LIMIT_WINDOW_SECONDS)
+    if seconds <= 0:
+        return DEFAULT_RATE_LIMIT_WINDOW_SECONDS
+    return seconds
+
+
+def _rate_limit_dir() -> str:
+    return os.path.join(_data_dir(), "ratelimit")
+
+
 def _env_int(name: str, default: int) -> int:
     value = os.environ.get(name, "").strip()
     if not value:
@@ -1213,12 +1302,38 @@ async def _send_capacity_error(send, *, limit_name: str, max_concurrent: int) ->
     )
 
 
-async def _send_json(send, payload: Any, status: int = 200) -> None:
+async def _send_rate_limit_error(
+    send,
+    result: object_rate_limit.RateLimitResult,
+) -> None:
+    await _send_json(
+        send,
+        {
+            "status": "error",
+            "error": "Rate limit exceeded",
+            "retry_after": result.retry_after,
+            "limit": result.limit,
+            "window_seconds": result.window_seconds,
+        },
+        status=429,
+        headers=[("retry-after", str(result.retry_after))],
+    )
+
+
+async def _send_json(
+    send,
+    payload: Any,
+    status: int = 200,
+    headers: list[tuple[str, str]] | None = None,
+) -> None:
     body = json.dumps(payload).encode("utf-8")
+    response_headers = [("content-type", "application/json; charset=utf-8")]
+    if headers:
+        response_headers.extend(headers)
     await _send_response(
         send,
         status=status,
-        headers=[("content-type", "application/json; charset=utf-8")],
+        headers=response_headers,
         body=body,
     )
 

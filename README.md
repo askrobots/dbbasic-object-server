@@ -150,6 +150,8 @@ export DBBASIC_DATA_DIR=./data
 export DBBASIC_MAX_REQUEST_BYTES=1048576
 export DBBASIC_MAX_CONCURRENT_REQUESTS=64
 export DBBASIC_MAX_CONCURRENT_EXECUTIONS=8
+export DBBASIC_RATE_LIMIT_REQUESTS=1000
+export DBBASIC_RATE_LIMIT_WINDOW_SECONDS=60
 ```
 
 The value above is a placeholder. Each real deployment must generate its own
@@ -162,6 +164,9 @@ set:
 ```bash
 export DBBASIC_ENABLE_SOURCE_WRITES=true
 ```
+
+Rate limiting is disabled unless `DBBASIC_RATE_LIMIT_REQUESTS` is set above
+zero. Public staging and production deployments should set it explicitly.
 
 Production auth and permissions still need to replace this temporary admin-token
 gate before general use.
@@ -186,6 +191,8 @@ rules the rest of the server will use:
 - detailed health reports uptime, request metrics, storage status, version,
   config, and request/object execution slot capacity
 - request bodies over `DBBASIC_MAX_REQUEST_BYTES` return `413 Payload Too Large`
+- traffic over `DBBASIC_RATE_LIMIT_REQUESTS` per `DBBASIC_RATE_LIMIT_WINDOW_SECONDS`
+  returns `429 Too Many Requests`
 - full request and object execution slots return `503 Service Unavailable`
 - `basics_counter` maps to `objects/basics/counter.py`
 - `u_42_deals` maps to `objects/users/42/deals.py`

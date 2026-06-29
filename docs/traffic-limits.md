@@ -72,6 +72,59 @@ These caps are per process. If uvicorn runs multiple workers, each worker has
 its own counters. A reverse proxy or process manager still controls the total
 machine-level shape.
 
+## Rate Limits
+
+Rate limiting is opt-in:
+
+```text
+DBBASIC_RATE_LIMIT_REQUESTS=1000
+DBBASIC_RATE_LIMIT_WINDOW_SECONDS=60
+```
+
+The default `DBBASIC_RATE_LIMIT_REQUESTS=0` leaves the app-level limiter
+disabled for local development. Public staging and production deployments should
+set an explicit value.
+
+When enabled, the server checks the rate limit before reading the request body
+or running object code. Plain `GET /health` is excluded so external monitoring
+can still tell whether the process is alive. Detailed health via
+`capacity=true` or `metrics=true` is rate-limited and still requires the admin
+token.
+
+The limiter stores one timestamp bucket per identity under:
+
+```text
+data/ratelimit/
+```
+
+Those files are runtime guardrails, not application data. Backups exclude them.
+
+Valid admin-token requests use a token bucket. Other requests use the client IP.
+By default the server ignores `X-Forwarded-For` and `X-Real-IP`; enable proxy
+header trust only when uvicorn is bound privately behind a trusted reverse
+proxy:
+
+```text
+DBBASIC_RATE_LIMIT_TRUST_PROXY_HEADERS=true
+```
+
+When the limit is full, the server returns:
+
+```http
+429 Too Many Requests
+Retry-After: 30
+```
+
+```json
+{
+  "status": "error",
+  "error": "Rate limit exceeded",
+  "retry_after": 30,
+  "limit": 1000,
+  "window_seconds": 60
+}
+```
+
 ## Capacity Health
 
 `GET /health` stays public and cheap:
@@ -122,6 +175,9 @@ For the first public staging VM:
 DBBASIC_MAX_REQUEST_BYTES=1048576
 DBBASIC_MAX_CONCURRENT_REQUESTS=64
 DBBASIC_MAX_CONCURRENT_EXECUTIONS=8
+DBBASIC_RATE_LIMIT_REQUESTS=1000
+DBBASIC_RATE_LIMIT_WINDOW_SECONDS=60
+DBBASIC_RATE_LIMIT_TRUST_PROXY_HEADERS=true
 DBBASIC_ENABLE_SOURCE_WRITES=false
 ```
 
@@ -156,9 +212,8 @@ read in place with normal Unix tools such as `gzip -cd`.
 
 ## Next Limits
 
-The request and concurrency caps are only the first boundaries. The next
-production-hardening steps are:
+The request, concurrency, and rate-limit caps are only the first boundaries. The
+next production-hardening steps are:
 
 - execution wall-clock timeout
-- rate limiting by IP and token
 - CPU and memory isolation for untrusted object code
