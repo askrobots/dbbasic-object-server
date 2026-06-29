@@ -161,6 +161,7 @@ export DBBASIC_MAX_REQUEST_BYTES=1048576
 export DBBASIC_MAX_CONCURRENT_REQUESTS=64
 export DBBASIC_MAX_CONCURRENT_EXECUTIONS=8
 export DBBASIC_OBJECT_TIMEOUT_SECONDS=5
+export DBBASIC_TRUSTED_IN_PROCESS_OBJECTS=site_home
 export DBBASIC_RATE_LIMIT_REQUESTS=1000
 export DBBASIC_RATE_LIMIT_WINDOW_SECONDS=60
 export DBBASIC_ENABLE_PERMISSION_AUDIT=false
@@ -217,6 +218,9 @@ rules the rest of the server will use:
   returns `429 Too Many Requests`
 - full request and object execution slots return `503 Service Unavailable`
 - object execution over `DBBASIC_OBJECT_TIMEOUT_SECONDS` returns `504 Gateway Timeout`
+- trusted server-owned objects listed in `DBBASIC_TRUSTED_IN_PROCESS_OBJECTS`
+  run in-process even when object timeouts are enabled; do not use this for
+  unreviewed user code
 - optional permission audit logs route decisions without changing responses
 - optional permission enforcement checks object routes before source,
   introspection, or execution work runs

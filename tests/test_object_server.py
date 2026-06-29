@@ -206,6 +206,7 @@ def test_health_capacity_reports_version_config_objects_and_slots(tmp_path, monk
     monkeypatch.setenv(object_server.MAX_REQUEST_BYTES_ENV, "2048")
     monkeypatch.setenv(object_server.MAX_CONCURRENT_REQUESTS_ENV, "2")
     monkeypatch.setenv(object_server.MAX_CONCURRENT_EXECUTIONS_ENV, "1")
+    monkeypatch.setenv(object_server.TRUSTED_IN_PROCESS_OBJECTS_ENV, "site_home, basics_counter")
     enable_admin_token(monkeypatch)
 
     token = claim_limit_slot(object_server._request_limiter, 2)
@@ -227,6 +228,7 @@ def test_health_capacity_reports_version_config_objects_and_slots(tmp_path, monk
     assert payload["config"]["max_request_bytes"] == 2048
     assert payload["config"]["max_concurrent_requests"] == 2
     assert payload["config"]["max_concurrent_executions"] == 1
+    assert payload["config"]["trusted_in_process_objects"] == ["basics_counter", "site_home"]
     assert payload["config"]["permission_enforcement_enabled"] is False
     assert payload["config"]["permission_audit_enabled"] is False
     assert payload["config"]["permission_trust_headers"] is False
@@ -2047,6 +2049,68 @@ def test_object_execution_timeout_returns_504_and_logs(tmp_path, monkeypatch):
     assert payload["logs"][0]["level"] == "ERROR"
     assert payload["logs"][0]["error_type"] == object_execution.TIMEOUT_ERROR_TYPE
     assert payload["logs"][0]["status"] == "error"
+
+
+def test_timeout_enabled_uses_subprocess_for_untrusted_objects(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(
+        root / "basics" / "fast.py",
+        "def GET(request):\n    return {'mode': 'object_source'}\n",
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv(object_server.OBJECT_TIMEOUT_SECONDS_ENV, "5")
+    calls = []
+
+    def fake_subprocess(request, roots=None, *, timeout_seconds, raise_on_error=False):
+        calls.append((request.object_id, timeout_seconds))
+        return object_execution.ObjectExecutionResult(
+            object_id=request.object_id,
+            method=request.normalized_method(),
+            path=request.path,
+            ok=True,
+            result={"mode": "subprocess"},
+            error=None,
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:00Z",
+            duration_ms=1.0,
+        )
+
+    monkeypatch.setattr(
+        object_execution,
+        "execute_python_object_subprocess",
+        fake_subprocess,
+    )
+
+    status, _, payload = request("/objects/basics_fast")
+
+    assert status == 200
+    assert payload == {"mode": "subprocess"}
+    assert calls == [("basics_fast", 5.0)]
+
+
+def test_trusted_in_process_object_bypasses_subprocess_timeout_path(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(
+        root / "basics" / "fast.py",
+        "def GET(request):\n    return {'mode': 'in_process'}\n",
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv(object_server.OBJECT_TIMEOUT_SECONDS_ENV, "5")
+    monkeypatch.setenv(object_server.TRUSTED_IN_PROCESS_OBJECTS_ENV, "basics_fast")
+
+    def fail_subprocess(*args, **kwargs):
+        raise AssertionError("trusted object should not use subprocess execution")
+
+    monkeypatch.setattr(
+        object_execution,
+        "execute_python_object_subprocess",
+        fail_subprocess,
+    )
+
+    status, _, payload = request("/objects/basics_fast")
+
+    assert status == 200
+    assert payload == {"mode": "in_process"}
 
 
 def test_execution_concurrency_limit_releases_after_object_error(tmp_path, monkeypatch):

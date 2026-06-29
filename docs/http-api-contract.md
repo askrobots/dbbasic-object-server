@@ -469,6 +469,11 @@ terminated and the client receives:
 The timeout is a wall-clock boundary. It is not a complete CPU or memory
 sandbox.
 
+Objects named in `DBBASIC_TRUSTED_IN_PROCESS_OBJECTS` keep the fast in-process
+execution path even when timeouts are enabled. This is for reviewed
+server-owned objects, such as a high-traffic public homepage. Do not use it for
+unreviewed user code.
+
 ## Source
 
 ```http

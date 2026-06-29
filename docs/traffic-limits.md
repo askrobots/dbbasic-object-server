@@ -153,6 +153,17 @@ Timeout failures are written to the object log with
 `ObjectExecutionTimeoutError`, so Scroll and operators can see which object
 timed out.
 
+Trusted server-owned objects can opt back into the fast in-process path even
+when timeouts are enabled:
+
+```text
+DBBASIC_TRUSTED_IN_PROCESS_OBJECTS=site_home,system_health
+```
+
+Use that only for reviewed objects shipped or controlled by the server operator,
+such as a public homepage that receives frequent hits. Untrusted user objects
+should stay on the timeout-enabled worker path.
+
 This boundary is intentionally narrow. It stops hung object work and releases
 the execution slot, but it is not the final sandbox. CPU quotas, memory limits,
 and a longer-lived worker pool are still future hardening steps.

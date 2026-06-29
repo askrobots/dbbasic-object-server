@@ -166,6 +166,7 @@ DBBASIC_MAX_REQUEST_BYTES=1048576
 DBBASIC_MAX_CONCURRENT_REQUESTS=64
 DBBASIC_MAX_CONCURRENT_EXECUTIONS=8
 DBBASIC_OBJECT_TIMEOUT_SECONDS=5
+DBBASIC_TRUSTED_IN_PROCESS_OBJECTS=site_home
 DBBASIC_RATE_LIMIT_REQUESTS=1000
 DBBASIC_RATE_LIMIT_WINDOW_SECONDS=60
 DBBASIC_RATE_LIMIT_TRUST_PROXY_HEADERS=true
@@ -271,6 +272,9 @@ The concurrency limits are per process. Under overload, the server returns
 hardening still needs CPU/memory isolation and a longer-lived worker pool.
 `DBBASIC_OBJECT_TIMEOUT_SECONDS` runs object methods in a worker process and
 returns `504` if the wall-clock timeout is exceeded.
+`DBBASIC_TRUSTED_IN_PROCESS_OBJECTS` is a comma-separated allowlist for
+reviewed server-owned objects that should keep the fast in-process path, such as
+the public homepage. Do not add user-created objects to this list.
 The rate limit values above return `429` with `Retry-After` when one IP or
 valid admin token exceeds the configured window.
 `DBBASIC_RATE_LIMIT_TRUST_PROXY_HEADERS` is appropriate only because uvicorn is

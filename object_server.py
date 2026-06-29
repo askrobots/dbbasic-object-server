@@ -43,6 +43,7 @@ RATE_LIMIT_REQUESTS_ENV = "DBBASIC_RATE_LIMIT_REQUESTS"
 RATE_LIMIT_WINDOW_SECONDS_ENV = "DBBASIC_RATE_LIMIT_WINDOW_SECONDS"
 RATE_LIMIT_TRUST_PROXY_HEADERS_ENV = "DBBASIC_RATE_LIMIT_TRUST_PROXY_HEADERS"
 OBJECT_TIMEOUT_SECONDS_ENV = "DBBASIC_OBJECT_TIMEOUT_SECONDS"
+TRUSTED_IN_PROCESS_OBJECTS_ENV = "DBBASIC_TRUSTED_IN_PROCESS_OBJECTS"
 PERMISSION_ENFORCEMENT_ENV = "DBBASIC_ENABLE_PERMISSION_ENFORCEMENT"
 PERMISSION_AUDIT_ENV = "DBBASIC_ENABLE_PERMISSION_AUDIT"
 PERMISSION_TRUST_HEADERS_ENV = "DBBASIC_PERMISSION_TRUST_HEADERS"
@@ -412,6 +413,7 @@ def _health_payload(*, include_metrics: bool) -> dict[str, Any]:
             "rate_limit_window_seconds": _rate_limit_window_seconds(),
             "rate_limit_trust_proxy_headers": _env_enabled(RATE_LIMIT_TRUST_PROXY_HEADERS_ENV),
             "object_timeout_seconds": _object_timeout_seconds(),
+            "trusted_in_process_objects": sorted(_trusted_in_process_object_ids()),
             "permission_enforcement_enabled": _permission_enforcement_enabled(),
             "permission_audit_enabled": _permission_audit_enabled(),
             "permission_trust_headers": _env_enabled(PERMISSION_TRUST_HEADERS_ENV),
@@ -1087,7 +1089,7 @@ async def _execute_object_method(
     timeout_seconds = _object_timeout_seconds()
 
     try:
-        if timeout_seconds > 0:
+        if timeout_seconds > 0 and not _object_runs_in_process(object_id):
             result = object_execution.execute_python_object_subprocess(
                 execution_request,
                 timeout_seconds=timeout_seconds,
@@ -1765,6 +1767,15 @@ def _object_timeout_seconds() -> float:
     if seconds < 0:
         return DEFAULT_OBJECT_TIMEOUT_SECONDS
     return seconds
+
+
+def _object_runs_in_process(object_id: str) -> bool:
+    return object_id in _trusted_in_process_object_ids()
+
+
+def _trusted_in_process_object_ids() -> frozenset[str]:
+    value = os.environ.get(TRUSTED_IN_PROCESS_OBJECTS_ENV, "")
+    return frozenset(part.strip() for part in value.split(",") if part.strip())
 
 
 def _rate_limit_dir() -> str:
