@@ -16,6 +16,7 @@ flowchart TD
     A --> L["Single VM deployment"]
     A --> N["Backup and restore"]
     A --> O["Traffic limits"]
+    A --> P["Permissions model"]
 
     B --> F["Object namespace"]
     B --> G["Execution result shape"]
@@ -46,6 +47,9 @@ flowchart TD
   what stays out of portable backups.
 - `traffic-limits.md` - request-size limits, high-traffic safety layers, and
   the next rate/concurrency/execution boundaries.
+- `permissions-model.md` - server-side access modes, role/object/action rules,
+  ownership, sharing, row/field filters, subscriptions, and temporary paid
+  access.
 
 ## Documentation Rules
 
@@ -61,7 +65,6 @@ flowchart TD
 Useful next docs:
 
 - object method reference
-- permissions model
 - AI repair loop guide
 - realtime event contract
 - package/install guide

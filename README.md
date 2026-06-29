@@ -84,6 +84,8 @@ This repository currently contains:
 - `object_state.py` - TSV-backed object state reads and runtime writes
 - `object_logs.py` - TSV-backed object log reads, appends, rotation, compression, retention, and runtime logger helper
 - `object_metadata.py` - conservative object metadata summaries
+- `object_permissions.py` - server-side access modes, role/object/action checks,
+  ownership, sharing, subscriptions, temporary grants, and row/field filters
 - `object_versions.py` - source version metadata, content snapshots, and rollback
 - `object_backup.py` - runtime backup, verification, and safe restore helpers
 - `object_daemon.py` - background worker for scheduler, queue, events, and cleanup
@@ -232,14 +234,16 @@ intentionally starting small so the public codebase can be reviewed and cleaned
 as it grows.
 
 The public repository now has a runnable ASGI server, direct Python object
-execution, source/state/log/version storage, metadata, a daemon slice, tests,
-GitHub Actions, and a conservative single-VM staging path. It is ready for local
-experimentation and controlled staging, not general public code execution.
+execution, source/state/log/version storage, metadata, a daemon slice, the first
+permissions evaluator, tests, GitHub Actions, and a conservative single-VM
+staging path. It is ready for local experimentation and controlled staging, not
+general public code execution.
 
 Near-term work:
 
 - move the hardened core runtime and sandbox into this repository
-- enforce authentication, permissions, and row/object access rules in the server
+- wire the permissions evaluator into authentication, row/object access checks,
+  and Scroll-compatible introspection endpoints
 - add CPU, memory, wall-clock, and rate limits around execution
 - wire scheduled backup retention and Scroll backup controls to `object_backup.py`
 - keep the HTTP contract compatible with Scroll and existing tools
