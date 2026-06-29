@@ -333,6 +333,7 @@ In another shell:
 
 ```bash
 curl http://127.0.0.1:8001/health
+curl -H "Authorization: Token $DBBASIC_ADMIN_TOKEN" 'http://127.0.0.1:8001/health?capacity=true'
 curl -H "Authorization: Token $DBBASIC_ADMIN_TOKEN" http://127.0.0.1:8001/objects
 curl http://127.0.0.1:8001/objects/site_home
 curl -H "Authorization: Token $DBBASIC_ADMIN_TOKEN" 'http://127.0.0.1:8001/objects/site_home?state=true'
@@ -373,6 +374,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now dbbasic-object-server
 sudo systemctl status dbbasic-object-server
 curl http://127.0.0.1:8001/health
+curl -H "Authorization: Token $DBBASIC_ADMIN_TOKEN" 'http://127.0.0.1:8001/health?capacity=true'
 ```
 
 Watch logs:

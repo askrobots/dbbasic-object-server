@@ -149,6 +149,93 @@ def test_health_endpoint_bypasses_request_concurrency_limit(monkeypatch):
     assert payload == {"status": "ok"}
 
 
+def test_health_capacity_requires_admin_token_configuration(monkeypatch):
+    monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)
+
+    status, _, payload = request("/health", query_string="capacity=true")
+
+    assert status == 403
+    assert payload == {
+        "status": "error",
+        "error": "Health capacity requires DBBASIC_ADMIN_TOKEN.",
+    }
+
+
+def test_health_capacity_requires_authorization_header(monkeypatch):
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/health", query_string="capacity=true")
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
+
+
+def test_health_capacity_reports_version_config_objects_and_slots(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {'ok': True}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.MAX_REQUEST_BYTES_ENV, "2048")
+    monkeypatch.setenv(object_server.MAX_CONCURRENT_REQUESTS_ENV, "2")
+    monkeypatch.setenv(object_server.MAX_CONCURRENT_EXECUTIONS_ENV, "1")
+    enable_admin_token(monkeypatch)
+
+    token = claim_limit_slot(object_server._request_limiter, 2)
+    try:
+        status, _, payload = request(
+            "/health",
+            query_string="capacity=true",
+            headers=auth_headers(),
+        )
+    finally:
+        token.release()
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["version"] == "0.0.1"
+    assert payload["station_id"] == "standalone"
+    assert payload["objects"] == {"count": 1}
+    assert payload["checks"]["storage"] == {"status": "ok"}
+    assert payload["config"]["max_request_bytes"] == 2048
+    assert payload["config"]["max_concurrent_requests"] == 2
+    assert payload["config"]["max_concurrent_executions"] == 1
+    assert payload["capacity"]["requests"] == {
+        "in_flight": 1,
+        "max": 2,
+        "available": 1,
+        "limited": True,
+    }
+    assert payload["capacity"]["object_executions"] == {
+        "in_flight": 0,
+        "max": 1,
+        "available": 1,
+        "limited": True,
+    }
+    assert "metrics" not in payload
+
+
+def test_health_metrics_keeps_old_dashboard_shape(monkeypatch):
+    enable_admin_token(monkeypatch)
+    request("/missing-before-health-metrics")
+
+    status, _, payload = request(
+        "/health",
+        query_string="metrics=true",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["requests"] >= 1
+    assert payload["errors"] >= 0
+    assert payload["rps"] >= 0
+    assert set(payload["response_time_ms"]) == {"avg", "p50", "p95", "p99"}
+    assert payload["metrics"]["total_requests"] >= 1
+    assert payload["metrics"]["total_4xx"] >= 1
+    assert "top_paths" in payload["metrics"]
+
+
 def test_request_concurrency_limit_returns_503_when_full(monkeypatch):
     monkeypatch.setenv(object_server.MAX_CONCURRENT_REQUESTS_ENV, "1")
     token = claim_limit_slot(object_server._request_limiter, 1)

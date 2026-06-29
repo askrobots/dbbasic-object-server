@@ -122,6 +122,8 @@ uvicorn object_server:app --host 127.0.0.1 --port 8001
 Current endpoints:
 
 - `GET /health`
+- `GET /health?capacity=true`
+- `GET /health?metrics=true`
 - `GET /objects?format=json`
 - `GET /objects/{object_id}`
 - `POST /objects/{object_id}`
@@ -152,8 +154,10 @@ export DBBASIC_MAX_CONCURRENT_EXECUTIONS=8
 
 The value above is a placeholder. Each real deployment must generate its own
 secret outside the source tree. Then send `Authorization: Token <token>` with
-the request. Source updates and rollback are disabled by default. For local
-development only, also set:
+the request. Detailed health via `capacity=true` or `metrics=true` also uses
+that token because it exposes runtime configuration and process capacity. Source
+updates and rollback are disabled by default. For local development only, also
+set:
 
 ```bash
 export DBBASIC_ENABLE_SOURCE_WRITES=true
@@ -179,6 +183,8 @@ rules the rest of the server will use:
 - `object_backup.py` archives and safely restores object source plus runtime data
 - `object_daemon.py` runs scheduled, queued, and event work
 - `deployment_checks.py` checks the single-VM filesystem layout before public exposure
+- detailed health reports uptime, request metrics, storage status, version,
+  config, and request/object execution slot capacity
 - request bodies over `DBBASIC_MAX_REQUEST_BYTES` return `413 Payload Too Large`
 - full request and object execution slots return `503 Service Unavailable`
 - `basics_counter` maps to `objects/basics/counter.py`

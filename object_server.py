@@ -10,7 +10,11 @@ import hmac
 import json
 import os
 import threading
+import time
 import urllib.parse
+from collections import Counter, deque
+from datetime import datetime, timezone
+from importlib import metadata as importlib_metadata
 from typing import Any
 
 import http_api_contract
@@ -37,6 +41,82 @@ TRUE_VALUES = {"1", "true", "yes", "on"}
 SENSITIVE_GET_FLAGS = {"source", "state", "logs", "metadata", "versions"}
 
 _runtime = PythonObjectRuntime()
+
+
+class RequestMetrics:
+    """Thread-safe, in-process request metrics for health and Scroll."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._start_time = time.time()
+        self._total_requests = 0
+        self._total_errors = 0
+        self._total_4xx = 0
+        self._response_times_ms: deque[float] = deque(maxlen=1000)
+        self._methods: Counter[str] = Counter()
+        self._status_codes: Counter[int] = Counter()
+        self._paths: Counter[str] = Counter()
+        self._path_errors: Counter[str] = Counter()
+        self._recent_errors: deque[dict[str, Any]] = deque(maxlen=50)
+
+    def record_request(self, method: str, path: str, status: int, duration_ms: float) -> None:
+        with self._lock:
+            self._total_requests += 1
+            self._methods[method] += 1
+            self._status_codes[status] += 1
+            self._paths[path] += 1
+            self._response_times_ms.append(duration_ms)
+
+            if status >= 500:
+                self._total_errors += 1
+                self._path_errors[path] += 1
+            if 400 <= status < 500:
+                self._total_4xx += 1
+                self._path_errors[path] += 1
+            if status >= 400:
+                self._recent_errors.append(
+                    {
+                        "timestamp": _utc_timestamp(),
+                        "method": method,
+                        "path": path,
+                        "status": status,
+                        "duration_ms": round(duration_ms, 2),
+                    }
+                )
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            uptime_seconds = max(time.time() - self._start_time, 0.001)
+            response_times = list(self._response_times_ms)
+            total_requests = self._total_requests
+            total_errors = self._total_errors
+            total_4xx = self._total_4xx
+            methods = dict(self._methods)
+            status_codes = {str(code): count for code, count in self._status_codes.items()}
+            top_paths = [
+                {
+                    "path": path,
+                    "requests": count,
+                    "errors": self._path_errors.get(path, 0),
+                }
+                for path, count in self._paths.most_common(10)
+            ]
+            recent_errors = list(self._recent_errors)
+
+        return {
+            "uptime_seconds": round(uptime_seconds, 3),
+            "uptime_human": _human_duration(uptime_seconds),
+            "total_requests": total_requests,
+            "total_errors": total_errors,
+            "total_4xx": total_4xx,
+            "requests_per_second": round(total_requests / uptime_seconds, 2),
+            "error_rate": round((total_errors / total_requests * 100) if total_requests else 0, 2),
+            "response_time_ms": _response_time_summary(response_times),
+            "methods": methods,
+            "status_codes": status_codes,
+            "top_paths": top_paths,
+            "recent_errors": recent_errors,
+        }
 
 
 class RequestBodyTooLargeError(ValueError):
@@ -87,9 +167,29 @@ class ConcurrencyLimiter:
             if self._in_flight > 0:
                 self._in_flight -= 1
 
+    def snapshot(self, limit: int) -> dict[str, Any]:
+        with self._lock:
+            in_flight = self._in_flight
+
+        if limit <= 0:
+            return {
+                "in_flight": in_flight,
+                "max": limit,
+                "available": None,
+                "limited": False,
+            }
+
+        return {
+            "in_flight": in_flight,
+            "max": limit,
+            "available": max(limit - in_flight, 0),
+            "limited": True,
+        }
+
 
 _request_limiter = ConcurrencyLimiter()
 _execution_limiter = ConcurrencyLimiter()
+_metrics = RequestMetrics()
 
 
 async def app(scope: dict[str, Any], receive, send) -> None:
@@ -105,7 +205,22 @@ async def app(scope: dict[str, Any], receive, send) -> None:
     if scope["type"] != "http":
         return
 
-    await _handle_http(scope, receive, send)
+    method = scope.get("method", "GET").upper()
+    path = scope.get("path", "/")
+    status_code = 500
+    started_at = time.perf_counter()
+
+    async def send_with_metrics(message):
+        nonlocal status_code
+        if message["type"] == "http.response.start":
+            status_code = int(message.get("status", status_code))
+        await send(message)
+
+    try:
+        await _handle_http(scope, receive, send_with_metrics)
+    finally:
+        duration_ms = (time.perf_counter() - started_at) * 1000
+        _metrics.record_request(method, path, status_code, duration_ms)
 
 
 async def _handle_http(scope: dict[str, Any], receive, send) -> None:
@@ -115,7 +230,7 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
     headers = _parse_headers(scope.get("headers", []))
 
     if path == "/health":
-        await _send_json(send, {"status": "ok"})
+        await _handle_health(send, query, headers)
         return
 
     request_limit = _max_concurrent_requests()
@@ -176,6 +291,76 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
         await _send_json(send, {"status": "error", "error": "Not found"}, status=404)
     finally:
         request_token.release()
+
+
+async def _handle_health(
+    send,
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    if not _is_detailed_health(query):
+        await _send_json(send, {"status": "ok"})
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Health capacity requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    payload = _health_payload(include_metrics=query.get("metrics") == "true")
+    status_code = 503 if payload["status"] == "degraded" else 200
+    await _send_json(send, payload, status=status_code)
+
+
+def _is_detailed_health(query: dict[str, str]) -> bool:
+    return query.get("capacity") == "true" or query.get("metrics") == "true"
+
+
+def _health_payload(*, include_metrics: bool) -> dict[str, Any]:
+    metrics = _metrics.snapshot()
+    storage_check = _storage_check()
+    status = "ok" if storage_check["status"] == "ok" else "degraded"
+    payload: dict[str, Any] = {
+        "status": status,
+        "timestamp": _utc_timestamp(),
+        "version": _package_version(),
+        "station_id": _station_id(),
+        "pid": os.getpid(),
+        "threads": _thread_count(),
+        "uptime": metrics["uptime_human"],
+        "uptime_seconds": metrics["uptime_seconds"],
+        "requests": metrics["total_requests"],
+        "errors": metrics["total_errors"],
+        "rps": metrics["requests_per_second"],
+        "error_rate": metrics["error_rate"],
+        "response_time_ms": metrics["response_time_ms"],
+        "objects": {
+            "count": _object_count(),
+        },
+        "capacity": {
+            "requests": _request_limiter.snapshot(_max_concurrent_requests()),
+            "object_executions": _execution_limiter.snapshot(_max_concurrent_executions()),
+        },
+        "config": {
+            "source_writes_enabled": _env_enabled(SOURCE_WRITES_ENV),
+            "max_request_bytes": _max_request_bytes(),
+            "max_concurrent_requests": _max_concurrent_requests(),
+            "max_concurrent_executions": _max_concurrent_executions(),
+        },
+        "checks": {
+            "storage": storage_check,
+        },
+        "system": _system_snapshot(),
+    }
+
+    if include_metrics:
+        payload["metrics"] = metrics
+
+    return payload
 
 
 async def _handle_object_get(
@@ -646,6 +831,138 @@ def _append_execution_log(result: object_execution.ObjectExecutionResult) -> Non
     except Exception:
         # Logging is feedback for the dev loop; it should not change the object response.
         pass
+
+
+def _object_count() -> int:
+    return sum(1 for _ in iter_object_sources())
+
+
+def _package_version() -> str:
+    try:
+        return importlib_metadata.version("dbbasic-object-server")
+    except importlib_metadata.PackageNotFoundError:
+        return "0.0.1"
+
+
+def _station_id() -> str:
+    return os.environ.get("DBBASIC_STATION_ID") or os.environ.get("STATION_ID") or "standalone"
+
+
+def _storage_check() -> dict[str, str]:
+    check_path = os.path.join(_data_dir(), ".health_check")
+    try:
+        os.makedirs(_data_dir(), exist_ok=True)
+        with open(check_path, "w", encoding="utf-8") as handle:
+            handle.write("ok")
+        with open(check_path, encoding="utf-8") as handle:
+            handle.read()
+        os.unlink(check_path)
+    except OSError as exc:
+        return {
+            "status": "error",
+            "message": str(exc),
+        }
+
+    return {"status": "ok"}
+
+
+def _system_snapshot() -> dict[str, Any]:
+    snapshot: dict[str, Any] = {
+        "cpu_count": os.cpu_count(),
+    }
+
+    try:
+        snapshot["load_average"] = [round(value, 3) for value in os.getloadavg()]
+    except OSError:
+        snapshot["load_average"] = None
+
+    memory = _linux_memory_snapshot()
+    if memory is not None:
+        snapshot["memory"] = memory
+
+    return snapshot
+
+
+def _linux_memory_snapshot() -> dict[str, Any] | None:
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as handle:
+            lines = handle.readlines()
+    except OSError:
+        return None
+
+    values_kb: dict[str, int] = {}
+    for line in lines:
+        key, _, value = line.partition(":")
+        parts = value.strip().split()
+        if not parts:
+            continue
+        try:
+            values_kb[key] = int(parts[0])
+        except ValueError:
+            continue
+
+    total_kb = values_kb.get("MemTotal")
+    available_kb = values_kb.get("MemAvailable")
+    if not total_kb or available_kb is None:
+        return None
+
+    used_kb = max(total_kb - available_kb, 0)
+    return {
+        "total_mb": round(total_kb / 1024, 2),
+        "available_mb": round(available_kb / 1024, 2),
+        "used_mb": round(used_kb / 1024, 2),
+        "used_percent": round(used_kb / total_kb * 100, 2),
+    }
+
+
+def _thread_count() -> int:
+    task_dir = f"/proc/{os.getpid()}/task"
+    try:
+        return len(os.listdir(task_dir))
+    except OSError:
+        return threading.active_count()
+
+
+def _response_time_summary(values: list[float]) -> dict[str, float]:
+    if not values:
+        return {
+            "avg": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+        }
+
+    return {
+        "avg": round(sum(values) / len(values), 2),
+        "p50": round(_percentile(values, 50), 2),
+        "p95": round(_percentile(values, 95), 2),
+        "p99": round(_percentile(values, 99), 2),
+    }
+
+
+def _percentile(values: list[float], percentile: int) -> float:
+    sorted_values = sorted(values)
+    index = int((len(sorted_values) - 1) * percentile / 100)
+    return sorted_values[index]
+
+
+def _human_duration(seconds: float) -> str:
+    remaining = int(seconds)
+    days, remaining = divmod(remaining, 86400)
+    hours, remaining = divmod(remaining, 3600)
+    minutes, seconds = divmod(remaining, 60)
+
+    if days:
+        return f"{days}d {hours}h {minutes}m"
+    if hours:
+        return f"{hours}h {minutes}m"
+    if minutes:
+        return f"{minutes}m {seconds}s"
+    return f"{seconds}s"
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _parse_query(query_string: bytes | str) -> dict[str, str]:

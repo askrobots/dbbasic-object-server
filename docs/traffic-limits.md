@@ -72,6 +72,32 @@ These caps are per process. If uvicorn runs multiple workers, each worker has
 its own counters. A reverse proxy or process manager still controls the total
 machine-level shape.
 
+## Capacity Health
+
+`GET /health` stays public and cheap:
+
+```json
+{
+  "status": "ok"
+}
+```
+
+Detailed capacity is an operator surface and requires the admin token:
+
+```http
+GET /health?capacity=true
+Authorization: Token <token>
+```
+
+It reports the configured request and object execution limits, current
+in-flight slot counts, object count, storage status, version, uptime, request
+counts, recent response timing, and basic process/system information. Scroll and
+future station routers should use this detailed shape instead of guessing from
+logs.
+
+`GET /health?metrics=true` includes the same capacity payload plus detailed
+request metrics such as status counts, top paths, and recent HTTP errors.
+
 ## High-Traffic Shape
 
 Use layered limits:

@@ -35,6 +35,70 @@ also require `DBBASIC_ENABLE_SOURCE_WRITES=true`. The real role, object, and row
 permission system still needs to replace this temporary admin-only boundary
 before general use.
 
+## Health
+
+Plain health is a public liveness check:
+
+```http
+GET /health
+```
+
+Response:
+
+```json
+{
+  "status": "ok"
+}
+```
+
+Detailed health is for operators, Scroll, and future cluster routing:
+
+```http
+GET /health?capacity=true
+Authorization: Token <token>
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "version": "0.0.1",
+  "station_id": "standalone",
+  "uptime": "2h 10m",
+  "requests": 120,
+  "errors": 0,
+  "rps": 1.4,
+  "objects": {
+    "count": 4
+  },
+  "capacity": {
+    "requests": {
+      "in_flight": 1,
+      "max": 64,
+      "available": 63,
+      "limited": true
+    },
+    "object_executions": {
+      "in_flight": 0,
+      "max": 8,
+      "available": 8,
+      "limited": true
+    }
+  },
+  "checks": {
+    "storage": {
+      "status": "ok"
+    }
+  }
+}
+```
+
+`GET /health?metrics=true` returns the same detailed health payload plus a
+`metrics` object with request counts, status counts, response timing, top paths,
+and recent HTTP errors. This preserves the older dashboard/Scroll direction
+without exposing those details through the public liveness route.
+
 ## Object List
 
 ```http
