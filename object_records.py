@@ -1,15 +1,17 @@
-"""Read-only TSV-backed collection records.
+"""TSV-backed collection records.
 
 Collection records are the simple data surface Scroll can point generated
-tables and forms at. The current public API is read-only: records live in
-``data/collections/{collection}/records.tsv`` and writes will come later after
-permissions, audit, and migration rules are enforced by the server.
+tables and forms at. Records live in
+``data/collections/{collection}/records.tsv``.
 """
 
 from __future__ import annotations
 
 import csv
+import os
 import re
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -33,11 +35,24 @@ class RecordNotFoundError(LookupError):
     """Raised when a record cannot be found in a collection."""
 
 
+class DuplicateRecordIdError(ValueError):
+    """Raised when a create would reuse an existing record id."""
+
+
+class InvalidRecordPayloadError(ValueError):
+    """Raised when a record write payload is not usable."""
+
+
 def validate_record_id(record_id: str) -> bool:
     """Return True when a record id is route-safe."""
     if not isinstance(record_id, str):
         return False
     return bool(_RECORD_ID_RE.fullmatch(record_id))
+
+
+def normalize_record_payload(payload: dict[str, Any], *, require_id: bool = False) -> dict[str, str]:
+    """Return a TSV-safe record payload with scalar values converted to strings."""
+    return _normalize_record_payload(payload, require_id=require_id)
 
 
 def list_collection_records(
@@ -104,6 +119,89 @@ def get_collection_record(
     for record in _read_collection_records(collection, base_dir=base_dir):
         if record.get("id") == record_id:
             return record
+
+    raise RecordNotFoundError(f"Record not found: {collection}/{record_id}")
+
+
+def create_collection_record(
+    collection: str,
+    record: dict[str, Any],
+    *,
+    base_dir: Path | str = DEFAULT_DATA_DIR,
+    roots: Iterable[Path] | None = None,
+) -> dict[str, str]:
+    """Append one record to a collection TSV and return the stored row."""
+    _ensure_collection_known(collection, base_dir=base_dir, roots=roots)
+    clean = _normalize_record_payload(record, require_id=True)
+    record_id = clean["id"]
+    if not validate_record_id(record_id):
+        raise InvalidRecordIdError(f"Invalid record id: {record_id}")
+
+    path = collection_records_file(collection, base_dir=base_dir)
+    with _records_file_lock(path):
+        records, fields = _read_records_and_fields(collection, path)
+        if any(row.get("id") == record_id for row in records):
+            raise DuplicateRecordIdError(f"Record already exists: {collection}/{record_id}")
+
+        merged_fields = _merge_fields(fields, clean)
+        records.append(clean)
+        _write_collection_records(collection, path, merged_fields, records)
+        return _project_record(clean, merged_fields)
+
+
+def update_collection_record(
+    collection: str,
+    record_id: str,
+    changes: dict[str, Any],
+    *,
+    base_dir: Path | str = DEFAULT_DATA_DIR,
+    roots: Iterable[Path] | None = None,
+) -> dict[str, str]:
+    """Update one existing record by id and return the stored row."""
+    _ensure_collection_known(collection, base_dir=base_dir, roots=roots)
+    if not validate_record_id(record_id):
+        raise InvalidRecordIdError(f"Invalid record id: {record_id}")
+
+    clean = _normalize_record_payload(changes, require_id=False)
+    if "id" in clean and clean["id"] != record_id:
+        raise InvalidRecordPayloadError("Record id cannot be changed")
+
+    path = collection_records_file(collection, base_dir=base_dir)
+    with _records_file_lock(path):
+        records, fields = _read_records_and_fields(collection, path)
+        for index, existing in enumerate(records):
+            if existing.get("id") == record_id:
+                updated = dict(existing)
+                updated.update(clean)
+                updated["id"] = record_id
+                merged_fields = _merge_fields(fields, updated)
+                records[index] = updated
+                _write_collection_records(collection, path, merged_fields, records)
+                return _project_record(updated, merged_fields)
+
+    raise RecordNotFoundError(f"Record not found: {collection}/{record_id}")
+
+
+def delete_collection_record(
+    collection: str,
+    record_id: str,
+    *,
+    base_dir: Path | str = DEFAULT_DATA_DIR,
+    roots: Iterable[Path] | None = None,
+) -> dict[str, str]:
+    """Delete one existing record by id and return the removed row."""
+    _ensure_collection_known(collection, base_dir=base_dir, roots=roots)
+    if not validate_record_id(record_id):
+        raise InvalidRecordIdError(f"Invalid record id: {record_id}")
+
+    path = collection_records_file(collection, base_dir=base_dir)
+    with _records_file_lock(path):
+        records, fields = _read_records_and_fields(collection, path)
+        for index, existing in enumerate(records):
+            if existing.get("id") == record_id:
+                removed = records.pop(index)
+                _write_collection_records(collection, path, fields, records)
+                return _project_record(removed, fields)
 
     raise RecordNotFoundError(f"Record not found: {collection}/{record_id}")
 
@@ -200,6 +298,81 @@ def _read_collection_records(
         return records
 
 
+def _read_records_and_fields(
+    collection: str,
+    path: Path,
+) -> tuple[list[dict[str, str]], list[str]]:
+    if not path.exists():
+        return [], ["id"]
+
+    if not path.is_file():
+        raise ValueError(f"Collection records path is not a file: {collection}")
+
+    with path.open(newline="") as handle:
+        reader = csv.DictReader(handle, delimiter="\t")
+        _validate_header(collection, reader.fieldnames)
+        fields = list(reader.fieldnames or [])
+        records = []
+        for row_number, row in enumerate(reader, start=2):
+            if None in row:
+                raise ValueError(
+                    f"Collection records file has extra fields on row {row_number}: {collection}"
+                )
+            records.append({key: value if value is not None else "" for key, value in row.items()})
+        return records, fields
+
+
+def _write_collection_records(
+    collection: str,
+    path: Path,
+    fields: list[str],
+    records: list[dict[str, str]],
+) -> None:
+    if "id" not in fields:
+        fields = ["id", *fields]
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        with temp_path.open("w", newline="") as handle:
+            writer = csv.DictWriter(
+                handle,
+                fieldnames=fields,
+                delimiter="\t",
+                lineterminator="\n",
+                extrasaction="ignore",
+            )
+            writer.writeheader()
+            for record in records:
+                writer.writerow(_project_record(record, fields))
+        temp_path.replace(path)
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
+
+
+@contextmanager
+def _records_file_lock(records_file: Path):
+    """Use a best-effort advisory lock for collection record mutations."""
+    lock_path = records_file.with_name(f".{records_file.name}.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with lock_path.open("a") as lock_file:
+        try:
+            import fcntl
+        except ImportError:
+            fcntl = None
+
+        if fcntl is not None:
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+
 def _validate_header(collection: str, fields: list[str] | None) -> None:
     if not fields:
         raise ValueError(f"Collection records file is missing a header: {collection}")
@@ -213,6 +386,46 @@ def _validate_header(collection: str, fields: list[str] | None) -> None:
         raise ValueError(f"Collection records file has duplicate field names: {collection}")
     if "id" not in clean:
         raise ValueError(f"Collection records file must include an id column: {collection}")
+
+
+def _normalize_record_payload(payload: dict[str, Any], *, require_id: bool) -> dict[str, str]:
+    if not isinstance(payload, dict):
+        raise InvalidRecordPayloadError("Record payload must be an object")
+    if require_id and "id" not in payload:
+        raise InvalidRecordPayloadError("Record payload must include an id")
+
+    clean: dict[str, str] = {}
+    for key, value in payload.items():
+        if not isinstance(key, str) or not key:
+            raise InvalidRecordPayloadError("Record field names must be non-empty strings")
+        if key.strip() != key:
+            raise InvalidRecordPayloadError(f"Record field name has whitespace: {key!r}")
+        if "\t" in key or "\n" in key or "\r" in key:
+            raise InvalidRecordPayloadError(f"Record field name is not TSV-safe: {key!r}")
+        if value is None:
+            clean[key] = ""
+        elif isinstance(value, (str, int, float, bool)):
+            clean[key] = str(value)
+        else:
+            raise InvalidRecordPayloadError(
+                f"Record field value must be scalar or null: {key}"
+            )
+
+    return clean
+
+
+def _merge_fields(existing_fields: list[str], record: dict[str, str]) -> list[str]:
+    fields = list(existing_fields) if existing_fields else ["id"]
+    if "id" not in fields:
+        fields.insert(0, "id")
+    for field in record:
+        if field not in fields:
+            fields.append(field)
+    return fields
+
+
+def _project_record(record: dict[str, str], fields: list[str]) -> dict[str, str]:
+    return {field: record.get(field, "") for field in fields}
 
 
 def _validate_page(*, limit: int, offset: int) -> None:

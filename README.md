@@ -81,7 +81,7 @@ This repository currently contains:
 - `object_namespace.py` - object source discovery and object ID resolution
 - `object_execution.py` - structured object execution results and error capture
 - `object_collections.py` - read-only collection summaries derived from objects, records, and permission policy
-- `object_records.py` - read-only TSV-backed collection records for generated tables and forms
+- `object_records.py` - TSV-backed collection records for generated tables and forms
 - `object_source.py` - source read, update, version, and rollback operations
 - `object_state.py` - TSV-backed object state reads and runtime writes
 - `object_files.py` - read-only object-owned file listing and download helpers
@@ -112,9 +112,9 @@ The current public ASGI server can list objects, return source for an existing
 object, execute object `GET`, `POST`, `PUT`, and `DELETE` methods, and update
 source when the explicit source-write gate is enabled. It can also list source
 versions, read a specific version, read object state, read object logs, read
-object-owned files, read object metadata, list derived collections, read
-collection records, read schema metadata, and roll back source through the same
-write gate. Object execution can return JSON data, HTML/text/binary responses
+object-owned files, read object metadata, list derived collections, read and
+write collection records, read schema metadata, and roll back source through the
+same write gate. Object execution can return JSON data, HTML/text/binary responses
 through `content_type` and `body`, or a low-level `(status, headers, body)`
 tuple.
 
@@ -143,7 +143,10 @@ Current endpoints:
 - `GET /collections`
 - `GET /collections/{collection}`
 - `GET /collections/{collection}/records`
+- `POST /collections/{collection}/records`
 - `GET /collections/{collection}/records/{record_id}`
+- `PUT /collections/{collection}/records/{record_id}`
+- `DELETE /collections/{collection}/records/{record_id}`
 - `GET /schemas`
 - `GET /schemas/{collection}`
 - `GET /objects?format=json`
@@ -203,10 +206,13 @@ the persisted `data/permissions/policy.json` policy to return `401`, `402`, or
 unless `DBBASIC_PERMISSION_TRUST_HEADERS=true` is set behind a proxy that strips
 client-supplied copies.
 
-Collection record routes are admin-token gated by default. When permission audit
-or enforcement is enabled, they use the same persisted policy with the `read`
-action. Enforcement applies row filters before pagination and redacts allowed or
-denied fields before returning records.
+Collection record routes are admin-token gated by default. Reads can use
+permission audit or enforcement with the `read` action. Writes require either
+the admin token or enforcement mode with an allowed `create`, `update`, or
+`delete` decision. Audit-only mode logs write decisions, but it does not grant
+mutation access by itself. Enforcement applies row filters before pagination,
+checks writes against the affected record, and redacts allowed or denied fields
+before returning records.
 
 Production user/session auth still needs to replace the temporary admin-token
 gate before general use.
@@ -222,7 +228,7 @@ rules the rest of the server will use:
 - `object_execution.py` returns success or error results from object method runs
 - `object_source.py` reads, updates, versions, and rolls back source files
 - `object_state.py` reads and writes runtime-owned TSV-backed object state
-- `object_records.py` reads TSV-backed collection records under `data/collections/`
+- `object_records.py` reads and writes TSV-backed collection records under `data/collections/`
 - `object_files.py` lists and reads object-owned files under `data/files/`
 - `object_logs.py` reads and appends TSV-backed object logs, rotates/compresses old logs, and provides `_logger`
 - `object_metadata.py` summarizes source, state, logs, files, and versions

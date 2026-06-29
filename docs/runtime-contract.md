@@ -371,22 +371,28 @@ data/collections/{collection}/records.tsv
 ```
 
 The TSV file must have a header row and an `id` column. The current public
-record API is read-only:
+record API is:
 
 ```python
 list_collection_records(collection, base_dir="data", limit=100, offset=0)
 read_collection_records(collection, base_dir="data")
 get_collection_record(collection, record_id, base_dir="data")
+create_collection_record(collection, record, base_dir="data")
+update_collection_record(collection, record_id, changes, base_dir="data")
+delete_collection_record(collection, record_id, base_dir="data")
 ```
 
-Values are returned as strings. Schema metadata can tell tools how to render or
-validate fields, but the raw TSV reader does not coerce types yet.
+Values are stored and returned as strings. Schema metadata can tell tools how to
+render or validate fields, but the raw TSV reader does not coerce types yet.
+Record writes preserve existing columns and append new columns from submitted
+fields. Record IDs are unique and cannot be changed by update.
 
 The HTTP record routes are admin-gated by default. When permission audit or
-enforcement is enabled, those routes use the server permission policy. Record
+enforcement is enabled, read routes use the server permission policy. Record
 lists apply row filters before pagination; record detail checks evaluate the
-selected row and can redact fields. Record writes are intentionally not public
-until write permissions, audit logs, and migration rules exist.
+selected row and can redact fields. Record writes require either the admin token
+or enforcement mode with an allowed `create`, `update`, or `delete` decision.
+Audit-only mode records write decisions without granting mutation access.
 
 ## Collection Schemas
 

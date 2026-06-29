@@ -314,16 +314,18 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
                     method,
                     collection_parts[0],
                     query,
+                    body,
                     headers,
                 )
                 return
 
             if len(collection_parts) == 3 and collection_parts[1] == "records":
-                await _handle_collection_record_get(
+                await _handle_collection_record(
                     send,
                     method,
                     collection_parts[0],
                     collection_parts[2],
+                    body,
                     headers,
                 )
                 return
@@ -1344,12 +1346,26 @@ async def _handle_collection_records(
     method: str,
     collection: str,
     query: dict[str, str],
+    body: bytes,
     headers: dict[str, str],
 ) -> None:
-    if method != "GET":
-        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+    if method == "GET":
+        await _handle_collection_records_get(send, collection, query, headers)
         return
 
+    if method == "POST":
+        await _handle_collection_record_create(send, collection, body, headers)
+        return
+
+    await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+
+
+async def _handle_collection_records_get(
+    send,
+    collection: str,
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
     permission_check = None
     if _permission_checks_enabled():
         permission_check = await _collection_permission_check(
@@ -1402,17 +1418,98 @@ async def _handle_collection_records(
     await _send_json(send, {"status": "ok", **records_payload})
 
 
-async def _handle_collection_record_get(
+async def _handle_collection_record_create(
+    send,
+    collection: str,
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    try:
+        record_payload = _record_payload_from_body(body, require_id=True)
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    if not await _authorize_collection_write(
+        send,
+        headers,
+        object_permissions.CREATE,
+        collection=collection,
+        method="POST",
+        record=record_payload,
+        gate_message=f"Collection record writes require {ADMIN_TOKEN_ENV}.",
+    ):
+        return
+
+    try:
+        record = object_records.create_collection_record(
+            collection,
+            record_payload,
+            base_dir=_data_dir(),
+        )
+    except object_collections.InvalidCollectionNameError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_collections.CollectionNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+    except object_records.DuplicateRecordIdError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=409)
+        return
+    except (object_records.InvalidRecordIdError, object_records.InvalidRecordPayloadError) as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except OSError as exc:
+        await _send_json(
+            send,
+            {"status": "error", "error": f"Could not save collection record: {exc}"},
+            status=500,
+        )
+        return
+
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "collection": collection,
+            "record": record,
+        },
+        status=201,
+    )
+
+
+async def _handle_collection_record(
     send,
     method: str,
     collection: str,
     record_id: str,
+    body: bytes,
     headers: dict[str, str],
 ) -> None:
-    if method != "GET":
-        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+    if method == "GET":
+        await _handle_collection_record_get(send, collection, record_id, headers)
         return
 
+    if method == "PUT":
+        await _handle_collection_record_update(send, collection, record_id, body, headers)
+        return
+
+    if method == "DELETE":
+        await _handle_collection_record_delete(send, collection, record_id, headers)
+        return
+
+    await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+
+
+async def _handle_collection_record_get(
+    send,
+    collection: str,
+    record_id: str,
+    headers: dict[str, str],
+) -> None:
     if not _permission_checks_enabled():
         gate_error = _admin_token_gate_error(
             headers,
@@ -1464,6 +1561,205 @@ async def _handle_collection_record_get(
             "record": record,
         },
     )
+
+
+async def _handle_collection_record_update(
+    send,
+    collection: str,
+    record_id: str,
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    try:
+        changes = _record_payload_from_body(body)
+        existing = object_records.get_collection_record(
+            collection,
+            record_id,
+            base_dir=_data_dir(),
+        )
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_collections.InvalidCollectionNameError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_records.InvalidRecordIdError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except (object_collections.CollectionNotFoundError, object_records.RecordNotFoundError) as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+
+    candidate = dict(existing)
+    candidate.update(changes)
+    candidate["id"] = record_id
+
+    if not await _authorize_collection_write(
+        send,
+        headers,
+        object_permissions.UPDATE,
+        collection=collection,
+        method="PUT",
+        record=existing,
+        gate_message=f"Collection record writes require {ADMIN_TOKEN_ENV}.",
+    ):
+        return
+
+    if _permission_enforcement_enabled():
+        if not await _authorize_collection_write(
+            send,
+            headers,
+            object_permissions.UPDATE,
+            collection=collection,
+            method="PUT",
+            record=candidate,
+            gate_message=f"Collection record writes require {ADMIN_TOKEN_ENV}.",
+        ):
+            return
+
+    try:
+        record = object_records.update_collection_record(
+            collection,
+            record_id,
+            changes,
+            base_dir=_data_dir(),
+        )
+    except object_records.RecordNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+    except (object_records.InvalidRecordIdError, object_records.InvalidRecordPayloadError) as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except OSError as exc:
+        await _send_json(
+            send,
+            {"status": "error", "error": f"Could not save collection record: {exc}"},
+            status=500,
+        )
+        return
+
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "collection": collection,
+            "record": record,
+        },
+    )
+
+
+async def _handle_collection_record_delete(
+    send,
+    collection: str,
+    record_id: str,
+    headers: dict[str, str],
+) -> None:
+    try:
+        existing = object_records.get_collection_record(
+            collection,
+            record_id,
+            base_dir=_data_dir(),
+        )
+    except object_collections.InvalidCollectionNameError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_records.InvalidRecordIdError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except (object_collections.CollectionNotFoundError, object_records.RecordNotFoundError) as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    if not await _authorize_collection_write(
+        send,
+        headers,
+        object_permissions.DELETE,
+        collection=collection,
+        method="DELETE",
+        record=existing,
+        gate_message=f"Collection record writes require {ADMIN_TOKEN_ENV}.",
+    ):
+        return
+
+    try:
+        record = object_records.delete_collection_record(
+            collection,
+            record_id,
+            base_dir=_data_dir(),
+        )
+    except object_records.RecordNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+    except object_records.InvalidRecordIdError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except OSError as exc:
+        await _send_json(
+            send,
+            {"status": "error", "error": f"Could not delete collection record: {exc}"},
+            status=500,
+        )
+        return
+
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "collection": collection,
+            "record": record,
+            "deleted": True,
+        },
+    )
+
+
+async def _authorize_collection_write(
+    send,
+    headers: dict[str, str],
+    action: str,
+    *,
+    collection: str,
+    method: str,
+    record: dict[str, Any],
+    gate_message: str,
+) -> bool:
+    if _permission_enforcement_enabled():
+        return await _collection_permission_check(
+            send,
+            headers,
+            action,
+            collection=collection,
+            method=method,
+            record=record,
+        ) is not None
+
+    if _permission_audit_enabled():
+        permission_check = await _collection_permission_check(
+            send,
+            headers,
+            action,
+            collection=collection,
+            method=method,
+            record=record,
+        )
+        if permission_check is None:
+            return False
+
+    gate_error = _admin_token_gate_error(headers, gate_message)
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return False
+
+    return True
 
 
 async def _handle_schemas(
@@ -1788,6 +2084,13 @@ def _parse_json_body(body: bytes) -> dict[str, Any]:
         raise ValueError("JSON body must be an object")
 
     return payload
+
+
+def _record_payload_from_body(body: bytes, *, require_id: bool = False) -> dict[str, str]:
+    payload = _parse_json_body(body)
+    if not payload:
+        raise ValueError("Record payload must not be empty")
+    return object_records.normalize_record_payload(payload, require_id=require_id)
 
 
 def _parse_post_payload(body: bytes, query: dict[str, str]) -> dict[str, Any]:

@@ -179,13 +179,23 @@ Route actions currently map like this:
 - `?versions=true` or `?version=N` -> `versions`
 - `?metadata=true` -> `read`
 - `GET /collections/{collection}/records` -> `read`
+- `POST /collections/{collection}/records` -> `create`
 - `GET /collections/{collection}/records/{record_id}` -> `read`
+- `PUT /collections/{collection}/records/{record_id}` -> `update`
+- `DELETE /collections/{collection}/records/{record_id}` -> `delete`
 
 Collection record lists apply row filters before pagination. Record detail
 checks include the selected record, so owner, account, subscription, temporary
 access, row-filter, and field-redaction rules can all be enforced by the server.
-By default the collection record routes are admin-token gated; when permission
-audit or enforcement is enabled, they use the active policy instead.
+Record writes check the affected record. Updates also check the candidate row
+after applying the submitted changes, so a user cannot pass a row filter on the
+old row and then move the row into another owner/account by changing fields.
+
+By default the collection record routes are admin-token gated. Read routes can
+use audit or enforcement mode with the active policy. Write routes require the
+admin token unless permission enforcement is enabled and the active policy
+allows the matching `create`, `update`, or `delete` action. Audit-only mode logs
+write decisions, but it does not authorize mutations by itself.
 
 Audit-only mode logs decisions without blocking the request:
 

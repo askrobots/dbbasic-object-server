@@ -700,7 +700,7 @@ def test_collection_record_routes_reject_non_get_methods(tmp_path, monkeypatch):
 
     list_status, _, list_payload = request(
         "/collections/contacts/records",
-        method="POST",
+        method="PUT",
         headers=auth_headers(),
     )
     detail_status, _, detail_payload = request(
@@ -713,6 +713,293 @@ def test_collection_record_routes_reject_non_get_methods(tmp_path, monkeypatch):
     assert detail_status == 405
     assert list_payload == {"status": "error", "error": "Method not allowed"}
     assert detail_payload == {"status": "error", "error": "Method not allowed"}
+
+
+def test_collection_record_create_requires_admin_token_by_default(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    schema_file = data_dir / "schemas" / "contacts.json"
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text(json.dumps({"fields": [{"name": "id"}]}))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    missing_auth_status, _, missing_auth_payload = request(
+        "/collections/contacts/records",
+        method="POST",
+        body=json.dumps({"id": "c1", "name": "Ada"}).encode("utf-8"),
+    )
+    create_status, _, create_payload = request(
+        "/collections/contacts/records",
+        method="POST",
+        body=json.dumps({"id": "c1", "name": "Ada"}).encode("utf-8"),
+        headers=auth_headers(),
+    )
+
+    assert missing_auth_status == 401
+    assert missing_auth_payload == {"status": "error", "error": "Unauthorized"}
+    assert create_status == 201
+    assert create_payload == {
+        "status": "ok",
+        "collection": "contacts",
+        "record": {"id": "c1", "name": "Ada"},
+    }
+
+
+def test_collection_record_create_rejects_duplicate_and_invalid_payload(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    duplicate_status, _, duplicate_payload = request(
+        "/collections/contacts/records",
+        method="POST",
+        body=json.dumps({"id": "c1", "name": "Again"}).encode("utf-8"),
+        headers=auth_headers(),
+    )
+    invalid_status, _, invalid_payload = request(
+        "/collections/contacts/records",
+        method="POST",
+        body=json.dumps({"name": "No id"}).encode("utf-8"),
+        headers=auth_headers(),
+    )
+
+    assert duplicate_status == 409
+    assert duplicate_payload == {
+        "status": "error",
+        "error": "Record already exists: contacts/c1",
+    }
+    assert invalid_status == 400
+    assert invalid_payload == {"status": "error", "error": "Record payload must include an id"}
+
+
+def test_collection_record_update_and_delete_require_admin_token_by_default(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\nc2\tGrace\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    denied_status, _, denied_payload = request(
+        "/collections/contacts/records/c1",
+        method="PUT",
+        body=json.dumps({"name": "Ada Lovelace"}).encode("utf-8"),
+    )
+    update_status, _, update_payload = request(
+        "/collections/contacts/records/c1",
+        method="PUT",
+        body=json.dumps({"name": "Ada Lovelace", "email": "ada@example.com"}).encode("utf-8"),
+        headers=auth_headers(),
+    )
+    delete_status, _, delete_payload = request(
+        "/collections/contacts/records/c2",
+        method="DELETE",
+        headers=auth_headers(),
+    )
+    list_status, _, list_payload = request("/collections/contacts/records", headers=auth_headers())
+
+    assert denied_status == 401
+    assert denied_payload == {"status": "error", "error": "Unauthorized"}
+    assert update_status == 200
+    assert update_payload == {
+        "status": "ok",
+        "collection": "contacts",
+        "record": {
+            "id": "c1",
+            "name": "Ada Lovelace",
+            "email": "ada@example.com",
+        },
+    }
+    assert delete_status == 200
+    assert delete_payload == {
+        "status": "ok",
+        "collection": "contacts",
+        "record": {"id": "c2", "name": "Grace", "email": ""},
+        "deleted": True,
+    }
+    assert list_status == 200
+    assert list_payload["records"] == [
+        {"id": "c1", "name": "Ada Lovelace", "email": "ada@example.com"},
+    ]
+
+
+def test_collection_record_update_rejects_id_change(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/collections/contacts/records/c1",
+        method="PUT",
+        body=json.dumps({"id": "c2", "name": "Grace"}).encode("utf-8"),
+        headers=auth_headers(),
+    )
+
+    assert status == 400
+    assert payload == {"status": "error", "error": "Record id cannot be changed"}
+
+
+def test_collection_record_create_enforcement_uses_row_filter(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    schema_file = data_dir / "schemas" / "contacts.json"
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text(json.dumps({"fields": [{"name": "id"}]}))
+    save_permission_policy(
+        data_dir,
+        {
+            "access_mode": "role_based",
+            "rules": [
+                {
+                    "effect": "allow",
+                    "principal": "role:sales",
+                    "actions": ["create"],
+                    "collection": "contacts",
+                    "row_filter": {"owner_id": "$user_id"},
+                }
+            ],
+        },
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+    monkeypatch.setenv(object_server.PERMISSION_TRUST_HEADERS_ENV, "true")
+    enable_admin_token(monkeypatch)
+    headers = [("x-dbbasic-user-id", "7"), ("x-dbbasic-roles", "sales")]
+
+    denied_status, _, denied_payload = request(
+        "/collections/contacts/records",
+        method="POST",
+        body=json.dumps({"id": "c1", "name": "Bob", "owner_id": "8"}).encode("utf-8"),
+        headers=headers,
+    )
+    allowed_status, _, allowed_payload = request(
+        "/collections/contacts/records",
+        method="POST",
+        body=json.dumps({"id": "c2", "name": "Ada", "owner_id": "7"}).encode("utf-8"),
+        headers=headers,
+    )
+
+    assert denied_status == 403
+    assert denied_payload == {"status": "error", "error": "no matching role rule", "code": "forbidden"}
+    assert allowed_status == 201
+    assert allowed_payload["record"] == {"id": "c2", "name": "Ada", "owner_id": "7"}
+
+
+def test_collection_record_update_enforcement_checks_existing_and_candidate(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\towner_id\nc1\tAda\t7\nc2\tBob\t8\n")
+    save_permission_policy(
+        data_dir,
+        {
+            "access_mode": "role_based",
+            "rules": [
+                {
+                    "effect": "allow",
+                    "principal": "role:sales",
+                    "actions": ["update"],
+                    "collection": "contacts",
+                    "row_filter": {"owner_id": "$user_id"},
+                }
+            ],
+        },
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+    monkeypatch.setenv(object_server.PERMISSION_TRUST_HEADERS_ENV, "true")
+    enable_admin_token(monkeypatch)
+    headers = [("x-dbbasic-user-id", "7"), ("x-dbbasic-roles", "sales")]
+
+    allowed_status, _, allowed_payload = request(
+        "/collections/contacts/records/c1",
+        method="PUT",
+        body=json.dumps({"name": "Ada Lovelace"}).encode("utf-8"),
+        headers=headers,
+    )
+    steal_status, _, steal_payload = request(
+        "/collections/contacts/records/c1",
+        method="PUT",
+        body=json.dumps({"owner_id": "8"}).encode("utf-8"),
+        headers=headers,
+    )
+    other_status, _, other_payload = request(
+        "/collections/contacts/records/c2",
+        method="PUT",
+        body=json.dumps({"name": "Robert"}).encode("utf-8"),
+        headers=headers,
+    )
+
+    assert allowed_status == 200
+    assert allowed_payload["record"] == {"id": "c1", "name": "Ada Lovelace", "owner_id": "7"}
+    assert steal_status == 403
+    assert steal_payload == {"status": "error", "error": "no matching role rule", "code": "forbidden"}
+    assert other_status == 403
+    assert other_payload == {"status": "error", "error": "no matching role rule", "code": "forbidden"}
+
+
+def test_collection_record_delete_enforcement_uses_row_filter(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\towner_id\nc1\tAda\t7\nc2\tBob\t8\n")
+    save_permission_policy(
+        data_dir,
+        {
+            "access_mode": "role_based",
+            "rules": [
+                {
+                    "effect": "allow",
+                    "principal": "role:sales",
+                    "actions": ["delete"],
+                    "collection": "contacts",
+                    "row_filter": {"owner_id": "$user_id"},
+                }
+            ],
+        },
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+    monkeypatch.setenv(object_server.PERMISSION_TRUST_HEADERS_ENV, "true")
+    enable_admin_token(monkeypatch)
+    headers = [("x-dbbasic-user-id", "7"), ("x-dbbasic-roles", "sales")]
+
+    denied_status, _, denied_payload = request(
+        "/collections/contacts/records/c2",
+        method="DELETE",
+        headers=headers,
+    )
+    allowed_status, _, allowed_payload = request(
+        "/collections/contacts/records/c1",
+        method="DELETE",
+        headers=headers,
+    )
+    list_status, _, list_payload = request("/collections/contacts/records", headers=auth_headers())
+
+    assert denied_status == 403
+    assert denied_payload == {"status": "error", "error": "no matching role rule", "code": "forbidden"}
+    assert allowed_status == 200
+    assert allowed_payload["deleted"] is True
+    assert allowed_payload["record"] == {"id": "c1", "name": "Ada", "owner_id": "7"}
+    assert list_status == 200
+    assert list_payload["records"] == [{"id": "c2", "name": "Bob", "owner_id": "8"}]
+
+
+def test_collection_record_writes_in_audit_mode_still_require_admin_token(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_AUDIT_ENV, "true")
+
+    status, _, payload = request(
+        "/collections/contacts/records",
+        method="POST",
+        body=json.dumps({"id": "c2", "name": "Grace"}).encode("utf-8"),
+    )
+
+    assert status == 403
+    assert payload == {
+        "status": "error",
+        "error": "Collection record writes require DBBASIC_ADMIN_TOKEN.",
+    }
+    entry = object_permission_audit.get_permission_audit(data_dir)[-1]
+    assert entry["action"] == "create"
+    assert entry["enforced"] is False
 
 
 def test_collection_records_enforcement_denies_default_policy(tmp_path, monkeypatch):

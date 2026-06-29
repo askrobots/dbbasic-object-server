@@ -281,10 +281,13 @@ DBBASIC_PERMISSION_TRUST_HEADERS=true
 Supported headers are `X-DBBASIC-User-Id`, `X-DBBASIC-Account-Id`,
 `X-DBBASIC-Roles`, and `X-DBBASIC-Subscriptions`.
 
-Collection record routes use the same `read` action. In enforcement mode the
-server applies row filters before pagination, evaluates detail requests against
-the selected record, and redacts `fields` / `denied_fields` from returned
-records. That is the first server-side path for Scroll's collection tables.
+Collection record read routes use the `read` action. Collection record write
+routes use `create`, `update`, and `delete`. In enforcement mode the server
+applies row filters before pagination, evaluates detail and write requests
+against the selected record, blocks owner-changing updates that would escape the
+allowed row filter, and redacts `fields` / `denied_fields` from returned
+records. Audit-only mode can log write decisions, but it does not grant
+mutation access without the admin token.
 
 Operators and Scroll can read recent audit entries through an admin-gated
 endpoint:
@@ -508,10 +511,85 @@ data/collections/{collection}/records.tsv
 ```
 
 The TSV file must have a header row and an `id` column. Values are returned as
-strings. Collection records are read-only through the current public HTTP
-surface. Missing collections or records return `404`; unsafe collection or
-record names return `400`. Missing subscription entitlements can return
-`402 Payment Required` when the active policy requires them.
+strings.
+
+Create one record:
+
+```http
+POST /collections/{collection}/records
+Authorization: Token <token>
+Content-Type: application/json
+```
+
+```json
+{
+  "id": "c2",
+  "first_name": "Grace",
+  "last_name": "Hopper"
+}
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "collection": "contacts",
+  "record": {
+    "id": "c2",
+    "first_name": "Grace",
+    "last_name": "Hopper"
+  }
+}
+```
+
+Successful creates return `201`. Duplicate record IDs return `409`.
+
+Update one record:
+
+```http
+PUT /collections/{collection}/records/{record_id}
+Authorization: Token <token>
+Content-Type: application/json
+```
+
+```json
+{
+  "last_name": "Lovelace",
+  "email": "ada@example.com"
+}
+```
+
+The record `id` cannot be changed.
+
+Delete one record:
+
+```http
+DELETE /collections/{collection}/records/{record_id}
+Authorization: Token <token>
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "collection": "contacts",
+  "record": {
+    "id": "c1",
+    "first_name": "Ada",
+    "last_name": "Lovelace"
+  },
+  "deleted": true
+}
+```
+
+Missing collections or records return `404`; unsafe collection, record, or field
+names return `400`. Missing subscription entitlements can return
+`402 Payment Required` when the active policy requires them. By default all
+record mutations require the admin token. With
+`DBBASIC_ENABLE_PERMISSION_ENFORCEMENT=true`, mutations can also be authorized
+by persisted policy rules using `create`, `update`, and `delete`.
 
 ## Schemas
 
