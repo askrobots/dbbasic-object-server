@@ -68,6 +68,26 @@ Loaded object modules receive `_logger` and `_state_manager`. The current public
 runtime injects a minimal state manager with `get`, `set`, `get_all`, and
 `reload`.
 
+## Storage Boundary
+
+The default runtime storage is file-backed:
+
+- object source under `objects/`
+- object state under `data/state/`
+- object logs under `data/logs/`
+- object versions under `data/versions/`
+- object-owned files under `data/files/` when file helpers land
+
+SQL databases, SQLite, external HTTP APIs, and AI APIs are optional integrations.
+They should be reachable from objects or packages when needed, but the base
+runtime should not require a database service before the first useful app can
+run.
+
+That boundary is intentional. It keeps the single-VM deployment small, makes
+backup/restore understandable, and lets Scroll inspect source, state, logs,
+versions, schemas, and diagrams without turning SQL into the default storage
+contract.
+
 ## Object Execution Result
 
 Public code should use `object_execution.py` for the shared execution result shape.

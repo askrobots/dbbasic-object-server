@@ -31,7 +31,8 @@ flowchart TD
 - `http-api-contract.md` - existing `/objects` HTTP API shape used by current
   clients and tools.
 - `object-authoring.md` - current object source layout, method shape, runtime
-  helpers, state/log usage, and response return forms.
+  helpers, state/log usage, response return forms, and the object-first
+  storage/schema loop.
 - `asgi-realtime-direction.md` - why the server uses plain ASGI, and how
   WebSocket/SSE object events fit the direction.
 - `rest-and-object-messages.md` - how DBBASIC separates RESTful resources from

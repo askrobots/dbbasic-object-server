@@ -62,6 +62,56 @@ State is stored under `data/state/{object_id}/state.tsv`. Logs are stored under
 `data/logs/{object_id}/log.tsv`. The active log is plain TSV. Rotated logs are
 gzip-compressed by default and can still be read by the server.
 
+## Default Storage And Integrations
+
+The default DBBASIC object should not need a separate database. Source, state,
+logs, files, and versions are file-backed so a useful app can start on one VM
+with normal Unix paths and backups.
+
+Objects can still connect to SQL databases, SQLite files, HTTP APIs, AI APIs, or
+other services when a workload needs them. Those integrations should be explicit
+object behavior or package behavior, not hidden platform requirements.
+
+This keeps the base stack small while leaving room for:
+
+- SQL/reporting objects
+- schema and relationship inspectors
+- API connector objects
+- migration objects
+- AI-assisted query and data tools
+
+DBBASIC Scroll can expose SQL, schema, and diagram screens, but those should be
+capabilities of the object system rather than proof that every app needs a
+database tier by default.
+
+Schema still matters. The difference is that DBBASIC should let schemas,
+validation rules, relationships, and generated admin screens live close to the
+objects and packages that use them. That avoids forcing every small app through
+an external database, migration, ORM, admin, and deployment loop before the app
+has proved it needs that weight.
+
+```mermaid
+flowchart LR
+    subgraph DB["Database-first loop"]
+        D1["Design schema"] --> D2["Run migration"]
+        D2 --> D3["Update model/ORM"]
+        D3 --> D4["Update route/view/controller"]
+        D4 --> D5["Deploy"]
+        D5 --> D6["Inspect errors"]
+        D6 --> D1
+    end
+
+    subgraph OBJ["DBBASIC object loop"]
+        O1["Edit object or package metadata"] --> O2["Run it"]
+        O2 --> O3["Read output, logs, state, errors"]
+        O3 --> O4["Fix source or schema metadata"]
+        O4 --> O5["Keep versions"]
+        O5 --> O1
+    end
+
+    O3 -.-> I["Optional integrations: SQL, SQLite, HTTP APIs, AI APIs"]
+```
+
 ## JSON Object
 
 ```python

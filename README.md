@@ -69,6 +69,8 @@ That makes the system useful for humans and AI tools:
 - run from queues, schedules, events, or tools
 - state and logs are stored in simple file-backed formats
 - companion tools such as DBBASIC Scroll can inspect and operate the runtime
+- connect to SQL, SQLite, HTTP APIs, or AI APIs when an object or package needs
+  them, without making that the default app stack
 
 ## Current Public Contents
 
@@ -188,7 +190,8 @@ tools all agree on the same object rules.
 See `docs/README.md` for the documentation map,
 `docs/runtime-contract.md` for the daemon-facing runtime contract,
 `docs/http-api-contract.md` for the HTTP API shape that existing clients expect,
-`docs/object-authoring.md` for the current object authoring shape,
+`docs/object-authoring.md` for the current object authoring shape and
+object-first storage/schema loop,
 `docs/asgi-realtime-direction.md` for the ASGI/realtime direction, and
 `docs/rest-and-object-messages.md` for the resource/message split. See
 `docs/single-vm-deployment.md` for the first conservative staging deployment
