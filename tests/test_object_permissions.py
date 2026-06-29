@@ -327,3 +327,85 @@ def test_time_boxed_rule_models_temporary_pay_per_view_access():
     assert active.allowed is True
     assert active.reason == "temporary paid access"
     assert expired.allowed is False
+
+
+def test_policy_serialization_round_trips_json_shape():
+    payload = {
+        "access_mode": "role_based",
+        "roles": {"sales": {"label": "Sales"}},
+        "user_roles": {"7": ["sales"]},
+        "rules": [
+            {
+                "effect": "allow",
+                "principal": "role:sales",
+                "actions": ["read"],
+                "collection": "contacts",
+                "row_filter": {"owner_id": "$user_id"},
+                "fields": ["email", "name"],
+                "denied_fields": ["internal_notes"],
+                "reason": "sales reps only see own contacts",
+            }
+        ],
+        "admin_roles": ["admin"],
+    }
+
+    policy = permissions.policy_from_dict(payload)
+    serialized = permissions.policy_to_dict(policy)
+
+    assert serialized == {
+        "access_mode": "role_based",
+        "roles": {"sales": {"label": "Sales"}},
+        "user_roles": {"7": ["sales"]},
+        "rules": [
+            {
+                "effect": "allow",
+                "actions": ["read"],
+                "principal": "role:sales",
+                "collection": "contacts",
+                "row_filter": {"owner_id": "$user_id"},
+                "fields": ["email", "name"],
+                "denied_fields": ["internal_notes"],
+                "reason": "sales reps only see own contacts",
+            }
+        ],
+        "admin_roles": ["admin"],
+    }
+
+
+def test_subject_and_decision_serialization_match_scroll_shape():
+    subject = permissions.subject_from_dict(
+        {
+            "user_id": 42,
+            "account_id": "customer-acme",
+            "roles": ["customer_employee"],
+            "subscriptions": ["pro"],
+        }
+    )
+    decision = permissions.PermissionDecision.allow(
+        "active pro subscription",
+        row_filter={"customer_account_id": "$account_id"},
+        fields=["invoice_id", "total"],
+        denied_fields=["internal_notes"],
+    )
+
+    assert subject.user_id == "42"
+    assert subject.account_id == "customer-acme"
+    assert subject.roles == ("customer_employee",)
+    assert permissions.decision_to_dict(decision) == {
+        "allowed": True,
+        "reason": "active pro subscription",
+        "code": "allowed",
+        "http_status": 200,
+        "row_filter": {"customer_account_id": "$account_id"},
+        "fields": ["invoice_id", "total"],
+        "denied_fields": ["internal_notes"],
+    }
+
+
+def test_policy_from_dict_rejects_unknown_access_mode():
+    try:
+        permissions.policy_from_dict({"access_mode": "unknown"})
+    except ValueError as exc:
+        assert "Permission access_mode must be one of:" in str(exc)
+    else:
+        raise AssertionError("Expected unknown access mode to fail")

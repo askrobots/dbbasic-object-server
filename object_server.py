@@ -22,6 +22,8 @@ import http_api_contract
 import object_execution
 import object_logs
 import object_metadata
+import object_permission_store
+import object_permissions
 import object_rate_limit
 import object_source
 import object_state
@@ -260,6 +262,14 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
             await _send_request_too_large(send, exc)
             return
 
+        if path == http_api_contract.PERMISSIONS_POLICY_PATH:
+            await _handle_permissions_policy(send, method, body, headers)
+            return
+
+        if path == http_api_contract.PERMISSIONS_CHECK_PATH:
+            await _handle_permissions_check(send, method, body, headers)
+            return
+
         if path == http_api_contract.OBJECTS_PATH:
             if method == "GET":
                 gate_error = _admin_token_gate_error(
@@ -405,6 +415,113 @@ def _health_payload(*, include_metrics: bool) -> dict[str, Any]:
         payload["metrics"] = metrics
 
     return payload
+
+
+async def _handle_permissions_policy(
+    send,
+    method: str,
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    gate_error = _permissions_gate_error(headers)
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    if method == "GET":
+        try:
+            policy = object_permission_store.load_policy(_data_dir())
+        except ValueError as exc:
+            await _send_json(
+                send,
+                {"status": "error", "error": f"Permission policy is invalid: {exc}"},
+                status=500,
+            )
+            return
+
+        await _send_json(
+            send,
+            {
+                "status": "ok",
+                "policy": object_permissions.policy_to_dict(policy),
+            },
+        )
+        return
+
+    if method == "PUT":
+        try:
+            payload = _parse_json_body(body)
+            policy_payload = _policy_payload_from_request(payload)
+            policy = object_permission_store.replace_policy(policy_payload, _data_dir())
+        except ValueError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        except OSError as exc:
+            await _send_json(
+                send,
+                {"status": "error", "error": f"Could not save permission policy: {exc}"},
+                status=500,
+            )
+            return
+
+        await _send_json(
+            send,
+            {
+                "status": "ok",
+                "policy": object_permissions.policy_to_dict(policy),
+            },
+        )
+        return
+
+    await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+
+
+async def _handle_permissions_check(
+    send,
+    method: str,
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    gate_error = _permissions_gate_error(headers)
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    if method != "POST":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    try:
+        payload = _parse_json_body(body)
+        policy = _policy_for_check_request(payload)
+        subject = object_permissions.subject_from_dict(payload.get("subject", payload.get("user")))
+        action = _required_payload_text(payload, "action")
+        collection = _optional_payload_text(payload, "collection")
+        object_id = _optional_payload_text(payload, "object_id")
+        record = _optional_record_payload(payload)
+        checked_at = _optional_datetime_payload(payload, "now")
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    decision = object_permissions.check_permission(
+        subject,
+        action,
+        policy=policy,
+        collection=collection,
+        object_id=object_id,
+        record=record,
+        now=checked_at,
+    )
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "decision": object_permissions.decision_to_dict(decision),
+        },
+    )
 
 
 async def _handle_object_get(
@@ -1098,6 +1215,63 @@ def _payload_text(payload: dict[str, Any], key: str, default: str) -> str:
     return value
 
 
+def _required_payload_text(payload: dict[str, Any], key: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Request JSON field '{key}' must be a non-empty string")
+    return value
+
+
+def _optional_payload_text(payload: dict[str, Any], key: str) -> str | None:
+    if key not in payload or payload[key] is None:
+        return None
+    value = payload[key]
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Request JSON field '{key}' must be a non-empty string")
+    return value
+
+
+def _policy_payload_from_request(payload: dict[str, Any]) -> dict[str, Any]:
+    policy_payload = payload.get("policy", payload)
+    if not isinstance(policy_payload, dict):
+        raise ValueError("Request JSON field 'policy' must be an object")
+    return policy_payload
+
+
+def _policy_for_check_request(payload: dict[str, Any]) -> object_permissions.PermissionPolicy:
+    if "policy" in payload:
+        policy_payload = _policy_payload_from_request(payload)
+        return object_permissions.policy_from_dict(policy_payload)
+
+    return object_permission_store.load_policy(_data_dir())
+
+
+def _optional_record_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
+    if "record" not in payload or payload["record"] is None:
+        return None
+    record = payload["record"]
+    if not isinstance(record, dict):
+        raise ValueError("Request JSON field 'record' must be an object")
+    return record
+
+
+def _optional_datetime_payload(payload: dict[str, Any], key: str) -> datetime | None:
+    if key not in payload or payload[key] is None:
+        return None
+    value = payload[key]
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Request JSON field '{key}' must be an ISO timestamp")
+
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"Request JSON field '{key}' must be an ISO timestamp") from exc
+
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def _payload_int(payload: dict[str, Any], key: str, *, minimum: int | None = None) -> int:
     if key not in payload:
         raise ValueError(f"Request JSON field '{key}' is required")
@@ -1157,6 +1331,10 @@ def _source_write_gate_error(headers: dict[str, str]) -> tuple[int, str] | None:
         )
 
     return _admin_token_gate_error(headers, f"Source writes require {ADMIN_TOKEN_ENV}.")
+
+
+def _permissions_gate_error(headers: dict[str, str]) -> tuple[int, str] | None:
+    return _admin_token_gate_error(headers, f"Permissions API requires {ADMIN_TOKEN_ENV}.")
 
 
 def _admin_token_gate_error(

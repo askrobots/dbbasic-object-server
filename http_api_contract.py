@@ -9,10 +9,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-
 OBJECTS_PATH = "/objects"
 OBJECT_PATH = "/objects/{object_id}"
 OBJECT_STATION_PATH = "/objects/{object_id}@{station_id}"
+PERMISSIONS_POLICY_PATH = "/permissions/policy"
+PERMISSIONS_CHECK_PATH = "/permissions/check"
 
 SOURCE_QUERY = {"source": "true", "format": "json"}
 STATE_QUERY = {"state": "true"}
@@ -33,6 +34,8 @@ RESPONSE_FIELDS: dict[str, frozenset[str]] = {
     "version": frozenset({"status", "object_id", "version"}),
     "rollback": frozenset({"status", "message", "version_id", "object_id"}),
     "destroy_object": frozenset({"status", "message", "object_id"}),
+    "permissions_policy": frozenset({"status", "policy"}),
+    "permissions_check": frozenset({"status", "decision"}),
 }
 
 

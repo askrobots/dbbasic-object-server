@@ -9,6 +9,8 @@ def test_contract_keeps_objects_paths_as_public_surface():
     assert http_api_contract.OBJECTS_PATH == "/objects"
     assert http_api_contract.OBJECT_PATH == "/objects/{object_id}"
     assert http_api_contract.OBJECT_STATION_PATH == "/objects/{object_id}@{station_id}"
+    assert http_api_contract.PERMISSIONS_POLICY_PATH == "/permissions/policy"
+    assert http_api_contract.PERMISSIONS_CHECK_PATH == "/permissions/check"
 
 
 def test_contract_keeps_existing_introspection_query_flags():
@@ -88,6 +90,14 @@ def test_contract_keeps_existing_introspection_query_flags():
             "destroy_object",
             {"status": "ok", "message": "Object destroyed: u_42_deals", "object_id": "u_42_deals"},
         ),
+        (
+            "permissions_policy",
+            {"status": "ok", "policy": {"access_mode": "role_based"}},
+        ),
+        (
+            "permissions_check",
+            {"status": "ok", "decision": {"allowed": True}},
+        ),
     ],
 )
 def test_existing_client_response_shapes_have_required_fields(response_name, payload):
@@ -127,6 +137,9 @@ def test_http_contract_doc_mentions_required_compatibility_surface():
         "PUT /objects/{object_id}?source=true",
         "POST /objects/{object_id}",
         "DELETE /objects/{object_id}?destroy=true",
+        "GET /permissions/policy",
+        "PUT /permissions/policy",
+        "POST /permissions/check",
         "source=true",
         "state=true",
         "metadata=true",

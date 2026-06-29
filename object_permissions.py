@@ -32,6 +32,8 @@ OWNER_ACTIONS = frozenset({READ, UPDATE, DELETE, EXECUTE, SOURCE, STATE, LOGS, F
 ADMIN_ACTIONS = frozenset(
     {READ, CREATE, UPDATE, DELETE, EXECUTE, SOURCE, STATE, LOGS, FILES, VERSIONS, ADMIN, SHARE}
 )
+ACCESS_MODES = frozenset({"public", "password", "registered", "subscription", "role_based", "private"})
+RULE_EFFECTS = frozenset({"allow", "deny"})
 
 
 @dataclass(frozen=True)
@@ -267,6 +269,158 @@ def check_permission(
     return mode_decision
 
 
+def subject_from_dict(payload: Mapping[str, Any] | None) -> PermissionSubject:
+    """Build a subject from JSON-compatible data."""
+    if payload is None:
+        return PermissionSubject.anonymous()
+    if not isinstance(payload, Mapping):
+        raise ValueError("Permission subject must be an object")
+
+    return PermissionSubject(
+        user_id=_optional_string(payload.get("user_id")),
+        account_id=_optional_string(payload.get("account_id")),
+        roles=_string_tuple(payload.get("roles", ()), "subject.roles"),
+        subscriptions=_string_tuple(payload.get("subscriptions", ()), "subject.subscriptions"),
+    )
+
+
+def rule_from_dict(payload: Mapping[str, Any]) -> PermissionRule:
+    """Build one rule from JSON-compatible data."""
+    if not isinstance(payload, Mapping):
+        raise ValueError("Permission rule must be an object")
+
+    effect = _required_string(payload, "effect").lower()
+    if effect not in RULE_EFFECTS:
+        raise ValueError(f"Permission rule effect must be one of: {', '.join(sorted(RULE_EFFECTS))}")
+
+    actions = _string_set(payload.get("actions"), "rule.actions")
+    if not actions:
+        raise ValueError("Permission rule actions must not be empty")
+
+    principal = _required_string(payload, "principal")
+    row_filter = payload.get("row_filter", {})
+    if not isinstance(row_filter, Mapping):
+        raise ValueError("Permission rule row_filter must be an object")
+
+    fields_payload = payload.get("fields")
+    fields = _string_set(fields_payload, "rule.fields") if fields_payload is not None else None
+    denied_fields = _string_set(payload.get("denied_fields", ()), "rule.denied_fields")
+
+    return PermissionRule(
+        effect=effect,
+        actions=frozenset(actions),
+        principal=principal,
+        collection=_optional_string(payload.get("collection")),
+        object_id=_optional_string(payload.get("object_id")),
+        row_filter=dict(row_filter),
+        fields=frozenset(fields) if fields is not None else None,
+        denied_fields=frozenset(denied_fields),
+        valid_from=_optional_string(payload.get("valid_from")),
+        expires_at=_optional_string(payload.get("expires_at")),
+        reason=_optional_string(payload.get("reason")) or "",
+    )
+
+
+def policy_from_dict(payload: Mapping[str, Any]) -> PermissionPolicy:
+    """Build a policy from JSON-compatible data."""
+    if not isinstance(payload, Mapping):
+        raise ValueError("Permission policy must be an object")
+
+    access_mode = _optional_string(payload.get("access_mode")) or "role_based"
+    if access_mode not in ACCESS_MODES:
+        raise ValueError(f"Permission access_mode must be one of: {', '.join(sorted(ACCESS_MODES))}")
+
+    roles_payload = payload.get("roles", {})
+    if not isinstance(roles_payload, Mapping):
+        raise ValueError("Permission policy roles must be an object")
+    roles: dict[str, dict[str, Any]] = {}
+    for role, metadata in roles_payload.items():
+        role_name = _string_value(role)
+        if not role_name:
+            raise ValueError("Permission role names must be strings")
+        if not isinstance(metadata, Mapping):
+            raise ValueError(f"Permission role metadata must be an object: {role_name}")
+        roles[role_name] = dict(metadata)
+
+    user_roles_payload = payload.get("user_roles", {})
+    if not isinstance(user_roles_payload, Mapping):
+        raise ValueError("Permission policy user_roles must be an object")
+    user_roles: dict[str, tuple[str, ...]] = {}
+    for user_id, role_names in user_roles_payload.items():
+        normalized_user_id = _string_value(user_id)
+        if not normalized_user_id:
+            raise ValueError("Permission user_roles keys must be strings")
+        user_roles[normalized_user_id] = _string_tuple(
+            role_names,
+            f"user_roles.{normalized_user_id}",
+        )
+
+    rules_payload = payload.get("rules", ())
+    if not isinstance(rules_payload, (list, tuple)):
+        raise ValueError("Permission policy rules must be a list")
+    rules = tuple(rule_from_dict(rule) for rule in rules_payload)
+
+    return PermissionPolicy(
+        access_mode=access_mode,
+        roles=roles,
+        user_roles=user_roles,
+        rules=rules,
+        admin_roles=_string_tuple(payload.get("admin_roles", ("admin", "superuser")), "admin_roles"),
+    )
+
+
+def rule_to_dict(rule: PermissionRule) -> dict[str, Any]:
+    """Return a JSON-compatible rule."""
+    payload: dict[str, Any] = {
+        "effect": rule.effect,
+        "actions": sorted(rule.actions),
+        "principal": rule.principal,
+        "row_filter": dict(rule.row_filter),
+        "denied_fields": sorted(rule.denied_fields),
+        "reason": rule.reason,
+    }
+
+    if rule.collection is not None:
+        payload["collection"] = rule.collection
+    if rule.object_id is not None:
+        payload["object_id"] = rule.object_id
+    if rule.fields is not None:
+        payload["fields"] = sorted(rule.fields)
+    if rule.valid_from is not None:
+        payload["valid_from"] = rule.valid_from
+    if rule.expires_at is not None:
+        payload["expires_at"] = rule.expires_at
+
+    return payload
+
+
+def policy_to_dict(policy: PermissionPolicy) -> dict[str, Any]:
+    """Return a JSON-compatible policy."""
+    return {
+        "access_mode": policy.access_mode,
+        "roles": {role: dict(metadata) for role, metadata in sorted(policy.roles.items())},
+        "user_roles": {
+            user_id: list(role_names)
+            for user_id, role_names in sorted(policy.user_roles.items())
+        },
+        "rules": [rule_to_dict(rule) for rule in policy.rules],
+        "admin_roles": list(policy.admin_roles),
+    }
+
+
+def decision_to_dict(decision: PermissionDecision) -> dict[str, Any]:
+    """Return a JSON-compatible permission decision."""
+    return {
+        "allowed": decision.allowed,
+        "reason": decision.reason,
+        "code": decision.code,
+        "http_status": decision.http_status,
+        "row_filter": dict(decision.row_filter),
+        "fields": sorted(decision.fields) if decision.fields is not None else None,
+        "denied_fields": sorted(decision.denied_fields),
+    }
+
+
 def _access_mode_decision(
     subject: PermissionSubject,
     access_mode: str,
@@ -480,6 +634,42 @@ def _string_value(value: Any) -> str | None:
     if value is None:
         return None
     return str(value)
+
+
+def _optional_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return str(value)
+    raise ValueError(f"Expected string-compatible value, got {type(value).__name__}")
+
+
+def _required_string(payload: Mapping[str, Any], key: str) -> str:
+    if key not in payload:
+        raise ValueError(f"Permission field '{key}' is required")
+    value = _optional_string(payload[key])
+    if value is None or not value:
+        raise ValueError(f"Permission field '{key}' must be a non-empty string")
+    return value
+
+
+def _string_tuple(value: Any, field_name: str) -> tuple[str, ...]:
+    return tuple(sorted(_string_set(value, field_name)))
+
+
+def _string_set(value: Any, field_name: str) -> frozenset[str]:
+    if not isinstance(value, (list, tuple, set, frozenset)):
+        raise ValueError(f"Permission field '{field_name}' must be a list of strings")
+
+    values: set[str] = set()
+    for item in value:
+        string_value = _optional_string(item)
+        if string_value is None or not string_value:
+            raise ValueError(f"Permission field '{field_name}' contains an invalid value")
+        values.add(string_value)
+    return frozenset(values)
 
 
 def _parse_timestamp(value: str) -> datetime | None:

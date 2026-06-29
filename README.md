@@ -84,6 +84,7 @@ This repository currently contains:
 - `object_state.py` - TSV-backed object state reads and runtime writes
 - `object_logs.py` - TSV-backed object log reads, appends, rotation, compression, retention, and runtime logger helper
 - `object_metadata.py` - conservative object metadata summaries
+- `object_permission_store.py` - JSON-backed permission policy persistence
 - `object_permissions.py` - server-side access modes, role/object/action checks,
   ownership, sharing, subscriptions, temporary grants, and row/field filters
 - `object_versions.py` - source version metadata, content snapshots, and rollback
@@ -126,6 +127,9 @@ Current endpoints:
 - `GET /health`
 - `GET /health?capacity=true`
 - `GET /health?metrics=true`
+- `GET /permissions/policy`
+- `PUT /permissions/policy`
+- `POST /permissions/check`
 - `GET /objects?format=json`
 - `GET /objects/{object_id}`
 - `POST /objects/{object_id}`
@@ -144,7 +148,8 @@ Execution currently uses `python_object_runtime.py`, a direct Python loader. It
 is useful for proving the loop, but it is not the production sandbox or security
 boundary.
 
-Object listing, source, state, logs, metadata, and versions require:
+Permission policy/check endpoints, object listing, source, state, logs,
+metadata, and versions require:
 
 ```bash
 export DBBASIC_ADMIN_TOKEN=replace-with-a-local-dev-token

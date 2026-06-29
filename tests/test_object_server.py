@@ -410,6 +410,214 @@ def test_object_list_requires_authorization_header(tmp_path, monkeypatch):
     assert payload == {"status": "error", "error": "Unauthorized"}
 
 
+def test_permissions_policy_requires_admin_token_configuration(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)
+
+    status, _, payload = request("/permissions/policy")
+
+    assert status == 403
+    assert payload == {"status": "error", "error": "Permissions API requires DBBASIC_ADMIN_TOKEN."}
+
+
+def test_permissions_policy_requires_authorization_header(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/permissions/policy")
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
+
+
+def test_permissions_policy_get_returns_default_policy(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/permissions/policy", headers=auth_headers())
+
+    assert status == 200
+    assert payload == {
+        "status": "ok",
+        "policy": {
+            "access_mode": "role_based",
+            "roles": {},
+            "user_roles": {},
+            "rules": [],
+            "admin_roles": ["admin", "superuser"],
+        },
+    }
+
+
+def test_permissions_policy_put_persists_policy(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+    policy = {
+        "access_mode": "role_based",
+        "roles": {"sales": {"label": "Sales"}},
+        "user_roles": {"7": ["sales"]},
+        "rules": [
+            {
+                "effect": "allow",
+                "principal": "role:sales",
+                "actions": ["read"],
+                "collection": "contacts",
+                "row_filter": {"owner_id": "$user_id"},
+                "reason": "sales reps only see own contacts",
+            }
+        ],
+        "admin_roles": ["admin"],
+    }
+
+    status, _, payload = request(
+        "/permissions/policy",
+        method="PUT",
+        body=json.dumps({"policy": policy}).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["policy"]["access_mode"] == "role_based"
+    assert (data_dir / "permissions" / "policy.json").exists()
+
+    status, _, payload = request("/permissions/policy", headers=auth_headers())
+
+    assert status == 200
+    assert payload["policy"]["rules"][0]["principal"] == "role:sales"
+    assert payload["policy"]["rules"][0]["row_filter"] == {"owner_id": "$user_id"}
+
+
+def test_permissions_policy_put_rejects_invalid_policy(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/permissions/policy",
+        method="PUT",
+        body=json.dumps({"policy": {"access_mode": "unknown"}}).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 400
+    assert payload["status"] == "error"
+    assert "Permission access_mode must be one of:" in payload["error"]
+
+
+def test_permissions_check_uses_persisted_policy(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
+    policy = {
+        "access_mode": "role_based",
+        "rules": [
+            {
+                "effect": "allow",
+                "principal": "role:sales",
+                "actions": ["read"],
+                "collection": "contacts",
+                "row_filter": {"owner_id": "$user_id"},
+                "reason": "sales reps only see own contacts",
+            }
+        ],
+    }
+    request(
+        "/permissions/policy",
+        method="PUT",
+        body=json.dumps({"policy": policy}).encode(),
+        headers=auth_headers(),
+    )
+
+    status, _, payload = request(
+        "/permissions/check",
+        method="POST",
+        body=json.dumps(
+            {
+                "subject": {"user_id": "7", "roles": ["sales"]},
+                "action": "read",
+                "collection": "contacts",
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload == {
+        "status": "ok",
+        "decision": {
+            "allowed": True,
+            "reason": "sales reps only see own contacts",
+            "code": "allowed",
+            "http_status": 200,
+            "row_filter": {"owner_id": "$user_id"},
+            "fields": None,
+            "denied_fields": [],
+        },
+    }
+
+
+def test_permissions_check_accepts_inline_policy_for_preview(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/permissions/check",
+        method="POST",
+        body=json.dumps(
+            {
+                "policy": {
+                    "access_mode": "role_based",
+                    "rules": [
+                        {
+                            "effect": "allow",
+                            "principal": "account:customer-acme",
+                            "actions": ["read"],
+                            "collection": "invoices",
+                            "row_filter": {"customer_account_id": "$account_id"},
+                            "fields": ["invoice_id", "total"],
+                            "denied_fields": ["internal_notes"],
+                        }
+                    ],
+                },
+                "subject": {"user_id": "9", "account_id": "customer-acme"},
+                "action": "read",
+                "collection": "invoices",
+                "record": {"customer_account_id": "customer-acme", "total": 120},
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["decision"]["allowed"] is True
+    assert payload["decision"]["fields"] == ["invoice_id", "total"]
+    assert payload["decision"]["denied_fields"] == ["internal_notes"]
+
+
+def test_permissions_check_returns_payment_required_decision(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/permissions/check",
+        method="POST",
+        body=json.dumps(
+            {
+                "policy": {"access_mode": "subscription"},
+                "subject": {"user_id": "42"},
+                "action": "read",
+                "collection": "premium_reports",
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["decision"]["allowed"] is False
+    assert payload["decision"]["code"] == "payment_required"
+    assert payload["decision"]["http_status"] == 402
+
+
 def test_get_source_returns_existing_contract_shape(tmp_path, monkeypatch):
     root = tmp_path / "objects"
     write_source(root / "basics" / "counter.py", "def GET(request):\n    return {'count': 1}\n")

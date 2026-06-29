@@ -66,6 +66,82 @@ flowchart TD
     I -- no --> Y
 ```
 
+## Persistence And API
+
+The current public server stores the active policy as:
+
+```text
+data/permissions/policy.json
+```
+
+If the file does not exist, the server uses a conservative default:
+
+```json
+{
+  "access_mode": "role_based",
+  "roles": {},
+  "user_roles": {},
+  "rules": [],
+  "admin_roles": ["admin", "superuser"]
+}
+```
+
+The policy endpoints are admin-gated until real user sessions exist:
+
+```http
+GET /permissions/policy
+Authorization: Token <token>
+```
+
+```http
+PUT /permissions/policy
+Authorization: Token <token>
+Content-Type: application/json
+```
+
+```json
+{
+  "policy": {
+    "access_mode": "role_based",
+    "roles": {"sales": {"label": "Sales"}},
+    "user_roles": {"7": ["sales"]},
+    "rules": []
+  }
+}
+```
+
+Scroll and tests can preview decisions without persisting draft rules:
+
+```http
+POST /permissions/check
+Authorization: Token <token>
+Content-Type: application/json
+```
+
+```json
+{
+  "policy": {
+    "access_mode": "role_based",
+    "rules": [
+      {
+        "effect": "allow",
+        "principal": "role:sales",
+        "actions": ["read"],
+        "collection": "contacts",
+        "row_filter": {"owner_id": "$user_id"}
+      }
+    ]
+  },
+  "subject": {"user_id": "7", "roles": ["sales"]},
+  "action": "read",
+  "collection": "contacts"
+}
+```
+
+If `policy` is omitted, `/permissions/check` uses the persisted policy file.
+The optional `now` field accepts an ISO timestamp for testing temporary access
+windows.
+
 ## Access Modes
 
 Access modes answer who gets through the front door.

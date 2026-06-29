@@ -128,6 +128,124 @@ Retry-After: 30
 }
 ```
 
+## Permissions Policy
+
+The public server now has a persisted permission policy shape. The endpoints are
+admin-gated while the real user/session layer is still being extracted.
+
+```http
+GET /permissions/policy
+Authorization: Token <token>
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "policy": {
+    "access_mode": "role_based",
+    "roles": {},
+    "user_roles": {},
+    "rules": [],
+    "admin_roles": ["admin", "superuser"]
+  }
+}
+```
+
+Update:
+
+```http
+PUT /permissions/policy
+Authorization: Token <token>
+Content-Type: application/json
+```
+
+```json
+{
+  "policy": {
+    "access_mode": "role_based",
+    "roles": {"sales": {"label": "Sales"}},
+    "user_roles": {"7": ["sales"]},
+    "rules": [
+      {
+        "effect": "allow",
+        "principal": "role:sales",
+        "actions": ["read"],
+        "collection": "contacts",
+        "row_filter": {"owner_id": "$user_id"}
+      }
+    ],
+    "admin_roles": ["admin"]
+  }
+}
+```
+
+The policy is stored under `data/permissions/policy.json`. Missing policy files
+load as a conservative `role_based` policy with no grants.
+
+## Permissions Check
+
+Scroll and admin tools can ask the server to evaluate one permission decision.
+This is useful for previewing draft rules and for future "test as role" screens.
+
+```http
+POST /permissions/check
+Authorization: Token <token>
+Content-Type: application/json
+```
+
+```json
+{
+  "subject": {
+    "user_id": "7",
+    "account_id": "customer-acme",
+    "roles": ["sales"],
+    "subscriptions": ["pro"]
+  },
+  "action": "read",
+  "collection": "contacts",
+  "object_id": null,
+  "record": null
+}
+```
+
+If the request includes a `policy` object, the server evaluates against that
+inline policy without saving it. Otherwise it evaluates against the persisted
+policy. The optional `now` field accepts an ISO timestamp for previewing
+temporary access windows.
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "decision": {
+    "allowed": true,
+    "reason": "sales reps only see own contacts",
+    "code": "allowed",
+    "http_status": 200,
+    "row_filter": {"owner_id": "$user_id"},
+    "fields": null,
+    "denied_fields": []
+  }
+}
+```
+
+When a paid entitlement is missing, the decision can include:
+
+```json
+{
+  "allowed": false,
+  "reason": "subscription required",
+  "code": "payment_required",
+  "http_status": 402,
+  "row_filter": {},
+  "fields": null,
+  "denied_fields": []
+}
+```
+
 ## Object List
 
 ```http
