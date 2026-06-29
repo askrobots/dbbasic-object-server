@@ -472,7 +472,7 @@ async def _execute_object_method(
     _append_execution_log(result)
 
     if result.ok:
-        await _send_json(send, result.result)
+        await _send_object_response(send, result.result)
         return
 
     await _send_execution_error(send, result)
@@ -696,14 +696,123 @@ async def _read_body(receive) -> bytes:
 
 async def _send_json(send, payload: Any, status: int = 200) -> None:
     body = json.dumps(payload).encode("utf-8")
+    await _send_response(
+        send,
+        status=status,
+        headers=[("content-type", "application/json; charset=utf-8")],
+        body=body,
+    )
+
+
+async def _send_object_response(send, payload: Any) -> None:
+    status, headers, body = _normalize_object_response(payload)
+    await _send_response(send, status=status, headers=headers, body=body)
+
+
+def _normalize_object_response(payload: Any) -> tuple[int, list[tuple[str, str]], bytes]:
+    if _is_response_tuple(payload):
+        status, headers, body = payload
+        return _normalize_status(status), _normalize_headers(headers), _normalize_body(body)
+
+    if isinstance(payload, dict) and payload.get("content_type"):
+        status = payload.get("status_code", payload.get("http_status", payload.get("status", 200)))
+        headers = [("content-type", str(payload["content_type"]))]
+        headers.extend(_normalize_headers(payload.get("headers", [])))
+        return _normalize_status(status), headers, _normalize_body(payload.get("body", b""))
+
+    if isinstance(payload, str):
+        return 200, [("content-type", "text/html; charset=utf-8")], payload.encode("utf-8")
+
+    if isinstance(payload, bytes):
+        return 200, [("content-type", "application/octet-stream")], payload
+
+    body = json.dumps(payload).encode("utf-8")
+    return 200, [("content-type", "application/json; charset=utf-8")], body
+
+
+async def _send_response(
+    send,
+    *,
+    status: int,
+    headers: list[tuple[str, str]],
+    body: bytes,
+) -> None:
     await send(
         {
             "type": "http.response.start",
             "status": status,
-            "headers": [(b"content-type", b"application/json; charset=utf-8")],
+            "headers": [(name.encode("latin-1"), value.encode("latin-1")) for name, value in headers],
         }
     )
     await send({"type": "http.response.body", "body": body})
+
+
+def _is_response_tuple(payload: Any) -> bool:
+    return isinstance(payload, tuple) and len(payload) == 3
+
+
+def _normalize_status(status: Any) -> int:
+    if isinstance(status, bool):
+        return 200
+
+    try:
+        value = int(status)
+    except (TypeError, ValueError):
+        return 200
+
+    if value < 100 or value > 599:
+        return 200
+
+    return value
+
+
+def _normalize_headers(headers: Any) -> list[tuple[str, str]]:
+    if headers is None:
+        return []
+
+    if isinstance(headers, dict):
+        header_items = headers.items()
+    elif isinstance(headers, (list, tuple)):
+        header_items = headers
+    else:
+        return []
+
+    normalized = []
+    for item in header_items:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            continue
+        name, value = item
+        header_name = _header_text(name).lower()
+        if header_name:
+            normalized.append((header_name, _header_text(value)))
+    return normalized
+
+
+def _header_text(value: Any) -> str:
+    if isinstance(value, bytes):
+        text = value.decode("latin-1")
+    else:
+        text = str(value)
+    return text.replace("\r", "").replace("\n", "")
+
+
+def _normalize_body(body: Any) -> bytes:
+    if body is None:
+        return b""
+
+    if isinstance(body, bytes):
+        return body
+
+    if isinstance(body, str):
+        return body.encode("utf-8")
+
+    if isinstance(body, (list, tuple)):
+        parts = []
+        for part in body:
+            parts.append(_normalize_body(part))
+        return b"".join(parts)
+
+    return str(body).encode("utf-8")
 
 
 async def _send_execution_error(

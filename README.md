@@ -99,7 +99,9 @@ The current public ASGI server can list objects, return source for an existing
 object, execute object `GET`, `POST`, `PUT`, and `DELETE` methods, and update
 source when the explicit source-write gate is enabled. It can also list source
 versions, read a specific version, read object state, read object logs, read
-object metadata, and roll back source through the same write gate.
+object metadata, and roll back source through the same write gate. Object
+execution can return JSON data, HTML/text/binary responses through
+`content_type` and `body`, or a low-level `(status, headers, body)` tuple.
 
 ```bash
 python -m pip install -e '.[server,test]'

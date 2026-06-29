@@ -95,6 +95,40 @@ This is part of the `100x dev loop`: execute an object, inspect the structured
 error and traceback, patch the source, and keep the version trail close to the
 runtime feedback.
 
+## Object HTTP Responses
+
+The runtime returns plain Python values. The ASGI/web layer turns those values
+into HTTP responses.
+
+Compatibility response shapes:
+
+```python
+return {"status": "ok", "count": 1}
+```
+
+Normal dicts are JSON responses and are not wrapped in another envelope.
+
+```python
+return {
+    "content_type": "text/html; charset=utf-8",
+    "body": "<!doctype html><h1>DBBASIC</h1>",
+}
+```
+
+Dicts with `content_type` and `body` become raw HTTP responses. The body may be
+text or bytes. This is the object shape used by generated views, HTML pages, and
+binary/image objects.
+
+```python
+return (201, [("Content-Type", "text/plain")], [b"created"])
+```
+
+Tuples in `(status, headers, body)` form are passed through as low-level HTTP
+responses. `body` may be bytes, text, or a list of bytes/text parts.
+
+Plain string returns are served as `text/html; charset=utf-8`. Plain bytes
+returns are served as `application/octet-stream`.
+
 ## Object Versions
 
 Public code should use `object_versions.py` for source version storage. The

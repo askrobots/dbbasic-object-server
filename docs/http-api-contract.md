@@ -119,8 +119,33 @@ Content-Type: application/json
 }
 ```
 
-Execution responses are object-defined JSON. The server should pass successful
-object results through without wrapping them in a new envelope.
+Execution responses are object-defined. The server should pass successful object
+results through without wrapping them in a new envelope.
+
+Compatibility response shapes:
+
+- normal dicts return JSON
+- dicts with `content_type` and `body` return raw HTTP responses
+- `(status, headers, body)` tuples return low-level HTTP responses
+- strings return `text/html; charset=utf-8`
+- bytes return `application/octet-stream`
+
+Example HTML object response:
+
+```python
+def GET(request):
+    return {
+        "content_type": "text/html; charset=utf-8",
+        "body": "<!doctype html><h1>DBBASIC</h1>",
+    }
+```
+
+Example tuple response:
+
+```python
+def POST(request):
+    return (201, [("Content-Type", "text/plain")], [b"created"])
+```
 
 On server-side execution failure, return a non-2xx status with:
 

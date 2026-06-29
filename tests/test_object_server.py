@@ -12,6 +12,17 @@ def write_source(path, content):
 
 
 def request(path, method="GET", query_string="", body=b"", headers=None):
+    status, headers, payload = raw_request(
+        path,
+        method=method,
+        query_string=query_string,
+        body=body,
+        headers=headers,
+    )
+    return status, headers, json.loads(payload.decode("utf-8"))
+
+
+def raw_request(path, method="GET", query_string="", body=b"", headers=None):
     return asyncio.run(
         asgi_request(
             path,
@@ -60,8 +71,8 @@ async def asgi_request(path, method="GET", query_string="", body=b"", headers=No
         for message in messages
         if message["type"] == "http.response.body"
     ]
-    payload = b"".join(body_parts).decode("utf-8")
-    return start["status"], dict(start["headers"]), json.loads(payload)
+    payload = b"".join(body_parts)
+    return start["status"], dict(start["headers"]), payload
 
 
 def enable_source_writes(monkeypatch, root, data_dir):
@@ -899,6 +910,73 @@ def test_object_execution_runs_get_method(tmp_path, monkeypatch):
 
     assert status == 200
     assert payload == {"count": 1}
+
+
+def test_object_execution_returns_html_content_type_response(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(
+        root / "site" / "home.py",
+        "def GET(request):\n"
+        "    return {\n"
+        "        'content_type': 'text/html; charset=utf-8',\n"
+        "        'body': '<!doctype html><h1>DBBASIC</h1>',\n"
+        "    }\n",
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+
+    status, headers, body = raw_request("/objects/site_home")
+
+    assert status == 200
+    assert headers[b"content-type"] == b"text/html; charset=utf-8"
+    assert body == b"<!doctype html><h1>DBBASIC</h1>"
+
+
+def test_object_execution_returns_binary_content_type_response(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(
+        root / "basics" / "image.py",
+        "def GET(request):\n"
+        "    return {\n"
+        "        'content_type': 'image/png',\n"
+        "        'body': b'\\x89PNG',\n"
+        "    }\n",
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+
+    status, headers, body = raw_request("/objects/basics_image")
+
+    assert status == 200
+    assert headers[b"content-type"] == b"image/png"
+    assert body == b"\x89PNG"
+
+
+def test_object_execution_returns_response_tuple(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(
+        root / "basics" / "created.py",
+        "def POST(request):\n"
+        "    return (201, [('Content-Type', 'text/plain'), ('X-Object', 'created')], [b'ok'])\n",
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+
+    status, headers, body = raw_request("/objects/basics_created", method="POST")
+
+    assert status == 201
+    assert headers[b"content-type"] == b"text/plain"
+    assert headers[b"x-object"] == b"created"
+    assert body == b"ok"
+
+
+def test_object_execution_returns_plain_string_as_html(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return '<h1>DBBASIC</h1>'\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+
+    status, headers, body = raw_request("/objects/site_home")
+
+    assert status == 200
+    assert headers[b"content-type"] == b"text/html; charset=utf-8"
+    assert body == b"<h1>DBBASIC</h1>"
 
 
 def test_object_execution_appends_success_log(tmp_path, monkeypatch):
