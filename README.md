@@ -85,6 +85,7 @@ This repository currently contains:
 - `object_logs.py` - TSV-backed object log reads, appends, rotation, compression, retention, and runtime logger helper
 - `object_metadata.py` - conservative object metadata summaries
 - `object_versions.py` - source version metadata, content snapshots, and rollback
+- `object_backup.py` - runtime backup, verification, and safe restore helpers
 - `object_daemon.py` - background worker for scheduler, queue, events, and cleanup
 - `deployment_checks.py` - single-VM filesystem ownership and permission checks
 
@@ -172,6 +173,7 @@ rules the rest of the server will use:
 - `object_logs.py` reads and appends TSV-backed object logs, rotates/compresses old logs, and provides `_logger`
 - `object_metadata.py` summarizes source, state, logs, and versions
 - `object_versions.py` keeps source history as `metadata.tsv` plus `vN.txt` files
+- `object_backup.py` archives and safely restores object source plus runtime data
 - `object_daemon.py` runs scheduled, queued, and event work
 - `deployment_checks.py` checks the single-VM filesystem layout before public exposure
 - `basics_counter` maps to `objects/basics/counter.py`
@@ -192,6 +194,7 @@ See `docs/README.md` for the documentation map,
 `docs/http-api-contract.md` for the HTTP API shape that existing clients expect,
 `docs/object-authoring.md` for the current object authoring shape and
 object-first storage/schema loop,
+`docs/backup-restore.md` for runtime backup and restore,
 `docs/asgi-realtime-direction.md` for the ASGI/realtime direction, and
 `docs/rest-and-object-messages.md` for the resource/message split. See
 `docs/single-vm-deployment.md` for the first conservative staging deployment
@@ -217,7 +220,7 @@ Near-term work:
 - move the hardened core runtime and sandbox into this repository
 - enforce authentication, permissions, and row/object access rules in the server
 - add CPU, memory, wall-clock, and request-size limits around execution
-- add backup/restore checks and log retention
+- wire scheduled backup retention and Scroll backup controls to `object_backup.py`
 - keep the HTTP contract compatible with Scroll and existing tools
 - add deployment scripts after the manual single-VM path stays boring
 

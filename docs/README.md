@@ -14,6 +14,7 @@ flowchart TD
     A --> D["ASGI and realtime direction"]
     A --> E["REST and object messages"]
     A --> L["Single VM deployment"]
+    A --> N["Backup and restore"]
 
     B --> F["Object namespace"]
     B --> G["Execution result shape"]
@@ -40,6 +41,8 @@ flowchart TD
 - `single-vm-deployment.md` - conservative staging deployment on one VM with
   systemd, localhost uvicorn, separate object/data paths, filesystem checks,
   provider monitoring, and backup notes.
+- `backup-restore.md` - runtime archive format, verification, safe restore, and
+  what stays out of portable backups.
 
 ## Documentation Rules
 
@@ -56,7 +59,6 @@ Useful next docs:
 
 - object method reference
 - permissions model
-- backup and restore guide
 - AI repair loop guide
 - realtime event contract
 - package/install guide

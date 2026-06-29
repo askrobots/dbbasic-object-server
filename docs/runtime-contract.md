@@ -88,6 +88,12 @@ backup/restore understandable, and lets Scroll inspect source, state, logs,
 versions, schemas, and diagrams without turning SQL into the default storage
 contract.
 
+Runtime backups should use `object_backup.py`. The portable archive contains
+object source plus `data/state/`, `data/logs/`, `data/versions/`, and
+`data/files/`. It deliberately leaves deployment secrets, service files,
+virtualenvs, git history, lock files, temp files, and ephemeral rate-limit files
+outside the archive.
+
 ## Object Execution Result
 
 Public code should use `object_execution.py` for the shared execution result shape.

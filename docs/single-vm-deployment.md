@@ -488,18 +488,56 @@ new runnable code through the public hostname.
 
 ## Backup
 
-The minimum backup set is:
+The portable runtime backup set is:
 
 ```text
 /var/lib/dbbasic-object-server/objects
-/var/lib/dbbasic-object-server/data
+/var/lib/dbbasic-object-server/data/state
+/var/lib/dbbasic-object-server/data/logs
+/var/lib/dbbasic-object-server/data/versions
+/var/lib/dbbasic-object-server/data/files
+```
+
+Create and verify a portable runtime backup with:
+
+```bash
+python -m object_backup create \
+  /var/backups/dbbasic-object-server/runtime-YYYYMMDD-HHMMSS.tar.gz \
+  --objects-dir /var/lib/dbbasic-object-server/objects \
+  --data-dir /var/lib/dbbasic-object-server/data
+
+python -m object_backup verify \
+  /var/backups/dbbasic-object-server/runtime-YYYYMMDD-HHMMSS.tar.gz \
+  --json
+```
+
+Restore into clean directories first:
+
+```bash
+python -m object_backup restore \
+  /var/backups/dbbasic-object-server/runtime-YYYYMMDD-HHMMSS.tar.gz \
+  --objects-dir /tmp/dbbasic-restore/objects \
+  --data-dir /tmp/dbbasic-restore/data \
+  --json
+```
+
+The runtime archive deliberately excludes deployment secrets, environment files,
+systemd service files, git history, virtualenvs, caches, lock files, temp files,
+and ephemeral rate-limit files.
+
+The server environment file and systemd unit still need to be backed up by an
+operator-controlled process:
+
+```text
 /etc/dbbasic-object-server.env
 /etc/systemd/system/dbbasic-object-server.service
 ```
 
-For staging, a daily tarball or VM snapshot is enough. Before calling this a
-production deployment, backup and restore should be tested by restoring those
-paths on a second clean VM and running the health/object checks again.
+Keep those secret-aware backups separate from portable runtime archives. Before
+calling this a production deployment, restore runtime backups on a second clean
+VM and run the health/object checks again.
+
+See `backup-restore.md` for the runtime archive contract and restore rules.
 
 ## Current Limits
 
