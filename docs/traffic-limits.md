@@ -248,6 +248,9 @@ Traffic controls also need disk controls:
 - rotate object logs before they grow forever
 - gzip rotated logs at rest
 - keep a bounded number of rotated logs per object
+- disable noisy uvicorn access logs in systemd and rely on object logs,
+  request metrics, and deliberate analytics objects
+- cap journald retention for process logs
 - keep backup retention explicit
 - delete temp files and stale lock files only through known runtime paths
 

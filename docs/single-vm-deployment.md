@@ -360,7 +360,7 @@ cd /opt/dbbasic-object-server
 set -a
 . /etc/dbbasic-object-server.env
 set +a
-.venv/bin/uvicorn object_server:app --host 127.0.0.1 --port 8001
+.venv/bin/uvicorn object_server:app --host 127.0.0.1 --port 8001 --no-access-log
 ```
 
 In another shell:
@@ -389,7 +389,7 @@ User=dbbasic
 Group=dbbasic
 WorkingDirectory=/opt/dbbasic-object-server
 EnvironmentFile=/etc/dbbasic-object-server.env
-ExecStart=/opt/dbbasic-object-server/.venv/bin/uvicorn object_server:app --host 127.0.0.1 --port 8001
+ExecStart=/opt/dbbasic-object-server/.venv/bin/uvicorn object_server:app --host 127.0.0.1 --port 8001 --no-access-log
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=true
@@ -415,6 +415,27 @@ Watch logs:
 
 ```bash
 sudo journalctl -u dbbasic-object-server -f
+```
+
+`--no-access-log` keeps successful request lines out of journald. DBBASIC keeps
+the useful application trail in object logs and `/health?metrics=true`, which
+are the surfaces Scroll should read. If access analytics are needed later,
+build them as an explicit app/object instead of relying on raw process logs.
+
+Cap journald so process logs cannot consume the VM:
+
+```bash
+sudo mkdir -p /etc/systemd/journald.conf.d
+sudo tee /etc/systemd/journald.conf.d/99-dbbasic.conf >/dev/null <<'EOF'
+[Journal]
+SystemMaxUse=128M
+SystemKeepFree=1G
+MaxRetentionSec=7day
+Compress=yes
+EOF
+sudo systemctl restart systemd-journald
+sudo journalctl --vacuum-size=128M
+sudo journalctl --disk-usage
 ```
 
 ## Upgrade

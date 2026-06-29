@@ -16,6 +16,7 @@ DEFAULT_OBJECTS_DIR = Path("/var/lib/dbbasic-object-server/objects")
 DEFAULT_DATA_DIR = Path("/var/lib/dbbasic-object-server/data")
 DEFAULT_ENV_FILE = Path("/etc/dbbasic-object-server.env")
 DEFAULT_SERVICE_FILE = Path("/etc/systemd/system/dbbasic-object-server.service")
+DEFAULT_JOURNALD_DROPIN = Path("/etc/systemd/journald.conf.d/99-dbbasic.conf")
 DEFAULT_SERVICE_USER = "dbbasic"
 DEFAULT_SERVICE_GROUP = "dbbasic"
 
@@ -37,6 +38,7 @@ def check_single_vm_layout(
     data_dir: Path | str | None = None,
     env_file: Path | str = DEFAULT_ENV_FILE,
     service_file: Path | str = DEFAULT_SERVICE_FILE,
+    journald_dropin: Path | str = DEFAULT_JOURNALD_DROPIN,
     service_user: str = DEFAULT_SERVICE_USER,
     service_group: str = DEFAULT_SERVICE_GROUP,
     env_owner: str = "root",
@@ -85,6 +87,13 @@ def check_single_vm_layout(
     results.extend(
         _check_service_file(
             Path(service_file),
+            expected_owner=system_owner,
+            expected_group=system_group,
+        )
+    )
+    results.extend(
+        _check_journald_dropin(
+            Path(journald_dropin),
             expected_owner=system_owner,
             expected_group=system_group,
         )
@@ -180,6 +189,52 @@ def _check_service_file(path: Path, *, expected_owner: str, expected_group: str)
     if mode & stat.S_IWGRP or mode & stat.S_IWOTH:
         results.append(_result(name, path, "error", f"group/world writable, mode is {_mode(mode)}"))
 
+    content = path.read_text(errors="replace")
+    if "ExecStart=" in content and "uvicorn" in content and "--no-access-log" not in content:
+        results.append(
+            _result(
+                name,
+                path,
+                "warning",
+                "uvicorn access logs are enabled; add --no-access-log and rely on object logs plus metrics",
+            )
+        )
+
+    if not results:
+        results.append(_result(name, path, "ok", f"file mode {_mode(mode)}"))
+    return results
+
+
+def _check_journald_dropin(
+    path: Path,
+    *,
+    expected_owner: str,
+    expected_group: str,
+) -> list[CheckResult]:
+    name = "journald retention drop-in"
+    if not path.exists():
+        return [_result(name, path, "warning", "missing; journald may keep unbounded process logs")]
+    if not path.is_file():
+        return [_result(name, path, "error", "not a file")]
+
+    results: list[CheckResult] = []
+    owner, group = _owner_group(path)
+    mode = stat.S_IMODE(path.stat().st_mode)
+    content = path.read_text(errors="replace")
+
+    if owner != expected_owner:
+        results.append(_result(name, path, "error", f"expected owner {expected_owner}, found {owner}"))
+    if group != expected_group:
+        results.append(_result(name, path, "warning", f"expected group {expected_group}, found {group}"))
+    if mode & stat.S_IWGRP or mode & stat.S_IWOTH:
+        results.append(_result(name, path, "error", f"group/world writable, mode is {_mode(mode)}"))
+    if "[Journal]" not in content:
+        results.append(_result(name, path, "warning", "missing [Journal] section"))
+    if "SystemMaxUse=" not in content and "RuntimeMaxUse=" not in content:
+        results.append(_result(name, path, "warning", "missing journal size cap"))
+    if "MaxRetentionSec=" not in content:
+        results.append(_result(name, path, "warning", "missing journal age retention cap"))
+
     if not results:
         results.append(_result(name, path, "ok", f"file mode {_mode(mode)}"))
     return results
@@ -223,6 +278,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--data-dir", type=Path)
     parser.add_argument("--env-file", type=Path, default=DEFAULT_ENV_FILE)
     parser.add_argument("--service-file", type=Path, default=DEFAULT_SERVICE_FILE)
+    parser.add_argument("--journald-dropin", type=Path, default=DEFAULT_JOURNALD_DROPIN)
     parser.add_argument("--service-user", default=DEFAULT_SERVICE_USER)
     parser.add_argument("--service-group", default=DEFAULT_SERVICE_GROUP)
     parser.add_argument("--env-owner", default="root")
@@ -237,6 +293,7 @@ def main(argv: list[str] | None = None) -> int:
         data_dir=args.data_dir,
         env_file=args.env_file,
         service_file=args.service_file,
+        journald_dropin=args.journald_dropin,
         service_user=args.service_user,
         service_group=args.service_group,
         env_owner=args.env_owner,
