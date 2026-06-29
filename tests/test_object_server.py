@@ -745,6 +745,62 @@ def test_collection_record_create_requires_admin_token_by_default(tmp_path, monk
     }
 
 
+def test_collection_record_create_uses_schema_validation(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    schema_file = data_dir / "schemas" / "invoices.json"
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text(
+        json.dumps(
+            {
+                "fields": [
+                    {"name": "id"},
+                    {"name": "invoice_date", "type": "date", "required": True},
+                    {"name": "status", "type": "enum", "enum": ["draft", "sent"], "default": "draft"},
+                    {"name": "total", "type": "computed", "computed": "sum(line_items)"},
+                ]
+            }
+        )
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    missing_required_status, _, missing_required_payload = request(
+        "/collections/invoices/records",
+        method="POST",
+        body=json.dumps({"id": "i1", "status": "draft"}).encode("utf-8"),
+        headers=auth_headers(),
+    )
+    invalid_computed_status, _, invalid_computed_payload = request(
+        "/collections/invoices/records",
+        method="POST",
+        body=json.dumps({"id": "i1", "invoice_date": "2026-04-08", "total": "100"}).encode("utf-8"),
+        headers=auth_headers(),
+    )
+    create_status, _, create_payload = request(
+        "/collections/invoices/records",
+        method="POST",
+        body=json.dumps({"id": "i1", "invoice_date": "2026-04-08"}).encode("utf-8"),
+        headers=auth_headers(),
+    )
+
+    assert missing_required_status == 400
+    assert missing_required_payload == {
+        "status": "error",
+        "error": "Record field 'invoice_date' is required",
+    }
+    assert invalid_computed_status == 400
+    assert invalid_computed_payload == {
+        "status": "error",
+        "error": "Record field 'total' is computed or read-only and cannot be written",
+    }
+    assert create_status == 201
+    assert create_payload == {
+        "status": "ok",
+        "collection": "invoices",
+        "record": {"id": "i1", "invoice_date": "2026-04-08", "status": "draft"},
+    }
+
+
 def test_collection_record_create_rejects_duplicate_and_invalid_payload(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -19,10 +20,10 @@ def write_records(data_dir: Path, collection: str, content: str) -> Path:
     return path
 
 
-def write_schema(data_dir: Path, collection: str) -> Path:
+def write_schema(data_dir: Path, collection: str, fields: list[dict] | None = None) -> Path:
     path = data_dir / "schemas" / f"{collection}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text('{"fields": [{"name": "id"}]}')
+    path.write_text(json.dumps({"fields": fields or [{"name": "id"}]}))
     return path
 
 
@@ -104,6 +105,77 @@ def test_create_collection_record_can_start_schema_backed_collection(tmp_path):
     )
 
 
+def test_create_collection_record_applies_schema_defaults_and_allows_extra_fields(tmp_path):
+    data_dir = tmp_path / "data"
+    write_schema(
+        data_dir,
+        "invoices",
+        [
+            {"name": "id"},
+            {"name": "invoice_date", "type": "date", "required": True},
+            {"name": "status", "type": "enum", "enum": ["draft", "sent"], "default": "draft"},
+            {"name": "quantity", "type": "integer", "validation": {"min": 1, "max": 20}},
+            {"name": "notes", "validation": {"min_length": 3, "max_length": 20}},
+        ],
+    )
+
+    record = object_records.create_collection_record(
+        "invoices",
+        {
+            "id": "i1",
+            "invoice_date": "2026-04-08",
+            "quantity": 3,
+            "notes": "Thanks",
+            "extra_field": "still allowed",
+        },
+        base_dir=data_dir,
+        roots=[],
+    )
+
+    assert record == {
+        "id": "i1",
+        "invoice_date": "2026-04-08",
+        "quantity": "3",
+        "notes": "Thanks",
+        "extra_field": "still allowed",
+        "status": "draft",
+    }
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ({"id": "i1", "status": "draft"}, "invoice_date' is required"),
+        ({"id": "i1", "invoice_date": "bad-date", "status": "draft"}, "invoice_date' must be a date"),
+        ({"id": "i1", "invoice_date": "2026-04-08", "status": "paid"}, "status' must be one of"),
+        ({"id": "i1", "invoice_date": "2026-04-08", "quantity": "0"}, "quantity' is below min"),
+        ({"id": "i1", "invoice_date": "2026-04-08", "quantity": "3.5"}, "quantity' must be an integer"),
+        ({"id": "i1", "invoice_date": "2026-04-08", "total": "100"}, "total' is computed"),
+    ],
+)
+def test_create_collection_record_validates_schema_fields(tmp_path, payload, message):
+    data_dir = tmp_path / "data"
+    write_schema(
+        data_dir,
+        "invoices",
+        [
+            {"name": "id"},
+            {"name": "invoice_date", "type": "date", "required": True},
+            {"name": "status", "type": "enum", "enum": ["draft", "sent"]},
+            {"name": "quantity", "type": "integer", "validation": {"min": 1, "max": 20}},
+            {"name": "total", "type": "computed", "computed": "sum(line_items)"},
+        ],
+    )
+
+    with pytest.raises(object_records.InvalidRecordPayloadError, match=message):
+        object_records.create_collection_record(
+            "invoices",
+            payload,
+            base_dir=data_dir,
+            roots=[],
+        )
+
+
 def test_create_collection_record_rejects_duplicate_id(tmp_path):
     data_dir = tmp_path / "data"
     write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
@@ -136,6 +208,48 @@ def test_update_collection_record_merges_changes_and_preserves_fields(tmp_path):
         "phone": "555-0100",
     }
     assert object_records.get_collection_record("contacts", "c1", base_dir=data_dir, roots=[]) == record
+
+
+def test_update_collection_record_validates_final_schema_record(tmp_path):
+    data_dir = tmp_path / "data"
+    write_schema(
+        data_dir,
+        "invoices",
+        [
+            {"name": "id"},
+            {"name": "customer_id", "type": "relation", "required": True},
+            {"name": "paid", "type": "boolean"},
+            {"name": "total", "type": "computed", "computed": "sum(line_items)"},
+        ],
+    )
+    write_records(data_dir, "invoices", "id\tcustomer_id\tpaid\n"
+                                        "i1\tc1\tfalse\n")
+
+    record = object_records.update_collection_record(
+        "invoices",
+        "i1",
+        {"paid": "true"},
+        base_dir=data_dir,
+        roots=[],
+    )
+
+    assert record == {"id": "i1", "customer_id": "c1", "paid": "true"}
+    with pytest.raises(object_records.InvalidRecordPayloadError, match="customer_id' is required"):
+        object_records.update_collection_record(
+            "invoices",
+            "i1",
+            {"customer_id": ""},
+            base_dir=data_dir,
+            roots=[],
+        )
+    with pytest.raises(object_records.InvalidRecordPayloadError, match="total' is computed"):
+        object_records.update_collection_record(
+            "invoices",
+            "i1",
+            {"total": "100"},
+            base_dir=data_dir,
+            roots=[],
+        )
 
 
 def test_update_collection_record_rejects_id_change(tmp_path):

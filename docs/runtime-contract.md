@@ -382,10 +382,28 @@ update_collection_record(collection, record_id, changes, base_dir="data")
 delete_collection_record(collection, record_id, base_dir="data")
 ```
 
-Values are stored and returned as strings. Schema metadata can tell tools how to
-render or validate fields, but the raw TSV reader does not coerce types yet.
-Record writes preserve existing columns and append new columns from submitted
-fields. Record IDs are unique and cannot be changed by update.
+Values are stored and returned as strings. Record writes preserve existing
+columns and append new columns from submitted fields. Record IDs are unique and
+cannot be changed by update.
+
+If a manual schema exists for the collection, create/update validates known
+fields before writing the TSV:
+
+- `required: true`, `validation.required`, and `validation.not_null` require a
+  non-empty value
+- `default` fills missing or empty fields during create
+- `type` can validate `integer`, `number`, `currency`, `boolean`, `date`,
+  `datetime`, and `enum`
+- `enum`, `validation.choices`, or `validation.in` restrict allowed values
+- `validation.min`, `validation.max`, `validation.min_length`,
+  `validation.max_length`, `validation.pattern`, and `validation.regex` are
+  enforced
+- `type: "computed"`, `computed`, or read-only metadata rejects submitted
+  writes for that field
+
+Unknown fields are still allowed. This preserves the DBBASIC rule that schemas
+can tighten important collections without turning every object into a migration
+project.
 
 The HTTP record routes are admin-gated by default. When permission audit or
 enforcement is enabled, read routes use the server permission policy. Record
@@ -410,8 +428,8 @@ list_schemas(base_dir="data")
 get_schema(collection, base_dir="data")
 ```
 
-A schema file can describe fields, validation hints, computed values, and
-relations:
+A schema file can describe fields, validation rules, computed values, UI hints,
+field permissions, and relations:
 
 ```json
 {
@@ -424,6 +442,12 @@ relations:
       "required": true,
       "relation": {"collection": "contacts"},
       "validation": {"not_null": true}
+    },
+    {
+      "name": "cost_price",
+      "type": "currency",
+      "permissions": {"admin": "edit", "sales": "hidden"},
+      "ui": {"section": "totals"}
     }
   ]
 }

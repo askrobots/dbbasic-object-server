@@ -174,7 +174,24 @@ def _normalize_field(payload: Any, *, schema: str) -> dict[str, Any]:
         "required": bool(payload.get("required", False)),
     }
 
-    for key in ("label", "description", "relation", "validation", "default", "enum", "computed"):
+    metadata_keys = (
+        "label",
+        "description",
+        "relation",
+        "validation",
+        "default",
+        "enum",
+        "computed",
+        "read_only",
+        "readonly",
+        "readOnly",
+        "ui",
+        "layout",
+        "permissions",
+        "placeholder",
+        "help",
+    )
+    for key in metadata_keys:
         if key in payload:
             field[key] = _json_compatible(payload[key], field_name=f"{schema}.{name}.{key}")
 

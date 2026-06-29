@@ -119,6 +119,54 @@ def test_list_schemas_includes_manual_and_derived_collection_schemas(tmp_path):
     ]
 
 
+def test_get_schema_preserves_scroll_field_metadata(tmp_path):
+    data_dir = tmp_path / "data"
+    write_schema(
+        data_dir,
+        "invoices",
+        {
+            "fields": [
+                {
+                    "name": "cost_price",
+                    "type": "currency",
+                    "label": "Cost Price",
+                    "read_only": True,
+                    "ui": {"widget": "money", "section": "totals"},
+                    "layout": {"column": 2, "order": 5},
+                    "permissions": {
+                        "admin": "edit",
+                        "sales": "hidden",
+                        "viewer": "hidden",
+                    },
+                    "placeholder": "0.00",
+                    "help": "Internal margin input",
+                }
+            ]
+        },
+    )
+
+    schema = object_schemas.get_schema("invoices", base_dir=data_dir, roots=[])
+
+    assert schema["fields"] == [
+        {
+            "name": "cost_price",
+            "type": "currency",
+            "required": False,
+            "label": "Cost Price",
+            "read_only": True,
+            "ui": {"widget": "money", "section": "totals"},
+            "layout": {"column": 2, "order": 5},
+            "permissions": {
+                "admin": "edit",
+                "sales": "hidden",
+                "viewer": "hidden",
+            },
+            "placeholder": "0.00",
+            "help": "Internal margin input",
+        }
+    ]
+
+
 def test_get_schema_rejects_unsafe_names(tmp_path):
     with pytest.raises(object_schemas.InvalidSchemaNameError):
         object_schemas.get_schema("../bad", base_dir=tmp_path / "data", roots=[])

@@ -591,6 +591,12 @@ record mutations require the admin token. With
 `DBBASIC_ENABLE_PERMISSION_ENFORCEMENT=true`, mutations can also be authorized
 by persisted policy rules using `create`, `update`, and `delete`.
 
+If `data/schemas/{collection}.json` exists, `POST` and `PUT` mutations validate
+known fields before the TSV write. Required fields, create defaults, basic
+scalar types, enum values, length/numeric/pattern rules, and computed/read-only
+fields are enforced by the server. Unknown fields are still accepted so tools
+can add data before a schema is complete.
+
 ## Schemas
 
 ```http
@@ -646,9 +652,16 @@ Response:
         "type": "computed",
         "required": false,
         "computed": "sum(line_items)"
+      },
+      {
+        "name": "cost_price",
+        "type": "currency",
+        "required": false,
+        "permissions": {"admin": "edit", "sales": "hidden"},
+        "ui": {"section": "totals"}
       }
     ],
-    "field_count": 2
+    "field_count": 3
   }
 }
 ```
@@ -663,6 +676,9 @@ Manual schemas are read-only through the current public HTTP surface. If a
 collection has no manual schema, the server may return an empty derived schema
 for that collection so Scroll can still show the collection and later attach
 fields. Missing schemas return `404`; unsafe schema names return `400`.
+
+Schema `permissions` and `ui` fields are preserved for generated admin screens,
+but field-level role enforcement still comes from the server permission policy.
 
 ## Create Object
 

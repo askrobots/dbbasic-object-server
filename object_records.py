@@ -8,10 +8,12 @@ tables and forms at. Records live in
 from __future__ import annotations
 
 import csv
+import math
 import os
 import re
 import threading
 from contextlib import contextmanager
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -25,6 +27,11 @@ DEFAULT_RECORD_LIMIT = 100
 MAX_RECORD_LIMIT = 1000
 
 _RECORD_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+_INTEGER_TYPES = {"int", "integer"}
+_FLOAT_TYPES = {"float", "number", "currency"}
+_BOOLEAN_TYPES = {"bool", "boolean"}
+_TRUE_VALUES = {"true", "1", "yes", "on"}
+_FALSE_VALUES = {"false", "0", "no", "off"}
 
 
 class InvalidRecordIdError(ValueError):
@@ -136,6 +143,15 @@ def create_collection_record(
     record_id = clean["id"]
     if not validate_record_id(record_id):
         raise InvalidRecordIdError(f"Invalid record id: {record_id}")
+    submitted_fields = frozenset(clean)
+    clean = _apply_schema_defaults(collection, clean, base_dir=base_dir, roots=roots)
+    _validate_record_against_schema(
+        collection,
+        clean,
+        submitted_fields=submitted_fields,
+        base_dir=base_dir,
+        roots=roots,
+    )
 
     path = collection_records_file(collection, base_dir=base_dir)
     with _records_file_lock(path):
@@ -165,6 +181,7 @@ def update_collection_record(
     clean = _normalize_record_payload(changes, require_id=False)
     if "id" in clean and clean["id"] != record_id:
         raise InvalidRecordPayloadError("Record id cannot be changed")
+    submitted_fields = frozenset(clean)
 
     path = collection_records_file(collection, base_dir=base_dir)
     with _records_file_lock(path):
@@ -174,6 +191,13 @@ def update_collection_record(
                 updated = dict(existing)
                 updated.update(clean)
                 updated["id"] = record_id
+                _validate_record_against_schema(
+                    collection,
+                    updated,
+                    submitted_fields=submitted_fields,
+                    base_dir=base_dir,
+                    roots=roots,
+                )
                 merged_fields = _merge_fields(fields, updated)
                 records[index] = updated
                 _write_collection_records(collection, path, merged_fields, records)
@@ -412,6 +436,251 @@ def _normalize_record_payload(payload: dict[str, Any], *, require_id: bool) -> d
             )
 
     return clean
+
+
+def _apply_schema_defaults(
+    collection: str,
+    record: dict[str, str],
+    *,
+    base_dir: Path | str,
+    roots: Iterable[Path] | None,
+) -> dict[str, str]:
+    fields = _schema_fields(collection, base_dir=base_dir, roots=roots)
+    if not fields:
+        return record
+
+    clean = dict(record)
+    for field in fields:
+        name = field["name"]
+        if name in clean and clean[name] != "":
+            continue
+        if _is_computed_or_read_only(field):
+            continue
+        if "default" not in field:
+            continue
+        clean[name] = _schema_scalar_to_string(field["default"], field_name=name)
+    return clean
+
+
+def _validate_record_against_schema(
+    collection: str,
+    record: dict[str, str],
+    *,
+    submitted_fields: frozenset[str],
+    base_dir: Path | str,
+    roots: Iterable[Path] | None,
+) -> None:
+    fields = _schema_fields(collection, base_dir=base_dir, roots=roots)
+    if not fields:
+        return
+
+    for field in fields:
+        name = field["name"]
+        value = record.get(name, "")
+
+        if name in submitted_fields and _is_computed_or_read_only(field):
+            raise InvalidRecordPayloadError(
+                f"Record field '{name}' is computed or read-only and cannot be written"
+            )
+
+        if _field_is_required(field) and not _is_computed_or_read_only(field) and _is_empty(value):
+            raise InvalidRecordPayloadError(f"Record field '{name}' is required")
+
+        if _is_empty(value):
+            continue
+
+        _validate_field_type(field, value)
+        _validate_field_enum(field, value)
+        _validate_field_rules(field, value)
+
+
+def _schema_fields(
+    collection: str,
+    *,
+    base_dir: Path | str,
+    roots: Iterable[Path] | None,
+) -> list[dict[str, Any]]:
+    try:
+        schema = object_schemas.get_schema(collection, base_dir=base_dir, roots=roots)
+    except object_schemas.SchemaNotFoundError:
+        return []
+    fields = schema.get("fields", [])
+    if not isinstance(fields, list):
+        return []
+    return [field for field in fields if isinstance(field, dict) and "name" in field]
+
+
+def _field_is_required(field: dict[str, Any]) -> bool:
+    validation = field.get("validation") if isinstance(field.get("validation"), dict) else {}
+    return bool(field.get("required") or validation.get("required") or validation.get("not_null"))
+
+
+def _is_computed_or_read_only(field: dict[str, Any]) -> bool:
+    field_type = str(field.get("type", "")).lower()
+    return bool(
+        field_type == "computed"
+        or field.get("computed")
+        or field.get("read_only")
+        or field.get("readonly")
+        or field.get("readOnly")
+    )
+
+
+def _is_empty(value: str | None) -> bool:
+    return value is None or value == ""
+
+
+def _schema_scalar_to_string(value: Any, *, field_name: str) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (str, int, float, bool)):
+        return str(value)
+    raise InvalidRecordPayloadError(f"Schema default for '{field_name}' must be scalar or null")
+
+
+def _validate_field_type(field: dict[str, Any], value: str) -> None:
+    name = field["name"]
+    field_type = str(field.get("type") or "text").lower()
+    if field_type in _INTEGER_TYPES:
+        _parse_integer(value, field_name=name)
+    elif field_type in _FLOAT_TYPES:
+        _parse_float(value, field_name=name)
+    elif field_type in _BOOLEAN_TYPES:
+        _parse_boolean(value, field_name=name)
+    elif field_type == "date":
+        _parse_date(value, field_name=name)
+    elif field_type in {"datetime", "timestamp"}:
+        _parse_datetime(value, field_name=name)
+    elif field_type == "enum":
+        _validate_field_enum(field, value, required=True)
+
+
+def _validate_field_enum(field: dict[str, Any], value: str, *, required: bool = False) -> None:
+    enum_payload = field.get("enum")
+    validation = field.get("validation") if isinstance(field.get("validation"), dict) else {}
+    if enum_payload is None:
+        enum_payload = validation.get("choices", validation.get("in"))
+    values = _enum_values(enum_payload)
+    if not values:
+        if required:
+            raise InvalidRecordPayloadError(f"Record field '{field['name']}' enum has no values")
+        return
+    if value not in values:
+        allowed = ", ".join(values)
+        raise InvalidRecordPayloadError(
+            f"Record field '{field['name']}' must be one of: {allowed}"
+        )
+
+
+def _enum_values(enum_payload: Any) -> list[str]:
+    if enum_payload is None:
+        return []
+    if isinstance(enum_payload, dict):
+        enum_payload = enum_payload.get("values")
+    if not isinstance(enum_payload, list):
+        return []
+    values = []
+    for item in enum_payload:
+        if isinstance(item, (str, int, float, bool)):
+            values.append(str(item))
+    return values
+
+
+def _validate_field_rules(field: dict[str, Any], value: str) -> None:
+    validation = field.get("validation")
+    if not isinstance(validation, dict):
+        return
+
+    name = field["name"]
+    if "min_length" in validation and len(value) < _rule_int(validation["min_length"], name, "min_length"):
+        raise InvalidRecordPayloadError(f"Record field '{name}' is shorter than min_length")
+    if "max_length" in validation and len(value) > _rule_int(validation["max_length"], name, "max_length"):
+        raise InvalidRecordPayloadError(f"Record field '{name}' is longer than max_length")
+
+    pattern = validation.get("pattern", validation.get("regex"))
+    if pattern is not None:
+        if not isinstance(pattern, str):
+            raise InvalidRecordPayloadError(f"Record field '{name}' validation pattern must be a string")
+        try:
+            matches = re.fullmatch(pattern, value)
+        except re.error as exc:
+            raise InvalidRecordPayloadError(
+                f"Record field '{name}' validation pattern is invalid"
+            ) from exc
+        if not matches:
+            raise InvalidRecordPayloadError(f"Record field '{name}' does not match pattern")
+
+    if "min" in validation:
+        if _parse_float(value, field_name=name) < _rule_float(validation["min"], name, "min"):
+            raise InvalidRecordPayloadError(f"Record field '{name}' is below min")
+    if "max" in validation:
+        if _parse_float(value, field_name=name) > _rule_float(validation["max"], name, "max"):
+            raise InvalidRecordPayloadError(f"Record field '{name}' is above max")
+
+
+def _parse_integer(value: str, *, field_name: str) -> int:
+    try:
+        if value.strip() != value or not re.fullmatch(r"[+-]?\d+", value):
+            raise ValueError
+        return int(value)
+    except ValueError as exc:
+        raise InvalidRecordPayloadError(f"Record field '{field_name}' must be an integer") from exc
+
+
+def _parse_float(value: str, *, field_name: str) -> float:
+    try:
+        number = float(value)
+    except ValueError as exc:
+        raise InvalidRecordPayloadError(f"Record field '{field_name}' must be a number") from exc
+    if not math.isfinite(number):
+        raise InvalidRecordPayloadError(f"Record field '{field_name}' must be a finite number")
+    return number
+
+
+def _parse_boolean(value: str, *, field_name: str) -> bool:
+    text = value.lower()
+    if text in _TRUE_VALUES:
+        return True
+    if text in _FALSE_VALUES:
+        return False
+    raise InvalidRecordPayloadError(f"Record field '{field_name}' must be a boolean")
+
+
+def _parse_date(value: str, *, field_name: str) -> date:
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise InvalidRecordPayloadError(f"Record field '{field_name}' must be a date") from exc
+
+
+def _parse_datetime(value: str, *, field_name: str) -> datetime:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise InvalidRecordPayloadError(f"Record field '{field_name}' must be a datetime") from exc
+
+
+def _rule_int(value: Any, field_name: str, rule_name: str) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise InvalidRecordPayloadError(
+            f"Record field '{field_name}' validation {rule_name} must be an integer"
+        ) from exc
+
+
+def _rule_float(value: Any, field_name: str, rule_name: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise InvalidRecordPayloadError(
+            f"Record field '{field_name}' validation {rule_name} must be a number"
+        ) from exc
+    if not math.isfinite(number):
+        raise InvalidRecordPayloadError(
+            f"Record field '{field_name}' validation {rule_name} must be finite"
+        )
+    return number
 
 
 def _merge_fields(existing_fields: list[str], record: dict[str, str]) -> list[str]:

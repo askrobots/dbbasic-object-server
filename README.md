@@ -87,7 +87,7 @@ This repository currently contains:
 - `object_files.py` - read-only object-owned file listing and download helpers
 - `object_logs.py` - TSV-backed object log reads, appends, rotation, compression, retention, and runtime logger helper
 - `object_metadata.py` - conservative object metadata summaries
-- `object_schemas.py` - read-only schema metadata for generated UI, validation hints, and relations
+- `object_schemas.py` - read-only schema metadata for generated UI, validation rules, field permissions, and relations
 - `object_permission_audit.py` - JSONL-backed permission decision audit reads and writes
 - `object_permission_store.py` - JSON-backed permission policy persistence
 - `object_permissions.py` - server-side access modes, role/object/action checks,
@@ -213,6 +213,12 @@ the admin token or enforcement mode with an allowed `create`, `update`, or
 mutation access by itself. Enforcement applies row filters before pagination,
 checks writes against the affected record, and redacts allowed or denied fields
 before returning records.
+
+If `data/schemas/{collection}.json` exists, collection writes also use it for
+server-side validation. Known fields can require values, apply defaults, enforce
+basic types, restrict enum values, and reject computed/read-only fields. Unknown
+fields still work so DBBASIC can stay schemaless until a collection needs more
+structure.
 
 Production user/session auth still needs to replace the temporary admin-token
 gate before general use.
