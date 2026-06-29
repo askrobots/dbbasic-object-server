@@ -360,6 +360,54 @@ Collection summaries include:
 The log portion is intentionally a cheap file-presence check. Listing
 collections should not scan every log entry on a busy server.
 
+## Collection Schemas
+
+Schema metadata lives under:
+
+```text
+data/schemas/{collection}.json
+```
+
+The public helper module is `object_schemas.py`. It currently exposes read-only
+operations:
+
+```python
+list_schemas(base_dir="data")
+get_schema(collection, base_dir="data")
+```
+
+A schema file can describe fields, validation hints, computed values, and
+relations:
+
+```json
+{
+  "title": "Invoices",
+  "version": 1,
+  "fields": [
+    {
+      "name": "customer_id",
+      "type": "relation",
+      "required": true,
+      "relation": {"collection": "contacts"},
+      "validation": {"not_null": true}
+    }
+  ]
+}
+```
+
+If a collection exists but no manual schema file exists, the server can return
+an empty derived schema. That lets Scroll render the collection first and add
+field metadata later without breaking the object API.
+
+Schema metadata is not the permission system by itself. Permission rules still
+control access modes, ownership, sharing, row filters, and field allow/deny
+lists. Schema fields tell tools what exists; permissions decide who can see or
+change it.
+
+Schema writes are intentionally not public yet. They need source/package audit
+trails, server-enforced permissions, and migration rules before they become a
+write API.
+
 ## Scheduler State
 
 Scheduler state keys begin with:

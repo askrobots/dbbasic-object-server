@@ -542,6 +542,177 @@ def test_collection_routes_reject_non_get_methods(tmp_path, monkeypatch):
     assert detail_payload == {"status": "error", "error": "Method not allowed"}
 
 
+def test_schema_list_requires_admin_token_configuration(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(tmp_path / "objects"))
+    monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)
+
+    status, _, payload = request("/schemas")
+
+    assert status == 403
+    assert payload == {"status": "error", "error": "Schema listing requires DBBASIC_ADMIN_TOKEN."}
+
+
+def test_schema_list_requires_authorization_header(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(tmp_path / "objects"))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/schemas")
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
+
+
+def test_schema_list_returns_manual_and_derived_summaries(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "contacts" / "directory.py", "def GET(request):\n    return {}\n")
+    schema_file = data_dir / "schemas" / "invoices.json"
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text(
+        json.dumps(
+            {
+                "title": "Invoices",
+                "fields": [
+                    {"name": "invoice_date", "type": "date", "required": True},
+                    {"name": "total", "type": "computed"},
+                ],
+            }
+        )
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/schemas", headers=auth_headers())
+
+    assert status == 200
+    assert payload == {
+        "status": "ok",
+        "schemas": [
+            {
+                "name": "contacts",
+                "title": "Contacts",
+                "source": "derived",
+                "version": 1,
+                "field_count": 0,
+            },
+            {
+                "name": "invoices",
+                "title": "Invoices",
+                "source": "manual",
+                "version": 1,
+                "field_count": 2,
+            },
+        ],
+        "count": 2,
+    }
+
+
+def test_schema_detail_returns_manual_schema(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    schema_file = data_dir / "schemas" / "invoices.json"
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text(
+        json.dumps(
+            {
+                "title": "Invoices",
+                "fields": [
+                    {
+                        "name": "customer_id",
+                        "type": "relation",
+                        "relation": {"collection": "contacts"},
+                        "required": True,
+                    }
+                ],
+            }
+        )
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/schemas/invoices", headers=auth_headers())
+
+    assert status == 200
+    assert payload == {
+        "status": "ok",
+        "schema": {
+            "name": "invoices",
+            "title": "Invoices",
+            "source": "manual",
+            "version": 1,
+            "fields": [
+                {
+                    "name": "customer_id",
+                    "type": "relation",
+                    "required": True,
+                    "relation": {"collection": "contacts"},
+                }
+            ],
+            "field_count": 1,
+        },
+    }
+
+
+def test_schema_detail_returns_derived_schema_for_collection(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "contacts" / "directory.py", "def GET(request):\n    return {}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/schemas/contacts", headers=auth_headers())
+
+    assert status == 200
+    assert payload == {
+        "status": "ok",
+        "schema": {
+            "name": "contacts",
+            "title": "Contacts",
+            "source": "derived",
+            "version": 1,
+            "fields": [],
+            "field_count": 0,
+        },
+    }
+
+
+def test_schema_detail_rejects_invalid_name(tmp_path, monkeypatch):
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/schemas/bad.name", headers=auth_headers())
+
+    assert status == 400
+    assert payload == {"status": "error", "error": "Invalid schema name: bad.name"}
+
+
+def test_schema_detail_rejects_missing_schema(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(tmp_path / "objects"))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/schemas/missing", headers=auth_headers())
+
+    assert status == 404
+    assert payload == {"status": "error", "error": "Schema not found: missing"}
+
+
+def test_schema_routes_reject_non_get_methods(tmp_path, monkeypatch):
+    enable_admin_token(monkeypatch)
+
+    list_status, _, list_payload = request("/schemas", method="POST", headers=auth_headers())
+    detail_status, _, detail_payload = request(
+        "/schemas/contacts",
+        method="POST",
+        headers=auth_headers(),
+    )
+
+    assert list_status == 405
+    assert detail_status == 405
+    assert list_payload == {"status": "error", "error": "Method not allowed"}
+    assert detail_payload == {"status": "error", "error": "Method not allowed"}
+
+
 def test_permissions_policy_requires_admin_token_configuration(tmp_path, monkeypatch):
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)

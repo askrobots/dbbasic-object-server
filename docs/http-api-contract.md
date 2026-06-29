@@ -428,6 +428,79 @@ stable while giving tools such as Scroll a cleaner grouping API.
 The public server keeps collection routes read-only and admin-token gated for
 now. Missing collections return `404`; unsafe collection names return `400`.
 
+## Schemas
+
+```http
+GET /schemas
+Authorization: Token <token>
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "schemas": [
+    {
+      "name": "invoices",
+      "title": "Invoices",
+      "source": "manual",
+      "version": 1,
+      "field_count": 4
+    }
+  ],
+  "count": 1
+}
+```
+
+Read one schema:
+
+```http
+GET /schemas/{collection}
+Authorization: Token <token>
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "schema": {
+    "name": "invoices",
+    "title": "Invoices",
+    "source": "manual",
+    "version": 1,
+    "fields": [
+      {
+        "name": "customer_id",
+        "type": "relation",
+        "required": true,
+        "relation": {"collection": "contacts"},
+        "validation": {"not_null": true}
+      },
+      {
+        "name": "total",
+        "type": "computed",
+        "required": false,
+        "computed": "sum(line_items)"
+      }
+    ],
+    "field_count": 2
+  }
+}
+```
+
+Schema files live under:
+
+```text
+data/schemas/{collection}.json
+```
+
+Manual schemas are read-only through the current public HTTP surface. If a
+collection has no manual schema, the server may return an empty derived schema
+for that collection so Scroll can still show the collection and later attach
+fields. Missing schemas return `404`; unsafe schema names return `400`.
+
 ## Create Object
 
 ```http
