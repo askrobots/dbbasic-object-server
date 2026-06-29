@@ -1815,6 +1815,8 @@ def _admin_token_gate_error(
 def _is_sensitive_get(query: dict[str, str]) -> bool:
     if "version" in query:
         return True
+    if "file" in query:
+        return True
 
     return any(query.get(flag) == "true" for flag in SENSITIVE_GET_FLAGS)
 

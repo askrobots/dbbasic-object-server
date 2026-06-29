@@ -1188,6 +1188,23 @@ def test_get_file_downloads_object_owned_file(tmp_path, monkeypatch):
     assert body == b"\x89PNG"
 
 
+def test_get_file_requires_admin_token(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {}\n")
+    file_path = data_dir / "files" / "site_home" / "image.png"
+    file_path.parent.mkdir(parents=True)
+    file_path.write_bytes(b"\x89PNG")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/objects/site_home", query_string="file=image.png")
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
+
+
 def test_get_file_rejects_path_traversal(tmp_path, monkeypatch):
     root = tmp_path / "objects"
     data_dir = tmp_path / "data"
