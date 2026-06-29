@@ -421,6 +421,32 @@ def decision_to_dict(decision: PermissionDecision) -> dict[str, Any]:
     }
 
 
+def subject_roles(subject: PermissionSubject, policy: PermissionPolicy) -> frozenset[str]:
+    """Return roles assigned directly and through the active policy."""
+    return _subject_roles(subject, policy)
+
+
+def subject_has_admin_role(subject: PermissionSubject, policy: PermissionPolicy) -> bool:
+    """Return True when the subject has one of the policy admin roles."""
+    return _has_admin_role(_subject_roles(subject, policy), policy)
+
+
+def principal_matches(
+    principal: str,
+    subject: PermissionSubject,
+    policy: PermissionPolicy,
+    *,
+    record: Mapping[str, Any] | None = None,
+) -> bool:
+    """Return True when a portable principal matches the subject."""
+    return _principal_matches(
+        principal,
+        subject,
+        _subject_roles(subject, policy),
+        record=record,
+    )
+
+
 def _access_mode_decision(
     subject: PermissionSubject,
     access_mode: str,

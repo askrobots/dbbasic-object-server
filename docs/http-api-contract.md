@@ -597,6 +597,20 @@ scalar types, enum values, length/numeric/pattern rules, and computed/read-only
 fields are enforced by the server. Unknown fields are still accepted so tools
 can add data before a schema is complete.
 
+When `DBBASIC_ENABLE_PERMISSION_ENFORCEMENT=true`, schema field permissions are
+also enforced for collection records. Fields resolved as `hidden` are removed
+from `GET` responses. Submitted fields resolved as `read` or `hidden` are
+rejected with `403`:
+
+```json
+{
+  "status": "error",
+  "error": "Record field 'margin' is not editable for this subject",
+  "code": "forbidden",
+  "denied_fields": ["margin"]
+}
+```
+
 ## Schemas
 
 ```http
@@ -677,8 +691,9 @@ collection has no manual schema, the server may return an empty derived schema
 for that collection so Scroll can still show the collection and later attach
 fields. Missing schemas return `404`; unsafe schema names return `400`.
 
-Schema `permissions` and `ui` fields are preserved for generated admin screens,
-but field-level role enforcement still comes from the server permission policy.
+Schema `permissions` and `ui` fields are preserved for generated admin screens.
+With permission enforcement enabled, schema `permissions` also refine record
+reads and writes after the broader server policy has allowed the row.
 
 ## Create Object
 

@@ -364,6 +364,47 @@ PermissionRule.allow(
 )
 ```
 
+Schema field permissions add the generated-form version of the same idea. They
+live next to field metadata so Scroll can render the right controls and the
+server can enforce the same decision:
+
+```json
+{
+  "name": "margin",
+  "type": "currency",
+  "permissions": {
+    "admin": "edit",
+    "sales": "hidden",
+    "viewer": "hidden"
+  }
+}
+```
+
+The access levels are:
+
+- `edit` - visible and writable
+- `read` - visible but not writable
+- `hidden` - removed from reads and not writable
+
+Principal keys can be role names such as `sales`, or full principals such as
+`role:sales`, `user:42`, `account:customer-acme`, `subscription:pro`,
+`registered`, `public`, or `owner`. Grouped access lists are also accepted:
+
+```json
+{
+  "name": "notes",
+  "permissions": {
+    "edit": ["owner", "role:admin"],
+    "read": ["role:support"],
+    "default": "hidden"
+  }
+}
+```
+
+When multiple principals match one subject, the most restrictive field access
+wins. Schema field permissions only refine fields after the broader policy has
+already allowed access to the row.
+
 ## Subscription And Temporary Access
 
 Subscriptions can be broad:

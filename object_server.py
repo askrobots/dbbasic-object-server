@@ -22,6 +22,7 @@ from typing import Any
 import http_api_contract
 import object_collections
 import object_execution
+import object_field_permissions
 import object_files
 import object_logs
 import object_metadata
@@ -1402,12 +1403,16 @@ async def _handle_collection_records_get(
         return
 
     if permission_check is not None and permission_check["enforced"]:
-        records = _filter_records_for_permission(
-            records,
-            collection=collection,
-            subject=permission_check["subject"],
-            policy=permission_check["policy"],
-        )
+        try:
+            records = _filter_records_for_permission(
+                records,
+                collection=collection,
+                subject=permission_check["subject"],
+                policy=permission_check["policy"],
+            )
+        except ValueError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=500)
+            return
 
     records_payload = object_records.collection_records_payload(
         collection,
@@ -1430,7 +1435,7 @@ async def _handle_collection_record_create(
         await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
         return
 
-    if not await _authorize_collection_write(
+    permission_check = await _authorize_collection_write(
         send,
         headers,
         object_permissions.CREATE,
@@ -1438,8 +1443,33 @@ async def _handle_collection_record_create(
         method="POST",
         record=record_payload,
         gate_message=f"Collection record writes require {ADMIN_TOKEN_ENV}.",
-    ):
+    )
+    if permission_check is None:
         return
+    if permission_check["enforced"]:
+        try:
+            denied_fields = _schema_denied_write_fields(
+                collection,
+                record_payload.keys(),
+                subject=permission_check["subject"],
+                policy=permission_check["policy"],
+                record=record_payload,
+            )
+        except ValueError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=500)
+            return
+        if denied_fields:
+            await _send_json(
+                send,
+                {
+                    "status": "error",
+                    "error": _field_write_denied_message(denied_fields),
+                    "code": "forbidden",
+                    "denied_fields": denied_fields,
+                },
+                status=403,
+            )
+            return
 
     try:
         record = object_records.create_collection_record(
@@ -1551,7 +1581,17 @@ async def _handle_collection_record_get(
         if permission_check is None:
             return
         if permission_check["enforced"]:
-            record = _apply_record_field_policy(record, permission_check["decision"])
+            try:
+                record = _apply_record_field_policy(
+                    record,
+                    permission_check["decision"],
+                    collection=collection,
+                    subject=permission_check["subject"],
+                    policy=permission_check["policy"],
+                )
+            except ValueError as exc:
+                await _send_json(send, {"status": "error", "error": str(exc)}, status=500)
+                return
 
     await _send_json(
         send,
@@ -1594,7 +1634,7 @@ async def _handle_collection_record_update(
     candidate.update(changes)
     candidate["id"] = record_id
 
-    if not await _authorize_collection_write(
+    permission_check = await _authorize_collection_write(
         send,
         headers,
         object_permissions.UPDATE,
@@ -1602,11 +1642,12 @@ async def _handle_collection_record_update(
         method="PUT",
         record=existing,
         gate_message=f"Collection record writes require {ADMIN_TOKEN_ENV}.",
-    ):
+    )
+    if permission_check is None:
         return
 
     if _permission_enforcement_enabled():
-        if not await _authorize_collection_write(
+        permission_check = await _authorize_collection_write(
             send,
             headers,
             object_permissions.UPDATE,
@@ -1614,7 +1655,33 @@ async def _handle_collection_record_update(
             method="PUT",
             record=candidate,
             gate_message=f"Collection record writes require {ADMIN_TOKEN_ENV}.",
-        ):
+        )
+        if permission_check is None:
+            return
+
+    if permission_check["enforced"]:
+        try:
+            denied_fields = _schema_denied_write_fields(
+                collection,
+                changes.keys(),
+                subject=permission_check["subject"],
+                policy=permission_check["policy"],
+                record=candidate,
+            )
+        except ValueError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=500)
+            return
+        if denied_fields:
+            await _send_json(
+                send,
+                {
+                    "status": "error",
+                    "error": _field_write_denied_message(denied_fields),
+                    "code": "forbidden",
+                    "denied_fields": denied_fields,
+                },
+                status=403,
+            )
             return
 
     try:
@@ -1676,7 +1743,7 @@ async def _handle_collection_record_delete(
         await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
         return
 
-    if not await _authorize_collection_write(
+    permission_check = await _authorize_collection_write(
         send,
         headers,
         object_permissions.DELETE,
@@ -1684,7 +1751,8 @@ async def _handle_collection_record_delete(
         method="DELETE",
         record=existing,
         gate_message=f"Collection record writes require {ADMIN_TOKEN_ENV}.",
-    ):
+    )
+    if permission_check is None:
         return
 
     try:
@@ -1730,7 +1798,7 @@ async def _authorize_collection_write(
     method: str,
     record: dict[str, Any],
     gate_message: str,
-) -> bool:
+) -> dict[str, Any] | None:
     if _permission_enforcement_enabled():
         return await _collection_permission_check(
             send,
@@ -1739,7 +1807,7 @@ async def _authorize_collection_write(
             collection=collection,
             method=method,
             record=record,
-        ) is not None
+        )
 
     if _permission_audit_enabled():
         permission_check = await _collection_permission_check(
@@ -1751,15 +1819,20 @@ async def _authorize_collection_write(
             record=record,
         )
         if permission_check is None:
-            return False
+            return None
 
     gate_error = _admin_token_gate_error(headers, gate_message)
     if gate_error is not None:
         status, message = gate_error
         await _send_json(send, {"status": "error", "error": message}, status=status)
-        return False
+        return None
 
-    return True
+    return {
+        "subject": _permission_subject(headers),
+        "policy": object_permissions.PermissionPolicy(access_mode="public"),
+        "decision": object_permissions.PermissionDecision.allow("admin token"),
+        "enforced": False,
+    }
 
 
 async def _handle_schemas(
@@ -2419,20 +2492,64 @@ def _filter_records_for_permission(
             record=record,
         )
         if decision.allowed:
-            allowed_records.append(_apply_record_field_policy(record, decision))
+            allowed_records.append(
+                _apply_record_field_policy(
+                    record,
+                    decision,
+                    collection=collection,
+                    subject=subject,
+                    policy=policy,
+                )
+            )
     return allowed_records
 
 
 def _apply_record_field_policy(
     record: dict[str, str],
     decision: object_permissions.PermissionDecision,
+    *,
+    collection: str | None = None,
+    subject: object_permissions.PermissionSubject | None = None,
+    policy: object_permissions.PermissionPolicy | None = None,
 ) -> dict[str, str]:
     filtered = dict(record)
     if decision.fields is not None:
         filtered = {key: value for key, value in filtered.items() if key in decision.fields}
     for field in decision.denied_fields:
         filtered.pop(field, None)
+    if collection is not None and subject is not None and policy is not None:
+        filtered = object_field_permissions.redact_record(
+            collection,
+            filtered,
+            subject=subject,
+            policy=policy,
+            base_dir=_data_dir(),
+        )
     return filtered
+
+
+def _schema_denied_write_fields(
+    collection: str,
+    submitted_fields,
+    *,
+    subject: object_permissions.PermissionSubject,
+    policy: object_permissions.PermissionPolicy,
+    record: dict[str, Any],
+) -> list[str]:
+    return object_field_permissions.denied_write_fields(
+        collection,
+        submitted_fields,
+        subject=subject,
+        policy=policy,
+        record=record,
+        base_dir=_data_dir(),
+    )
+
+
+def _field_write_denied_message(fields: list[str]) -> str:
+    if len(fields) == 1:
+        return f"Record field '{fields[0]}' is not editable for this subject"
+    return f"Record fields are not editable for this subject: {', '.join(fields)}"
 
 
 def _permission_checks_enabled() -> bool:

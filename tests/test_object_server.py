@@ -1219,6 +1219,163 @@ def test_collection_record_detail_enforces_row_filter_and_fields(tmp_path, monke
     assert denied_payload == {"status": "error", "error": "no matching role rule", "code": "forbidden"}
 
 
+def test_collection_records_enforcement_applies_schema_field_permissions(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(
+        data_dir,
+        "invoices",
+        "id\towner_id\tmemo\tstatus\tcost_price\tmargin\n"
+        "i1\t7\tHosting\tdraft\t100\t30\n"
+        "i2\t8\tSupport\tsent\t200\t60\n",
+    )
+    schema_file = data_dir / "schemas" / "invoices.json"
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text(
+        json.dumps(
+            {
+                "fields": [
+                    {"name": "id"},
+                    {"name": "owner_id"},
+                    {"name": "memo", "permissions": {"sales": "edit", "admin": "edit"}},
+                    {"name": "status", "permissions": {"sales": "read", "admin": "edit"}},
+                    {"name": "cost_price", "permissions": {"sales": "hidden", "admin": "edit"}},
+                    {"name": "margin", "permissions": {"sales": "hidden", "admin": "edit"}},
+                ]
+            }
+        )
+    )
+    save_permission_policy(
+        data_dir,
+        {
+            "access_mode": "role_based",
+            "rules": [
+                {
+                    "effect": "allow",
+                    "principal": "role:sales",
+                    "actions": ["read"],
+                    "collection": "invoices",
+                    "row_filter": {"owner_id": "$user_id"},
+                }
+            ],
+        },
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+    monkeypatch.setenv(object_server.PERMISSION_TRUST_HEADERS_ENV, "true")
+    enable_admin_token(monkeypatch)
+    sales_headers = [("x-dbbasic-user-id", "7"), ("x-dbbasic-roles", "sales")]
+
+    list_status, _, list_payload = request("/collections/invoices/records", headers=sales_headers)
+    detail_status, _, detail_payload = request("/collections/invoices/records/i1", headers=sales_headers)
+    admin_status, _, admin_payload = request("/collections/invoices/records/i1", headers=auth_headers())
+
+    assert list_status == 200
+    assert list_payload["records"] == [
+        {"id": "i1", "owner_id": "7", "memo": "Hosting", "status": "draft"}
+    ]
+    assert detail_status == 200
+    assert detail_payload["record"] == {
+        "id": "i1",
+        "owner_id": "7",
+        "memo": "Hosting",
+        "status": "draft",
+    }
+    assert admin_status == 200
+    assert admin_payload["record"] == {
+        "id": "i1",
+        "owner_id": "7",
+        "memo": "Hosting",
+        "status": "draft",
+        "cost_price": "100",
+        "margin": "30",
+    }
+
+
+def test_collection_record_update_enforces_schema_edit_permissions(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "invoices", "id\towner_id\tmemo\tstatus\tmargin\ni1\t7\tHosting\tdraft\t30\n")
+    schema_file = data_dir / "schemas" / "invoices.json"
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text(
+        json.dumps(
+            {
+                "fields": [
+                    {"name": "id"},
+                    {"name": "owner_id"},
+                    {"name": "memo", "permissions": {"sales": "edit", "admin": "edit"}},
+                    {"name": "status", "permissions": {"sales": "read", "admin": "edit"}},
+                    {"name": "margin", "permissions": {"sales": "hidden", "admin": "edit"}},
+                ]
+            }
+        )
+    )
+    save_permission_policy(
+        data_dir,
+        {
+            "access_mode": "role_based",
+            "rules": [
+                {
+                    "effect": "allow",
+                    "principal": "role:sales",
+                    "actions": ["update", "read"],
+                    "collection": "invoices",
+                    "row_filter": {"owner_id": "$user_id"},
+                }
+            ],
+        },
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+    monkeypatch.setenv(object_server.PERMISSION_TRUST_HEADERS_ENV, "true")
+    enable_admin_token(monkeypatch)
+    sales_headers = [("x-dbbasic-user-id", "7"), ("x-dbbasic-roles", "sales")]
+
+    allowed_status, _, allowed_payload = request(
+        "/collections/invoices/records/i1",
+        method="PUT",
+        body=json.dumps({"memo": "Managed hosting"}).encode("utf-8"),
+        headers=sales_headers,
+    )
+    read_only_status, _, read_only_payload = request(
+        "/collections/invoices/records/i1",
+        method="PUT",
+        body=json.dumps({"status": "sent"}).encode("utf-8"),
+        headers=sales_headers,
+    )
+    hidden_status, _, hidden_payload = request(
+        "/collections/invoices/records/i1",
+        method="PUT",
+        body=json.dumps({"margin": "45"}).encode("utf-8"),
+        headers=sales_headers,
+    )
+    admin_status, _, admin_payload = request(
+        "/collections/invoices/records/i1",
+        method="PUT",
+        body=json.dumps({"status": "sent", "margin": "45"}).encode("utf-8"),
+        headers=auth_headers(),
+    )
+
+    assert allowed_status == 200
+    assert allowed_payload["record"]["memo"] == "Managed hosting"
+    assert read_only_status == 403
+    assert read_only_payload == {
+        "status": "error",
+        "error": "Record field 'status' is not editable for this subject",
+        "code": "forbidden",
+        "denied_fields": ["status"],
+    }
+    assert hidden_status == 403
+    assert hidden_payload == {
+        "status": "error",
+        "error": "Record field 'margin' is not editable for this subject",
+        "code": "forbidden",
+        "denied_fields": ["margin"],
+    }
+    assert admin_status == 200
+    assert admin_payload["record"]["status"] == "sent"
+    assert admin_payload["record"]["margin"] == "45"
+
+
 def test_collection_records_enforcement_returns_payment_required(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     write_records(data_dir, "reports", "id\ttitle\n1\tRevenue\n")

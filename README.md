@@ -88,6 +88,7 @@ This repository currently contains:
 - `object_logs.py` - TSV-backed object log reads, appends, rotation, compression, retention, and runtime logger helper
 - `object_metadata.py` - conservative object metadata summaries
 - `object_schemas.py` - read-only schema metadata for generated UI, validation rules, field permissions, and relations
+- `object_field_permissions.py` - schema-level `edit/read/hidden` enforcement for collection record fields
 - `object_permission_audit.py` - JSONL-backed permission decision audit reads and writes
 - `object_permission_store.py` - JSON-backed permission policy persistence
 - `object_permissions.py` - server-side access modes, role/object/action checks,
@@ -212,7 +213,9 @@ the admin token or enforcement mode with an allowed `create`, `update`, or
 `delete` decision. Audit-only mode logs write decisions, but it does not grant
 mutation access by itself. Enforcement applies row filters before pagination,
 checks writes against the affected record, and redacts allowed or denied fields
-before returning records.
+before returning records. Schema field permissions add the generated-app layer:
+fields marked `hidden` are removed from reads, and fields marked `read` or
+`hidden` cannot be written by that subject.
 
 If `data/schemas/{collection}.json` exists, collection writes also use it for
 server-side validation. Known fields can require values, apply defaults, enforce

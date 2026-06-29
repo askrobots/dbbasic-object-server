@@ -411,6 +411,9 @@ lists apply row filters before pagination; record detail checks evaluate the
 selected row and can redact fields. Record writes require either the admin token
 or enforcement mode with an allowed `create`, `update`, or `delete` decision.
 Audit-only mode records write decisions without granting mutation access.
+When enforcement is enabled, schema field permissions are also applied: `hidden`
+fields are removed from record reads, and submitted fields with `read` or
+`hidden` access are rejected before the TSV write.
 
 ## Collection Schemas
 
@@ -459,8 +462,9 @@ field metadata later without breaking the object API.
 
 Schema metadata is not the permission system by itself. Permission rules still
 control access modes, ownership, sharing, row filters, and field allow/deny
-lists. Schema fields tell tools what exists; permissions decide who can see or
-change it.
+lists. Schema fields tell tools what exists and can refine individual
+`edit/read/hidden` field behavior for generated forms. The server enforces those
+schema field permissions only after the broader policy has allowed the row.
 
 Schema writes are intentionally not public yet. They need source/package audit
 trails, server-enforced permissions, and migration rules before they become a
