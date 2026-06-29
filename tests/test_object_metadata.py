@@ -44,6 +44,7 @@ def test_get_object_metadata_summarizes_existing_object(tmp_path):
         "state_count": 2,
         "state_keys": ["count", "name"],
         "log_count": 2,
+        "file_count": 0,
         "version_count": 2,
     }
 

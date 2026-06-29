@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Iterable
 
+import object_files
 import object_logs
 import object_source
 import object_state
@@ -27,6 +28,7 @@ def get_object_metadata(
     source = _find_object_source(object_id, roots=roots)
     state = object_state.get_object_state(object_id, base_dir=base_dir)
     logs = object_logs.get_object_logs(object_id, base_dir=base_dir)
+    files = object_files.list_object_files(object_id, base_dir=base_dir)
     versions = object_versions.VersionManager(base_dir).get_history(object_id)
 
     return {
@@ -38,6 +40,7 @@ def get_object_metadata(
         "state_count": len(state),
         "state_keys": list(state.keys()),
         "log_count": len(logs),
+        "file_count": len(files),
         "version_count": len(versions),
     }
 

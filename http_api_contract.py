@@ -19,6 +19,8 @@ PERMISSIONS_AUDIT_PATH = "/permissions/audit"
 SOURCE_QUERY = {"source": "true", "format": "json"}
 STATE_QUERY = {"state": "true"}
 METADATA_QUERY = {"metadata": "true"}
+FILES_QUERY = {"files": "true"}
+FILE_QUERY = {"file": "name"}
 LOGS_QUERY = {"logs": "true", "format": "json", "limit": "100"}
 VERSIONS_QUERY = {"versions": "true", "limit": "10"}
 
@@ -30,6 +32,7 @@ RESPONSE_FIELDS: dict[str, frozenset[str]] = {
     "update_source": frozenset({"status", "message", "version_id", "object_id"}),
     "state": frozenset({"status", "object_id", "state"}),
     "metadata": frozenset({"status", "object_id", "metadata"}),
+    "files": frozenset({"status", "object_id", "files", "count"}),
     "logs": frozenset({"status", "object_id", "logs", "count"}),
     "versions": frozenset({"status", "object_id", "versions", "count"}),
     "version": frozenset({"status", "object_id", "version"}),

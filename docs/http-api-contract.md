@@ -589,6 +589,7 @@ Response:
     "state_count": 1,
     "state_keys": ["count"],
     "log_count": 3,
+    "file_count": 1,
     "version_count": 2
   }
 }
@@ -597,6 +598,50 @@ Response:
 The public server reports source paths relative to the object source root, not
 absolute local filesystem paths. Metadata may grow over time. Existing clients
 expect the top-level `metadata` field.
+
+## Files
+
+```http
+GET /objects/{object_id}?files=true
+Authorization: Token <token>
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "object_id": "site_home",
+  "files": [
+    {
+      "name": "report.txt",
+      "size": 1200,
+      "modified": 1760000000.0
+    }
+  ],
+  "count": 1
+}
+```
+
+Download one object-owned file:
+
+```http
+GET /objects/{object_id}?file=report.txt
+Authorization: Token <token>
+```
+
+The server reads files from:
+
+```text
+data/files/{object_id}/
+```
+
+Filenames are validated before filesystem access. Empty names, absolute paths,
+null bytes, and `..` traversal are rejected with `400`. Missing files return
+`404`.
+
+This public slice is read-only. Upload and delete routes should wait for
+explicit size limits, content policy, audit trails, and permission enforcement.
 
 ## Logs
 

@@ -18,6 +18,8 @@ def test_contract_keeps_existing_introspection_query_flags():
     assert http_api_contract.SOURCE_QUERY == {"source": "true", "format": "json"}
     assert http_api_contract.STATE_QUERY == {"state": "true"}
     assert http_api_contract.METADATA_QUERY == {"metadata": "true"}
+    assert http_api_contract.FILES_QUERY == {"files": "true"}
+    assert http_api_contract.FILE_QUERY == {"file": "name"}
     assert http_api_contract.LOGS_QUERY == {
         "logs": "true",
         "format": "json",
@@ -65,6 +67,10 @@ def test_contract_keeps_existing_introspection_query_flags():
                 "object_id": "basics_counter",
                 "metadata": {"version_count": 2},
             },
+        ),
+        (
+            "files",
+            {"status": "ok", "object_id": "basics_counter", "files": [], "count": 0},
         ),
         (
             "logs",
@@ -149,6 +155,8 @@ def test_http_contract_doc_mentions_required_compatibility_surface():
         "source=true",
         "state=true",
         "metadata=true",
+        "files=true",
+        "file=report.txt",
         "versions=true",
         "action=rollback",
         "version_id",

@@ -1126,6 +1126,87 @@ def test_get_logs_rejects_invalid_object_id(tmp_path, monkeypatch):
     assert payload == {"status": "error", "error": "Invalid object ID: bad.id"}
 
 
+def test_get_files_lists_object_owned_files(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {}\n")
+    file_path = data_dir / "files" / "site_home" / "assets" / "report.txt"
+    file_path.parent.mkdir(parents=True)
+    file_path.write_text("hello")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/objects/site_home",
+        query_string="files=true",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["object_id"] == "site_home"
+    assert payload["count"] == 1
+    assert payload["files"][0]["name"] == "assets/report.txt"
+    assert payload["files"][0]["size"] == 5
+
+
+def test_get_files_requires_admin_token(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/objects/site_home", query_string="files=true")
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
+
+
+def test_get_file_downloads_object_owned_file(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {}\n")
+    file_path = data_dir / "files" / "site_home" / "image.png"
+    file_path.parent.mkdir(parents=True)
+    file_path.write_bytes(b"\x89PNG")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, headers, body = raw_request(
+        "/objects/site_home",
+        query_string="file=image.png",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert headers[b"content-type"] == b"image/png"
+    assert headers[b"content-disposition"] == b'inline; filename="image.png"'
+    assert body == b"\x89PNG"
+
+
+def test_get_file_rejects_path_traversal(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/objects/site_home",
+        query_string="file=../secret.txt",
+        headers=auth_headers(),
+    )
+
+    assert status == 400
+    assert payload["status"] == "error"
+    assert payload["error"].startswith("Invalid filename:")
+
+
 def test_get_metadata_summarizes_object_storage(tmp_path, monkeypatch):
     root = tmp_path / "objects"
     data_dir = tmp_path / "data"
@@ -1168,6 +1249,7 @@ def test_get_metadata_summarizes_object_storage(tmp_path, monkeypatch):
             "state_count": 1,
             "state_keys": ["count"],
             "log_count": 1,
+            "file_count": 0,
             "version_count": 1,
         },
     }

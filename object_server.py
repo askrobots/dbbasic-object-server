@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import mimetypes
 import os
 import threading
 import time
@@ -20,6 +21,7 @@ from typing import Any
 
 import http_api_contract
 import object_execution
+import object_files
 import object_logs
 import object_metadata
 import object_permission_audit
@@ -54,7 +56,7 @@ DEFAULT_RATE_LIMIT_REQUESTS = 0
 DEFAULT_RATE_LIMIT_WINDOW_SECONDS = 60
 DEFAULT_OBJECT_TIMEOUT_SECONDS = 0.0
 TRUE_VALUES = {"1", "true", "yes", "on"}
-SENSITIVE_GET_FLAGS = {"source", "state", "logs", "metadata", "versions"}
+SENSITIVE_GET_FLAGS = {"source", "state", "logs", "metadata", "versions", "files", "file"}
 
 _runtime = PythonObjectRuntime()
 
@@ -657,6 +659,30 @@ async def _handle_object_get(
         await _handle_object_logs_get(send, object_id, query)
         return
 
+    if query.get("files") == "true":
+        if await _send_permission_denied_if_needed(
+            send,
+            headers,
+            object_permissions.FILES,
+            object_id=object_id,
+            method="GET",
+        ):
+            return
+        await _handle_object_files_get(send, object_id)
+        return
+
+    if "file" in query:
+        if await _send_permission_denied_if_needed(
+            send,
+            headers,
+            object_permissions.FILES,
+            object_id=object_id,
+            method="GET",
+        ):
+            return
+        await _handle_object_file_get(send, object_id, query)
+        return
+
     if query.get("metadata") == "true":
         if await _send_permission_denied_if_needed(
             send,
@@ -780,6 +806,86 @@ async def _handle_object_logs_get(
             "logs": logs,
             "count": len(logs),
         },
+    )
+
+
+async def _handle_object_files_get(send, object_id: str) -> None:
+    try:
+        _ensure_object_source_exists(object_id)
+        files = object_files.list_object_files(object_id, base_dir=_data_dir())
+    except InvalidObjectIdError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_source.ObjectSourceNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+    except OSError as exc:
+        await _send_json(
+            send,
+            {"status": "error", "error": f"Could not read object files: {exc}"},
+            status=500,
+        )
+        return
+
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "object_id": object_id,
+            "files": files,
+            "count": len(files),
+        },
+    )
+
+
+async def _handle_object_file_get(
+    send,
+    object_id: str,
+    query: dict[str, str],
+) -> None:
+    filename = query.get("file", "")
+    try:
+        _ensure_object_source_exists(object_id)
+        content, metadata = object_files.read_object_file(
+            object_id,
+            filename,
+            base_dir=_data_dir(),
+        )
+    except object_files.InvalidObjectFilenameError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except InvalidObjectIdError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_source.ObjectSourceNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+    except object_files.ObjectFileNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+    except OSError as exc:
+        await _send_json(
+            send,
+            {"status": "error", "error": f"Could not read object file: {exc}"},
+            status=500,
+        )
+        return
+
+    content_type, _ = mimetypes.guess_type(metadata["name"])
+    if content_type is None:
+        content_type = "application/octet-stream"
+
+    disposition = "inline" if content_type.startswith("image/") else "attachment"
+    download_name = _download_filename(metadata["name"])
+    await _send_response(
+        send,
+        status=200,
+        headers=[
+            ("content-type", content_type),
+            ("content-length", str(len(content))),
+            ("content-disposition", f'{disposition}; filename="{download_name}"'),
+        ],
+        body=content,
     )
 
 
@@ -1996,6 +2102,11 @@ def _header_text(value: Any) -> str:
     else:
         text = str(value)
     return text.replace("\r", "").replace("\n", "")
+
+
+def _download_filename(filename: str) -> str:
+    name = filename.rsplit("/", 1)[-1]
+    return name.replace("\\", "_").replace('"', "_") or "download"
 
 
 def _normalize_body(body: Any) -> bytes:

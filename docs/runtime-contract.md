@@ -76,7 +76,7 @@ The default runtime storage is file-backed:
 - object state under `data/state/`
 - object logs under `data/logs/`
 - object versions under `data/versions/`
-- object-owned files under `data/files/` when file helpers land
+- object-owned files under `data/files/`
 
 SQL databases, SQLite, external HTTP APIs, and AI APIs are optional integrations.
 They should be reachable from objects or packages when needed, but the base
@@ -302,6 +302,35 @@ _logger.get_logs(level=None, limit=None, offset=0, **filters)
 
 This keeps object-owned application logs and runtime execution logs together
 without creating a second logging format.
+
+## Object Files
+
+Object-owned files live under:
+
+```text
+data/files/{object_id}/
+```
+
+The public helper module is `object_files.py`. It currently exposes read-only
+operations:
+
+```python
+list_object_files(object_id, base_dir="data")
+read_object_file(object_id, filename, base_dir="data")
+```
+
+`list_object_files` returns dictionaries with:
+
+- `name`
+- `size`
+- `modified`
+
+`read_object_file` returns raw bytes plus the same metadata. Filenames are
+validated before filesystem access. Empty names, absolute paths, null bytes, and
+`..` traversal are rejected.
+
+Upload and delete are intentionally not public yet. They need explicit request
+size limits, content policy, audit logs, and server-enforced permissions.
 
 ## Scheduler State
 

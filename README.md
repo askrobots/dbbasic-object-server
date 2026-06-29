@@ -82,6 +82,7 @@ This repository currently contains:
 - `object_execution.py` - structured object execution results and error capture
 - `object_source.py` - source read, update, version, and rollback operations
 - `object_state.py` - TSV-backed object state reads and runtime writes
+- `object_files.py` - read-only object-owned file listing and download helpers
 - `object_logs.py` - TSV-backed object log reads, appends, rotation, compression, retention, and runtime logger helper
 - `object_metadata.py` - conservative object metadata summaries
 - `object_permission_audit.py` - JSONL-backed permission decision audit reads and writes
@@ -93,7 +94,8 @@ This repository currently contains:
 - `object_daemon.py` - background worker for scheduler, queue, events, and cleanup
 - `deployment_checks.py` - single-VM filesystem ownership and permission checks
 
-It does not yet contain the full object server, API handlers, object runtime, sample applications, package system, or production deployment files.
+It does not yet contain the full private prototype, cluster runtime, dashboard,
+sample applications, package system, or production installer.
 
 ## Object Source Directories
 
@@ -107,8 +109,8 @@ The current public ASGI server can list objects, return source for an existing
 object, execute object `GET`, `POST`, `PUT`, and `DELETE` methods, and update
 source when the explicit source-write gate is enabled. It can also list source
 versions, read a specific version, read object state, read object logs, read
-object metadata, and roll back source through the same write gate. Object
-execution can return JSON data, HTML/text/binary responses through
+object-owned files, read object metadata, and roll back source through the same
+write gate. Object execution can return JSON data, HTML/text/binary responses through
 `content_type` and `body`, or a low-level `(status, headers, body)` tuple.
 
 This server is useful for local development and controlled staging. It is not
@@ -204,8 +206,9 @@ rules the rest of the server will use:
 - `object_execution.py` returns success or error results from object method runs
 - `object_source.py` reads, updates, versions, and rolls back source files
 - `object_state.py` reads and writes runtime-owned TSV-backed object state
+- `object_files.py` lists and reads object-owned files under `data/files/`
 - `object_logs.py` reads and appends TSV-backed object logs, rotates/compresses old logs, and provides `_logger`
-- `object_metadata.py` summarizes source, state, logs, and versions
+- `object_metadata.py` summarizes source, state, logs, files, and versions
 - `object_permission_audit.py` records and reads route permission decisions
 - `object_versions.py` keeps source history as `metadata.tsv` plus `vN.txt` files
 - `object_backup.py` archives and safely restores object source plus runtime data

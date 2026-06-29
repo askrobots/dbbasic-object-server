@@ -69,6 +69,7 @@ py-modules = [
     "object_backup",
     "object_daemon",
     "object_execution",
+    "object_files",
     "object_logs",
     "object_metadata",
     "object_namespace",
