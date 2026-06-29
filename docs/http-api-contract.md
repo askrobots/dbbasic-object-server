@@ -29,6 +29,12 @@ Authentication is required for source, state, logs, versions, object creation,
 source updates, rollback, and destructive deletes. Basic object execution may be
 public or authenticated depending on server policy and the object being called.
 
+That is the compatibility and production contract. The current public ASGI slice
+does not yet enforce read-side auth for source, state, logs, metadata, or
+versions inside `object_server.py`. Until server-side auth and permissions are
+implemented, public deployments must block those routes at the reverse proxy and
+allowlist only the objects meant to be public.
+
 ## Object List
 
 ```http

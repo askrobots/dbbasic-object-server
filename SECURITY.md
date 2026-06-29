@@ -81,6 +81,11 @@ With this shape, outside users can run only the objects intentionally exposed by
 the proxy. They cannot add, edit, roll back, list, or inspect arbitrary objects
 through the public hostname.
 
+The current public ASGI server does not yet enforce read-side authentication for
+source, state, logs, metadata, or versions. Treat the reverse proxy allowlist as
+required for any internet-facing staging deployment until server-side
+permissions are implemented.
+
 ## Current Status
 
 The public repository currently contains a minimal ASGI server, direct Python

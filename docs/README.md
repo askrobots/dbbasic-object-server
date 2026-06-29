@@ -10,6 +10,7 @@ hold the deeper contracts, design rules, and implementation notes.
 flowchart TD
     A["README"] --> B["Runtime contract"]
     A --> C["HTTP API contract"]
+    A --> M["Object authoring"]
     A --> D["ASGI and realtime direction"]
     A --> E["REST and object messages"]
     A --> L["Single VM deployment"]
@@ -29,6 +30,8 @@ flowchart TD
   and event contracts.
 - `http-api-contract.md` - existing `/objects` HTTP API shape used by current
   clients and tools.
+- `object-authoring.md` - current object source layout, method shape, runtime
+  helpers, state/log usage, and response return forms.
 - `asgi-realtime-direction.md` - why the server uses plain ASGI, and how
   WebSocket/SSE object events fit the direction.
 - `rest-and-object-messages.md` - how DBBASIC separates RESTful resources from
@@ -49,13 +52,12 @@ flowchart TD
 
 Useful next docs:
 
-- object authoring guide
 - object method reference
-- source/state/log/version examples
 - permissions model
 - backup and restore guide
 - AI repair loop guide
 - realtime event contract
+- package/install guide
 
 PHP-style community notes were useful because examples and corrections lived
 near the function being used. GitHub does not provide inline manual comments in

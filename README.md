@@ -103,6 +103,11 @@ object metadata, and roll back source through the same write gate. Object
 execution can return JSON data, HTML/text/binary responses through
 `content_type` and `body`, or a low-level `(status, headers, body)` tuple.
 
+This server is useful for local development and controlled staging. It is not
+the final public auth or permissions boundary yet. If you put it behind a public
+hostname before auth and permissions land, expose only explicit public object
+routes through a reverse proxy and keep source writes disabled.
+
 ```bash
 python -m pip install -e '.[server,test]'
 uvicorn object_server:app --host 127.0.0.1 --port 8001
@@ -171,6 +176,7 @@ tools all agree on the same object rules.
 See `docs/README.md` for the documentation map,
 `docs/runtime-contract.md` for the daemon-facing runtime contract,
 `docs/http-api-contract.md` for the HTTP API shape that existing clients expect,
+`docs/object-authoring.md` for the current object authoring shape,
 `docs/asgi-realtime-direction.md` for the ASGI/realtime direction, and
 `docs/rest-and-object-messages.md` for the resource/message split. See
 `docs/single-vm-deployment.md` for the first conservative staging deployment
@@ -182,16 +188,23 @@ Read `SECURITY.md` and `CONTRIBUTING.md` before copying code or documentation fr
 
 Early public assembly.
 
-The object server has been useful internally, but this repository is intentionally starting small so the public codebase can be reviewed and cleaned as it grows.
+The object server has been useful internally, but this repository is
+intentionally starting small so the public codebase can be reviewed and cleaned
+as it grows.
+
+The public repository now has a runnable ASGI server, direct Python object
+execution, source/state/log/version storage, metadata, a daemon slice, tests,
+GitHub Actions, and a conservative single-VM staging path. It is ready for local
+experimentation and controlled staging, not general public code execution.
 
 Near-term work:
 
-- move the core object runtime into this repository
-- add a minimal runnable server
-- document object conventions
-- add tests
-- define permissions and execution boundaries
-- document production deployment
+- move the hardened core runtime and sandbox into this repository
+- enforce authentication, permissions, and row/object access rules in the server
+- add CPU, memory, wall-clock, and request-size limits around execution
+- add backup/restore checks and log retention
+- keep the HTTP contract compatible with Scroll and existing tools
+- add deployment scripts after the manual single-VM path stays boring
 
 ## Public Repository Safety
 

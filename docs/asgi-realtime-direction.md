@@ -87,18 +87,22 @@ forcing everything through a Rails/Django-style request/deploy cycle.
 The public v1 server should stay single-node first and keep clustering separate
 until replication and conflict behavior are proven.
 
-The first ASGI layer should be small:
+The first public ASGI layer is now small and runnable. It includes:
 
 - `GET /health`
 - `GET /objects?format=json`
 - `GET /objects/{object_id}?source=true&format=json`
-
-Then add:
-
 - object execution
 - source update and rollback
-- auth and permissions
 - state/log/version endpoints
+- metadata endpoints
+
+The next server work is:
+
+- auth and permissions
+- resource limits around object execution
+- backup/restore checks
+- log retention
 - WebSocket or SSE object event streams
 
 Realtime should arrive as an object-level event system, not as a decorative

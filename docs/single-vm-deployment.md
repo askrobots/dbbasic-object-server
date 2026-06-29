@@ -148,6 +148,23 @@ PY
 
 This object resolves as `site_home`.
 
+For a public staging page, the same object can return HTML instead of JSON:
+
+```python
+def GET(request):
+    count = int(_state_manager.get("count", 0)) + 1
+    _state_manager.set("count", count)
+    _logger.info("site_home served", count=count, response_type="html")
+
+    return {
+        "content_type": "text/html; charset=utf-8",
+        "body": f"<!doctype html><h1>DBBASIC Object Server</h1><p>Served {count} times.</p>",
+    }
+```
+
+That keeps the staging page honest: it is a live object with state and logs, not
+a static file.
+
 ## Run Manually
 
 Before creating a service, run the server by hand:
@@ -290,8 +307,9 @@ curl https://dbbasic.example.com/objects/site_home
 curl https://dbbasic.example.com/objects
 ```
 
-The first three should return JSON from the object server. The full `/objects`
-route should stay blocked by Caddy in this early staging mode.
+The first three should return responses from the object server. The root and
+`site_home` responses may be JSON or HTML depending on the object. The full
+`/objects` route should stay blocked by Caddy in this early staging mode.
 
 ## Public Code Execution Controls
 
