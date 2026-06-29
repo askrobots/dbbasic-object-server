@@ -11,6 +11,24 @@ This shape should stay cheap and understandable: one small VM can run the
 server, objects, TSV-backed state, logs, versions, HTTPS proxy, and monitoring
 without requiring a separate database tier for the first useful app.
 
+## Deployment Goal
+
+The first deployment path should stay closer to a simple Unix/PHP-style upload
+than a large multi-service app stack:
+
+- one VM is enough for the first useful business app
+- no container runtime is required for the base deployment
+- no separate database server is required before the app proves itself
+- server code, live object source, runtime data, and secrets live in separate
+  Unix paths
+- normal upgrades are `git pull`, package install, service restart, checks
+- object edits do not require a full server redeploy
+- every manual step should become scriptable after it stays boring
+
+This does not mean skipping safety. The simple path still uses a service user,
+systemd, a reverse proxy, HTTPS, private config, filesystem checks, backups, and
+explicit public route allowlists.
+
 ## Verified Baseline
 
 The first staging install was verified on:
@@ -336,6 +354,38 @@ Watch logs:
 ```bash
 sudo journalctl -u dbbasic-object-server -f
 ```
+
+## Upgrade
+
+For a staging VM that already follows this layout, a normal server-code upgrade
+should be small and repeatable:
+
+```bash
+cd /opt/dbbasic-object-server
+sudo -u dbbasic git pull --ff-only
+sudo -u dbbasic .venv/bin/python -m pip install -e '.[server]'
+sudo systemctl restart dbbasic-object-server
+```
+
+Then verify the local service, filesystem layout, public proxy, and deployed
+commit:
+
+```bash
+cd /opt/dbbasic-object-server
+set -a
+. /etc/dbbasic-object-server.env
+set +a
+.venv/bin/python -m deployment_checks
+curl http://127.0.0.1:8001/health
+curl https://dbbasic.example.com/
+sudo systemctl is-active dbbasic-object-server caddy
+sudo -u dbbasic git rev-parse --short HEAD
+```
+
+If the upgrade only changes live objects under
+`/var/lib/dbbasic-object-server/objects`, the server should not need a git
+deploy. That is the object loop: edit one object, run it, inspect state/logs,
+and keep the version trail.
 
 ## HTTPS Proxy
 
