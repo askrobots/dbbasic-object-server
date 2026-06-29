@@ -579,6 +579,8 @@ The portable runtime backup set is:
 /var/lib/dbbasic-object-server/data/logs
 /var/lib/dbbasic-object-server/data/versions
 /var/lib/dbbasic-object-server/data/files
+/var/lib/dbbasic-object-server/data/schemas
+/var/lib/dbbasic-object-server/data/collections
 ```
 
 Create and verify a portable runtime backup with:

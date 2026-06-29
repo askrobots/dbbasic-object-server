@@ -11,6 +11,8 @@ def test_contract_keeps_objects_paths_as_public_surface():
     assert http_api_contract.OBJECT_STATION_PATH == "/objects/{object_id}@{station_id}"
     assert http_api_contract.COLLECTIONS_PATH == "/collections"
     assert http_api_contract.COLLECTION_PATH == "/collections/{collection}"
+    assert http_api_contract.COLLECTION_RECORDS_PATH == "/collections/{collection}/records"
+    assert http_api_contract.COLLECTION_RECORD_PATH == "/collections/{collection}/records/{record_id}"
     assert http_api_contract.SCHEMAS_PATH == "/schemas"
     assert http_api_contract.SCHEMA_PATH == "/schemas/{collection}"
     assert http_api_contract.PERMISSIONS_POLICY_PATH == "/permissions/policy"
@@ -46,6 +48,20 @@ def test_contract_keeps_existing_introspection_query_flags():
         (
             "collection",
             {"status": "ok", "collection": {"name": "site", "object_count": 1}},
+        ),
+        (
+            "record_list",
+            {
+                "status": "ok",
+                "collection": "contacts",
+                "records": [],
+                "count": 0,
+                "total": 0,
+            },
+        ),
+        (
+            "record",
+            {"status": "ok", "collection": "contacts", "record": {"id": "c1"}},
         ),
         (
             "schema_list",
@@ -165,6 +181,8 @@ def test_http_contract_doc_mentions_required_compatibility_surface():
         "GET /objects?format=json",
         "GET /collections",
         "GET /collections/{collection}",
+        "GET /collections/{collection}/records",
+        "GET /collections/{collection}/records/{record_id}",
         "GET /schemas",
         "GET /schemas/{collection}",
         "POST /objects",

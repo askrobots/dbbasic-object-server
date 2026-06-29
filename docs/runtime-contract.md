@@ -77,6 +77,8 @@ The default runtime storage is file-backed:
 - object logs under `data/logs/`
 - object versions under `data/versions/`
 - object-owned files under `data/files/`
+- collection records under `data/collections/`
+- collection schemas under `data/schemas/`
 
 SQL databases, SQLite, external HTTP APIs, and AI APIs are optional integrations.
 They should be reachable from objects or packages when needed, but the base
@@ -90,9 +92,9 @@ contract.
 
 Runtime backups should use `object_backup.py`. The portable archive contains
 object source plus `data/state/`, `data/logs/`, `data/versions/`, and
-`data/files/`. It deliberately leaves deployment secrets, service files,
-virtualenvs, git history, lock files, temp files, and ephemeral rate-limit files
-outside the archive.
+`data/files/`, `data/schemas/`, and `data/collections/`. It deliberately leaves
+deployment secrets, service files, virtualenvs, git history, lock files, temp
+files, and ephemeral rate-limit files outside the archive.
 
 ## Object Execution Result
 
@@ -334,8 +336,8 @@ size limits, content policy, audit logs, and server-enforced permissions.
 
 ## Object Collections
 
-Collections are a read-only derived view. The public helper module is
-`object_collections.py`.
+Collections are a read-only derived view. The public helper modules are
+`object_collections.py` and `object_records.py`.
 
 The server infers collection names from object IDs:
 
@@ -344,8 +346,9 @@ The server infers collection names from object IDs:
 - `u_42_deals` belongs to `deals`
 
 Permission rules can also name a collection before any object exists for it.
-That lets Scroll show planned collections while the server keeps `/objects` as
-the stable source of truth.
+Record files can name a collection before any object exists for it too. That
+lets Scroll show planned or data-backed collections while the server keeps
+`/objects` as the stable source of executable behavior.
 
 Collection summaries include:
 
@@ -355,10 +358,30 @@ Collection summaries include:
 - object-owned file count
 - number of objects with state
 - number of objects with logs
+- whether a TSV record file exists
 - exact permission rule summary for that collection
 
 The log portion is intentionally a cheap file-presence check. Listing
 collections should not scan every log entry on a busy server.
+
+Collection records live under:
+
+```text
+data/collections/{collection}/records.tsv
+```
+
+The TSV file must have a header row and an `id` column. The current public
+record API is read-only:
+
+```python
+list_collection_records(collection, base_dir="data", limit=100, offset=0)
+get_collection_record(collection, record_id, base_dir="data")
+```
+
+Values are returned as strings. Schema metadata can tell tools how to render or
+validate fields, but the raw TSV reader does not coerce types yet. Record writes
+are intentionally not public until server-enforced permissions, audit logs, and
+migration rules exist.
 
 ## Collection Schemas
 

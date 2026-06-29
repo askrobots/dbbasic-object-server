@@ -26,6 +26,12 @@ def write_file(data_dir: Path, object_id: str, filename: str, content: bytes = b
     file_path.write_bytes(content)
 
 
+def write_records(data_dir: Path, collection: str, content: str = "id\tname\nr1\tAda\n") -> None:
+    records_file = data_dir / "collections" / collection / "records.tsv"
+    records_file.parent.mkdir(parents=True, exist_ok=True)
+    records_file.write_text(content)
+
+
 def save_policy(data_dir: Path, policy: object_permissions.PermissionPolicy) -> None:
     object_permission_store.save_policy(policy, base_dir=data_dir)
 
@@ -44,6 +50,7 @@ def test_list_collections_derives_summaries_from_sources_state_logs_files_and_po
     write_state(data_dir, "site_home")
     object_logs.append_object_log("site_home", "INFO", "served", base_dir=data_dir)
     write_file(data_dir, "site_home", "card.txt")
+    write_records(data_dir, "site")
     save_policy(
         data_dir,
         object_permissions.PermissionPolicy(
@@ -79,6 +86,7 @@ def test_list_collections_derives_summaries_from_sources_state_logs_files_and_po
         "file_count": 1,
         "state_object_count": 1,
         "log_object_count": 1,
+        "has_records": True,
         "owners": ["system"],
         "kinds": {"system": 2},
         "permission": {
@@ -107,6 +115,7 @@ def test_get_collection_includes_object_details(tmp_path):
 
     assert collection["name"] == "apps"
     assert collection["object_count"] == 1
+    assert collection["has_records"] is False
     assert collection["objects"] == [
         {
             "object_id": "apps_widget_counter",
@@ -145,6 +154,7 @@ def test_permission_only_collection_is_listed(tmp_path):
             "file_count": 0,
             "state_object_count": 0,
             "log_object_count": 0,
+            "has_records": False,
             "owners": [],
             "kinds": {},
             "permission": {
@@ -154,6 +164,35 @@ def test_permission_only_collection_is_listed(tmp_path):
                 "deny_count": 0,
                 "actions": ["read"],
                 "principals": ["role:billing"],
+            },
+        }
+    ]
+
+
+def test_record_only_collection_is_listed(tmp_path):
+    data_dir = tmp_path / "data"
+    root = tmp_path / "objects"
+    write_records(data_dir, "contacts")
+
+    collections = object_collections.list_collections(base_dir=data_dir, roots=[root])
+
+    assert collections == [
+        {
+            "name": "contacts",
+            "object_count": 0,
+            "file_count": 0,
+            "state_object_count": 0,
+            "log_object_count": 0,
+            "has_records": True,
+            "owners": [],
+            "kinds": {},
+            "permission": {
+                "access_mode": "role_based",
+                "rule_count": 0,
+                "allow_count": 0,
+                "deny_count": 0,
+                "actions": [],
+                "principals": [],
             },
         }
     ]

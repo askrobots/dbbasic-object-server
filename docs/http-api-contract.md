@@ -361,6 +361,7 @@ Response:
       "file_count": 1,
       "state_object_count": 1,
       "log_object_count": 1,
+      "has_records": true,
       "owners": ["system"],
       "kinds": {"system": 2},
       "permission": {
@@ -395,6 +396,7 @@ Response:
     "file_count": 0,
     "state_object_count": 0,
     "log_object_count": 0,
+    "has_records": false,
     "owners": ["system"],
     "kinds": {"system": 1},
     "permission": {
@@ -421,12 +423,75 @@ Response:
 ```
 
 Collections are a derived view over object source IDs, source folders, object
-state/files/log presence, and permission rules. The server does not store a
-separate collection table yet. This keeps the existing `/objects` contract
-stable while giving tools such as Scroll a cleaner grouping API.
+state/files/log presence, record-file presence, and permission rules. The server
+does not store a separate collection table yet. This keeps the existing
+`/objects` contract stable while giving tools such as Scroll a cleaner grouping
+API.
 
 The public server keeps collection routes read-only and admin-token gated for
 now. Missing collections return `404`; unsafe collection names return `400`.
+
+## Collection Records
+
+List records:
+
+```http
+GET /collections/{collection}/records?limit=100&offset=0
+Authorization: Token <token>
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "collection": "contacts",
+  "records": [
+    {
+      "id": "c1",
+      "first_name": "Ada",
+      "last_name": "Lovelace"
+    }
+  ],
+  "count": 1,
+  "total": 1,
+  "limit": 100,
+  "offset": 0,
+  "has_more": false
+}
+```
+
+Read one record:
+
+```http
+GET /collections/{collection}/records/{record_id}
+Authorization: Token <token>
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "collection": "contacts",
+  "record": {
+    "id": "c1",
+    "first_name": "Ada",
+    "last_name": "Lovelace"
+  }
+}
+```
+
+Record files live under:
+
+```text
+data/collections/{collection}/records.tsv
+```
+
+The TSV file must have a header row and an `id` column. Values are returned as
+strings. Collection records are read-only through the current public HTTP
+surface. Missing collections or records return `404`; unsafe collection or
+record names return `400`.
 
 ## Schemas
 

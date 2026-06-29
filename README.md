@@ -80,7 +80,8 @@ This repository currently contains:
 - `python_object_runtime.py` - minimal direct Python object loader for early execution tests
 - `object_namespace.py` - object source discovery and object ID resolution
 - `object_execution.py` - structured object execution results and error capture
-- `object_collections.py` - read-only collection summaries derived from objects and permission policy
+- `object_collections.py` - read-only collection summaries derived from objects, records, and permission policy
+- `object_records.py` - read-only TSV-backed collection records for generated tables and forms
 - `object_source.py` - source read, update, version, and rollback operations
 - `object_state.py` - TSV-backed object state reads and runtime writes
 - `object_files.py` - read-only object-owned file listing and download helpers
@@ -111,10 +112,11 @@ The current public ASGI server can list objects, return source for an existing
 object, execute object `GET`, `POST`, `PUT`, and `DELETE` methods, and update
 source when the explicit source-write gate is enabled. It can also list source
 versions, read a specific version, read object state, read object logs, read
-object-owned files, read object metadata, list derived collections, read schema
-metadata, and roll back source through the same write gate. Object execution can
-return JSON data, HTML/text/binary responses through `content_type` and `body`,
-or a low-level `(status, headers, body)` tuple.
+object-owned files, read object metadata, list derived collections, read
+collection records, read schema metadata, and roll back source through the same
+write gate. Object execution can return JSON data, HTML/text/binary responses
+through `content_type` and `body`, or a low-level `(status, headers, body)`
+tuple.
 
 This server is useful for local development and controlled staging. It is not
 the final auth boundary yet. Object listing and introspection reads require the
@@ -140,6 +142,8 @@ Current endpoints:
 - `GET /permissions/audit`
 - `GET /collections`
 - `GET /collections/{collection}`
+- `GET /collections/{collection}/records`
+- `GET /collections/{collection}/records/{record_id}`
 - `GET /schemas`
 - `GET /schemas/{collection}`
 - `GET /objects?format=json`
@@ -213,6 +217,7 @@ rules the rest of the server will use:
 - `object_execution.py` returns success or error results from object method runs
 - `object_source.py` reads, updates, versions, and rolls back source files
 - `object_state.py` reads and writes runtime-owned TSV-backed object state
+- `object_records.py` reads TSV-backed collection records under `data/collections/`
 - `object_files.py` lists and reads object-owned files under `data/files/`
 - `object_logs.py` reads and appends TSV-backed object logs, rotates/compresses old logs, and provides `_logger`
 - `object_metadata.py` summarizes source, state, logs, files, and versions

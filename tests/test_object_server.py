@@ -16,6 +16,13 @@ def write_source(path, content):
     return path
 
 
+def write_records(data_dir, collection, content):
+    path = data_dir / "collections" / collection / "records.tsv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
+    return path
+
+
 def request(
     path,
     method="GET",
@@ -473,6 +480,7 @@ def test_collection_list_returns_derived_collection_summaries(tmp_path, monkeypa
     assert [item["name"] for item in payload["collections"]] == ["deals", "site"]
     site = payload["collections"][1]
     assert site["object_count"] == 2
+    assert site["has_records"] is False
     assert site["owners"] == ["system"]
     assert site["kinds"] == {"system": 2}
     assert site["permission"]["principals"] == ["role:admin"]
@@ -532,6 +540,171 @@ def test_collection_routes_reject_non_get_methods(tmp_path, monkeypatch):
     list_status, _, list_payload = request("/collections", method="POST", headers=auth_headers())
     detail_status, _, detail_payload = request(
         "/collections/site",
+        method="POST",
+        headers=auth_headers(),
+    )
+
+    assert list_status == 405
+    assert detail_status == 405
+    assert list_payload == {"status": "error", "error": "Method not allowed"}
+    assert detail_payload == {"status": "error", "error": "Method not allowed"}
+
+
+def test_collection_records_require_admin_token_configuration(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)
+
+    status, _, payload = request("/collections/contacts/records")
+
+    assert status == 403
+    assert payload == {"status": "error", "error": "Collection records require DBBASIC_ADMIN_TOKEN."}
+
+
+def test_collection_records_require_authorization_header(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/collections/contacts/records")
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
+
+
+def test_collection_records_return_paginated_tsv_rows(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(
+        data_dir,
+        "contacts",
+        "id\tfirst_name\tlast_name\n"
+        "c1\tAda\tLovelace\n"
+        "c2\tGrace\tHopper\n"
+        "c3\tKatherine\tJohnson\n",
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/collections/contacts/records",
+        query_string="limit=2&offset=1",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload == {
+        "status": "ok",
+        "collection": "contacts",
+        "records": [
+            {"id": "c2", "first_name": "Grace", "last_name": "Hopper"},
+            {"id": "c3", "first_name": "Katherine", "last_name": "Johnson"},
+        ],
+        "count": 2,
+        "total": 3,
+        "limit": 2,
+        "offset": 1,
+        "has_more": False,
+    }
+
+
+def test_collection_record_detail_returns_one_tsv_row(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\nc2\tGrace\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/collections/contacts/records/c2", headers=auth_headers())
+
+    assert status == 200
+    assert payload == {
+        "status": "ok",
+        "collection": "contacts",
+        "record": {"id": "c2", "name": "Grace"},
+    }
+
+
+def test_collection_records_return_empty_for_schema_backed_collection(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    schema_file = data_dir / "schemas" / "invoices.json"
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text(json.dumps({"fields": [{"name": "id"}]}))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/collections/invoices/records", headers=auth_headers())
+
+    assert status == 200
+    assert payload["records"] == []
+    assert payload["total"] == 0
+
+
+def test_collection_records_reject_bad_limit(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/collections/contacts/records",
+        query_string="limit=0",
+        headers=auth_headers(),
+    )
+
+    assert status == 400
+    assert payload == {"status": "error", "error": "Query parameter 'limit' must be at least 1"}
+
+
+def test_collection_records_reject_invalid_and_missing_collection(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
+
+    invalid_status, _, invalid_payload = request(
+        "/collections/bad.name/records",
+        headers=auth_headers(),
+    )
+    missing_status, _, missing_payload = request(
+        "/collections/missing/records",
+        headers=auth_headers(),
+    )
+
+    assert invalid_status == 400
+    assert invalid_payload == {"status": "error", "error": "Invalid collection name: bad.name"}
+    assert missing_status == 404
+    assert missing_payload == {"status": "error", "error": "Collection not found: missing"}
+
+
+def test_collection_record_detail_rejects_invalid_and_missing_record(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    invalid_status, _, invalid_payload = request(
+        "/collections/contacts/records/bad.name",
+        headers=auth_headers(),
+    )
+    missing_status, _, missing_payload = request(
+        "/collections/contacts/records/missing",
+        headers=auth_headers(),
+    )
+
+    assert invalid_status == 400
+    assert invalid_payload == {"status": "error", "error": "Invalid record id: bad.name"}
+    assert missing_status == 404
+    assert missing_payload == {
+        "status": "error",
+        "error": "Record not found: contacts/missing",
+    }
+
+
+def test_collection_record_routes_reject_non_get_methods(tmp_path, monkeypatch):
+    enable_admin_token(monkeypatch)
+
+    list_status, _, list_payload = request(
+        "/collections/contacts/records",
+        method="POST",
+        headers=auth_headers(),
+    )
+    detail_status, _, detail_payload = request(
+        "/collections/contacts/records/c1",
         method="POST",
         headers=auth_headers(),
     )

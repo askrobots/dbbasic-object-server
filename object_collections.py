@@ -25,6 +25,9 @@ from object_namespace import (
 )
 from object_versions import DEFAULT_DATA_DIR
 
+COLLECTIONS_DIR = "collections"
+RECORDS_FILE = "records.tsv"
+
 
 class InvalidCollectionNameError(ValueError):
     """Raised when a collection name is not safe for routes or storage."""
@@ -126,8 +129,9 @@ def _summaries_by_collection(
         for rule in policy.rules
         if rule.collection is not None and validate_collection_name(rule.collection)
     }
+    record_collections = set(_iter_record_collections(base_dir))
 
-    collection_names = set(object_groups) | policy_collections
+    collection_names = set(object_groups) | policy_collections | record_collections
     summaries: dict[str, dict[str, Any]] = {}
     for collection in collection_names:
         objects = sorted(object_groups.get(collection, []), key=lambda item: item.object_id)
@@ -135,6 +139,7 @@ def _summaries_by_collection(
             collection,
             objects,
             policy,
+            has_records=collection in record_collections,
             include_objects=include_objects,
         )
 
@@ -165,6 +170,7 @@ def _collection_summary(
     objects: list[CollectionObjectSummary],
     policy: object_permissions.PermissionPolicy,
     *,
+    has_records: bool,
     include_objects: bool,
 ) -> dict[str, Any]:
     owners = sorted({item.owner for item in objects})
@@ -175,6 +181,7 @@ def _collection_summary(
         "file_count": sum(item.file_count for item in objects),
         "state_object_count": sum(1 for item in objects if item.state_count > 0),
         "log_object_count": sum(1 for item in objects if item.has_logs),
+        "has_records": has_records,
         "owners": owners,
         "kinds": dict(sorted(kinds.items())),
         "permission": _permission_summary(collection, policy),
@@ -218,3 +225,16 @@ def _has_logs(object_id: str, *, base_dir: Path | str) -> bool:
         return True
 
     return any(path.is_file() for path in log_dir.glob("log-*.tsv*"))
+
+
+def _iter_record_collections(base_dir: Path | str) -> list[str]:
+    root = Path(base_dir) / COLLECTIONS_DIR
+    if not root.exists() or not root.is_dir():
+        return []
+
+    names = []
+    for path in sorted(root.glob(f"*/{RECORDS_FILE}"), key=lambda item: item.as_posix()):
+        name = path.parent.name
+        if validate_collection_name(name):
+            names.append(name)
+    return names

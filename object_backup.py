@@ -22,7 +22,7 @@ from object_versions import DEFAULT_DATA_DIR
 DATA_DIR_ENV = "DBBASIC_DATA_DIR"
 BACKUP_FORMAT_VERSION = 1
 MANIFEST_NAME = "dbbasic-backup-manifest.json"
-RUNTIME_DATA_DIRS = ("state", "logs", "versions", "files")
+RUNTIME_DATA_DIRS = ("state", "logs", "versions", "files", "schemas", "collections")
 SKIP_PARTS = {"__pycache__", ".git", ".venv", "node_modules"}
 SKIP_SUFFIXES = (".pyc", ".pyo", ".tmp", ".lock")
 

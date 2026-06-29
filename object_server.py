@@ -29,6 +29,7 @@ import object_permission_audit
 import object_permission_store
 import object_permissions
 import object_rate_limit
+import object_records
 import object_schemas
 import object_source
 import object_state
@@ -305,7 +306,29 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
             return
 
         if path.startswith(f"{http_api_contract.COLLECTIONS_PATH}/"):
-            collection = path.removeprefix(f"{http_api_contract.COLLECTIONS_PATH}/")
+            collection_path = path.removeprefix(f"{http_api_contract.COLLECTIONS_PATH}/")
+            collection_parts = collection_path.split("/")
+            if len(collection_parts) == 2 and collection_parts[1] == "records":
+                await _handle_collection_records(
+                    send,
+                    method,
+                    collection_parts[0],
+                    query,
+                    headers,
+                )
+                return
+
+            if len(collection_parts) == 3 and collection_parts[1] == "records":
+                await _handle_collection_record_get(
+                    send,
+                    method,
+                    collection_parts[0],
+                    collection_parts[2],
+                    headers,
+                )
+                return
+
+            collection = collection_path
             await _handle_collection_get(send, method, collection, headers)
             return
 
@@ -1312,6 +1335,95 @@ async def _handle_collection_get(
         {
             "status": "ok",
             "collection": summary,
+        },
+    )
+
+
+async def _handle_collection_records(
+    send,
+    method: str,
+    collection: str,
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Collection records require {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    try:
+        records_payload = object_records.list_collection_records(
+            collection,
+            base_dir=_data_dir(),
+            limit=_query_int(query, "limit", default=100, minimum=1, maximum=1000),
+            offset=_query_int(query, "offset", default=0, minimum=0),
+        )
+    except object_collections.InvalidCollectionNameError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_collections.CollectionNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    await _send_json(send, {"status": "ok", **records_payload})
+
+
+async def _handle_collection_record_get(
+    send,
+    method: str,
+    collection: str,
+    record_id: str,
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Collection record detail requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    try:
+        record = object_records.get_collection_record(
+            collection,
+            record_id,
+            base_dir=_data_dir(),
+        )
+    except object_collections.InvalidCollectionNameError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_records.InvalidRecordIdError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except (object_collections.CollectionNotFoundError, object_records.RecordNotFoundError) as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "collection": collection,
+            "record": record,
         },
     )
 

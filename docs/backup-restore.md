@@ -1,7 +1,7 @@
 # Backup And Restore
 
 DBBASIC runtime backups protect the object loop by keeping source, state, logs,
-files, and versions recoverable together.
+files, versions, schemas, and collection records recoverable together.
 
 The public backup helper is:
 
@@ -22,10 +22,13 @@ data/state/
 data/logs/
 data/versions/
 data/files/
+data/schemas/
+data/collections/
 ```
 
 That covers object source, object state, current logs, rotated compressed logs,
-source versions, and future object-owned files.
+source versions, object-owned files, schema metadata, and TSV-backed collection
+records.
 
 ## Excluded
 
