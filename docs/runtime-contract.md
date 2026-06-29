@@ -212,6 +212,7 @@ Log storage intentionally matches the working prototype:
 ```text
 data/logs/{object_id}/log.tsv
 data/logs/{object_id}/log-*.tsv
+data/logs/{object_id}/log-*.tsv.gz
 ```
 
 Rows are TSV with a header. The default fields are:
@@ -228,8 +229,33 @@ Rows are TSV with a header. The default fields are:
 
 Object code may add extra fields such as `method`, `user_id`, or request
 metadata. The public log reader returns the current `log.tsv` first, then
-rotated `log-*.tsv` files in sorted order, and supports exact `level` filtering
-and `limit`.
+rotated `log-*.tsv` and `log-*.tsv.gz` files in sorted order, and supports
+exact `level` filtering and `limit`.
+
+The active `log.tsv` stays plain TSV so appends, `tail`, and crash recovery stay
+simple. When it reaches the configured size limit, the runtime rotates it to a
+timestamped file and gzip-compresses the rotated file by default.
+
+Log maintenance settings:
+
+- `DBBASIC_LOG_MAX_BYTES` controls active log size before rotation. The default
+  is `10485760` bytes. Values less than or equal to `0` disable rotation.
+- `DBBASIC_LOG_COMPRESS_ROTATED` controls gzip compression of new rotated logs.
+  The default is `true`. Set it to `false` for plain rotated TSV files.
+- `DBBASIC_LOG_KEEP_ROTATED` controls garbage collection of rotated logs. The
+  default is `32`. Values less than or equal to `0` keep all rotated logs.
+
+Compressed rotated logs remain ordinary files on disk. Operators can inspect
+them without expanding a second copy:
+
+```bash
+gzip -cd data/logs/site_home/log-*.tsv.gz
+```
+
+This is at-rest compression. HTTP response compression, log replication
+compression, and backup-transfer compression are separate transport concerns.
+Those should compress larger batches or responses, not tiny realtime events by
+default.
 
 The public ASGI execution path appends one log entry after each object method
 run. Successful runs use `DEBUG` with `status=success`; failed runs use `ERROR`

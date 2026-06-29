@@ -108,6 +108,9 @@ Create `/etc/dbbasic-object-server.env`:
 DBBASIC_OBJECTS_DIR=/var/lib/dbbasic-object-server/objects
 DBBASIC_DATA_DIR=/var/lib/dbbasic-object-server/data
 DBBASIC_ENABLE_SOURCE_WRITES=false
+DBBASIC_LOG_MAX_BYTES=10485760
+DBBASIC_LOG_COMPRESS_ROTATED=true
+DBBASIC_LOG_KEEP_ROTATED=32
 ```
 
 For the first VM boot, leave source writes disabled. After health checks and
@@ -127,6 +130,38 @@ python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 
 Do not commit real tokens, VM hostnames, private URLs, or deployment-specific
 paths to this repository.
+
+## Log Maintenance
+
+Object logs are part of the runtime feedback loop, so staging servers should not
+let them grow forever.
+
+The active log for an object stays plain TSV:
+
+```text
+/var/lib/dbbasic-object-server/data/logs/{object_id}/log.tsv
+```
+
+When it reaches `DBBASIC_LOG_MAX_BYTES`, the server rotates it. New rotated logs
+are gzip-compressed by default:
+
+```text
+/var/lib/dbbasic-object-server/data/logs/{object_id}/log-YYYYMMDD-HHMMSS-ffffff.tsv.gz
+```
+
+Inspect compressed logs without expanding a second copy:
+
+```bash
+gzip -cd /var/lib/dbbasic-object-server/data/logs/site_home/log-*.tsv.gz
+```
+
+Garbage collection is controlled by `DBBASIC_LOG_KEEP_ROTATED`. The default
+keeps the newest 32 rotated files per object and deletes older rotated logs
+after a successful rotation. Set it to `0` to keep all rotated logs.
+
+This is at-rest compression. For in-motion compression, start with reverse-proxy
+HTTP compression for large log responses. Later station replication should
+compress batches, not individual tiny events.
 
 ## Minimal Object
 

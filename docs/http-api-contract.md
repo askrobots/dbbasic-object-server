@@ -325,6 +325,7 @@ Logs are currently read from:
 ```text
 data/logs/{object_id}/log.tsv
 data/logs/{object_id}/log-*.tsv
+data/logs/{object_id}/log-*.tsv.gz
 ```
 
 The TSV header defines the fields. The normal fields are `entry_id`,
@@ -335,6 +336,11 @@ The public ASGI server appends one execution log entry after each object method
 run. Successful runs use `level=DEBUG` and `status=success`; failed runs use
 `level=ERROR`, `status=error`, and include error fields. The endpoint itself
 remains read-only.
+
+Log storage may rotate and gzip old logs on disk. The HTTP response shape does
+not change; clients still receive JSON log entries. Transport compression for
+large log responses should be handled through normal HTTP compression, such as a
+reverse proxy honoring `Accept-Encoding`, rather than changing this JSON shape.
 
 ## Versions
 

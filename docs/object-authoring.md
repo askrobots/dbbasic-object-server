@@ -59,7 +59,8 @@ _logger.error(message, **fields)
 ```
 
 State is stored under `data/state/{object_id}/state.tsv`. Logs are stored under
-`data/logs/{object_id}/log.tsv`.
+`data/logs/{object_id}/log.tsv`. The active log is plain TSV. Rotated logs are
+gzip-compressed by default and can still be read by the server.
 
 ## JSON Object
 
