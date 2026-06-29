@@ -163,6 +163,8 @@ DBBASIC_DATA_DIR=/var/lib/dbbasic-object-server/data
 DBBASIC_ENABLE_SOURCE_WRITES=false
 DBBASIC_ADMIN_TOKEN=replace-with-a-generated-token
 DBBASIC_MAX_REQUEST_BYTES=1048576
+DBBASIC_MAX_CONCURRENT_REQUESTS=64
+DBBASIC_MAX_CONCURRENT_EXECUTIONS=8
 DBBASIC_LOG_MAX_BYTES=10485760
 DBBASIC_LOG_COMPRESS_ROTATED=true
 DBBASIC_LOG_KEEP_ROTATED=32
@@ -232,16 +234,17 @@ parsing or object execution. The default is 1 MiB:
 
 ```text
 DBBASIC_MAX_REQUEST_BYTES=1048576
+DBBASIC_MAX_CONCURRENT_REQUESTS=64
+DBBASIC_MAX_CONCURRENT_EXECUTIONS=8
 ```
 
 Configure the same or smaller request body limit in the reverse proxy so Caddy
 or nginx can reject oversized traffic before Python handles it. The app-level
 limit stays in place because proxy configuration can drift.
 
-Future production hardening still needs rate limits, request concurrency caps,
-object execution concurrency caps, and execution timeouts. Under overload, the
-server should fail fast with `429` or `503` rather than queueing unlimited work
-on a small VM.
+The concurrency limits are per process. Under overload, the server returns
+`503` rather than queueing unlimited work on a small VM. Future production
+hardening still needs rate limits and execution timeouts.
 
 See `traffic-limits.md` for the operating model.
 
@@ -571,7 +574,7 @@ Known limits:
 - the current direct Python loader is not a production sandbox
 - source writes still use a temporary admin token gate
 - object permissions are not enforced yet
-- execution timeout, rate, and concurrency limits are not complete
+- execution timeout and rate limits are not complete
 - WebSocket/SSE runtime behavior is still design-stage
 
 That is still useful. A clean VM lets DBBASIC prove that install, restart,

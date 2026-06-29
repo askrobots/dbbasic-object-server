@@ -9,6 +9,7 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import threading
 import urllib.parse
 from typing import Any
 
@@ -27,7 +28,11 @@ SOURCE_WRITES_ENV = "DBBASIC_ENABLE_SOURCE_WRITES"
 ADMIN_TOKEN_ENV = "DBBASIC_ADMIN_TOKEN"
 DATA_DIR_ENV = "DBBASIC_DATA_DIR"
 MAX_REQUEST_BYTES_ENV = "DBBASIC_MAX_REQUEST_BYTES"
+MAX_CONCURRENT_REQUESTS_ENV = "DBBASIC_MAX_CONCURRENT_REQUESTS"
+MAX_CONCURRENT_EXECUTIONS_ENV = "DBBASIC_MAX_CONCURRENT_EXECUTIONS"
 DEFAULT_MAX_REQUEST_BYTES = 1_048_576
+DEFAULT_MAX_CONCURRENT_REQUESTS = 64
+DEFAULT_MAX_CONCURRENT_EXECUTIONS = 8
 TRUE_VALUES = {"1", "true", "yes", "on"}
 SENSITIVE_GET_FLAGS = {"source", "state", "logs", "metadata", "versions"}
 
@@ -41,6 +46,50 @@ class RequestBodyTooLargeError(ValueError):
         self.max_bytes = max_bytes
         self.actual_bytes = actual_bytes
         super().__init__("Request body too large")
+
+
+class ConcurrencyToken:
+    """Release handle for a claimed concurrency slot."""
+
+    def __init__(self, limiter: "ConcurrencyLimiter | None"):
+        self._limiter = limiter
+        self._released = False
+
+    def release(self) -> None:
+        if self._released:
+            return
+
+        self._released = True
+        if self._limiter is not None:
+            self._limiter.release()
+
+
+class ConcurrencyLimiter:
+    """Small per-process non-queueing concurrency limiter."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._in_flight = 0
+
+    def try_acquire(self, limit: int) -> ConcurrencyToken | None:
+        if limit <= 0:
+            return ConcurrencyToken(None)
+
+        with self._lock:
+            if self._in_flight >= limit:
+                return None
+            self._in_flight += 1
+
+        return ConcurrencyToken(self)
+
+    def release(self) -> None:
+        with self._lock:
+            if self._in_flight > 0:
+                self._in_flight -= 1
+
+
+_request_limiter = ConcurrencyLimiter()
+_execution_limiter = ConcurrencyLimiter()
 
 
 async def app(scope: dict[str, Any], receive, send) -> None:
@@ -65,59 +114,68 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
     query = _parse_query(scope.get("query_string", b""))
     headers = _parse_headers(scope.get("headers", []))
 
-    try:
-        body = await _read_body(receive, headers=headers)
-    except RequestBodyTooLargeError as exc:
-        await _send_request_too_large(send, exc)
-        return
-
     if path == "/health":
         await _send_json(send, {"status": "ok"})
         return
 
-    if path == http_api_contract.OBJECTS_PATH:
-        if method == "GET":
-            gate_error = _admin_token_gate_error(
-                headers,
-                f"Object listing requires {ADMIN_TOKEN_ENV}.",
-            )
-            if gate_error is not None:
-                status, message = gate_error
-                await _send_json(send, {"status": "error", "error": message}, status=status)
+    request_limit = _max_concurrent_requests()
+    request_token = _request_limiter.try_acquire(request_limit)
+    if request_token is None:
+        await _send_capacity_error(send, limit_name="requests", max_concurrent=request_limit)
+        return
+
+    try:
+        try:
+            body = await _read_body(receive, headers=headers)
+        except RequestBodyTooLargeError as exc:
+            await _send_request_too_large(send, exc)
+            return
+
+        if path == http_api_contract.OBJECTS_PATH:
+            if method == "GET":
+                gate_error = _admin_token_gate_error(
+                    headers,
+                    f"Object listing requires {ADMIN_TOKEN_ENV}.",
+                )
+                if gate_error is not None:
+                    status, message = gate_error
+                    await _send_json(send, {"status": "error", "error": message}, status=status)
+                    return
+
+                await _send_json(send, _list_objects_payload())
                 return
 
-            await _send_json(send, _list_objects_payload())
+            await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
             return
 
-        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
-        return
+        if path.startswith(f"{http_api_contract.OBJECTS_PATH}/"):
+            object_id = path.removeprefix(f"{http_api_contract.OBJECTS_PATH}/")
+            if method == "GET":
+                await _handle_object_get(send, object_id, query, headers)
+                return
 
-    if path.startswith(f"{http_api_contract.OBJECTS_PATH}/"):
-        object_id = path.removeprefix(f"{http_api_contract.OBJECTS_PATH}/")
-        if method == "GET":
-            await _handle_object_get(send, object_id, query, headers)
+            if method == "POST":
+                await _handle_object_post(send, object_id, body, query, headers)
+                return
+
+            if method == "PUT" and query.get("source") == "true":
+                await _handle_object_source_put(send, object_id, body, headers)
+                return
+
+            if method == "PUT":
+                await _handle_object_body_method(send, object_id, "PUT", body, query)
+                return
+
+            if method == "DELETE":
+                await _handle_object_body_method(send, object_id, "DELETE", body, query)
+                return
+
+            await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
             return
 
-        if method == "POST":
-            await _handle_object_post(send, object_id, body, query, headers)
-            return
-
-        if method == "PUT" and query.get("source") == "true":
-            await _handle_object_source_put(send, object_id, body, headers)
-            return
-
-        if method == "PUT":
-            await _handle_object_body_method(send, object_id, "PUT", body, query)
-            return
-
-        if method == "DELETE":
-            await _handle_object_body_method(send, object_id, "DELETE", body, query)
-            return
-
-        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
-        return
-
-    await _send_json(send, {"status": "error", "error": "Not found"}, status=404)
+        await _send_json(send, {"status": "error", "error": "Not found"}, status=404)
+    finally:
+        request_token.release()
 
 
 async def _handle_object_get(
@@ -500,15 +558,28 @@ async def _execute_object_method(
     method: str,
     payload: dict[str, Any],
 ) -> None:
-    result = object_execution.execute_object(
-        _runtime,
-        object_execution.ObjectExecutionRequest(
-            object_id=object_id,
-            method=method,
-            payload=payload,
-        ),
-    )
-    _append_execution_log(result)
+    execution_limit = _max_concurrent_executions()
+    execution_token = _execution_limiter.try_acquire(execution_limit)
+    if execution_token is None:
+        await _send_capacity_error(
+            send,
+            limit_name="object_executions",
+            max_concurrent=execution_limit,
+        )
+        return
+
+    try:
+        result = object_execution.execute_object(
+            _runtime,
+            object_execution.ObjectExecutionRequest(
+                object_id=object_id,
+                method=method,
+                payload=payload,
+            ),
+        )
+        _append_execution_log(result)
+    finally:
+        execution_token.release()
 
     if result.ok:
         await _send_object_response(send, result.result)
@@ -733,20 +804,30 @@ def _data_dir() -> str:
     return os.environ.get(DATA_DIR_ENV, object_versions.DEFAULT_DATA_DIR)
 
 
+def _max_concurrent_requests() -> int:
+    return _env_int(MAX_CONCURRENT_REQUESTS_ENV, DEFAULT_MAX_CONCURRENT_REQUESTS)
+
+
+def _max_concurrent_executions() -> int:
+    return _env_int(MAX_CONCURRENT_EXECUTIONS_ENV, DEFAULT_MAX_CONCURRENT_EXECUTIONS)
+
+
 def _max_request_bytes() -> int:
-    value = os.environ.get(MAX_REQUEST_BYTES_ENV, "").strip()
-    if not value:
-        return DEFAULT_MAX_REQUEST_BYTES
-
-    try:
-        max_bytes = int(value)
-    except ValueError:
-        return DEFAULT_MAX_REQUEST_BYTES
-
+    max_bytes = _env_int(MAX_REQUEST_BYTES_ENV, DEFAULT_MAX_REQUEST_BYTES)
     if max_bytes < 0:
         return DEFAULT_MAX_REQUEST_BYTES
-
     return max_bytes
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return default
+
+    try:
+        return int(value)
+    except ValueError:
+        return default
 
 
 def _content_length(headers: dict[str, str]) -> int | None:
@@ -799,6 +880,19 @@ async def _send_request_too_large(send, error: RequestBodyTooLargeError) -> None
             "max_bytes": error.max_bytes,
         },
         status=413,
+    )
+
+
+async def _send_capacity_error(send, *, limit_name: str, max_concurrent: int) -> None:
+    await _send_json(
+        send,
+        {
+            "status": "error",
+            "error": "Server is busy",
+            "limit": limit_name,
+            "max_concurrent": max_concurrent,
+        },
+        status=503,
     )
 
 

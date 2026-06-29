@@ -107,6 +107,12 @@ def enable_admin_token(monkeypatch):
     monkeypatch.setenv("DBBASIC_ADMIN_TOKEN", TEST_ADMIN_TOKEN)
 
 
+def claim_limit_slot(limiter, limit):
+    token = limiter.try_acquire(limit)
+    assert token is not None
+    return token
+
+
 def update_source(object_id, code, *, author="test-api", message="Update source"):
     return request(
         f"/objects/{object_id}",
@@ -129,6 +135,47 @@ def test_health_endpoint_returns_ok():
     assert status == 200
     assert headers[b"content-type"] == b"application/json; charset=utf-8"
     assert payload == {"status": "ok"}
+
+
+def test_health_endpoint_bypasses_request_concurrency_limit(monkeypatch):
+    monkeypatch.setenv(object_server.MAX_CONCURRENT_REQUESTS_ENV, "1")
+    token = claim_limit_slot(object_server._request_limiter, 1)
+    try:
+        status, _, payload = request("/health")
+    finally:
+        token.release()
+
+    assert status == 200
+    assert payload == {"status": "ok"}
+
+
+def test_request_concurrency_limit_returns_503_when_full(monkeypatch):
+    monkeypatch.setenv(object_server.MAX_CONCURRENT_REQUESTS_ENV, "1")
+    token = claim_limit_slot(object_server._request_limiter, 1)
+    try:
+        status, _, payload = request("/missing")
+    finally:
+        token.release()
+
+    assert status == 503
+    assert payload == {
+        "status": "error",
+        "error": "Server is busy",
+        "limit": "requests",
+        "max_concurrent": 1,
+    }
+
+
+def test_request_concurrency_limit_releases_after_error(monkeypatch):
+    monkeypatch.setenv(object_server.MAX_CONCURRENT_REQUESTS_ENV, "1")
+
+    first_status, _, first_payload = request("/missing")
+    second_status, _, second_payload = request("/missing")
+
+    assert first_status == 404
+    assert first_payload == {"status": "error", "error": "Not found"}
+    assert second_status == 404
+    assert second_payload == {"status": "error", "error": "Not found"}
 
 
 def test_object_list_returns_existing_contract_shape(tmp_path, monkeypatch):
@@ -1306,6 +1353,26 @@ def test_object_execution_returns_404_for_missing_object(tmp_path, monkeypatch):
     assert payload == {"status": "error", "error": "Object not found: missing_object"}
 
 
+def test_execution_concurrency_limit_returns_503_when_full(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {'ok': True}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv(object_server.MAX_CONCURRENT_EXECUTIONS_ENV, "1")
+    token = claim_limit_slot(object_server._execution_limiter, 1)
+    try:
+        status, _, payload = request("/objects/basics_counter")
+    finally:
+        token.release()
+
+    assert status == 503
+    assert payload == {
+        "status": "error",
+        "error": "Server is busy",
+        "limit": "object_executions",
+        "max_concurrent": 1,
+    }
+
+
 def test_object_execution_returns_json_error_for_object_exception(tmp_path, monkeypatch):
     root = tmp_path / "objects"
     write_source(
@@ -1320,6 +1387,24 @@ def test_object_execution_returns_json_error_for_object_exception(tmp_path, monk
     assert payload["status"] == "error"
     assert payload["error"].startswith("Execution failed: GET failed for object basics_broken")
     assert "RuntimeError: boom" in payload["error"]
+
+
+def test_execution_concurrency_limit_releases_after_object_error(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(
+        root / "basics" / "broken.py",
+        "def GET(request):\n    raise RuntimeError('boom')\n",
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv(object_server.MAX_CONCURRENT_EXECUTIONS_ENV, "1")
+
+    first_status, _, first_payload = request("/objects/basics_broken")
+    second_status, _, second_payload = request("/objects/basics_broken")
+
+    assert first_status == 500
+    assert "RuntimeError: boom" in first_payload["error"]
+    assert second_status == 500
+    assert "RuntimeError: boom" in second_payload["error"]
 
 
 def test_object_execution_appends_error_log(tmp_path, monkeypatch):

@@ -111,6 +111,7 @@ Compatibility details from the working prototype:
   parameters.
 - `PUT` and `DELETE` reject invalid JSON bodies with `400`.
 - request bodies over `DBBASIC_MAX_REQUEST_BYTES` are rejected with `413`.
+- full request or object execution capacity is rejected with `503`.
 - `POST` with `{"action": "rollback"}` is reserved for rollback.
 - `PUT /objects/{object_id}?source=true` is reserved for source updates.
 

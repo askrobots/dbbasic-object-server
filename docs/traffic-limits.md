@@ -33,14 +33,53 @@ This applies before JSON parsing and before object execution. It checks
 Large file upload paths should get their own file API and their own explicit
 limits. Normal object `POST`, `PUT`, and `DELETE` requests should stay small.
 
+## Concurrency
+
+The ASGI server also enforces per-process concurrency caps:
+
+```text
+DBBASIC_MAX_CONCURRENT_REQUESTS=64
+DBBASIC_MAX_CONCURRENT_EXECUTIONS=8
+```
+
+`DBBASIC_MAX_CONCURRENT_REQUESTS` limits non-health HTTP requests that are in
+flight inside one server process. `/health` bypasses this limit so a monitor can
+still check whether the process is alive under load.
+
+`DBBASIC_MAX_CONCURRENT_EXECUTIONS` limits object method executions inside one
+server process. Introspection routes, health checks, and other non-execution
+requests do not consume object execution slots.
+
+When either limit is full, the server returns:
+
+```http
+503 Service Unavailable
+```
+
+```json
+{
+  "status": "error",
+  "error": "Server is busy",
+  "limit": "object_executions",
+  "max_concurrent": 8
+}
+```
+
+Set either concurrency value to `0` to disable that app-level limit for local
+experiments. Production and staging deployments should keep explicit limits.
+
+These caps are per process. If uvicorn runs multiple workers, each worker has
+its own counters. A reverse proxy or process manager still controls the total
+machine-level shape.
+
 ## High-Traffic Shape
 
 Use layered limits:
 
 - reverse proxy body limit before Python receives the request
 - app body limit through `DBBASIC_MAX_REQUEST_BYTES`
+- app request and object execution limits through the concurrency env vars
 - per-IP and per-token rate limits before write or execute paths
-- concurrency caps for total requests and object executions
 - object execution wall-clock timeouts
 - later CPU and memory isolation around worker processes
 
@@ -55,12 +94,26 @@ For the first public staging VM:
 
 ```text
 DBBASIC_MAX_REQUEST_BYTES=1048576
+DBBASIC_MAX_CONCURRENT_REQUESTS=64
+DBBASIC_MAX_CONCURRENT_EXECUTIONS=8
 DBBASIC_ENABLE_SOURCE_WRITES=false
 ```
 
 Keep source writes closed until auth, permissions, backups, and rollback checks
 are working. Keep public routes narrow. Let the object server prove the loop
 without allowing arbitrary public code changes.
+
+## Cluster Direction
+
+Local capacity should become a station signal. A single station can already
+return `503` when it is full. Later, station heartbeat or health data should
+include capacity fields so a cluster router can avoid saturated stations before
+forwarding object work.
+
+That signal should include request slots, execution slots, recent error rate,
+and basic machine load such as CPU and memory pressure. That keeps the cluster
+model simple: each station knows its own limits, and the router uses those
+limits to choose where work should go.
 
 ## Logs And Garbage Collection
 
@@ -77,12 +130,9 @@ read in place with normal Unix tools such as `gzip -cd`.
 
 ## Next Limits
 
-The request body cap is only the first boundary. The next production-hardening
-steps are:
+The request and concurrency caps are only the first boundaries. The next
+production-hardening steps are:
 
 - execution wall-clock timeout
-- max concurrent requests
-- max concurrent object executions
 - rate limiting by IP and token
 - CPU and memory isolation for untrusted object code
-
