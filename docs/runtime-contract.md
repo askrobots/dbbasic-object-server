@@ -332,6 +332,34 @@ validated before filesystem access. Empty names, absolute paths, null bytes, and
 Upload and delete are intentionally not public yet. They need explicit request
 size limits, content policy, audit logs, and server-enforced permissions.
 
+## Object Collections
+
+Collections are a read-only derived view. The public helper module is
+`object_collections.py`.
+
+The server infers collection names from object IDs:
+
+- `site_home` belongs to `site`
+- `apps_widget_counter` belongs to `apps`
+- `u_42_deals` belongs to `deals`
+
+Permission rules can also name a collection before any object exists for it.
+That lets Scroll show planned collections while the server keeps `/objects` as
+the stable source of truth.
+
+Collection summaries include:
+
+- object count
+- object owner set
+- object kind counts
+- object-owned file count
+- number of objects with state
+- number of objects with logs
+- exact permission rule summary for that collection
+
+The log portion is intentionally a cheap file-presence check. Listing
+collections should not scan every log entry on a busy server.
+
 ## Scheduler State
 
 Scheduler state keys begin with:

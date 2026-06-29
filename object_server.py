@@ -20,6 +20,7 @@ from importlib import metadata as importlib_metadata
 from typing import Any
 
 import http_api_contract
+import object_collections
 import object_execution
 import object_files
 import object_logs
@@ -296,6 +297,15 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
                 return
 
             await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+            return
+
+        if path == http_api_contract.COLLECTIONS_PATH:
+            await _handle_collections(send, method, headers)
+            return
+
+        if path.startswith(f"{http_api_contract.COLLECTIONS_PATH}/"):
+            collection = path.removeprefix(f"{http_api_contract.COLLECTIONS_PATH}/")
+            await _handle_collection_get(send, method, collection, headers)
             return
 
         if path.startswith(f"{http_api_contract.OBJECTS_PATH}/"):
@@ -1220,6 +1230,80 @@ def _list_objects_payload() -> dict[str, Any]:
         "objects": objects,
         "count": len(objects),
     }
+
+
+async def _handle_collections(
+    send,
+    method: str,
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Collection listing requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    try:
+        collections = object_collections.list_collections(base_dir=_data_dir())
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=500)
+        return
+
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "collections": collections,
+            "count": len(collections),
+        },
+    )
+
+
+async def _handle_collection_get(
+    send,
+    method: str,
+    collection: str,
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Collection detail requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    try:
+        summary = object_collections.get_collection(collection, base_dir=_data_dir())
+    except object_collections.InvalidCollectionNameError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_collections.CollectionNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=500)
+        return
+
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "collection": summary,
+        },
+    )
 
 
 def _object_source_payload(source) -> dict[str, str]:

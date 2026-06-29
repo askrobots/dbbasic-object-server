@@ -67,6 +67,7 @@ py-modules = [
     "deployment_checks",
     "http_api_contract",
     "object_backup",
+    "object_collections",
     "object_daemon",
     "object_execution",
     "object_files",

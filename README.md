@@ -80,6 +80,7 @@ This repository currently contains:
 - `python_object_runtime.py` - minimal direct Python object loader for early execution tests
 - `object_namespace.py` - object source discovery and object ID resolution
 - `object_execution.py` - structured object execution results and error capture
+- `object_collections.py` - read-only collection summaries derived from objects and permission policy
 - `object_source.py` - source read, update, version, and rollback operations
 - `object_state.py` - TSV-backed object state reads and runtime writes
 - `object_files.py` - read-only object-owned file listing and download helpers
@@ -109,9 +110,10 @@ The current public ASGI server can list objects, return source for an existing
 object, execute object `GET`, `POST`, `PUT`, and `DELETE` methods, and update
 source when the explicit source-write gate is enabled. It can also list source
 versions, read a specific version, read object state, read object logs, read
-object-owned files, read object metadata, and roll back source through the same
-write gate. Object execution can return JSON data, HTML/text/binary responses through
-`content_type` and `body`, or a low-level `(status, headers, body)` tuple.
+object-owned files, read object metadata, list derived collections, and roll
+back source through the same write gate. Object execution can return JSON data,
+HTML/text/binary responses through `content_type` and `body`, or a low-level
+`(status, headers, body)` tuple.
 
 This server is useful for local development and controlled staging. It is not
 the final auth boundary yet. Object listing and introspection reads require the
@@ -135,6 +137,8 @@ Current endpoints:
 - `PUT /permissions/policy`
 - `POST /permissions/check`
 - `GET /permissions/audit`
+- `GET /collections`
+- `GET /collections/{collection}`
 - `GET /objects?format=json`
 - `GET /objects/{object_id}`
 - `POST /objects/{object_id}`

@@ -9,6 +9,8 @@ def test_contract_keeps_objects_paths_as_public_surface():
     assert http_api_contract.OBJECTS_PATH == "/objects"
     assert http_api_contract.OBJECT_PATH == "/objects/{object_id}"
     assert http_api_contract.OBJECT_STATION_PATH == "/objects/{object_id}@{station_id}"
+    assert http_api_contract.COLLECTIONS_PATH == "/collections"
+    assert http_api_contract.COLLECTION_PATH == "/collections/{collection}"
     assert http_api_contract.PERMISSIONS_POLICY_PATH == "/permissions/policy"
     assert http_api_contract.PERMISSIONS_CHECK_PATH == "/permissions/check"
     assert http_api_contract.PERMISSIONS_AUDIT_PATH == "/permissions/audit"
@@ -34,6 +36,14 @@ def test_contract_keeps_existing_introspection_query_flags():
         (
             "object_list",
             {"status": "ok", "objects": [], "count": 0},
+        ),
+        (
+            "collection_list",
+            {"status": "ok", "collections": [], "count": 0},
+        ),
+        (
+            "collection",
+            {"status": "ok", "collection": {"name": "site", "object_count": 1}},
         ),
         (
             "create_object",
@@ -143,6 +153,8 @@ def test_http_contract_doc_mentions_required_compatibility_surface():
 
     required_fragments = [
         "GET /objects?format=json",
+        "GET /collections",
+        "GET /collections/{collection}",
         "POST /objects",
         "GET /objects/{object_id}",
         "PUT /objects/{object_id}?source=true",

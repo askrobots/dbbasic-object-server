@@ -342,6 +342,92 @@ Response:
 Clients should accept either a top-level list or an object with an `objects`
 field. New server code should prefer the object form above.
 
+## Collections
+
+```http
+GET /collections
+Authorization: Token <token>
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "collections": [
+    {
+      "name": "site",
+      "object_count": 2,
+      "file_count": 1,
+      "state_object_count": 1,
+      "log_object_count": 1,
+      "owners": ["system"],
+      "kinds": {"system": 2},
+      "permission": {
+        "access_mode": "role_based",
+        "rule_count": 1,
+        "allow_count": 1,
+        "deny_count": 0,
+        "actions": ["execute", "read"],
+        "principals": ["role:admin"]
+      }
+    }
+  ],
+  "count": 1
+}
+```
+
+Read one collection with object details:
+
+```http
+GET /collections/{collection}
+Authorization: Token <token>
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "collection": {
+    "name": "site",
+    "object_count": 1,
+    "file_count": 0,
+    "state_object_count": 0,
+    "log_object_count": 0,
+    "owners": ["system"],
+    "kinds": {"system": 1},
+    "permission": {
+      "access_mode": "role_based",
+      "rule_count": 0,
+      "allow_count": 0,
+      "deny_count": 0,
+      "actions": [],
+      "principals": []
+    },
+    "objects": [
+      {
+        "object_id": "site_home",
+        "path": "site/home.py",
+        "owner": "system",
+        "kind": "system",
+        "state_count": 0,
+        "has_logs": false,
+        "file_count": 0
+      }
+    ]
+  }
+}
+```
+
+Collections are a derived view over object source IDs, source folders, object
+state/files/log presence, and permission rules. The server does not store a
+separate collection table yet. This keeps the existing `/objects` contract
+stable while giving tools such as Scroll a cleaner grouping API.
+
+The public server keeps collection routes read-only and admin-token gated for
+now. Missing collections return `404`; unsafe collection names return `400`.
+
 ## Create Object
 
 ```http

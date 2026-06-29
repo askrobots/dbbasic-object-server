@@ -421,6 +421,127 @@ def test_object_list_requires_authorization_header(tmp_path, monkeypatch):
     assert payload == {"status": "error", "error": "Unauthorized"}
 
 
+def test_collection_list_requires_admin_token_configuration(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(tmp_path / "objects"))
+    monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)
+
+    status, _, payload = request("/collections")
+
+    assert status == 403
+    assert payload == {"status": "error", "error": "Collection listing requires DBBASIC_ADMIN_TOKEN."}
+
+
+def test_collection_list_requires_authorization_header(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(tmp_path / "objects"))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/collections")
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
+
+
+def test_collection_list_returns_derived_collection_summaries(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {'ok': True}\n")
+    write_source(root / "site" / "about.py", "def GET(request):\n    return {'ok': True}\n")
+    write_source(root / "users" / "42" / "deals.py", "def GET(request):\n    return {}\n")
+    save_permission_policy(
+        data_dir,
+        {
+            "access_mode": "role_based",
+            "rules": [
+                {
+                    "effect": "allow",
+                    "principal": "role:admin",
+                    "actions": ["read", "execute"],
+                    "collection": "site",
+                }
+            ],
+        },
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/collections", headers=auth_headers())
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["count"] == 2
+    assert [item["name"] for item in payload["collections"]] == ["deals", "site"]
+    site = payload["collections"][1]
+    assert site["object_count"] == 2
+    assert site["owners"] == ["system"]
+    assert site["kinds"] == {"system": 2}
+    assert site["permission"]["principals"] == ["role:admin"]
+
+
+def test_collection_detail_returns_objects(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "apps" / "widget_counter.py", "def GET(request):\n    return {}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/collections/apps", headers=auth_headers())
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["collection"]["name"] == "apps"
+    assert payload["collection"]["objects"] == [
+        {
+            "object_id": "apps_widget_counter",
+            "path": "apps/widget_counter.py",
+            "owner": "system",
+            "kind": "system",
+            "state_count": 0,
+            "has_logs": False,
+            "file_count": 0,
+        }
+    ]
+
+
+def test_collection_detail_rejects_invalid_name(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(tmp_path / "objects"))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/collections/bad.name", headers=auth_headers())
+
+    assert status == 400
+    assert payload["status"] == "error"
+    assert payload["error"] == "Invalid collection name: bad.name"
+
+
+def test_collection_detail_rejects_missing_collection(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(tmp_path / "objects"))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/collections/missing", headers=auth_headers())
+
+    assert status == 404
+    assert payload == {"status": "error", "error": "Collection not found: missing"}
+
+
+def test_collection_routes_reject_non_get_methods(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(tmp_path / "objects"))
+    enable_admin_token(monkeypatch)
+
+    list_status, _, list_payload = request("/collections", method="POST", headers=auth_headers())
+    detail_status, _, detail_payload = request(
+        "/collections/site",
+        method="POST",
+        headers=auth_headers(),
+    )
+
+    assert list_status == 405
+    assert detail_status == 405
+    assert list_payload == {"status": "error", "error": "Method not allowed"}
+    assert detail_payload == {"status": "error", "error": "Method not allowed"}
+
+
 def test_permissions_policy_requires_admin_token_configuration(tmp_path, monkeypatch):
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)
