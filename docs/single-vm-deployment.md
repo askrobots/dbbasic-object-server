@@ -7,6 +7,10 @@ The goal is not to claim the public runtime is production-ready. The goal is to
 keep a clean staging server running so install, restart, logs, object storage,
 and the edit/run/inspect loop are tested on a real machine.
 
+This shape should stay cheap and understandable: one small VM can run the
+server, objects, TSV-backed state, logs, versions, HTTPS proxy, and monitoring
+without requiring a separate database tier for the first useful app.
+
 ## Verified Baseline
 
 The first staging install was verified on:
@@ -59,6 +63,33 @@ After a reboot, verify the services and endpoint again:
 sudo systemctl is-active dbbasic-object-server caddy
 curl https://dbbasic.example.com/
 ```
+
+## Provider Monitoring
+
+For DigitalOcean Droplets, the metrics agent is useful on staging VMs because it
+adds CPU, memory, disk, and network graphs plus alerting while the server is
+under active development. DigitalOcean describes this as a free opt-in service.
+It sends system telemetry for monitoring, not customer content.
+
+Install it after normal OS updates:
+
+```bash
+curl -fsSL https://repos.insights.digitalocean.com/install.sh -o /tmp/do-agent-install.sh
+sudo bash /tmp/do-agent-install.sh
+```
+
+Verify it:
+
+```bash
+systemctl is-active do-agent
+systemctl is-enabled do-agent
+dpkg-query -W do-agent
+systemctl --no-pager --full status do-agent
+```
+
+Metrics usually appear in the Droplet's Insights tab after a few minutes. This
+is provider-specific VM monitoring; it does not replace DBBASIC's own object
+logs, state, versions, or future application/runtime metrics.
 
 ## Layout
 
