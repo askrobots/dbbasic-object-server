@@ -29,16 +29,17 @@ Authentication is required for source, state, logs, versions, object creation,
 source updates, rollback, and destructive deletes. Basic object execution may be
 public or authenticated depending on server policy and the object being called.
 
-That is the compatibility and production contract. The current public ASGI slice
-does not yet enforce read-side auth for source, state, logs, metadata, or
-versions inside `object_server.py`. Until server-side auth and permissions are
-implemented, public deployments must block those routes at the reverse proxy and
-allowlist only the objects meant to be public.
+The current public ASGI slice enforces that sensitive read surface with the
+temporary admin token from `DBBASIC_ADMIN_TOKEN`. Source update and rollback
+also require `DBBASIC_ENABLE_SOURCE_WRITES=true`. The real role, object, and row
+permission system still needs to replace this temporary admin-only boundary
+before general use.
 
 ## Object List
 
 ```http
 GET /objects?format=json
+Authorization: Token <token>
 ```
 
 Response:
@@ -225,8 +226,10 @@ DBBASIC_ENABLE_SOURCE_WRITES=true
 DBBASIC_ADMIN_TOKEN=replace-with-a-local-dev-token
 ```
 
-Production code should replace that temporary gate with the real auth and
-permission system before this endpoint is exposed to users.
+The token value shown here is a placeholder. Real deployments must generate a
+server-specific secret outside the source tree. Production code should replace
+that temporary gate with the real auth and permission system before this
+endpoint is exposed to users.
 
 ## State
 
@@ -440,8 +443,10 @@ DBBASIC_ENABLE_SOURCE_WRITES=true
 DBBASIC_ADMIN_TOKEN=replace-with-a-local-dev-token
 ```
 
-Production code should replace that temporary gate with the real auth and
-permission system before rollback is exposed to users.
+The token value shown here is a placeholder. Real deployments must generate a
+server-specific secret outside the source tree. Production code should replace
+that temporary gate with the real auth and permission system before rollback is
+exposed to users.
 
 ## Destroy Object
 

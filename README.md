@@ -104,9 +104,11 @@ execution can return JSON data, HTML/text/binary responses through
 `content_type` and `body`, or a low-level `(status, headers, body)` tuple.
 
 This server is useful for local development and controlled staging. It is not
-the final public auth or permissions boundary yet. If you put it behind a public
-hostname before auth and permissions land, expose only explicit public object
-routes through a reverse proxy and keep source writes disabled.
+the final role or permissions boundary yet. Object listing and introspection
+reads require the temporary admin token. Source updates and rollback require the
+same token plus the explicit source-write gate. If you put it behind a public
+hostname before permissions land, expose only explicit public object routes
+through a reverse proxy and keep source writes disabled.
 
 ```bash
 python -m pip install -e '.[server,test]'
@@ -134,16 +136,23 @@ Execution currently uses `python_object_runtime.py`, a direct Python loader. It
 is useful for proving the loop, but it is not the production sandbox or security
 boundary.
 
-Source updates are disabled by default. For local development only:
+Object listing, source, state, logs, metadata, and versions require:
 
 ```bash
-export DBBASIC_ENABLE_SOURCE_WRITES=true
 export DBBASIC_ADMIN_TOKEN=replace-with-a-local-dev-token
 export DBBASIC_DATA_DIR=./data
 ```
 
-Then send `Authorization: Token <token>` with source update and rollback
-requests. Production auth and permissions still need to replace this temporary
+The value above is a placeholder. Each real deployment must generate its own
+secret outside the source tree. Then send `Authorization: Token <token>` with
+the request. Source updates and rollback are disabled by default. For local
+development only, also set:
+
+```bash
+export DBBASIC_ENABLE_SOURCE_WRITES=true
+```
+
+Production auth and permissions still need to replace this temporary admin-token
 gate before general use.
 
 ## Current Extraction Slice
@@ -166,6 +175,7 @@ rules the rest of the server will use:
 - rollbacks create a new version instead of deleting history
 - source updates through HTTP require `DBBASIC_ENABLE_SOURCE_WRITES=true` and an
   admin token
+- object listing and introspection reads require an admin token
 - HTTP version history makes the loop visible: update source, inspect versions,
   rollback, and run the object again
 - the old prototype source directory name is intentionally not a public default

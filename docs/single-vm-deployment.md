@@ -108,24 +108,29 @@ Create `/etc/dbbasic-object-server.env`:
 DBBASIC_OBJECTS_DIR=/var/lib/dbbasic-object-server/objects
 DBBASIC_DATA_DIR=/var/lib/dbbasic-object-server/data
 DBBASIC_ENABLE_SOURCE_WRITES=false
+DBBASIC_ADMIN_TOKEN=replace-with-a-generated-token
 DBBASIC_LOG_MAX_BYTES=10485760
 DBBASIC_LOG_COMPRESS_ROTATED=true
 DBBASIC_LOG_KEEP_ROTATED=32
-```
-
-For the first VM boot, leave source writes disabled. After health checks and
-proxy access are working, a staging server can enable source writes with a
-strong local token:
-
-```text
-DBBASIC_ENABLE_SOURCE_WRITES=true
-DBBASIC_ADMIN_TOKEN=replace-with-a-generated-token
 ```
 
 Generate a local token on the VM:
 
 ```bash
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Use that generated value for `DBBASIC_ADMIN_TOKEN`. Do not reuse test tokens,
+README placeholders, or tokens from another server. It is required for local or
+admin object listing and introspection requests such as source, state, logs,
+metadata, and versions.
+
+For the first VM boot, leave source writes disabled. After health checks,
+backups, and proxy access are working, a staging server can enable source
+writes:
+
+```text
+DBBASIC_ENABLE_SOURCE_WRITES=true
 ```
 
 Do not commit real tokens, VM hostnames, private URLs, or deployment-specific
@@ -216,10 +221,10 @@ In another shell:
 
 ```bash
 curl http://127.0.0.1:8001/health
-curl http://127.0.0.1:8001/objects
+curl -H "Authorization: Token $DBBASIC_ADMIN_TOKEN" http://127.0.0.1:8001/objects
 curl http://127.0.0.1:8001/objects/site_home
-curl 'http://127.0.0.1:8001/objects/site_home?state=true'
-curl 'http://127.0.0.1:8001/objects/site_home?logs=true'
+curl -H "Authorization: Token $DBBASIC_ADMIN_TOKEN" 'http://127.0.0.1:8001/objects/site_home?state=true'
+curl -H "Authorization: Token $DBBASIC_ADMIN_TOKEN" 'http://127.0.0.1:8001/objects/site_home?logs=true'
 ```
 
 ## systemd

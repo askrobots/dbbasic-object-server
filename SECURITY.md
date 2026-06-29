@@ -73,18 +73,18 @@ For public staging:
 - put Caddy or another reverse proxy in front
 - proxy only explicit public object routes
 - keep `DBBASIC_ENABLE_SOURCE_WRITES=false`
-- do not expose source, version, logs, state, metadata, or object-list routes
-  until auth and permissions are enforced
+- generate a deployment-specific `DBBASIC_ADMIN_TOKEN` for local/admin introspection
+- do not expose source, version, logs, state, metadata, or object-list routes to
+  normal users until role and object permissions are enforced
 - do not add a public object-create route until permissions are enforced
 
 With this shape, outside users can run only the objects intentionally exposed by
 the proxy. They cannot add, edit, roll back, list, or inspect arbitrary objects
 through the public hostname.
 
-The current public ASGI server does not yet enforce read-side authentication for
-source, state, logs, metadata, or versions. Treat the reverse proxy allowlist as
-required for any internet-facing staging deployment until server-side
-permissions are implemented.
+The current public ASGI server now enforces an admin-token gate for object
+listing and introspection reads. Treat that as a temporary admin-only control,
+not as the final permissions model.
 
 ## Current Status
 
@@ -92,7 +92,8 @@ The public repository currently contains a minimal ASGI server, direct Python
 object loader, object namespace resolution, source update and rollback gates,
 state/log/version storage, a daemon slice, tests, and a single-VM staging guide.
 
-Source update and rollback routes are disabled by default and require both
+Object listing and introspection reads require an admin token. Source update and
+rollback routes are disabled by default and require both
 `DBBASIC_ENABLE_SOURCE_WRITES=true` and an admin token when enabled. This is a
 temporary development gate, not the final authorization system.
 

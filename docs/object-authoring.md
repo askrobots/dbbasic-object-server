@@ -148,12 +148,14 @@ APIs, but the first rule is the same: make the running object easy to inspect.
 
 ## Public Deployment Safety
 
-Until server-side auth and permissions are enforced, do not expose the full
-`/objects` API on a public hostname.
+Until role, object, and row-level permissions are enforced, do not expose the
+full `/objects` API on a public hostname.
 
 For public staging:
 
 - keep `DBBASIC_ENABLE_SOURCE_WRITES=false`
+- generate a deployment-specific `DBBASIC_ADMIN_TOKEN` outside the source tree
 - bind uvicorn to `127.0.0.1`
 - allowlist explicit public object routes in a reverse proxy
-- keep object source, state, logs, versions, and object listing private
+- keep object source, state, logs, versions, and object listing private from
+  normal public users

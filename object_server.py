@@ -28,6 +28,7 @@ SOURCE_WRITES_ENV = "DBBASIC_ENABLE_SOURCE_WRITES"
 ADMIN_TOKEN_ENV = "DBBASIC_ADMIN_TOKEN"
 DATA_DIR_ENV = "DBBASIC_DATA_DIR"
 TRUE_VALUES = {"1", "true", "yes", "on"}
+SENSITIVE_GET_FLAGS = {"source", "state", "logs", "metadata", "versions"}
 
 _runtime = PythonObjectRuntime()
 
@@ -62,6 +63,15 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
 
     if path == http_api_contract.OBJECTS_PATH:
         if method == "GET":
+            gate_error = _admin_token_gate_error(
+                headers,
+                f"Object listing requires {ADMIN_TOKEN_ENV}.",
+            )
+            if gate_error is not None:
+                status, message = gate_error
+                await _send_json(send, {"status": "error", "error": message}, status=status)
+                return
+
             await _send_json(send, _list_objects_payload())
             return
 
@@ -71,7 +81,7 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
     if path.startswith(f"{http_api_contract.OBJECTS_PATH}/"):
         object_id = path.removeprefix(f"{http_api_contract.OBJECTS_PATH}/")
         if method == "GET":
-            await _handle_object_get(send, object_id, query)
+            await _handle_object_get(send, object_id, query, headers)
             return
 
         if method == "POST":
@@ -96,7 +106,12 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
     await _send_json(send, {"status": "error", "error": "Not found"}, status=404)
 
 
-async def _handle_object_get(send, object_id: str, query: dict[str, str]) -> None:
+async def _handle_object_get(
+    send,
+    object_id: str,
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
     if "@" in object_id:
         await _send_json(
             send,
@@ -104,6 +119,16 @@ async def _handle_object_get(send, object_id: str, query: dict[str, str]) -> Non
             status=400,
         )
         return
+
+    if _is_sensitive_get(query):
+        gate_error = _admin_token_gate_error(
+            headers,
+            f"Object introspection requires {ADMIN_TOKEN_ENV}.",
+        )
+        if gate_error is not None:
+            status, message = gate_error
+            await _send_json(send, {"status": "error", "error": message}, status=status)
+            return
 
     if query.get("versions") == "true":
         await _handle_object_versions_get(send, object_id, query)
@@ -649,15 +674,29 @@ def _source_write_gate_error(headers: dict[str, str]) -> tuple[int, str] | None:
             f"Source writes are disabled. Set {SOURCE_WRITES_ENV}=true and {ADMIN_TOKEN_ENV}.",
         )
 
+    return _admin_token_gate_error(headers, f"Source writes require {ADMIN_TOKEN_ENV}.")
+
+
+def _admin_token_gate_error(
+    headers: dict[str, str],
+    missing_token_message: str,
+) -> tuple[int, str] | None:
     admin_token = os.environ.get(ADMIN_TOKEN_ENV, "")
     if not admin_token:
-        return (403, f"Source writes require {ADMIN_TOKEN_ENV}.")
+        return (403, missing_token_message)
 
     request_token = _authorization_token(headers)
     if request_token is None or not hmac.compare_digest(request_token, admin_token):
         return (401, "Unauthorized")
 
     return None
+
+
+def _is_sensitive_get(query: dict[str, str]) -> bool:
+    if "version" in query:
+        return True
+
+    return any(query.get(flag) == "true" for flag in SENSITIVE_GET_FLAGS)
 
 
 def _authorization_token(headers: dict[str, str]) -> str | None:

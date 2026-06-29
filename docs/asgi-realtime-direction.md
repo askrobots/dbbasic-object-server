@@ -96,13 +96,13 @@ The first public ASGI layer is now small and runnable. It includes:
 - source update and rollback
 - state/log/version endpoints
 - metadata endpoints
+- temporary admin-token gate for object listing and introspection reads
 
 The next server work is:
 
-- auth and permissions
+- role, object, and row-level permissions
 - resource limits around object execution
 - backup/restore checks
-- log retention
 - WebSocket or SSE object event streams
 
 Realtime should arrive as an object-level event system, not as a decorative

@@ -4,6 +4,8 @@ import json
 import object_server
 import object_versions
 
+TEST_ADMIN_TOKEN = "unit-test-only-admin-token"
+
 
 def write_source(path, content):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -79,11 +81,15 @@ def enable_source_writes(monkeypatch, root, data_dir):
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
     monkeypatch.setenv("DBBASIC_ENABLE_SOURCE_WRITES", "true")
-    monkeypatch.setenv("DBBASIC_ADMIN_TOKEN", "local-dev-token")
+    monkeypatch.setenv("DBBASIC_ADMIN_TOKEN", TEST_ADMIN_TOKEN)
 
 
 def auth_headers():
-    return [("authorization", "Token local-dev-token")]
+    return [("authorization", f"Token {TEST_ADMIN_TOKEN}")]
+
+
+def enable_admin_token(monkeypatch):
+    monkeypatch.setenv("DBBASIC_ADMIN_TOKEN", TEST_ADMIN_TOKEN)
 
 
 def update_source(object_id, code, *, author="test-api", message="Update source"):
@@ -115,8 +121,9 @@ def test_object_list_returns_existing_contract_shape(tmp_path, monkeypatch):
     write_source(root / "basics" / "counter.py", "def GET(request):\n    return {'count': 1}\n")
     write_source(root / "users" / "42" / "deals.py", "def GET(request):\n    return {}\n")
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    enable_admin_token(monkeypatch)
 
-    status, _, payload = request("/objects", query_string="format=json")
+    status, _, payload = request("/objects", query_string="format=json", headers=auth_headers())
 
     assert status == 200
     assert payload["status"] == "ok"
@@ -137,21 +144,44 @@ def test_object_list_returns_existing_contract_shape(tmp_path, monkeypatch):
 
 def test_object_list_returns_empty_when_objects_dir_is_missing(tmp_path, monkeypatch):
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(tmp_path / "missing"))
+    enable_admin_token(monkeypatch)
 
-    status, _, payload = request("/objects", query_string="format=json")
+    status, _, payload = request("/objects", query_string="format=json", headers=auth_headers())
 
     assert status == 200
     assert payload == {"status": "ok", "objects": [], "count": 0}
+
+
+def test_object_list_requires_admin_token_configuration(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(tmp_path / "objects"))
+    monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)
+
+    status, _, payload = request("/objects", query_string="format=json")
+
+    assert status == 403
+    assert payload == {"status": "error", "error": "Object listing requires DBBASIC_ADMIN_TOKEN."}
+
+
+def test_object_list_requires_authorization_header(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(tmp_path / "objects"))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/objects", query_string="format=json")
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
 
 
 def test_get_source_returns_existing_contract_shape(tmp_path, monkeypatch):
     root = tmp_path / "objects"
     write_source(root / "basics" / "counter.py", "def GET(request):\n    return {'count': 1}\n")
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    enable_admin_token(monkeypatch)
 
     status, _, payload = request(
         "/objects/basics_counter",
         query_string="source=true&format=json",
+        headers=auth_headers(),
     )
 
     assert status == 200
@@ -168,7 +198,7 @@ def test_get_source_rejects_station_routing_for_now(tmp_path, monkeypatch):
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
 
     status, _, payload = request(
-        "/objects/basics_counter@station2",
+        "/objects/basics_counter@remote_node",
         query_string="source=true&format=json",
     )
 
@@ -179,12 +209,32 @@ def test_get_source_rejects_station_routing_for_now(tmp_path, monkeypatch):
 
 def test_get_source_returns_404_for_missing_object(tmp_path, monkeypatch):
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(tmp_path / "objects"))
+    enable_admin_token(monkeypatch)
 
-    status, _, payload = request("/objects/missing_object", query_string="source=true&format=json")
+    status, _, payload = request(
+        "/objects/missing_object",
+        query_string="source=true&format=json",
+        headers=auth_headers(),
+    )
 
     assert status == 404
     assert payload["status"] == "error"
     assert payload["error"] == "Object source not found: missing_object"
+
+
+def test_get_source_requires_authorization_header(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {'count': 1}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/objects/basics_counter",
+        query_string="source=true&format=json",
+    )
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
 
 
 def test_get_state_returns_empty_state_for_object_without_state_file(tmp_path, monkeypatch):
@@ -192,8 +242,13 @@ def test_get_state_returns_empty_state_for_object_without_state_file(tmp_path, m
     write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
 
-    status, _, payload = request("/objects/basics_counter", query_string="state=true")
+    status, _, payload = request(
+        "/objects/basics_counter",
+        query_string="state=true",
+        headers=auth_headers(),
+    )
 
     assert status == 200
     assert payload == {
@@ -217,8 +272,13 @@ def test_get_state_reads_tsv_state(tmp_path, monkeypatch):
     )
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
 
-    status, _, payload = request("/objects/basics_counter", query_string="state=true")
+    status, _, payload = request(
+        "/objects/basics_counter",
+        query_string="state=true",
+        headers=auth_headers(),
+    )
 
     assert status == 200
     assert payload == {
@@ -235,8 +295,13 @@ def test_get_state_reads_tsv_state(tmp_path, monkeypatch):
 def test_get_state_returns_404_for_missing_object(tmp_path, monkeypatch):
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(tmp_path / "objects"))
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
 
-    status, _, payload = request("/objects/missing_object", query_string="state=true")
+    status, _, payload = request(
+        "/objects/missing_object",
+        query_string="state=true",
+        headers=auth_headers(),
+    )
 
     assert status == 404
     assert payload == {"status": "error", "error": "Object source not found: missing_object"}
@@ -246,8 +311,13 @@ def test_get_state_rejects_invalid_object_id(tmp_path, monkeypatch):
     root = tmp_path / "objects"
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
 
-    status, _, payload = request("/objects/bad.id", query_string="state=true")
+    status, _, payload = request(
+        "/objects/bad.id",
+        query_string="state=true",
+        headers=auth_headers(),
+    )
 
     assert status == 400
     assert payload == {"status": "error", "error": "Invalid object ID: bad.id"}
@@ -258,8 +328,13 @@ def test_get_logs_returns_empty_logs_for_object_without_log_file(tmp_path, monke
     write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
 
-    status, _, payload = request("/objects/basics_counter", query_string="logs=true")
+    status, _, payload = request(
+        "/objects/basics_counter",
+        query_string="logs=true",
+        headers=auth_headers(),
+    )
 
     assert status == 200
     assert payload == {
@@ -284,10 +359,12 @@ def test_get_logs_reads_tsv_logs_with_level_and_limit(tmp_path, monkeypatch):
     )
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
 
     status, _, payload = request(
         "/objects/basics_counter",
         query_string="logs=true&level=ERROR&limit=1",
+        headers=auth_headers(),
     )
 
     assert status == 200
@@ -312,8 +389,13 @@ def test_get_logs_rejects_bad_limit(tmp_path, monkeypatch):
     write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
 
-    status, _, payload = request("/objects/basics_counter", query_string="logs=true&limit=0")
+    status, _, payload = request(
+        "/objects/basics_counter",
+        query_string="logs=true&limit=0",
+        headers=auth_headers(),
+    )
 
     assert status == 400
     assert payload == {
@@ -325,8 +407,13 @@ def test_get_logs_rejects_bad_limit(tmp_path, monkeypatch):
 def test_get_logs_returns_404_for_missing_object(tmp_path, monkeypatch):
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(tmp_path / "objects"))
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
 
-    status, _, payload = request("/objects/missing_object", query_string="logs=true")
+    status, _, payload = request(
+        "/objects/missing_object",
+        query_string="logs=true",
+        headers=auth_headers(),
+    )
 
     assert status == 404
     assert payload == {"status": "error", "error": "Object source not found: missing_object"}
@@ -336,8 +423,13 @@ def test_get_logs_rejects_invalid_object_id(tmp_path, monkeypatch):
     root = tmp_path / "objects"
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
 
-    status, _, payload = request("/objects/bad.id", query_string="logs=true")
+    status, _, payload = request(
+        "/objects/bad.id",
+        query_string="logs=true",
+        headers=auth_headers(),
+    )
 
     assert status == 400
     assert payload == {"status": "error", "error": "Invalid object ID: bad.id"}
@@ -364,8 +456,13 @@ def test_get_metadata_summarizes_object_storage(tmp_path, monkeypatch):
     )
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
 
-    status, _, payload = request("/objects/basics_counter", query_string="metadata=true")
+    status, _, payload = request(
+        "/objects/basics_counter",
+        query_string="metadata=true",
+        headers=auth_headers(),
+    )
 
     assert status == 200
     assert payload == {
@@ -388,8 +485,13 @@ def test_get_metadata_summarizes_object_storage(tmp_path, monkeypatch):
 def test_get_metadata_returns_404_for_missing_object(tmp_path, monkeypatch):
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(tmp_path / "objects"))
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
 
-    status, _, payload = request("/objects/missing_object", query_string="metadata=true")
+    status, _, payload = request(
+        "/objects/missing_object",
+        query_string="metadata=true",
+        headers=auth_headers(),
+    )
 
     assert status == 404
     assert payload == {"status": "error", "error": "Object source not found: missing_object"}
@@ -399,8 +501,13 @@ def test_get_metadata_rejects_invalid_object_id(tmp_path, monkeypatch):
     root = tmp_path / "objects"
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
 
-    status, _, payload = request("/objects/bad.id", query_string="metadata=true")
+    status, _, payload = request(
+        "/objects/bad.id",
+        query_string="metadata=true",
+        headers=auth_headers(),
+    )
 
     assert status == 400
     assert payload == {"status": "error", "error": "Invalid object ID: bad.id"}
@@ -411,14 +518,14 @@ def test_source_update_is_disabled_by_default(tmp_path, monkeypatch):
     source_path = write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
     monkeypatch.delenv("DBBASIC_ENABLE_SOURCE_WRITES", raising=False)
-    monkeypatch.setenv("DBBASIC_ADMIN_TOKEN", "local-dev-token")
+    enable_admin_token(monkeypatch)
 
     status, _, payload = request(
         "/objects/basics_counter",
         method="PUT",
         query_string="source=true",
         body=json.dumps({"code": "def GET(request):\n    return {'count': 1}\n"}).encode(),
-        headers=[("authorization", "Token local-dev-token")],
+        headers=auth_headers(),
     )
 
     assert status == 403
@@ -451,7 +558,7 @@ def test_source_update_requires_authorization_header(tmp_path, monkeypatch):
     source_path = write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
     monkeypatch.setenv("DBBASIC_ENABLE_SOURCE_WRITES", "true")
-    monkeypatch.setenv("DBBASIC_ADMIN_TOKEN", "local-dev-token")
+    enable_admin_token(monkeypatch)
 
     status, _, payload = request(
         "/objects/basics_counter",
@@ -470,14 +577,14 @@ def test_source_update_rejects_invalid_json_body(tmp_path, monkeypatch):
     source_path = write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
     monkeypatch.setenv("DBBASIC_ENABLE_SOURCE_WRITES", "true")
-    monkeypatch.setenv("DBBASIC_ADMIN_TOKEN", "local-dev-token")
+    enable_admin_token(monkeypatch)
 
     status, _, payload = request(
         "/objects/basics_counter",
         method="PUT",
         query_string="source=true",
         body=b"{",
-        headers=[("authorization", "Token local-dev-token")],
+        headers=auth_headers(),
     )
 
     assert status == 400
@@ -490,14 +597,14 @@ def test_source_update_requires_code_string(tmp_path, monkeypatch):
     write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
     monkeypatch.setenv("DBBASIC_ENABLE_SOURCE_WRITES", "true")
-    monkeypatch.setenv("DBBASIC_ADMIN_TOKEN", "local-dev-token")
+    enable_admin_token(monkeypatch)
 
     status, _, payload = request(
         "/objects/basics_counter",
         method="PUT",
         query_string="source=true",
         body=json.dumps({"source": "wrong field"}).encode(),
-        headers=[("authorization", "Token local-dev-token")],
+        headers=auth_headers(),
     )
 
     assert status == 400
@@ -517,7 +624,7 @@ def test_source_update_versions_source_and_immediately_runs_new_code(tmp_path, m
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
     monkeypatch.setenv("DBBASIC_ENABLE_SOURCE_WRITES", "true")
-    monkeypatch.setenv("DBBASIC_ADMIN_TOKEN", "local-dev-token")
+    enable_admin_token(monkeypatch)
     new_code = "def GET(request):\n    return {'count': 2}\n"
 
     status, _, payload = request(
@@ -531,7 +638,7 @@ def test_source_update_versions_source_and_immediately_runs_new_code(tmp_path, m
                 "message": "Update counter",
             }
         ).encode(),
-        headers=[("authorization", "Token local-dev-token")],
+        headers=auth_headers(),
     )
 
     assert status == 200
@@ -576,6 +683,7 @@ def test_versions_endpoint_lists_history_newest_first_without_content(tmp_path, 
     status, _, payload = request(
         "/objects/basics_counter",
         query_string="versions=true&limit=10",
+        headers=auth_headers(),
     )
 
     assert status == 200
@@ -589,6 +697,7 @@ def test_versions_endpoint_lists_history_newest_first_without_content(tmp_path, 
     status, _, payload = request(
         "/objects/basics_counter",
         query_string="versions=true&limit=1",
+        headers=auth_headers(),
     )
 
     assert status == 200
@@ -600,10 +709,12 @@ def test_versions_endpoint_rejects_bad_limit(tmp_path, monkeypatch):
     root = tmp_path / "objects"
     write_source(root / "basics" / "counter.py", "def GET(request):\n    return {'count': 0}\n")
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    enable_admin_token(monkeypatch)
 
     status, _, payload = request(
         "/objects/basics_counter",
         query_string="versions=true&limit=0",
+        headers=auth_headers(),
     )
 
     assert status == 400
@@ -619,7 +730,11 @@ def test_specific_version_endpoint_returns_content(tmp_path, monkeypatch):
 
     update_source("basics_counter", v1_code, message="first")
 
-    status, _, payload = request("/objects/basics_counter", query_string="version=1")
+    status, _, payload = request(
+        "/objects/basics_counter",
+        query_string="version=1",
+        headers=auth_headers(),
+    )
 
     assert status == 200
     assert payload["status"] == "ok"
@@ -635,7 +750,11 @@ def test_specific_version_endpoint_returns_404_for_missing_version(tmp_path, mon
     data_dir = tmp_path / "data"
     enable_source_writes(monkeypatch, root, data_dir)
 
-    status, _, payload = request("/objects/basics_counter", query_string="version=99")
+    status, _, payload = request(
+        "/objects/basics_counter",
+        query_string="version=99",
+        headers=auth_headers(),
+    )
 
     assert status == 404
     assert payload == {
@@ -648,8 +767,13 @@ def test_specific_version_endpoint_rejects_bad_version_id(tmp_path, monkeypatch)
     root = tmp_path / "objects"
     write_source(root / "basics" / "counter.py", "def GET(request):\n    return {'count': 0}\n")
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    enable_admin_token(monkeypatch)
 
-    status, _, payload = request("/objects/basics_counter", query_string="version=bad")
+    status, _, payload = request(
+        "/objects/basics_counter",
+        query_string="version=bad",
+        headers=auth_headers(),
+    )
 
     assert status == 400
     assert payload == {"status": "error", "error": "Query parameter 'version' must be an integer"}
@@ -664,7 +788,7 @@ def test_rollback_requires_source_write_gate(tmp_path, monkeypatch):
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.delenv("DBBASIC_ENABLE_SOURCE_WRITES", raising=False)
-    monkeypatch.setenv("DBBASIC_ADMIN_TOKEN", "local-dev-token")
+    enable_admin_token(monkeypatch)
 
     status, _, payload = request(
         "/objects/basics_counter",
@@ -985,12 +1109,17 @@ def test_object_execution_appends_success_log(tmp_path, monkeypatch):
     write_source(root / "basics" / "counter.py", "def GET(request):\n    return {'count': 1}\n")
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
 
     status, _, payload = request("/objects/basics_counter")
     assert status == 200
     assert payload == {"count": 1}
 
-    status, _, payload = request("/objects/basics_counter", query_string="logs=true")
+    status, _, payload = request(
+        "/objects/basics_counter",
+        query_string="logs=true",
+        headers=auth_headers(),
+    )
 
     assert status == 200
     assert payload["count"] == 1
@@ -1015,11 +1144,16 @@ def test_object_execution_state_manager_persists_state(tmp_path, monkeypatch):
     )
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
 
     assert request("/objects/basics_counter")[2] == {"count": 1}
     assert request("/objects/basics_counter")[2] == {"count": 2}
 
-    status, _, payload = request("/objects/basics_counter", query_string="state=true")
+    status, _, payload = request(
+        "/objects/basics_counter",
+        query_string="state=true",
+        headers=auth_headers(),
+    )
 
     assert status == 200
     assert payload == {
@@ -1041,13 +1175,18 @@ def test_object_execution_logger_writes_object_logs(tmp_path, monkeypatch):
     )
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
 
     status, _, payload = request("/objects/basics_counter")
 
     assert status == 200
     assert payload == {"ok": True}
 
-    status, _, payload = request("/objects/basics_counter", query_string="logs=true")
+    status, _, payload = request(
+        "/objects/basics_counter",
+        query_string="logs=true",
+        headers=auth_headers(),
+    )
 
     assert status == 200
     messages = [entry["message"] for entry in payload["logs"]]
@@ -1103,12 +1242,17 @@ def test_object_execution_appends_error_log(tmp_path, monkeypatch):
     )
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
 
     status, _, payload = request("/objects/basics_broken")
     assert status == 500
     assert "RuntimeError: boom" in payload["error"]
 
-    status, _, payload = request("/objects/basics_broken", query_string="logs=true")
+    status, _, payload = request(
+        "/objects/basics_broken",
+        query_string="logs=true",
+        headers=auth_headers(),
+    )
 
     assert status == 200
     assert payload["count"] == 1
