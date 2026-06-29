@@ -274,6 +274,10 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
             await _handle_permissions_check(send, method, body, headers)
             return
 
+        if path == http_api_contract.PERMISSIONS_AUDIT_PATH:
+            await _handle_permissions_audit(send, method, query, headers)
+            return
+
         if path == http_api_contract.OBJECTS_PATH:
             if method == "GET":
                 gate_error = _admin_token_gate_error(
@@ -527,6 +531,54 @@ async def _handle_permissions_check(
         {
             "status": "ok",
             "decision": object_permissions.decision_to_dict(decision),
+        },
+    )
+
+
+async def _handle_permissions_audit(
+    send,
+    method: str,
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    gate_error = _permissions_gate_error(headers)
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    try:
+        limit = _query_int(query, "limit", default=100, minimum=1, maximum=1000)
+        entries = object_permission_audit.get_permission_audit(
+            _data_dir(),
+            limit=limit,
+            action=_optional_query_text(query, "action"),
+            object_id=_optional_query_text(query, "object_id"),
+            collection=_optional_query_text(query, "collection"),
+            allowed=_optional_query_bool(query, "allowed"),
+            enforced=_optional_query_bool(query, "enforced"),
+        )
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except OSError as exc:
+        await _send_json(
+            send,
+            {"status": "error", "error": f"Could not read permission audit: {exc}"},
+            status=500,
+        )
+        return
+
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "entries": entries,
+            "count": len(entries),
         },
     )
 
@@ -1439,6 +1491,25 @@ def _query_int(
         raise ValueError(f"Query parameter '{key}' must be at most {maximum}")
 
     return parsed
+
+
+def _optional_query_text(query: dict[str, str], key: str) -> str | None:
+    if key not in query:
+        return None
+    value = query[key].strip()
+    return value or None
+
+
+def _optional_query_bool(query: dict[str, str], key: str) -> bool | None:
+    if key not in query:
+        return None
+
+    value = query[key].strip().lower()
+    if value in TRUE_VALUES:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"Query parameter '{key}' must be a boolean")
 
 
 def _ensure_object_source_exists(object_id: str) -> None:

@@ -187,6 +187,17 @@ DBBASIC_ENABLE_PERMISSION_AUDIT=true
 That is useful before turning enforcement on for a live app. Enforcement also
 writes audit entries.
 
+Operators and Scroll can read recent audit entries through the admin-gated audit
+endpoint:
+
+```http
+GET /permissions/audit?limit=100&object_id=site_home
+Authorization: Token <token>
+```
+
+Supported filters are `action`, `object_id`, `collection`, `allowed`, and
+`enforced`.
+
 By default, route checks only trust the admin token and anonymous public traffic.
 If a reverse proxy or auth gateway has already authenticated the request, trusted
 identity headers can be enabled explicitly:

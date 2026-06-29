@@ -84,6 +84,7 @@ This repository currently contains:
 - `object_state.py` - TSV-backed object state reads and runtime writes
 - `object_logs.py` - TSV-backed object log reads, appends, rotation, compression, retention, and runtime logger helper
 - `object_metadata.py` - conservative object metadata summaries
+- `object_permission_audit.py` - JSONL-backed permission decision audit reads and writes
 - `object_permission_store.py` - JSON-backed permission policy persistence
 - `object_permissions.py` - server-side access modes, role/object/action checks,
   ownership, sharing, subscriptions, temporary grants, and row/field filters
@@ -131,6 +132,7 @@ Current endpoints:
 - `GET /permissions/policy`
 - `PUT /permissions/policy`
 - `POST /permissions/check`
+- `GET /permissions/audit`
 - `GET /objects?format=json`
 - `GET /objects/{object_id}`
 - `POST /objects/{object_id}`
@@ -149,7 +151,7 @@ Execution currently uses `python_object_runtime.py`, a direct Python loader. It
 is useful for proving the loop, but it is not the production sandbox or security
 boundary.
 
-Permission policy/check endpoints, object listing, source, state, logs,
+Permission policy/check/audit endpoints, object listing, source, state, logs,
 metadata, and versions require:
 
 ```bash
@@ -203,6 +205,7 @@ rules the rest of the server will use:
 - `object_state.py` reads and writes runtime-owned TSV-backed object state
 - `object_logs.py` reads and appends TSV-backed object logs, rotates/compresses old logs, and provides `_logger`
 - `object_metadata.py` summarizes source, state, logs, and versions
+- `object_permission_audit.py` records and reads route permission decisions
 - `object_versions.py` keeps source history as `metadata.tsv` plus `vN.txt` files
 - `object_backup.py` archives and safely restores object source plus runtime data
 - `object_daemon.py` runs scheduled, queued, and event work

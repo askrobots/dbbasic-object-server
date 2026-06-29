@@ -280,6 +280,42 @@ DBBASIC_PERMISSION_TRUST_HEADERS=true
 Supported headers are `X-DBBASIC-User-Id`, `X-DBBASIC-Account-Id`,
 `X-DBBASIC-Roles`, and `X-DBBASIC-Subscriptions`.
 
+Operators and Scroll can read recent audit entries through an admin-gated
+endpoint:
+
+```http
+GET /permissions/audit?limit=100
+Authorization: Token <token>
+```
+
+Optional filters:
+
+- `action`
+- `object_id`
+- `collection`
+- `allowed=true|false`
+- `enforced=true|false`
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "entries": [
+    {
+      "timestamp": "2026-06-29T00:00:00Z",
+      "method": "GET",
+      "object_id": "site_home",
+      "collection": "site",
+      "action": "execute",
+      "enforced": false,
+      "decision": {"allowed": false, "code": "forbidden"}
+    }
+  ],
+  "count": 1
+}
+```
+
 ## Object List
 
 ```http

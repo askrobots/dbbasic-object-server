@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import deque
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +46,11 @@ def get_permission_audit(
     base_dir: Path | str = DEFAULT_DATA_DIR,
     *,
     limit: int = 100,
+    action: str | None = None,
+    object_id: str | None = None,
+    collection: str | None = None,
+    allowed: bool | None = None,
+    enforced: bool | None = None,
 ) -> list[dict[str, Any]]:
     """Read recent permission audit entries."""
     if limit < 1:
@@ -54,10 +60,48 @@ def get_permission_audit(
     if not path.exists():
         return []
 
-    lines = path.read_text(encoding="utf-8").splitlines()
-    entries: list[dict[str, Any]] = []
-    for line in lines[-limit:]:
-        if not line.strip():
-            continue
-        entries.append(json.loads(line))
-    return entries
+    entries: deque[dict[str, Any]] = deque(maxlen=limit)
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if _matches_filters(
+                entry,
+                action=action,
+                object_id=object_id,
+                collection=collection,
+                allowed=allowed,
+                enforced=enforced,
+            ):
+                entries.append(entry)
+
+    return list(entries)
+
+
+def _matches_filters(
+    entry: dict[str, Any],
+    *,
+    action: str | None,
+    object_id: str | None,
+    collection: str | None,
+    allowed: bool | None,
+    enforced: bool | None,
+) -> bool:
+    if action is not None and entry.get("action") != action:
+        return False
+    if object_id is not None and entry.get("object_id") != object_id:
+        return False
+    if collection is not None and entry.get("collection") != collection:
+        return False
+    if enforced is not None and entry.get("enforced") is not enforced:
+        return False
+    if allowed is not None:
+        decision = entry.get("decision")
+        if not isinstance(decision, dict) or decision.get("allowed") is not allowed:
+            return False
+
+    return True

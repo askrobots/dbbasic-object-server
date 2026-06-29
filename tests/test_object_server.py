@@ -627,6 +627,113 @@ def test_permissions_check_returns_payment_required_decision(tmp_path, monkeypat
     assert payload["decision"]["http_status"] == 402
 
 
+def test_permissions_audit_requires_admin_token_configuration(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)
+
+    status, _, payload = request("/permissions/audit")
+
+    assert status == 403
+    assert payload == {"status": "error", "error": "Permissions API requires DBBASIC_ADMIN_TOKEN."}
+
+
+def test_permissions_audit_requires_authorization_header(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/permissions/audit")
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
+
+
+def test_permissions_audit_returns_recent_entries_with_filters(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+    object_permission_audit.append_permission_audit(
+        {
+            "timestamp": "2026-06-29T00:00:00Z",
+            "action": "execute",
+            "object_id": "site_home",
+            "collection": "site",
+            "enforced": False,
+            "decision": {"allowed": False},
+        },
+        data_dir,
+    )
+    object_permission_audit.append_permission_audit(
+        {
+            "timestamp": "2026-06-29T00:00:01Z",
+            "action": "source",
+            "object_id": "basics_counter",
+            "collection": "basics",
+            "enforced": True,
+            "decision": {"allowed": True},
+        },
+        data_dir,
+    )
+
+    status, _, payload = request(
+        "/permissions/audit",
+        query_string="action=source&allowed=true&enforced=true&limit=10",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload == {
+        "status": "ok",
+        "entries": [
+            {
+                "timestamp": "2026-06-29T00:00:01Z",
+                "action": "source",
+                "object_id": "basics_counter",
+                "collection": "basics",
+                "enforced": True,
+                "decision": {"allowed": True},
+            }
+        ],
+        "count": 1,
+    }
+
+
+def test_permissions_audit_returns_empty_when_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/permissions/audit", headers=auth_headers())
+
+    assert status == 200
+    assert payload == {"status": "ok", "entries": [], "count": 0}
+
+
+def test_permissions_audit_rejects_bad_query_values(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/permissions/audit",
+        query_string="allowed=maybe",
+        headers=auth_headers(),
+    )
+
+    assert status == 400
+    assert payload == {
+        "status": "error",
+        "error": "Query parameter 'allowed' must be a boolean",
+    }
+
+
+def test_permissions_audit_rejects_non_get_methods(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/permissions/audit", method="POST", headers=auth_headers())
+
+    assert status == 405
+    assert payload == {"status": "error", "error": "Method not allowed"}
+
+
 def test_permission_enforcement_is_disabled_by_default(tmp_path, monkeypatch):
     root = tmp_path / "objects"
     data_dir = tmp_path / "data"

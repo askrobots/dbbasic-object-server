@@ -14,6 +14,7 @@ OBJECT_PATH = "/objects/{object_id}"
 OBJECT_STATION_PATH = "/objects/{object_id}@{station_id}"
 PERMISSIONS_POLICY_PATH = "/permissions/policy"
 PERMISSIONS_CHECK_PATH = "/permissions/check"
+PERMISSIONS_AUDIT_PATH = "/permissions/audit"
 
 SOURCE_QUERY = {"source": "true", "format": "json"}
 STATE_QUERY = {"state": "true"}
@@ -36,6 +37,7 @@ RESPONSE_FIELDS: dict[str, frozenset[str]] = {
     "destroy_object": frozenset({"status", "message", "object_id"}),
     "permissions_policy": frozenset({"status", "policy"}),
     "permissions_check": frozenset({"status", "decision"}),
+    "permissions_audit": frozenset({"status", "entries", "count"}),
 }
 
 

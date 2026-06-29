@@ -48,8 +48,8 @@ flowchart TD
 - `traffic-limits.md` - request-size limits, high-traffic safety layers, and
   the next rate/concurrency/execution boundaries.
 - `permissions-model.md` - server-side access modes, role/object/action rules,
-  ownership, sharing, row/field filters, subscriptions, and temporary paid
-  access.
+  ownership, sharing, row/field filters, subscriptions, temporary paid access,
+  route enforcement, and audit readback.
 
 ## Documentation Rules
 
