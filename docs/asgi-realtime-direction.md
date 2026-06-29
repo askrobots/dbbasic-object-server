@@ -22,6 +22,19 @@ flowchart LR
 
 but without classic CGI's process-per-request cost.
 
+That is a better comparison than saying DBBASIC is a Rails-like app structure.
+The goal is closer to persistent CGI with a reusable object runtime:
+
+- filesystem paths can map to runnable code
+- the server stays warm between requests
+- routing is derived from object source placement
+- common helpers provide state, logs, files, versions, and scheduling
+- object boundaries stay small enough for humans and AI tools to inspect
+
+Classic CGI made deployment easy but left too much work to each script. DBBASIC
+keeps the direct path-to-code idea and adds the shared runtime pieces that make
+objects reusable as application building blocks.
+
 ## Why ASGI Matters
 
 ASGI gives DBBASIC one server surface for:
