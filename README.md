@@ -111,11 +111,12 @@ execution can return JSON data, HTML/text/binary responses through
 `content_type` and `body`, or a low-level `(status, headers, body)` tuple.
 
 This server is useful for local development and controlled staging. It is not
-the final role or permissions boundary yet. Object listing and introspection
-reads require the temporary admin token. Source updates and rollback require the
-same token plus the explicit source-write gate. If you put it behind a public
-hostname before permissions land, expose only explicit public object routes
-through a reverse proxy and keep source writes disabled.
+the final auth boundary yet. Object listing and introspection reads require the
+temporary admin token. Source updates and rollback require the same token plus
+the explicit source-write gate. Route-level permission enforcement exists, but
+it is disabled unless the deployment explicitly enables it. If you put it behind
+a public hostname, expose only explicit public object routes through a reverse
+proxy and keep source writes disabled.
 
 ```bash
 python -m pip install -e '.[server,test]'
@@ -160,6 +161,9 @@ export DBBASIC_MAX_CONCURRENT_EXECUTIONS=8
 export DBBASIC_OBJECT_TIMEOUT_SECONDS=5
 export DBBASIC_RATE_LIMIT_REQUESTS=1000
 export DBBASIC_RATE_LIMIT_WINDOW_SECONDS=60
+export DBBASIC_ENABLE_PERMISSION_AUDIT=false
+export DBBASIC_ENABLE_PERMISSION_ENFORCEMENT=false
+export DBBASIC_PERMISSION_TRUST_HEADERS=false
 ```
 
 The value above is a placeholder. Each real deployment must generate its own
@@ -176,7 +180,14 @@ export DBBASIC_ENABLE_SOURCE_WRITES=true
 Rate limiting is disabled unless `DBBASIC_RATE_LIMIT_REQUESTS` is set above
 zero. Public staging and production deployments should set it explicitly.
 
-Production auth and permissions still need to replace this temporary admin-token
+Permission audit-only mode writes route decisions to
+`data/permissions/audit.jsonl` without blocking requests. Enforcement mode uses
+the persisted `data/permissions/policy.json` policy to return `401`, `402`, or
+`403` before object routes run. Trusted user/account/role headers are disabled
+unless `DBBASIC_PERMISSION_TRUST_HEADERS=true` is set behind a proxy that strips
+client-supplied copies.
+
+Production user/session auth still needs to replace the temporary admin-token
 gate before general use.
 
 ## Current Extraction Slice
@@ -203,6 +214,9 @@ rules the rest of the server will use:
   returns `429 Too Many Requests`
 - full request and object execution slots return `503 Service Unavailable`
 - object execution over `DBBASIC_OBJECT_TIMEOUT_SECONDS` returns `504 Gateway Timeout`
+- optional permission audit logs route decisions without changing responses
+- optional permission enforcement checks object routes before source,
+  introspection, or execution work runs
 - `basics_counter` maps to `objects/basics/counter.py`
 - `u_42_deals` maps to `objects/users/42/deals.py`
 - rollbacks create a new version instead of deleting history
@@ -247,8 +261,8 @@ general public code execution.
 Near-term work:
 
 - move the hardened core runtime and sandbox into this repository
-- wire the permissions evaluator into authentication, row/object access checks,
-  and Scroll-compatible introspection endpoints
+- connect real sessions, accounts, and auth gateways to permission enforcement
+- add Scroll-compatible permission audit and introspection endpoints
 - add CPU, memory, wall-clock, and rate limits around execution
 - wire scheduled backup retention and Scroll backup controls to `object_backup.py`
 - keep the HTTP contract compatible with Scroll and existing tools

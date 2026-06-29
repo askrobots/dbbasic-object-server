@@ -142,6 +142,69 @@ If `policy` is omitted, `/permissions/check` uses the persisted policy file.
 The optional `now` field accepts an ISO timestamp for testing temporary access
 windows.
 
+## Route Enforcement
+
+The public server can enforce the persisted policy against object routes, but it
+is intentionally opt-in while auth and Scroll editing mature.
+
+```text
+DBBASIC_ENABLE_PERMISSION_ENFORCEMENT=true
+```
+
+When enforcement is enabled, object routes call the same decision engine before
+serving or executing an object:
+
+```mermaid
+flowchart LR
+    A["HTTP request"] --> B["map subject"]
+    B --> C["map route to action"]
+    C --> D["load data/permissions/policy.json"]
+    D --> E["check_permission"]
+    E --> F{"allowed?"}
+    F -- yes --> G["serve object route"]
+    F -- no --> H["return 401 / 402 / 403"]
+    E --> I["append data/permissions/audit.jsonl"]
+```
+
+Route actions currently map like this:
+
+- `GET /objects/{id}` -> `execute`
+- `POST /objects/{id}` -> `execute`
+- `PUT /objects/{id}` -> `update`
+- `DELETE /objects/{id}` -> `delete`
+- `?source=true` -> `source`
+- `?state=true` -> `state`
+- `?logs=true` -> `logs`
+- `?versions=true` or `?version=N` -> `versions`
+- `?metadata=true` -> `read`
+
+Audit-only mode logs decisions without blocking the request:
+
+```text
+DBBASIC_ENABLE_PERMISSION_AUDIT=true
+```
+
+That is useful before turning enforcement on for a live app. Enforcement also
+writes audit entries.
+
+By default, route checks only trust the admin token and anonymous public traffic.
+If a reverse proxy or auth gateway has already authenticated the request, trusted
+identity headers can be enabled explicitly:
+
+```text
+DBBASIC_PERMISSION_TRUST_HEADERS=true
+```
+
+Supported headers:
+
+- `X-DBBASIC-User-Id`
+- `X-DBBASIC-Account-Id`
+- `X-DBBASIC-Roles`
+- `X-DBBASIC-Subscriptions`
+
+Only enable trusted headers behind infrastructure that strips or overwrites
+client-supplied copies.
+
 ## Access Modes
 
 Access modes answer who gets through the front door.

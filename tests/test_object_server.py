@@ -2,6 +2,8 @@ import asyncio
 import json
 
 import object_execution
+import object_permission_audit
+import object_permission_store
 import object_server
 import object_versions
 
@@ -128,6 +130,10 @@ def enable_admin_token(monkeypatch):
     monkeypatch.setenv("DBBASIC_ADMIN_TOKEN", TEST_ADMIN_TOKEN)
 
 
+def save_permission_policy(data_dir, policy):
+    object_permission_store.replace_policy(policy, data_dir)
+
+
 def claim_limit_slot(limiter, limit):
     token = limiter.try_acquire(limit)
     assert token is not None
@@ -221,6 +227,9 @@ def test_health_capacity_reports_version_config_objects_and_slots(tmp_path, monk
     assert payload["config"]["max_request_bytes"] == 2048
     assert payload["config"]["max_concurrent_requests"] == 2
     assert payload["config"]["max_concurrent_executions"] == 1
+    assert payload["config"]["permission_enforcement_enabled"] is False
+    assert payload["config"]["permission_audit_enabled"] is False
+    assert payload["config"]["permission_trust_headers"] is False
     assert payload["capacity"]["requests"] == {
         "in_flight": 1,
         "max": 2,
@@ -616,6 +625,133 @@ def test_permissions_check_returns_payment_required_decision(tmp_path, monkeypat
     assert payload["decision"]["allowed"] is False
     assert payload["decision"]["code"] == "payment_required"
     assert payload["decision"]["http_status"] == 402
+
+
+def test_permission_enforcement_is_disabled_by_default(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {'ok': True}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+
+    status, _, payload = request("/objects/site_home")
+
+    assert status == 200
+    assert payload == {"ok": True}
+    assert object_permission_audit.get_permission_audit(data_dir) == []
+
+
+def test_permission_enforcement_denies_execution_with_default_policy(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {'ok': True}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+
+    status, _, payload = request("/objects/site_home")
+
+    assert status == 403
+    assert payload == {"status": "error", "error": "no matching role rule", "code": "forbidden"}
+    entries = object_permission_audit.get_permission_audit(data_dir)
+    assert entries[-1]["action"] == "execute"
+    assert entries[-1]["object_id"] == "site_home"
+    assert entries[-1]["collection"] == "site"
+    assert entries[-1]["decision"]["allowed"] is False
+    assert entries[-1]["enforced"] is True
+
+
+def test_permission_enforcement_allows_public_policy_execution(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {'ok': True}\n")
+    save_permission_policy(data_dir, {"access_mode": "public"})
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+
+    status, _, payload = request("/objects/site_home")
+
+    assert status == 200
+    assert payload == {"ok": True}
+    assert object_permission_audit.get_permission_audit(data_dir)[-1]["decision"]["allowed"] is True
+
+
+def test_permission_enforcement_admin_token_bypasses_policy(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {'ok': True}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/objects/site_home", headers=auth_headers())
+
+    assert status == 200
+    assert payload == {"ok": True}
+    entry = object_permission_audit.get_permission_audit(data_dir)[-1]
+    assert entry["subject"]["roles"] == ["admin"]
+    assert entry["decision"]["reason"] == "admin role"
+
+
+def test_permission_enforcement_uses_trusted_subject_headers(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {'ok': True}\n")
+    save_permission_policy(
+        data_dir,
+        {
+            "access_mode": "role_based",
+            "rules": [
+                {
+                    "effect": "allow",
+                    "principal": "role:sales",
+                    "actions": ["execute"],
+                    "object_id": "site_home",
+                    "reason": "sales can execute site home",
+                }
+            ],
+        },
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+    monkeypatch.setenv(object_server.PERMISSION_TRUST_HEADERS_ENV, "true")
+
+    status, _, payload = request(
+        "/objects/site_home",
+        headers=[
+            ("x-dbbasic-user-id", "7"),
+            ("x-dbbasic-account-id", "customer-acme"),
+            ("x-dbbasic-roles", "sales"),
+        ],
+    )
+
+    assert status == 200
+    assert payload == {"ok": True}
+    entry = object_permission_audit.get_permission_audit(data_dir)[-1]
+    assert entry["subject"]["user_id"] == "7"
+    assert entry["subject"]["account_id"] == "customer-acme"
+    assert entry["subject"]["roles"] == ["sales"]
+    assert entry["decision"]["reason"] == "sales can execute site home"
+
+
+def test_permission_audit_shadow_mode_logs_without_blocking(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {'ok': True}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_AUDIT_ENV, "true")
+
+    status, _, payload = request("/objects/site_home")
+
+    assert status == 200
+    assert payload == {"ok": True}
+    entry = object_permission_audit.get_permission_audit(data_dir)[-1]
+    assert entry["decision"]["allowed"] is False
+    assert entry["enforced"] is False
 
 
 def test_get_source_returns_existing_contract_shape(tmp_path, monkeypatch):

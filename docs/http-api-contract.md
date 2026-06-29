@@ -246,6 +246,40 @@ When a paid entitlement is missing, the decision can include:
 }
 ```
 
+## Permission Route Enforcement
+
+Permission policy checks can be applied to object routes when explicitly enabled:
+
+```text
+DBBASIC_ENABLE_PERMISSION_ENFORCEMENT=true
+```
+
+When enforcement is enabled, denied object route checks return the
+`http_status`, `reason`, and `code` from the permission decision before object
+source, state, logs, versions, or execution work runs.
+
+Audit-only mode records the same decisions without changing responses:
+
+```text
+DBBASIC_ENABLE_PERMISSION_AUDIT=true
+```
+
+Audit entries are written as JSON lines under:
+
+```text
+data/permissions/audit.jsonl
+```
+
+Trusted identity headers are off by default and should only be enabled behind a
+trusted auth gateway or reverse proxy:
+
+```text
+DBBASIC_PERMISSION_TRUST_HEADERS=true
+```
+
+Supported headers are `X-DBBASIC-User-Id`, `X-DBBASIC-Account-Id`,
+`X-DBBASIC-Roles`, and `X-DBBASIC-Subscriptions`.
+
 ## Object List
 
 ```http

@@ -22,6 +22,7 @@ import http_api_contract
 import object_execution
 import object_logs
 import object_metadata
+import object_permission_audit
 import object_permission_store
 import object_permissions
 import object_rate_limit
@@ -42,6 +43,9 @@ RATE_LIMIT_REQUESTS_ENV = "DBBASIC_RATE_LIMIT_REQUESTS"
 RATE_LIMIT_WINDOW_SECONDS_ENV = "DBBASIC_RATE_LIMIT_WINDOW_SECONDS"
 RATE_LIMIT_TRUST_PROXY_HEADERS_ENV = "DBBASIC_RATE_LIMIT_TRUST_PROXY_HEADERS"
 OBJECT_TIMEOUT_SECONDS_ENV = "DBBASIC_OBJECT_TIMEOUT_SECONDS"
+PERMISSION_ENFORCEMENT_ENV = "DBBASIC_ENABLE_PERMISSION_ENFORCEMENT"
+PERMISSION_AUDIT_ENV = "DBBASIC_ENABLE_PERMISSION_AUDIT"
+PERMISSION_TRUST_HEADERS_ENV = "DBBASIC_PERMISSION_TRUST_HEADERS"
 DEFAULT_MAX_REQUEST_BYTES = 1_048_576
 DEFAULT_MAX_CONCURRENT_REQUESTS = 64
 DEFAULT_MAX_CONCURRENT_EXECUTIONS = 8
@@ -302,11 +306,11 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
                 return
 
             if method == "PUT":
-                await _handle_object_body_method(send, object_id, "PUT", body, query)
+                await _handle_object_body_method(send, object_id, "PUT", body, query, headers)
                 return
 
             if method == "DELETE":
-                await _handle_object_body_method(send, object_id, "DELETE", body, query)
+                await _handle_object_body_method(send, object_id, "DELETE", body, query, headers)
                 return
 
             await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
@@ -404,6 +408,9 @@ def _health_payload(*, include_metrics: bool) -> dict[str, Any]:
             "rate_limit_window_seconds": _rate_limit_window_seconds(),
             "rate_limit_trust_proxy_headers": _env_enabled(RATE_LIMIT_TRUST_PROXY_HEADERS_ENV),
             "object_timeout_seconds": _object_timeout_seconds(),
+            "permission_enforcement_enabled": _permission_enforcement_enabled(),
+            "permission_audit_enabled": _permission_audit_enabled(),
+            "permission_trust_headers": _env_enabled(PERMISSION_TRUST_HEADERS_ENV),
         },
         "checks": {
             "storage": storage_check,
@@ -549,26 +556,74 @@ async def _handle_object_get(
             return
 
     if query.get("versions") == "true":
+        if await _send_permission_denied_if_needed(
+            send,
+            headers,
+            object_permissions.VERSIONS,
+            object_id=object_id,
+            method="GET",
+        ):
+            return
         await _handle_object_versions_get(send, object_id, query)
         return
 
     if "version" in query:
+        if await _send_permission_denied_if_needed(
+            send,
+            headers,
+            object_permissions.VERSIONS,
+            object_id=object_id,
+            method="GET",
+        ):
+            return
         await _handle_object_version_get(send, object_id, query)
         return
 
     if query.get("state") == "true":
+        if await _send_permission_denied_if_needed(
+            send,
+            headers,
+            object_permissions.STATE,
+            object_id=object_id,
+            method="GET",
+        ):
+            return
         await _handle_object_state_get(send, object_id)
         return
 
     if query.get("logs") == "true":
+        if await _send_permission_denied_if_needed(
+            send,
+            headers,
+            object_permissions.LOGS,
+            object_id=object_id,
+            method="GET",
+        ):
+            return
         await _handle_object_logs_get(send, object_id, query)
         return
 
     if query.get("metadata") == "true":
+        if await _send_permission_denied_if_needed(
+            send,
+            headers,
+            object_permissions.READ,
+            object_id=object_id,
+            method="GET",
+        ):
+            return
         await _handle_object_metadata_get(send, object_id)
         return
 
     if query.get("source") == "true":
+        if await _send_permission_denied_if_needed(
+            send,
+            headers,
+            object_permissions.SOURCE,
+            object_id=object_id,
+            method="GET",
+        ):
+            return
         try:
             source = object_source.get_object_source(object_id)
         except InvalidObjectIdError as exc:
@@ -588,7 +643,14 @@ async def _handle_object_get(
         )
         return
 
-    await _execute_object_method(send, object_id, "GET", query)
+    await _execute_object_method(
+        send,
+        object_id,
+        "GET",
+        query,
+        headers,
+        permission_action=object_permissions.EXECUTE,
+    )
 
 
 async def _handle_object_state_get(send, object_id: str) -> None:
@@ -759,7 +821,14 @@ async def _handle_object_post(
         await _handle_object_rollback_post(send, object_id, payload, headers)
         return
 
-    await _execute_object_method(send, object_id, "POST", payload)
+    await _execute_object_method(
+        send,
+        object_id,
+        "POST",
+        payload,
+        headers,
+        permission_action=object_permissions.EXECUTE,
+    )
 
 
 async def _handle_object_body_method(
@@ -768,6 +837,7 @@ async def _handle_object_body_method(
     method: str,
     body: bytes,
     query: dict[str, str],
+    headers: dict[str, str],
 ) -> None:
     if "@" in object_id:
         await _send_json(
@@ -783,7 +853,20 @@ async def _handle_object_body_method(
         await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
         return
 
-    await _execute_object_method(send, object_id, method, payload)
+    permission_action = object_permissions.EXECUTE
+    if method == "PUT":
+        permission_action = object_permissions.UPDATE
+    elif method == "DELETE":
+        permission_action = object_permissions.DELETE
+
+    await _execute_object_method(
+        send,
+        object_id,
+        method,
+        payload,
+        headers,
+        permission_action=permission_action,
+    )
 
 
 async def _handle_object_rollback_post(
@@ -796,6 +879,15 @@ async def _handle_object_rollback_post(
     if gate_error is not None:
         status, message = gate_error
         await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    if await _send_permission_denied_if_needed(
+        send,
+        headers,
+        object_permissions.SOURCE,
+        object_id=object_id,
+        method="POST",
+    ):
         return
 
     try:
@@ -854,6 +946,15 @@ async def _handle_object_source_put(
         await _send_json(send, {"status": "error", "error": message}, status=status)
         return
 
+    if await _send_permission_denied_if_needed(
+        send,
+        headers,
+        object_permissions.SOURCE,
+        object_id=object_id,
+        method="PUT",
+    ):
+        return
+
     try:
         payload = _parse_json_body(body)
     except ValueError as exc:
@@ -903,7 +1004,19 @@ async def _execute_object_method(
     object_id: str,
     method: str,
     payload: dict[str, Any],
+    headers: dict[str, str],
+    *,
+    permission_action: str,
 ) -> None:
+    if await _send_permission_denied_if_needed(
+        send,
+        headers,
+        permission_action,
+        object_id=object_id,
+        method=method,
+    ):
+        return
+
     execution_limit = _max_concurrent_executions()
     execution_token = _execution_limiter.try_acquire(execution_limit)
     if execution_token is None:
@@ -963,6 +1076,15 @@ def _object_owner(object_id: str) -> str:
         return "system"
     user_id, _ = parsed
     return str(user_id)
+
+
+def _object_collection(object_id: str) -> str | None:
+    parsed = parse_user_object_id(object_id)
+    if parsed is not None:
+        _, name = parsed
+        return name.split("_", 1)[0] if name else None
+
+    return object_id.split("_", 1)[0] if object_id else None
 
 
 def _append_execution_log(result: object_execution.ObjectExecutionResult) -> None:
@@ -1335,6 +1457,165 @@ def _source_write_gate_error(headers: dict[str, str]) -> tuple[int, str] | None:
 
 def _permissions_gate_error(headers: dict[str, str]) -> tuple[int, str] | None:
     return _admin_token_gate_error(headers, f"Permissions API requires {ADMIN_TOKEN_ENV}.")
+
+
+async def _send_permission_denied_if_needed(
+    send,
+    headers: dict[str, str],
+    action: str,
+    *,
+    object_id: str,
+    method: str,
+) -> bool:
+    if not _permission_checks_enabled():
+        return False
+
+    subject = _permission_subject(headers)
+    enforced = _permission_enforcement_enabled()
+    collection = _object_collection(object_id)
+
+    try:
+        policy = object_permission_store.load_policy(_data_dir())
+        decision = object_permissions.check_permission(
+            subject,
+            action,
+            policy=policy,
+            collection=collection,
+            object_id=object_id,
+        )
+    except ValueError as exc:
+        _append_permission_audit_entry(
+            action=action,
+            object_id=object_id,
+            collection=collection,
+            method=method,
+            subject=subject,
+            enforced=enforced,
+            error=f"Permission policy is invalid: {exc}",
+        )
+        if enforced:
+            await _send_json(
+                send,
+                {"status": "error", "error": f"Permission policy is invalid: {exc}"},
+                status=500,
+            )
+            return True
+        return False
+
+    _append_permission_audit_entry(
+        action=action,
+        object_id=object_id,
+        collection=collection,
+        method=method,
+        subject=subject,
+        enforced=enforced,
+        decision=decision,
+    )
+
+    if not enforced or decision.allowed:
+        return False
+
+    await _send_json(
+        send,
+        {
+            "status": "error",
+            "error": decision.reason,
+            "code": decision.code,
+        },
+        status=decision.http_status,
+    )
+    return True
+
+
+def _permission_checks_enabled() -> bool:
+    return _permission_enforcement_enabled() or _permission_audit_enabled()
+
+
+def _permission_enforcement_enabled() -> bool:
+    return _env_enabled(PERMISSION_ENFORCEMENT_ENV)
+
+
+def _permission_audit_enabled() -> bool:
+    return _env_enabled(PERMISSION_AUDIT_ENV) or _permission_enforcement_enabled()
+
+
+def _permission_subject(headers: dict[str, str]) -> object_permissions.PermissionSubject:
+    token = _authorization_token(headers)
+    admin_token = os.environ.get(ADMIN_TOKEN_ENV, "")
+    if token and admin_token and hmac.compare_digest(token, admin_token):
+        return object_permissions.PermissionSubject(user_id="admin", roles=("admin",))
+
+    if not _env_enabled(PERMISSION_TRUST_HEADERS_ENV):
+        return object_permissions.PermissionSubject.anonymous()
+
+    user_id = _optional_header_text(headers, "x-dbbasic-user-id")
+    account_id = _optional_header_text(headers, "x-dbbasic-account-id")
+    return object_permissions.PermissionSubject(
+        user_id=user_id,
+        account_id=account_id,
+        roles=_csv_header(headers.get("x-dbbasic-roles", "")),
+        subscriptions=_csv_header(headers.get("x-dbbasic-subscriptions", "")),
+    )
+
+
+def _optional_header_text(headers: dict[str, str], name: str) -> str | None:
+    value = headers.get(name, "").strip()
+    return value or None
+
+
+def _csv_header(value: str) -> tuple[str, ...]:
+    values = []
+    seen = set()
+    for item in value.split(","):
+        normalized = item.strip()
+        if normalized and normalized not in seen:
+            values.append(normalized)
+            seen.add(normalized)
+    return tuple(values)
+
+
+def _append_permission_audit_entry(
+    *,
+    action: str,
+    object_id: str,
+    collection: str | None,
+    method: str,
+    subject: object_permissions.PermissionSubject,
+    enforced: bool,
+    decision: object_permissions.PermissionDecision | None = None,
+    error: str | None = None,
+) -> None:
+    if not _permission_audit_enabled():
+        return
+
+    entry: dict[str, Any] = {
+        "timestamp": _utc_timestamp(),
+        "method": method,
+        "object_id": object_id,
+        "collection": collection,
+        "action": action,
+        "subject": _permission_subject_payload(subject),
+        "enforced": enforced,
+    }
+    if decision is not None:
+        entry["decision"] = object_permissions.decision_to_dict(decision)
+    if error is not None:
+        entry["error"] = error
+
+    try:
+        object_permission_audit.append_permission_audit(entry, base_dir=_data_dir())
+    except (OSError, ValueError):
+        pass
+
+
+def _permission_subject_payload(subject: object_permissions.PermissionSubject) -> dict[str, Any]:
+    return {
+        "user_id": subject.user_id,
+        "account_id": subject.account_id,
+        "roles": list(subject.roles),
+        "subscriptions": list(subject.subscriptions),
+        "authenticated": subject.is_authenticated,
+    }
 
 
 def _admin_token_gate_error(

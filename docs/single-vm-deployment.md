@@ -169,6 +169,9 @@ DBBASIC_OBJECT_TIMEOUT_SECONDS=5
 DBBASIC_RATE_LIMIT_REQUESTS=1000
 DBBASIC_RATE_LIMIT_WINDOW_SECONDS=60
 DBBASIC_RATE_LIMIT_TRUST_PROXY_HEADERS=true
+DBBASIC_ENABLE_PERMISSION_AUDIT=false
+DBBASIC_ENABLE_PERMISSION_ENFORCEMENT=false
+DBBASIC_PERMISSION_TRUST_HEADERS=false
 DBBASIC_LOG_MAX_BYTES=10485760
 DBBASIC_LOG_COMPRESS_ROTATED=true
 DBBASIC_LOG_KEEP_ROTATED=32
@@ -192,6 +195,23 @@ writes:
 ```text
 DBBASIC_ENABLE_SOURCE_WRITES=true
 ```
+
+Permission audit and enforcement should also stay closed on first boot. Turn on
+audit mode first to watch route decisions without blocking users:
+
+```text
+DBBASIC_ENABLE_PERMISSION_AUDIT=true
+```
+
+Only enable blocking after the persisted policy and auth gateway are confirmed:
+
+```text
+DBBASIC_ENABLE_PERMISSION_ENFORCEMENT=true
+```
+
+`DBBASIC_PERMISSION_TRUST_HEADERS=true` is only appropriate when a trusted proxy
+or auth gateway strips client-supplied identity headers and writes fresh
+`X-DBBASIC-*` headers itself.
 
 Do not commit real tokens, VM hostnames, private URLs, or deployment-specific
 paths to this repository.
@@ -585,8 +605,8 @@ Known limits:
 
 - the current direct Python loader is not a production sandbox
 - source writes still use a temporary admin token gate
-- object permissions are not enforced yet
-- execution timeout and rate limits are not complete
+- route permission enforcement is available, but off until a deployment enables it
+- real user/session auth still needs to replace trusted staging headers
 - WebSocket/SSE runtime behavior is still design-stage
 
 That is still useful. A clean VM lets DBBASIC prove that install, restart,
