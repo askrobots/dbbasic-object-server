@@ -167,6 +167,59 @@ def test_get_schema_preserves_scroll_field_metadata(tmp_path):
     ]
 
 
+def test_replace_schema_writes_normalized_schema_atomically(tmp_path):
+    data_dir = tmp_path / "data"
+
+    schema = object_schemas.replace_schema(
+        "invoices",
+        {
+            "title": "Invoices",
+            "version": 2,
+            "ui": {"default_view": "form"},
+            "views": [{"name": "admin_invoice_form", "type": "form"}],
+            "fields": [
+                {
+                    "name": "customer_id",
+                    "type": "relation",
+                    "required": True,
+                    "relation": {"collection": "contacts"},
+                    "permissions": {"admin": "edit", "sales": "read"},
+                }
+            ],
+        },
+        base_dir=data_dir,
+    )
+
+    assert schema == {
+        "name": "invoices",
+        "title": "Invoices",
+        "source": "manual",
+        "version": 2,
+        "fields": [
+            {
+                "name": "customer_id",
+                "type": "relation",
+                "required": True,
+                "relation": {"collection": "contacts"},
+                "permissions": {"admin": "edit", "sales": "read"},
+            }
+        ],
+        "field_count": 1,
+        "ui": {"default_view": "form"},
+        "views": [{"name": "admin_invoice_form", "type": "form"}],
+    }
+    assert object_schemas.get_schema("invoices", base_dir=data_dir, roots=[]) == schema
+
+
+def test_replace_schema_rejects_mismatched_name(tmp_path):
+    with pytest.raises(ValueError, match="does not match"):
+        object_schemas.replace_schema(
+            "invoices",
+            {"name": "contacts", "fields": []},
+            base_dir=tmp_path / "data",
+        )
+
+
 def test_get_schema_rejects_unsafe_names(tmp_path):
     with pytest.raises(object_schemas.InvalidSchemaNameError):
         object_schemas.get_schema("../bad", base_dir=tmp_path / "data", roots=[])

@@ -87,7 +87,7 @@ This repository currently contains:
 - `object_files.py` - read-only object-owned file listing and download helpers
 - `object_logs.py` - TSV-backed object log reads, appends, rotation, compression, retention, and runtime logger helper
 - `object_metadata.py` - conservative object metadata summaries
-- `object_schemas.py` - read-only schema metadata for generated UI, validation rules, field permissions, and relations
+- `object_schemas.py` - schema metadata for generated UI, validation rules, field permissions, and relations
 - `object_field_permissions.py` - schema-level `edit/read/hidden` enforcement for collection record fields
 - `object_permission_audit.py` - JSONL-backed permission decision audit reads and writes
 - `object_permission_store.py` - JSON-backed permission policy persistence
@@ -114,8 +114,8 @@ object, execute object `GET`, `POST`, `PUT`, and `DELETE` methods, and update
 source when the explicit source-write gate is enabled. It can also list source
 versions, read a specific version, read object state, read object logs, read
 object-owned files, read object metadata, list derived collections, read and
-write collection records, read schema metadata, and roll back source through the
-same write gate. Object execution can return JSON data, HTML/text/binary responses
+write collection records, read and write schema metadata, and roll back source
+through the same write gate. Object execution can return JSON data, HTML/text/binary responses
 through `content_type` and `body`, or a low-level `(status, headers, body)`
 tuple.
 
@@ -150,6 +150,7 @@ Current endpoints:
 - `DELETE /collections/{collection}/records/{record_id}`
 - `GET /schemas`
 - `GET /schemas/{collection}`
+- `PUT /schemas/{collection}`
 - `GET /objects?format=json`
 - `GET /objects/{object_id}`
 - `POST /objects/{object_id}`

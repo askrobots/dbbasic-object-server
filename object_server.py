@@ -341,7 +341,7 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
 
         if path.startswith(f"{http_api_contract.SCHEMAS_PATH}/"):
             schema = path.removeprefix(f"{http_api_contract.SCHEMAS_PATH}/")
-            await _handle_schema_get(send, method, schema, headers)
+            await _handle_schema(send, method, schema, body, headers)
             return
 
         if path.startswith(f"{http_api_contract.OBJECTS_PATH}/"):
@@ -1875,7 +1875,20 @@ async def _handle_schema_get(
     schema: str,
     headers: dict[str, str],
 ) -> None:
+    await _handle_schema(send, method, schema, b"", headers)
+
+
+async def _handle_schema(
+    send,
+    method: str,
+    schema: str,
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
     if method != "GET":
+        if method == "PUT":
+            await _handle_schema_put(send, schema, body, headers)
+            return
         await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
         return
 
@@ -1905,6 +1918,48 @@ async def _handle_schema_get(
         {
             "status": "ok",
             "schema": schema_payload,
+        },
+    )
+
+
+async def _handle_schema_put(
+    send,
+    schema: str,
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Schema writes require {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    try:
+        payload = _parse_json_body(body)
+        schema_payload = _schema_payload_from_request(payload)
+        saved_schema = object_schemas.replace_schema(
+            schema,
+            schema_payload,
+            base_dir=_data_dir(),
+        )
+    except object_schemas.InvalidSchemaNameError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except OSError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=500)
+        return
+
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "schema": saved_schema,
         },
     )
 
@@ -2212,6 +2267,13 @@ def _policy_payload_from_request(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(policy_payload, dict):
         raise ValueError("Request JSON field 'policy' must be an object")
     return policy_payload
+
+
+def _schema_payload_from_request(payload: dict[str, Any]) -> dict[str, Any]:
+    schema_payload = payload.get("schema", payload)
+    if not isinstance(schema_payload, dict):
+        raise ValueError("Request JSON field 'schema' must be an object")
+    return schema_payload
 
 
 def _policy_for_check_request(payload: dict[str, Any]) -> object_permissions.PermissionPolicy:

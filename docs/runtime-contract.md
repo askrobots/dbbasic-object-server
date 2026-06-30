@@ -423,12 +423,13 @@ Schema metadata lives under:
 data/schemas/{collection}.json
 ```
 
-The public helper module is `object_schemas.py`. It currently exposes read-only
+The public helper module is `object_schemas.py`. It exposes read and admin-write
 operations:
 
 ```python
 list_schemas(base_dir="data")
 get_schema(collection, base_dir="data")
+replace_schema(collection, payload, base_dir="data")
 ```
 
 A schema file can describe fields, validation rules, computed values, UI hints,
@@ -466,9 +467,12 @@ lists. Schema fields tell tools what exists and can refine individual
 `edit/read/hidden` field behavior for generated forms. The server enforces those
 schema field permissions only after the broader policy has allowed the row.
 
-Schema writes are intentionally not public yet. They need source/package audit
-trails, server-enforced permissions, and migration rules before they become a
-write API.
+Schema writes are available through the admin-only replacement path. They are
+atomic file replacements under `data/schemas/` and preserve UI/view metadata so
+Scroll can save generated form, table, dashboard, validation, relation, and field
+permission definitions. User-level schema editing still needs real sessions,
+permission checks, and audit trails before it should be exposed outside trusted
+admin tooling.
 
 ## Scheduler State
 

@@ -1,4 +1,4 @@
-"""Read-only schema metadata for DBBASIC collections.
+"""Schema metadata for DBBASIC collections.
 
 Schemas describe the fields, validation hints, and relations Scroll can use to
 render forms, tables, and diagrams. They are metadata, not the default storage
@@ -8,7 +8,9 @@ engine; objects can still read/write TSV files, APIs, SQL, or other backends.
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -73,6 +75,48 @@ def get_schema(
         return _derived_schema(schema)
 
     raise SchemaNotFoundError(f"Schema not found: {schema}")
+
+
+def replace_schema(
+    schema: str,
+    payload: Mapping[str, Any],
+    *,
+    base_dir: Path | str = DEFAULT_DATA_DIR,
+) -> dict[str, Any]:
+    """Validate and atomically replace a manual schema file."""
+    if not validate_schema_name(schema):
+        raise InvalidSchemaNameError(f"Invalid schema name: {schema}")
+
+    base = Path(base_dir)
+    normalized = _normalize_schema(schema, payload, source="manual")
+    root = _schema_root(base)
+    root.mkdir(parents=True, exist_ok=True)
+    path = _schema_path(schema, base)
+
+    tmp_name = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=root,
+            prefix=f".{schema}.",
+            suffix=".tmp",
+            delete=False,
+        ) as tmp:
+            tmp_name = tmp.name
+            json.dump(normalized, tmp, indent=2, sort_keys=True)
+            tmp.write("\n")
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.replace(tmp_name, path)
+    finally:
+        if tmp_name:
+            try:
+                Path(tmp_name).unlink()
+            except FileNotFoundError:
+                pass
+
+    return normalized
 
 
 def _iter_manual_schema_names(base_dir: Path) -> list[str]:
@@ -150,7 +194,7 @@ def _normalize_schema(
         raise ValueError(f"Schema fields must be a list: {schema}")
 
     fields = [_normalize_field(field, schema=schema) for field in fields_payload]
-    return {
+    normalized = {
         "name": name,
         "title": _optional_string(payload.get("title")) or _title_from_name(name),
         "source": source,
@@ -158,6 +202,21 @@ def _normalize_schema(
         "fields": fields,
         "field_count": len(fields),
     }
+    metadata_keys = (
+        "description",
+        "permissions",
+        "ui",
+        "layout",
+        "views",
+        "forms",
+        "table",
+        "diagram",
+        "validation",
+    )
+    for key in metadata_keys:
+        if key in payload:
+            normalized[key] = _json_compatible(payload[key], field_name=f"{schema}.{key}")
+    return normalized
 
 
 def _normalize_field(payload: Any, *, schema: str) -> dict[str, Any]:

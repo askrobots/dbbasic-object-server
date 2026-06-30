@@ -680,16 +680,76 @@ Response:
 }
 ```
 
+Replace one manual schema:
+
+```http
+PUT /schemas/{collection}
+Content-Type: application/json
+Authorization: Token <token>
+```
+
+Request:
+
+```json
+{
+  "schema": {
+    "title": "Invoices",
+    "ui": {"default_view": "form"},
+    "views": [{"name": "invoice_admin", "type": "form"}],
+    "fields": [
+      {
+        "name": "invoice_date",
+        "type": "date",
+        "required": true,
+        "layout": {"column": 1}
+      },
+      {
+        "name": "margin",
+        "type": "currency",
+        "permissions": {"admin": "edit", "sales": "hidden"}
+      }
+    ]
+  }
+}
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "schema": {
+    "name": "invoices",
+    "title": "Invoices",
+    "source": "manual",
+    "version": 1,
+    "fields": [
+      {"name": "invoice_date", "type": "date", "required": true},
+      {
+        "name": "margin",
+        "type": "currency",
+        "required": false,
+        "permissions": {"admin": "edit", "sales": "hidden"}
+      }
+    ],
+    "field_count": 2,
+    "ui": {"default_view": "form"},
+    "views": [{"name": "invoice_admin", "type": "form"}]
+  }
+}
+```
+
 Schema files live under:
 
 ```text
 data/schemas/{collection}.json
 ```
 
-Manual schemas are read-only through the current public HTTP surface. If a
-collection has no manual schema, the server may return an empty derived schema
-for that collection so Scroll can still show the collection and later attach
-fields. Missing schemas return `404`; unsafe schema names return `400`.
+Manual schemas can be replaced through the admin-token gated `PUT` route. Writes
+are atomic file replacements under `data/schemas/`. If a collection has no
+manual schema, the server may return an empty derived schema for that collection
+so Scroll can still show the collection and later attach fields. Missing schemas
+return `404`; unsafe schema names return `400`.
 
 Schema `permissions` and `ui` fields are preserved for generated admin screens.
 With permission enforcement enabled, schema `permissions` also refine record

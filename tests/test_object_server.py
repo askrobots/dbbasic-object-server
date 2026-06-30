@@ -1545,6 +1545,140 @@ def test_schema_detail_returns_derived_schema_for_collection(tmp_path, monkeypat
     }
 
 
+def test_schema_put_requires_admin_token_configuration(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)
+
+    status, _, payload = request("/schemas/invoices", method="PUT", body=b"{}")
+
+    assert status == 403
+    assert payload == {"status": "error", "error": "Schema writes require DBBASIC_ADMIN_TOKEN."}
+
+
+def test_schema_put_requires_authorization_header(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/schemas/invoices", method="PUT", body=b"{}")
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
+
+
+def test_schema_put_writes_manual_schema(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    body = json.dumps(
+        {
+            "title": "Invoices",
+            "ui": {"default_view": "form"},
+            "views": [{"name": "invoice_admin", "type": "form"}],
+            "fields": [
+                {
+                    "name": "invoice_date",
+                    "type": "date",
+                    "required": True,
+                    "layout": {"column": 1},
+                },
+                {
+                    "name": "margin",
+                    "type": "currency",
+                    "permissions": {"admin": "edit", "sales": "hidden"},
+                },
+            ],
+        }
+    ).encode()
+
+    status, _, payload = request(
+        "/schemas/invoices",
+        method="PUT",
+        body=body,
+        headers=auth_headers(),
+    )
+    detail_status, _, detail_payload = request("/schemas/invoices", headers=auth_headers())
+
+    assert status == 200
+    assert payload == {
+        "status": "ok",
+        "schema": {
+            "name": "invoices",
+            "title": "Invoices",
+            "source": "manual",
+            "version": 1,
+            "fields": [
+                {
+                    "name": "invoice_date",
+                    "type": "date",
+                    "required": True,
+                    "layout": {"column": 1},
+                },
+                {
+                    "name": "margin",
+                    "type": "currency",
+                    "required": False,
+                    "permissions": {"admin": "edit", "sales": "hidden"},
+                },
+            ],
+            "field_count": 2,
+            "ui": {"default_view": "form"},
+            "views": [{"name": "invoice_admin", "type": "form"}],
+        },
+    }
+    assert detail_status == 200
+    assert detail_payload == payload
+    assert (data_dir / "schemas" / "invoices.json").exists()
+
+
+def test_schema_put_accepts_nested_schema_payload(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/schemas/contacts",
+        method="PUT",
+        body=json.dumps({"schema": {"fields": [{"name": "email", "type": "email"}]}}).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["schema"]["name"] == "contacts"
+    assert payload["schema"]["fields"] == [
+        {"name": "email", "type": "email", "required": False}
+    ]
+
+
+def test_schema_put_rejects_invalid_payload(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
+
+    name_status, _, name_payload = request(
+        "/schemas/invoices",
+        method="PUT",
+        body=json.dumps({"name": "contacts", "fields": []}).encode(),
+        headers=auth_headers(),
+    )
+    field_status, _, field_payload = request(
+        "/schemas/invoices",
+        method="PUT",
+        body=json.dumps({"fields": [{"name": "bad.name"}]}).encode(),
+        headers=auth_headers(),
+    )
+
+    assert name_status == 400
+    assert name_payload == {
+        "status": "error",
+        "error": "Schema file name does not match schema collection: invoices",
+    }
+    assert field_status == 400
+    assert field_payload == {
+        "status": "error",
+        "error": "Schema field has invalid name: invoices",
+    }
+
+
 def test_schema_detail_rejects_invalid_name(tmp_path, monkeypatch):
     enable_admin_token(monkeypatch)
 

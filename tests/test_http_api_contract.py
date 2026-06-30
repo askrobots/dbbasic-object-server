@@ -188,6 +188,7 @@ def test_http_contract_doc_mentions_required_compatibility_surface():
         "DELETE /collections/{collection}/records/{record_id}",
         "GET /schemas",
         "GET /schemas/{collection}",
+        "PUT /schemas/{collection}",
         "POST /objects",
         "GET /objects/{object_id}",
         "PUT /objects/{object_id}?source=true",
