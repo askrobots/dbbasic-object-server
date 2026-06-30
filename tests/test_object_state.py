@@ -99,6 +99,23 @@ def test_object_state_manager_deletes_and_persists_values(tmp_path):
     }
 
 
+def test_object_state_manager_deletes_many_values_in_one_pass(tmp_path):
+    data_dir = tmp_path / "data"
+    manager = object_state.ObjectStateManager("basics_counter", base_dir=data_dir)
+
+    manager.set("count", 3)
+    manager.set("name", "counter")
+    manager.set("status", "ready")
+
+    removed = manager.delete_many(["count", "missing", "name", "count"])
+
+    assert removed == 2
+    assert manager.get_all() == {"status": "ready"}
+    assert object_state.get_object_state("basics_counter", base_dir=data_dir) == {
+        "status": "ready"
+    }
+
+
 def test_object_state_manager_writes_timestamp_format(tmp_path):
     manager = object_state.ObjectStateManager("basics_counter", base_dir=tmp_path / "data")
 

@@ -683,6 +683,7 @@ The current endpoints are admin-gated:
 
 ```http
 GET /events?event_type=collection.record.created&limit=100&offset=0
+DELETE /events?keep_count=1000&keep_seconds=604800
 Authorization: Token <token>
 ```
 
@@ -735,6 +736,36 @@ Content-Type: application/json
 ```
 
 Successful publishes return `201`.
+
+Prune the delivery queue:
+
+```http
+DELETE /events?keep_count=1000&keep_seconds=604800
+Authorization: Token <token>
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "retention": {
+    "deleted": 12,
+    "kept": 1000,
+    "scanned": 1012,
+    "protected": 1,
+    "corrupt_deleted": 0,
+    "keep_count": 1000,
+    "keep_seconds": 604800
+  }
+}
+```
+
+`keep_count=0` disables count-based pruning. `keep_seconds=0` disables
+age-based pruning. Subscriptions are never deleted by event pruning, and the
+event referenced by a subscription `last_event_id` is protected to avoid
+surprise replay. Configure the default publish/daemon cleanup policy with
+`DBBASIC_EVENT_KEEP_COUNT` and `DBBASIC_EVENT_KEEP_SECONDS`.
 
 Subscriptions are stored in the same daemon-compatible `events` object state:
 

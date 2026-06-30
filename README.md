@@ -158,6 +158,12 @@ Current endpoints:
 - `GET /schemas/{collection}?version=1`
 - `PUT /schemas/{collection}`
 - `POST /schemas/{collection}` with `{"action": "rollback", "version_id": 1}`
+- `GET /events`
+- `POST /events`
+- `DELETE /events`
+- `GET /events/subscriptions`
+- `POST /events/subscriptions`
+- `DELETE /events/subscriptions`
 - `GET /objects?format=json`
 - `GET /objects/{object_id}`
 - `POST /objects/{object_id}`
@@ -193,6 +199,8 @@ export DBBASIC_ENABLE_PERMISSION_AUDIT=false
 export DBBASIC_ENABLE_PERMISSION_ENFORCEMENT=false
 export DBBASIC_PERMISSION_TRUST_HEADERS=false
 export DBBASIC_ENABLE_RECORD_EVENTS=true
+export DBBASIC_EVENT_KEEP_COUNT=1000
+export DBBASIC_EVENT_KEEP_SECONDS=604800
 ```
 
 The value above is a placeholder. Each real deployment must generate its own
@@ -254,7 +262,8 @@ rules the rest of the server will use:
 - `object_records.py` reads and writes TSV-backed collection records under `data/collections/`
 - `object_record_changes.py` keeps append-only collection record change history
 - `object_events.py` publishes events and subscriptions into `data/state/events/state.tsv`
-  and collection record mutations emit metadata-only `collection.record.*` events
+  and collection record mutations emit metadata-only `collection.record.*` events; event
+  retention keeps the delivery queue bounded while change history stays durable
 - `object_files.py` lists and reads object-owned files under `data/files/`
 - `object_logs.py` reads and appends TSV-backed object logs, rotates/compresses old logs, and provides `_logger`
 - `object_metadata.py` summarizes source, state, logs, files, and versions

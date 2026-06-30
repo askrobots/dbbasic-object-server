@@ -174,6 +174,8 @@ DBBASIC_ENABLE_PERMISSION_AUDIT=false
 DBBASIC_ENABLE_PERMISSION_ENFORCEMENT=false
 DBBASIC_PERMISSION_TRUST_HEADERS=false
 DBBASIC_ENABLE_RECORD_EVENTS=true
+DBBASIC_EVENT_KEEP_COUNT=1000
+DBBASIC_EVENT_KEEP_SECONDS=604800
 DBBASIC_LOG_MAX_BYTES=10485760
 DBBASIC_LOG_COMPRESS_ROTATED=true
 DBBASIC_LOG_KEEP_ROTATED=32
@@ -314,6 +316,18 @@ after a successful rotation. Set it to `0` to keep all rotated logs.
 This is at-rest compression. For in-motion compression, start with reverse-proxy
 HTTP compression for large log responses. Later station replication should
 compress batches, not individual tiny events.
+
+Event rows are a delivery queue, not the durable audit log. The server and
+daemon prune old `data/state/events/state.tsv` event rows with:
+
+```bash
+DBBASIC_EVENT_KEEP_COUNT=1000
+DBBASIC_EVENT_KEEP_SECONDS=604800
+```
+
+Set either value to `0` to disable that retention rule. Subscriptions stay in
+place, and any event referenced by a subscription `last_event_id` is protected so
+the daemon keeps its delivery cursor.
 
 ## Minimal Object
 

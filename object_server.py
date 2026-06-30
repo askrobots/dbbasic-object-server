@@ -57,6 +57,8 @@ PERMISSION_ENFORCEMENT_ENV = "DBBASIC_ENABLE_PERMISSION_ENFORCEMENT"
 PERMISSION_AUDIT_ENV = "DBBASIC_ENABLE_PERMISSION_AUDIT"
 PERMISSION_TRUST_HEADERS_ENV = "DBBASIC_PERMISSION_TRUST_HEADERS"
 RECORD_EVENTS_ENV = "DBBASIC_ENABLE_RECORD_EVENTS"
+EVENT_KEEP_COUNT_ENV = "DBBASIC_EVENT_KEEP_COUNT"
+EVENT_KEEP_SECONDS_ENV = "DBBASIC_EVENT_KEEP_SECONDS"
 DEFAULT_MAX_REQUEST_BYTES = 1_048_576
 DEFAULT_MAX_CONCURRENT_REQUESTS = 64
 DEFAULT_MAX_CONCURRENT_EXECUTIONS = 8
@@ -507,6 +509,8 @@ def _health_payload(*, include_metrics: bool) -> dict[str, Any]:
             "permission_enforcement_enabled": _permission_enforcement_enabled(),
             "permission_audit_enabled": _permission_audit_enabled(),
             "permission_trust_headers": _env_enabled(PERMISSION_TRUST_HEADERS_ENV),
+            "event_keep_count": _event_keep_count(),
+            "event_keep_seconds": _event_keep_seconds(),
         },
         "checks": {
             "storage": storage_check,
@@ -725,6 +729,8 @@ async def _handle_events(
                 source=_payload_text(payload, "source", "api"),
                 actor=_record_change_actor(headers),
                 base_dir=_data_dir(),
+                keep_count=_event_keep_count(),
+                keep_seconds=_event_keep_seconds(),
             )
         except (object_events.InvalidEventTypeError, ValueError) as exc:
             await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
@@ -738,6 +744,38 @@ async def _handle_events(
             return
 
         await _send_json(send, {"status": "ok", "event": event}, status=201)
+        return
+
+    if method == "DELETE":
+        try:
+            keep_count = _event_retention_query_int(
+                query,
+                "keep_count",
+                default=_event_keep_count(),
+                maximum=object_events.MAX_EVENT_KEEP_COUNT,
+            )
+            keep_seconds = _event_retention_query_int(
+                query,
+                "keep_seconds",
+                default=_event_keep_seconds(),
+            )
+            result = object_events.prune_events(
+                base_dir=_data_dir(),
+                keep_count=keep_count,
+                keep_seconds=keep_seconds,
+            )
+        except ValueError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        except OSError as exc:
+            await _send_json(
+                send,
+                {"status": "error", "error": f"Could not prune events: {exc}"},
+                status=500,
+            )
+            return
+
+        await _send_json(send, {"status": "ok", "retention": result})
         return
 
     await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
@@ -3316,6 +3354,8 @@ def _publish_record_change_event(change: dict[str, Any]) -> dict[str, Any] | Non
             source="record_changes",
             actor=str(change.get("actor") or "api"),
             base_dir=_data_dir(),
+            keep_count=_event_keep_count(),
+            keep_seconds=_event_keep_seconds(),
         )
     except (OSError, ValueError):
         return None
@@ -3326,6 +3366,33 @@ def _record_events_enabled() -> bool:
     if value is None:
         return True
     return value.strip().lower() in TRUE_VALUES
+
+
+def _event_keep_count() -> int | None:
+    value = _env_int(EVENT_KEEP_COUNT_ENV, object_events.DEFAULT_EVENT_KEEP_COUNT)
+    if value <= 0:
+        return None
+    return min(value, object_events.MAX_EVENT_KEEP_COUNT)
+
+
+def _event_keep_seconds() -> int | None:
+    value = _env_int(EVENT_KEEP_SECONDS_ENV, object_events.DEFAULT_EVENT_KEEP_SECONDS)
+    if value <= 0:
+        return None
+    return value
+
+
+def _event_retention_query_int(
+    query: dict[str, str],
+    key: str,
+    *,
+    default: int | None,
+    maximum: int | None = None,
+) -> int | None:
+    if key not in query:
+        return default
+    value = _query_int(query, key, default=0, minimum=0, maximum=maximum)
+    return value or None
 
 
 def _admin_token_gate_error(

@@ -45,6 +45,7 @@ RESPONSE_FIELDS: dict[str, frozenset[str]] = {
     "schema": frozenset({"status", "schema"}),
     "event_list": frozenset({"status", "events", "count", "total"}),
     "event": frozenset({"status", "event"}),
+    "event_retention": frozenset({"status", "retention"}),
     "event_subscription_list": frozenset(
         {"status", "subscriptions", "count", "total"}
     ),

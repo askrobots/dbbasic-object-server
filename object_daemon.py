@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 import signal
 import time
 import urllib.error
@@ -30,12 +31,16 @@ try:
 except ImportError:
     croniter = None
 
+import object_events
 from object_execution import ObjectExecutionFailure, ObjectExecutionRequest, execute_object
 from object_namespace import find_trigger_file, get_object_roots, resolve_object_id
 
 
 # Daemon state
 _running = True
+EVENT_KEEP_COUNT_ENV = "DBBASIC_EVENT_KEEP_COUNT"
+EVENT_KEEP_SECONDS_ENV = "DBBASIC_EVENT_KEEP_SECONDS"
+EVENT_CLEANUP_INTERVAL_SECONDS = 60.0
 
 
 def log(msg, level='INFO'):
@@ -344,6 +349,38 @@ def cleanup_ratelimit(max_age=120):
         log(f"Cleanup: removed {cleaned} expired rate limit file(s)")
 
 
+def cleanup_events(
+    *,
+    base_dir: Path | str = "data",
+    keep_count: int | None = None,
+    keep_seconds: int | None = None,
+):
+    """Prune old event queue rows while preserving subscriptions."""
+    if keep_count is None:
+        keep_count = _env_int(EVENT_KEEP_COUNT_ENV, object_events.DEFAULT_EVENT_KEEP_COUNT)
+    if keep_seconds is None:
+        keep_seconds = _env_int(EVENT_KEEP_SECONDS_ENV, object_events.DEFAULT_EVENT_KEEP_SECONDS)
+
+    result = object_events.prune_events(
+        base_dir=base_dir,
+        keep_count=keep_count,
+        keep_seconds=keep_seconds,
+    )
+    if result["deleted"]:
+        log(f"Cleanup: removed {result['deleted']} expired event row(s)")
+    return result
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
 # --- Object Execution ---
 
 def _execute_target(runtime: ObjectRuntime, object_id: str, method: str, payload: dict):
@@ -398,6 +435,7 @@ def main():
     print()
 
     runtime = ObjectRuntime(base_dir='./data')
+    last_event_cleanup = 0.0
 
     while _running:
         try:
@@ -420,8 +458,16 @@ def main():
         except Exception as e:
             log(f"Cleanup error: {e}", 'ERROR')
 
+        now = time.time()
+        if now - last_event_cleanup >= EVENT_CLEANUP_INTERVAL_SECONDS:
+            last_event_cleanup = now
+            try:
+                cleanup_events()
+            except Exception as e:
+                log(f"Event cleanup error: {e}", 'ERROR')
+
         # Sleep in small increments for responsive shutdown
-        deadline = time.time() + args.interval
+        deadline = now + args.interval
         while _running and time.time() < deadline:
             time.sleep(0.1)
 

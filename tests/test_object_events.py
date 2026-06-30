@@ -3,6 +3,7 @@ import json
 import pytest
 
 import object_events
+import object_state
 
 
 def test_publish_event_writes_daemon_compatible_state_and_lists_newest_first(
@@ -106,6 +107,76 @@ def test_subscribe_list_and_delete_subscription(tmp_path, monkeypatch):
     assert object_events.list_subscriptions(base_dir=data_dir)["subscriptions"] == []
 
 
+def test_prune_events_removes_old_overflow_and_corrupt_rows_but_keeps_cursor(
+    tmp_path,
+    monkeypatch,
+):
+    data_dir = tmp_path / "data"
+    timestamps = iter([100, 100, 200, 200, 300, 300, 400, 400, 500, 500, 600])
+    monkeypatch.setattr(object_events.time, "time", lambda: next(timestamps))
+
+    protected = object_events.publish_event("invoice.created", payload={"id": "old"}, base_dir=data_dir)
+    old_unprotected = object_events.publish_event(
+        "invoice.created",
+        payload={"id": "old_unprotected"},
+        base_dir=data_dir,
+    )
+    newest = object_events.publish_event("invoice.created", payload={"id": "newest"}, base_dir=data_dir)
+    subscription = object_events.subscribe_event(
+        "invoice.created",
+        subscriber_id="scroll",
+        callback_url="https://example.com/hooks/dbbasic",
+        base_dir=data_dir,
+    )
+
+    manager = object_state.ObjectStateManager(object_events.EVENTS_OBJECT_ID, base_dir=data_dir)
+    subscription["last_event_id"] = protected["id"]
+    manager.set("sub_invoice.created_scroll", json.dumps(subscription))
+    manager.set("event_bad", "not-json")
+
+    result = object_events.prune_events(
+        base_dir=data_dir,
+        keep_count=1,
+        keep_seconds=150,
+        now=400,
+    )
+
+    assert result == {
+        "deleted": 2,
+        "kept": 2,
+        "scanned": 4,
+        "protected": 1,
+        "corrupt_deleted": 1,
+        "keep_count": 1,
+        "keep_seconds": 150,
+    }
+
+    events = object_events.list_events(base_dir=data_dir)["events"]
+    assert [event["id"] for event in events] == [newest["id"], protected["id"]]
+    assert old_unprotected["id"] not in {event["id"] for event in events}
+    assert object_events.list_subscriptions(base_dir=data_dir)["subscriptions"][0]["last_event_id"] == protected["id"]
+
+
+def test_publish_event_can_prune_with_retention_options(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    timestamps = iter([100, 100, 200, 200, 300, 300])
+    monkeypatch.setattr(object_events.time, "time", lambda: next(timestamps))
+
+    first = object_events.publish_event("invoice.created", payload={"id": "i1"}, base_dir=data_dir)
+    second = object_events.publish_event(
+        "invoice.created",
+        payload={"id": "i2"},
+        base_dir=data_dir,
+        keep_count=1,
+        keep_seconds=0,
+    )
+
+    events = object_events.list_events(base_dir=data_dir)["events"]
+
+    assert [event["id"] for event in events] == [second["id"]]
+    assert first["id"] not in {event["id"] for event in events}
+
+
 def test_event_helpers_reject_unsafe_inputs(tmp_path):
     data_dir = tmp_path / "data"
 
@@ -130,6 +201,12 @@ def test_event_helpers_reject_unsafe_inputs(tmp_path):
 
     with pytest.raises(ValueError, match="limit must be at most"):
         object_events.list_events(base_dir=data_dir, limit=1001)
+
+    with pytest.raises(ValueError, match="keep_count must be at least"):
+        object_events.prune_events(base_dir=data_dir, keep_count=-1)
+
+    with pytest.raises(ValueError, match="keep_seconds must be at least"):
+        object_events.prune_events(base_dir=data_dir, keep_seconds=-1)
 
 
 def test_event_helpers_ignore_corrupt_state_rows(tmp_path):

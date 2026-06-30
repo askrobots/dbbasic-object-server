@@ -22,6 +22,9 @@ from object_versions import DEFAULT_DATA_DIR
 EVENTS_OBJECT_ID = "events"
 DEFAULT_EVENT_LIMIT = 100
 MAX_EVENT_LIMIT = 1000
+DEFAULT_EVENT_KEEP_COUNT = 1000
+DEFAULT_EVENT_KEEP_SECONDS = 7 * 24 * 60 * 60
+MAX_EVENT_KEEP_COUNT = 1_000_000
 VALID_CALLBACK_SCHEMES = {"http", "https"}
 
 _EVENT_TYPE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
@@ -61,9 +64,13 @@ def publish_event(
     source: str = "api",
     actor: str = "api",
     base_dir: Path | str = DEFAULT_DATA_DIR,
+    keep_count: int | None = None,
+    keep_seconds: int | None = None,
 ) -> dict[str, Any]:
     """Publish one event into daemon-compatible trigger state."""
     clean_event_type = _clean_event_type(event_type)
+    clean_keep_count = _clean_keep_count(keep_count)
+    clean_keep_seconds = _clean_keep_seconds(keep_seconds)
     timestamp = int(time.time())
     event = {
         "id": f"evt_{uuid4().hex[:16]}",
@@ -77,6 +84,18 @@ def publish_event(
 
     manager = _state_manager(base_dir)
     manager.set(_event_state_key(event), _json_dumps(event))
+    if _should_prune_after_publish(
+        manager.get_all(),
+        keep_count=clean_keep_count,
+        keep_seconds=clean_keep_seconds,
+        now=timestamp,
+    ):
+        prune_events(
+            base_dir=base_dir,
+            keep_count=clean_keep_count,
+            keep_seconds=clean_keep_seconds,
+            now=timestamp,
+        )
     return event
 
 
@@ -127,6 +146,81 @@ def list_events(
     if since is not None:
         payload["since"] = since
     return payload
+
+
+def prune_events(
+    *,
+    base_dir: Path | str = DEFAULT_DATA_DIR,
+    keep_count: int | None = DEFAULT_EVENT_KEEP_COUNT,
+    keep_seconds: int | None = DEFAULT_EVENT_KEEP_SECONDS,
+    now: int | None = None,
+) -> dict[str, Any]:
+    """Prune old event queue rows while preserving subscriptions.
+
+    Events are a delivery queue. Durable audit history lives in record change
+    logs, source versions, and object logs, so this helper removes old event
+    rows before the shared events state file grows without bound.
+    """
+    clean_keep_count = _clean_keep_count(keep_count)
+    clean_keep_seconds = _clean_keep_seconds(keep_seconds)
+    current_time = int(time.time() if now is None else now)
+
+    manager = _state_manager(base_dir)
+    state = manager.get_all()
+    protected_ids = _subscription_last_event_ids(state)
+    events: list[tuple[str, dict[str, Any], int, bool]] = []
+    event_keys: set[str] = set()
+    keys_to_delete: set[str] = set()
+    corrupt_deleted = 0
+
+    for key, value in state.items():
+        if not key.startswith("event_"):
+            continue
+        event_keys.add(key)
+        event = _load_json_object(value)
+        if event is None:
+            keys_to_delete.add(key)
+            corrupt_deleted += 1
+            continue
+
+        event_id = str(event.get("id", ""))
+        events.append(
+            (
+                key,
+                event,
+                _coerce_int(event.get("timestamp")),
+                event_id in protected_ids,
+            )
+        )
+
+    if clean_keep_seconds is not None:
+        cutoff = current_time - clean_keep_seconds
+        for key, _event, timestamp, protected in events:
+            if not protected and timestamp < cutoff:
+                keys_to_delete.add(key)
+
+    remaining = [row for row in events if row[0] not in keys_to_delete]
+    if clean_keep_count is not None:
+        unprotected = [row for row in remaining if not row[3]]
+        unprotected.sort(
+            key=lambda row: (_coerce_int(row[1].get("timestamp")), str(row[1].get("id", ""))),
+            reverse=True,
+        )
+        for key, _event, _timestamp, _protected in unprotected[clean_keep_count:]:
+            keys_to_delete.add(key)
+
+    deleted = manager.delete_many(sorted(keys_to_delete)) if keys_to_delete else 0
+    valid_deleted = len(keys_to_delete.intersection(event_keys)) - corrupt_deleted
+
+    return {
+        "deleted": deleted,
+        "kept": len(events) - valid_deleted,
+        "scanned": len(event_keys),
+        "protected": sum(1 for _key, _event, _timestamp, protected in events if protected),
+        "corrupt_deleted": corrupt_deleted,
+        "keep_count": clean_keep_count,
+        "keep_seconds": clean_keep_seconds,
+    }
 
 
 def subscribe_event(
@@ -268,6 +362,79 @@ def _validate_page(*, limit: int, offset: int) -> None:
         raise ValueError(f"limit must be at most {MAX_EVENT_LIMIT}")
     if offset < 0:
         raise ValueError("offset must be at least 0")
+
+
+def _clean_keep_count(value: int | None) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError("keep_count must be an integer")
+    try:
+        count = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("keep_count must be an integer") from exc
+    if count < 0:
+        raise ValueError("keep_count must be at least 0")
+    if count > MAX_EVENT_KEEP_COUNT:
+        raise ValueError(f"keep_count must be at most {MAX_EVENT_KEEP_COUNT}")
+    return count or None
+
+
+def _clean_keep_seconds(value: int | None) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError("keep_seconds must be an integer")
+    try:
+        seconds = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("keep_seconds must be an integer") from exc
+    if seconds < 0:
+        raise ValueError("keep_seconds must be at least 0")
+    return seconds or None
+
+
+def _subscription_last_event_ids(state: dict[str, Any]) -> set[str]:
+    protected: set[str] = set()
+    for key, value in state.items():
+        if not key.startswith("sub_"):
+            continue
+        subscription = _load_json_object(value)
+        if subscription is None:
+            continue
+        last_event_id = subscription.get("last_event_id")
+        if isinstance(last_event_id, str) and last_event_id:
+            protected.add(last_event_id)
+    return protected
+
+
+def _should_prune_after_publish(
+    state: dict[str, Any],
+    *,
+    keep_count: int | None,
+    keep_seconds: int | None,
+    now: int,
+) -> bool:
+    if keep_count is None and keep_seconds is None:
+        return False
+
+    protected_ids = _subscription_last_event_ids(state)
+    cutoff = None if keep_seconds is None else now - keep_seconds
+    unprotected_count = 0
+    for key, value in state.items():
+        if not key.startswith("event_"):
+            continue
+        event = _load_json_object(value)
+        if event is None:
+            return True
+        event_id = str(event.get("id", ""))
+        if event_id in protected_ids:
+            continue
+        unprotected_count += 1
+        if cutoff is not None and _coerce_int(event.get("timestamp")) < cutoff:
+            return True
+
+    return keep_count is not None and unprotected_count > keep_count
 
 
 def _json_safe_value(value: Any) -> Any:

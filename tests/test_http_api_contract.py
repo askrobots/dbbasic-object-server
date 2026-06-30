@@ -91,6 +91,10 @@ def test_contract_keeps_existing_introspection_query_flags():
             {"status": "ok", "event": {"id": "evt_1", "event_type": "invoice.created"}},
         ),
         (
+            "event_retention",
+            {"status": "ok", "retention": {"deleted": 0, "kept": 0}},
+        ),
+        (
             "event_subscription_list",
             {"status": "ok", "subscriptions": [], "count": 0, "total": 0},
         ),
@@ -223,6 +227,7 @@ def test_http_contract_doc_mentions_required_compatibility_surface():
         "POST /schemas/{collection}",
         "GET /events",
         "POST /events",
+        "DELETE /events",
         "GET /events/subscriptions",
         "POST /events/subscriptions",
         "DELETE /events/subscriptions",

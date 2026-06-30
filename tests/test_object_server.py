@@ -4011,6 +4011,46 @@ def test_events_api_publishes_and_lists_daemon_compatible_events(tmp_path, monke
     assert payload["events"] == [event]
 
 
+def test_events_api_prunes_event_queue(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    for record_id in ("c1", "c2"):
+        status, _, payload = request(
+            "/events",
+            method="POST",
+            body=json.dumps(
+                {
+                    "event_type": "collection.record.created",
+                    "source": "records",
+                    "payload": {"collection": "contacts", "record_id": record_id},
+                }
+            ).encode(),
+            headers=auth_headers(),
+        )
+        assert status == 201
+        assert payload["status"] == "ok"
+
+    status, _, payload = request(
+        "/events",
+        method="DELETE",
+        query_string="keep_count=1&keep_seconds=0",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["retention"]["deleted"] == 1
+    assert payload["retention"]["kept"] == 1
+
+    status, _, payload = request("/events", headers=auth_headers())
+
+    assert status == 200
+    assert payload["total"] == 1
+    assert payload["events"][0]["payload"]["record_id"] in {"c1", "c2"}
+
+
 def test_event_subscription_api_creates_lists_and_deletes(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))

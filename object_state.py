@@ -12,6 +12,7 @@ conflict handling in the full runtime.
 from __future__ import annotations
 
 import time
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +50,24 @@ class ObjectStateManager:
         if key in self._state:
             del self._state[key]
             _write_object_state(self.state_file, self._state, timestamp=time.time())
+
+    def delete_many(self, keys: Iterable[str]) -> int:
+        """Delete state values in one atomic rewrite and return the removed count."""
+        clean_keys = list(dict.fromkeys(keys))
+        for key in clean_keys:
+            _validate_state_key(key)
+
+        self._state = get_object_state(self.object_id, self.base_dir)
+        removed = 0
+        for key in clean_keys:
+            if key in self._state:
+                del self._state[key]
+                removed += 1
+
+        if removed:
+            _write_object_state(self.state_file, self._state, timestamp=time.time())
+
+        return removed
 
     def get_all(self) -> dict[str, Any]:
         """Return all loaded state values."""

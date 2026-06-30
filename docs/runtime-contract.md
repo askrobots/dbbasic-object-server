@@ -618,6 +618,7 @@ The current HTTP event API is admin-gated:
 ```http
 GET /events
 POST /events
+DELETE /events?keep_count=1000&keep_seconds=604800
 GET /events/subscriptions
 POST /events/subscriptions
 DELETE /events/subscriptions?event_type=invoice.created&subscriber_id=scroll
@@ -635,6 +636,20 @@ flows that need to react to those facts. By default, collection record `POST`,
 Record mutation event payloads include `change_id`, `collection`, `record_id`,
 `action`, `actor`, `timestamp`, and `changed_fields`. They do not include full
 `before` or `after` snapshots until subscriber permission filtering exists.
+
+Event retention is built into the server and daemon cleanup path. The default is
+to keep the newest 1000 events and prune events older than seven days. Configure
+that with:
+
+```text
+DBBASIC_EVENT_KEEP_COUNT=1000
+DBBASIC_EVENT_KEEP_SECONDS=604800
+```
+
+Set either value to `0` to disable that part of pruning. Pruning deletes only
+`event_` rows. It does not delete `sub_` rows, and it protects the event id held
+by any subscription `last_event_id` so the daemon does not lose its delivery
+cursor.
 
 ## Public Safety
 

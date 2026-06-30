@@ -71,6 +71,7 @@ def test_daemon_imports_without_runtime_package():
     assert callable(object_daemon.process_queue)
     assert callable(object_daemon.process_events)
     assert callable(object_daemon.cleanup_ratelimit)
+    assert callable(object_daemon.cleanup_events)
 
 
 def test_calculate_onetime_next_run():
@@ -104,6 +105,25 @@ def test_cleanup_ratelimit_removes_expired_and_corrupt_files(tmp_path, monkeypat
     assert recent.exists()
     assert not corrupt.exists()
     assert ignored.exists()
+
+
+def test_cleanup_events_prunes_event_queue(tmp_path):
+    data_dir = tmp_path / "data"
+    object_daemon.object_events.publish_event(
+        "test.event",
+        payload={"id": "first"},
+        base_dir=data_dir,
+    )
+    object_daemon.object_events.publish_event(
+        "test.event",
+        payload={"id": "second"},
+        base_dir=data_dir,
+    )
+
+    result = object_daemon.cleanup_events(base_dir=data_dir, keep_count=1, keep_seconds=0)
+
+    assert result["deleted"] == 1
+    assert object_daemon.object_events.list_events(base_dir=data_dir)["total"] == 1
 
 
 def test_process_queue_completes_pending_message(tmp_path, monkeypatch):
