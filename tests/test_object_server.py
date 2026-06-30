@@ -228,6 +228,98 @@ def test_identity_endpoint_reports_admin_token_subject(monkeypatch):
     assert payload["auth"]["method"] == "admin_token"
 
 
+def test_identity_session_create_and_use(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    enable_admin_token(monkeypatch)
+
+    status, _, created = request(
+        "/identity/sessions",
+        method="POST",
+        body=json.dumps(
+            {
+                "user_id": "7",
+                "account_id": "acme",
+                "roles": ["sales", "manager"],
+                "subscriptions": ["pro"],
+                "label": "scroll",
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 201
+    assert created["status"] == "ok"
+    assert created["token"]
+    assert created["session"]["user_id"] == "7"
+    assert created["session"]["account_id"] == "acme"
+    assert created["session"]["roles"] == ["sales", "manager"]
+    assert "token_hash" not in created["session"]
+
+    status, _, identity = request(
+        "/identity",
+        headers=[("authorization", f"Bearer {created['token']}")],
+    )
+
+    assert status == 200
+    assert identity["auth"]["method"] == "session_token"
+    assert identity["subject"] == {
+        "user_id": "7",
+        "account_id": "acme",
+        "roles": ["sales", "manager"],
+        "subscriptions": ["pro"],
+        "authenticated": True,
+    }
+
+
+def test_identity_sessions_are_admin_gated(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)
+
+    status, _, payload = request("/identity/sessions")
+
+    assert status == 403
+    assert payload == {
+        "status": "error",
+        "error": "Identity sessions require DBBASIC_ADMIN_TOKEN.",
+    }
+
+
+def test_identity_session_list_and_revoke(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    enable_admin_token(monkeypatch)
+    _, _, created = request(
+        "/identity/sessions",
+        method="POST",
+        body=json.dumps({"user_id": "7", "roles": ["sales"]}).encode(),
+        headers=auth_headers(),
+    )
+    session_id = created["session"]["session_id"]
+    token = created["token"]
+
+    status, _, listing = request("/identity/sessions", headers=auth_headers())
+
+    assert status == 200
+    assert listing["count"] == 1
+    assert listing["sessions"][0]["session_id"] == session_id
+    assert "token" not in listing["sessions"][0]
+
+    status, _, revoked = request(
+        f"/identity/sessions/{session_id}",
+        method="DELETE",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert revoked["session"]["active"] is False
+    assert revoked["session"]["revoked_at"] is not None
+
+    status, _, identity = request("/identity", headers=[("authorization", f"Token {token}")])
+
+    assert status == 200
+    assert identity["auth"]["method"] == "anonymous"
+    assert identity["subject"]["authenticated"] is False
+
+
 def test_identity_endpoint_ignores_untrusted_identity_headers(monkeypatch):
     monkeypatch.delenv("DBBASIC_PERMISSION_TRUST_HEADERS", raising=False)
     headers = [

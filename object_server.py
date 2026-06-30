@@ -27,6 +27,7 @@ import object_events
 import object_execution
 import object_field_permissions
 import object_files
+import object_identity
 import object_logs
 import object_metadata
 import object_package_changes
@@ -291,6 +292,16 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
             await _send_request_too_large(send, exc)
             return
 
+        if path == http_api_contract.IDENTITY_SESSIONS_PATH:
+            await _handle_identity_sessions(send, method, body, headers)
+            return
+
+        identity_session_prefix = http_api_contract.IDENTITY_SESSIONS_PATH + "/"
+        if path.startswith(identity_session_prefix):
+            session_id = path[len(identity_session_prefix):]
+            await _handle_identity_session(send, method, session_id, headers)
+            return
+
         if path == http_api_contract.IDENTITY_PATH:
             await _handle_identity(send, method, headers)
             return
@@ -495,6 +506,89 @@ async def _handle_identity(send, method: str, headers: dict[str, str]) -> None:
             },
         },
     )
+
+
+async def _handle_identity_sessions(
+    send,
+    method: str,
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    gate_error = _admin_token_gate_error(headers, f"Identity sessions require {ADMIN_TOKEN_ENV}.")
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    if method == "GET":
+        sessions = object_identity.list_sessions(base_dir=_data_dir())
+        await _send_json(
+            send,
+            {
+                "status": "ok",
+                "sessions": sessions,
+                "count": len(sessions),
+            },
+        )
+        return
+
+    if method == "POST":
+        try:
+            payload = _parse_json_body(body)
+            result = object_identity.create_session(payload, base_dir=_data_dir())
+        except ValueError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+
+        await _send_json(send, {"status": "ok", **result}, status=201)
+        return
+
+    await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+
+
+async def _handle_identity_session(
+    send,
+    method: str,
+    session_id: str,
+    headers: dict[str, str],
+) -> None:
+    gate_error = _admin_token_gate_error(headers, f"Identity sessions require {ADMIN_TOKEN_ENV}.")
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    if "/" in session_id or not session_id:
+        await _send_json(send, {"status": "error", "error": "Invalid session id"}, status=400)
+        return
+
+    if method == "GET":
+        try:
+            session = object_identity.get_session(session_id, base_dir=_data_dir())
+        except object_identity.InvalidSessionPayloadError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        except object_identity.SessionNotFoundError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+            return
+
+        await _send_json(send, {"status": "ok", "session": session})
+        return
+
+    if method == "DELETE":
+        try:
+            session = object_identity.revoke_session(session_id, base_dir=_data_dir())
+        except object_identity.InvalidSessionPayloadError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        except object_identity.SessionNotFoundError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+            return
+
+        await _send_json(send, {"status": "ok", "session": session})
+        return
+
+    await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
 
 
 async def _send_rate_limit_if_needed(
@@ -3897,6 +3991,14 @@ def _permission_identity(
     admin_token = os.environ.get(ADMIN_TOKEN_ENV, "")
     if token and admin_token and hmac.compare_digest(token, admin_token):
         return object_permissions.PermissionSubject(user_id="admin", roles=("admin",)), "admin_token"
+
+    if token:
+        try:
+            session = object_identity.resolve_session_token(token, base_dir=_data_dir())
+        except (OSError, ValueError):
+            session = None
+        if session is not None:
+            return session.subject(), "session_token"
 
     if not _env_enabled(PERMISSION_TRUST_HEADERS_ENV):
         return object_permissions.PermissionSubject.anonymous(), "anonymous"

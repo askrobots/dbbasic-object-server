@@ -167,6 +167,8 @@ Current auth methods are:
 - `anonymous` - no trusted identity was accepted.
 - `admin_token` - `Authorization: Token <DBBASIC_ADMIN_TOKEN>` or Bearer matched
   the server admin token.
+- `session_token` - `Authorization: Token <session-token>` or Bearer matched an
+  active file-backed DBBASIC identity session.
 - `trusted_headers` - `DBBASIC_PERMISSION_TRUST_HEADERS=true` and at least one
   `X-DBBASIC-*` identity header was present.
 
@@ -175,10 +177,73 @@ current staging server safe while giving future login/session gateways and
 Scroll one stable endpoint for the active account, user, roles, and
 subscriptions.
 
+### Identity Sessions
+
+The server can mint scoped subject tokens for Scroll, gateways, or controlled
+apps. Sessions are stored under `data/identity/sessions.tsv`. Only token hashes
+are written to disk; the raw token is returned once at creation time.
+
+Create a session:
+
+```http
+POST /identity/sessions
+Authorization: Token <admin-token>
+Content-Type: application/json
+```
+
+```json
+{
+  "user_id": "7",
+  "account_id": "acme",
+  "roles": ["sales"],
+  "subscriptions": ["pro"],
+  "label": "scroll desktop",
+  "ttl_seconds": 86400
+}
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "session": {
+    "session_id": "sess_...",
+    "user_id": "7",
+    "account_id": "acme",
+    "roles": ["sales"],
+    "subscriptions": ["pro"],
+    "label": "scroll desktop",
+    "created_at": "2026-06-30T18:00:00Z",
+    "expires_at": "2026-07-01T18:00:00Z",
+    "revoked_at": null,
+    "active": true
+  },
+  "token": "returned-once"
+}
+```
+
+List sessions:
+
+```http
+GET /identity/sessions
+Authorization: Token <admin-token>
+```
+
+Revoke a session:
+
+```http
+DELETE /identity/sessions/{session_id}
+Authorization: Token <admin-token>
+```
+
+Session tokens do not grant admin access. They only supply the active subject
+used by permission checks. Admin routes still require `DBBASIC_ADMIN_TOKEN`.
+
 ## Permissions Policy
 
 The public server now has a persisted permission policy shape. The endpoints are
-admin-gated while the real user/session layer is still being extracted.
+admin-gated while broader login and account management mature.
 
 ```http
 GET /permissions/policy

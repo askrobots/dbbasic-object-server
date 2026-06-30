@@ -235,6 +235,20 @@ Supported headers:
 Only enable trusted headers behind infrastructure that strips or overwrites
 client-supplied copies.
 
+The server can also mint DBBASIC identity sessions:
+
+```http
+POST /identity/sessions
+Authorization: Token <admin-token>
+```
+
+Those sessions store only a token hash under `data/identity/sessions.tsv`.
+Requests can then send `Authorization: Token <session-token>` or
+`Authorization: Bearer <session-token>`, and the server resolves the subject
+directly from its local identity store. This is the first built-in replacement
+for each app hand-rolling the same "current user, current account, current
+roles, current subscription" lookup.
+
 The active subject can be inspected through:
 
 ```http
