@@ -223,7 +223,8 @@ def _default_message(action: str) -> str:
 
 
 def _change_id(timestamp: str, package_id: str, action: str) -> str:
-    compact = timestamp.replace("-", "").replace(":", "").replace(".", "").replace("+00:00", "Z")
+    compact = timestamp.replace("+00:00", "Z")
+    compact = compact.replace("-", "").replace(":", "").replace(".", "")
     return f"{compact}-{package_id}-{action}-{uuid4().hex[:8]}"
 
 

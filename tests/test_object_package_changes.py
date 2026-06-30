@@ -31,6 +31,9 @@ def test_append_package_change_writes_jsonl_and_lists_newest_first(tmp_path):
     assert rows == [first, second]
     assert first["message"] == "Dry run package install"
     assert first["details"] == {"safe_to_install": True, "objects": {"create": 1}}
+    assert "+" not in first["change_id"]
+    assert ":" not in first["change_id"]
+    assert "." not in first["change_id"]
 
     payload = object_package_changes.list_package_changes("hello-world", base_dir=data_dir)
 
