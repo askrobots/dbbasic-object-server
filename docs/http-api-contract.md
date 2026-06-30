@@ -611,6 +611,61 @@ rejected with `403`:
 }
 ```
 
+Read collection record change history:
+
+```http
+GET /collections/{collection}/changes?limit=100&offset=0
+Authorization: Token <token>
+```
+
+Read change history for one record:
+
+```http
+GET /collections/{collection}/records/{record_id}/changes?limit=100&offset=0
+Authorization: Token <token>
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "collection": "contacts",
+  "record_id": "c1",
+  "changes": [
+    {
+      "change_id": "20260629T120000Z-contacts-c1-update-a1b2c3d4",
+      "timestamp": "2026-06-29T12:00:00+00:00",
+      "collection": "contacts",
+      "record_id": "c1",
+      "action": "update",
+      "actor": "admin",
+      "message": "Updated record",
+      "changed_fields": ["name"],
+      "before": {"id": "c1", "name": "Ada"},
+      "after": {"id": "c1", "name": "Ada Lovelace"}
+    }
+  ],
+  "count": 1,
+  "total": 1,
+  "limit": 100,
+  "offset": 0,
+  "has_more": false
+}
+```
+
+Successful `POST`, `PUT`, and `DELETE` record mutations append JSONL entries
+under:
+
+```text
+data/record_changes/{collection}/changes.jsonl
+```
+
+This is an audit and admin-history surface, not the event-delivery mechanism.
+Future trigger/listener code can publish durable `collection.record.created`,
+`collection.record.updated`, and `collection.record.deleted` events from the
+same facts.
+
 ## Schemas
 
 ```http

@@ -27,6 +27,7 @@ RUNTIME_DATA_DIRS = (
     "logs",
     "versions",
     "schema_versions",
+    "record_changes",
     "files",
     "schemas",
     "collections",

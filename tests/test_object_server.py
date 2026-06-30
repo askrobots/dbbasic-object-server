@@ -878,6 +878,119 @@ def test_collection_record_update_and_delete_require_admin_token_by_default(tmp_
     ]
 
 
+def test_collection_record_mutations_append_change_history(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\nc2\tGrace\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    create_status, _, create_payload = request(
+        "/collections/contacts/records",
+        method="POST",
+        body=json.dumps({"id": "c3", "name": "Katherine"}).encode("utf-8"),
+        headers=auth_headers(),
+    )
+    update_status, _, update_payload = request(
+        "/collections/contacts/records/c1",
+        method="PUT",
+        body=json.dumps({"name": "Ada Lovelace"}).encode("utf-8"),
+        headers=auth_headers(),
+    )
+    delete_status, _, delete_payload = request(
+        "/collections/contacts/records/c2",
+        method="DELETE",
+        headers=auth_headers(),
+    )
+
+    assert create_status == 201
+    assert create_payload["record"] == {"id": "c3", "name": "Katherine"}
+    assert update_status == 200
+    assert update_payload["record"] == {"id": "c1", "name": "Ada Lovelace"}
+    assert delete_status == 200
+    assert delete_payload["deleted"] is True
+
+    history_status, _, history_payload = request(
+        "/collections/contacts/changes",
+        query_string="limit=10",
+        headers=auth_headers(),
+    )
+    record_status, _, record_payload = request(
+        "/collections/contacts/records/c1/changes",
+        headers=auth_headers(),
+    )
+
+    assert history_status == 200
+    assert history_payload["collection"] == "contacts"
+    assert history_payload["count"] == 3
+    assert [change["action"] for change in history_payload["changes"]] == [
+        "delete",
+        "update",
+        "create",
+    ]
+    assert all(change["actor"] == "admin" for change in history_payload["changes"])
+
+    update_change = history_payload["changes"][1]
+    assert update_change["record_id"] == "c1"
+    assert update_change["changed_fields"] == ["name"]
+    assert update_change["before"] == {"id": "c1", "name": "Ada"}
+    assert update_change["after"] == {"id": "c1", "name": "Ada Lovelace"}
+
+    delete_change = history_payload["changes"][0]
+    assert delete_change["record_id"] == "c2"
+    assert delete_change["after"] is None
+
+    assert record_status == 200
+    assert record_payload["record_id"] == "c1"
+    assert record_payload["count"] == 1
+    assert record_payload["changes"][0]["action"] == "update"
+
+
+def test_collection_change_history_requires_admin_token(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    collection_status, _, collection_payload = request("/collections/contacts/changes")
+    record_status, _, record_payload = request("/collections/contacts/records/c1/changes")
+
+    assert collection_status == 401
+    assert collection_payload == {"status": "error", "error": "Unauthorized"}
+    assert record_status == 401
+    assert record_payload == {"status": "error", "error": "Unauthorized"}
+
+
+def test_collection_change_history_rejects_bad_queries_and_missing_collection(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    bad_limit_status, _, bad_limit_payload = request(
+        "/collections/contacts/changes",
+        query_string="limit=0",
+        headers=auth_headers(),
+    )
+    bad_record_status, _, bad_record_payload = request(
+        "/collections/contacts/records/bad.name/changes",
+        headers=auth_headers(),
+    )
+    missing_status, _, missing_payload = request(
+        "/collections/missing/changes",
+        headers=auth_headers(),
+    )
+
+    assert bad_limit_status == 400
+    assert bad_limit_payload == {
+        "status": "error",
+        "error": "Query parameter 'limit' must be at least 1",
+    }
+    assert bad_record_status == 400
+    assert bad_record_payload == {"status": "error", "error": "Invalid record id: bad.name"}
+    assert missing_status == 404
+    assert missing_payload == {"status": "error", "error": "Collection not found: missing"}
+
+
 def test_collection_record_update_rejects_id_change(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")

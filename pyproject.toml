@@ -79,6 +79,7 @@ py-modules = [
     "object_permission_store",
     "object_permissions",
     "object_rate_limit",
+    "object_record_changes",
     "object_records",
     "object_schema_versions",
     "object_schemas",

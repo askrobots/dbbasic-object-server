@@ -78,6 +78,7 @@ The default runtime storage is file-backed:
 - object versions under `data/versions/`
 - object-owned files under `data/files/`
 - collection records under `data/collections/`
+- collection record changes under `data/record_changes/`
 - collection schemas under `data/schemas/`
 
 SQL databases, SQLite, external HTTP APIs, and AI APIs are optional integrations.
@@ -91,10 +92,11 @@ versions, schemas, and diagrams without turning SQL into the default storage
 contract.
 
 Runtime backups should use `object_backup.py`. The portable archive contains
-object source plus `data/state/`, `data/logs/`, `data/versions/`, and
-`data/files/`, `data/schemas/`, and `data/collections/`. It deliberately leaves
-deployment secrets, service files, virtualenvs, git history, lock files, temp
-files, and ephemeral rate-limit files outside the archive.
+object source plus `data/state/`, `data/logs/`, `data/versions/`,
+`data/record_changes/`, `data/files/`, `data/schemas/`, and
+`data/collections/`. It deliberately leaves deployment secrets, service files,
+virtualenvs, git history, lock files, temp files, and ephemeral rate-limit files
+outside the archive.
 
 ## Object Execution Result
 
@@ -414,6 +416,37 @@ Audit-only mode records write decisions without granting mutation access.
 When enforcement is enabled, schema field permissions are also applied: `hidden`
 fields are removed from record reads, and submitted fields with `read` or
 `hidden` access are rejected before the TSV write.
+
+Record mutations also append change entries under:
+
+```text
+data/record_changes/{collection}/changes.jsonl
+```
+
+The public helper module is `object_record_changes.py`. It exposes:
+
+```python
+append_record_change(collection, record_id, action, before, after, base_dir="data")
+list_record_changes(collection, record_id=None, base_dir="data", limit=100, offset=0)
+```
+
+Entries are JSON Lines with:
+
+- `change_id`
+- `timestamp`
+- `collection`
+- `record_id`
+- `action`
+- `actor`
+- `message`
+- `changed_fields`
+- `before`
+- `after`
+
+This is the durable record history that Scroll can show in admin and rollback
+screens. It is intentionally separate from event delivery. Scheduler, queue, and
+event trigger objects can later publish notifications from the same facts
+without making callback delivery the only audit trail.
 
 ## Collection Schemas
 

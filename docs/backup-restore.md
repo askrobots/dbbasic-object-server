@@ -22,14 +22,15 @@ data/state/
 data/logs/
 data/versions/
 data/schema_versions/
+data/record_changes/
 data/files/
 data/schemas/
 data/collections/
 ```
 
 That covers object source, object state, current logs, rotated compressed logs,
-source versions, schema change history, object-owned files, schema metadata, and
-TSV-backed collection records.
+source versions, schema change history, record change history, object-owned
+files, schema metadata, and TSV-backed collection records.
 
 ## Excluded
 

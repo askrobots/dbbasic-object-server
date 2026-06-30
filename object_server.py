@@ -30,6 +30,7 @@ import object_permission_audit
 import object_permission_store
 import object_permissions
 import object_rate_limit
+import object_record_changes
 import object_records
 import object_schema_versions
 import object_schemas
@@ -310,6 +311,16 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
         if path.startswith(f"{http_api_contract.COLLECTIONS_PATH}/"):
             collection_path = path.removeprefix(f"{http_api_contract.COLLECTIONS_PATH}/")
             collection_parts = collection_path.split("/")
+            if len(collection_parts) == 2 and collection_parts[1] == "changes":
+                await _handle_collection_changes(
+                    send,
+                    method,
+                    collection_parts[0],
+                    query,
+                    headers,
+                )
+                return
+
             if len(collection_parts) == 2 and collection_parts[1] == "records":
                 await _handle_collection_records(
                     send,
@@ -317,6 +328,21 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
                     collection_parts[0],
                     query,
                     body,
+                    headers,
+                )
+                return
+
+            if (
+                len(collection_parts) == 4
+                and collection_parts[1] == "records"
+                and collection_parts[3] == "changes"
+            ):
+                await _handle_collection_record_changes(
+                    send,
+                    method,
+                    collection_parts[0],
+                    collection_parts[2],
+                    query,
                     headers,
                 )
                 return
@@ -1424,6 +1450,97 @@ async def _handle_collection_records_get(
     await _send_json(send, {"status": "ok", **records_payload})
 
 
+async def _handle_collection_changes(
+    send,
+    method: str,
+    collection: str,
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Collection change history requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    try:
+        object_collections.get_collection(collection, base_dir=_data_dir())
+        limit = _query_int(query, "limit", default=100, minimum=1, maximum=1000)
+        offset = _query_int(query, "offset", default=0, minimum=0)
+        changes = object_record_changes.list_record_changes(
+            collection,
+            base_dir=_data_dir(),
+            limit=limit,
+            offset=offset,
+        )
+    except object_collections.InvalidCollectionNameError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_collections.CollectionNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    await _send_json(send, {"status": "ok", **changes})
+
+
+async def _handle_collection_record_changes(
+    send,
+    method: str,
+    collection: str,
+    record_id: str,
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Collection record change history requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    try:
+        object_collections.get_collection(collection, base_dir=_data_dir())
+        limit = _query_int(query, "limit", default=100, minimum=1, maximum=1000)
+        offset = _query_int(query, "offset", default=0, minimum=0)
+        changes = object_record_changes.list_record_changes(
+            collection,
+            record_id=record_id,
+            base_dir=_data_dir(),
+            limit=limit,
+            offset=offset,
+        )
+    except object_collections.InvalidCollectionNameError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_records.InvalidRecordIdError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_collections.CollectionNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    await _send_json(send, {"status": "ok", **changes})
+
+
 async def _handle_collection_record_create(
     send,
     collection: str,
@@ -1497,6 +1614,24 @@ async def _handle_collection_record_create(
         await _send_json(
             send,
             {"status": "error", "error": f"Could not save collection record: {exc}"},
+            status=500,
+        )
+        return
+
+    try:
+        object_record_changes.append_record_change(
+            collection=collection,
+            record_id=record["id"],
+            action="create",
+            before=None,
+            after=record,
+            actor=_record_change_actor(headers),
+            base_dir=_data_dir(),
+        )
+    except (OSError, ValueError) as exc:
+        await _send_json(
+            send,
+            {"status": "error", "error": f"Could not record collection change: {exc}"},
             status=500,
         )
         return
@@ -1709,6 +1844,24 @@ async def _handle_collection_record_update(
         )
         return
 
+    try:
+        object_record_changes.append_record_change(
+            collection=collection,
+            record_id=record_id,
+            action="update",
+            before=existing,
+            after=record,
+            actor=_record_change_actor(headers),
+            base_dir=_data_dir(),
+        )
+    except (OSError, ValueError) as exc:
+        await _send_json(
+            send,
+            {"status": "error", "error": f"Could not record collection change: {exc}"},
+            status=500,
+        )
+        return
+
     await _send_json(
         send,
         {
@@ -1775,6 +1928,24 @@ async def _handle_collection_record_delete(
         await _send_json(
             send,
             {"status": "error", "error": f"Could not delete collection record: {exc}"},
+            status=500,
+        )
+        return
+
+    try:
+        object_record_changes.append_record_change(
+            collection=collection,
+            record_id=record_id,
+            action="delete",
+            before=record,
+            after=None,
+            actor=_record_change_actor(headers),
+            base_dir=_data_dir(),
+        )
+    except (OSError, ValueError) as exc:
+        await _send_json(
+            send,
+            {"status": "error", "error": f"Could not record collection change: {exc}"},
             status=500,
         )
         return
@@ -2908,6 +3079,17 @@ def _permission_subject_payload(subject: object_permissions.PermissionSubject) -
         "subscriptions": list(subject.subscriptions),
         "authenticated": subject.is_authenticated,
     }
+
+
+def _record_change_actor(headers: dict[str, str]) -> str:
+    subject = _permission_subject(headers)
+    if subject.user_id:
+        return subject.user_id
+    if subject.account_id:
+        return f"account:{subject.account_id}"
+    if subject.roles:
+        return ",".join(subject.roles)
+    return "api"
 
 
 def _admin_token_gate_error(

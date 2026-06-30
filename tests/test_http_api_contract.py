@@ -13,6 +13,11 @@ def test_contract_keeps_objects_paths_as_public_surface():
     assert http_api_contract.COLLECTION_PATH == "/collections/{collection}"
     assert http_api_contract.COLLECTION_RECORDS_PATH == "/collections/{collection}/records"
     assert http_api_contract.COLLECTION_RECORD_PATH == "/collections/{collection}/records/{record_id}"
+    assert http_api_contract.COLLECTION_CHANGES_PATH == "/collections/{collection}/changes"
+    assert (
+        http_api_contract.COLLECTION_RECORD_CHANGES_PATH
+        == "/collections/{collection}/records/{record_id}/changes"
+    )
     assert http_api_contract.SCHEMAS_PATH == "/schemas"
     assert http_api_contract.SCHEMA_PATH == "/schemas/{collection}"
     assert http_api_contract.PERMISSIONS_POLICY_PATH == "/permissions/policy"
@@ -62,6 +67,10 @@ def test_contract_keeps_existing_introspection_query_flags():
         (
             "record",
             {"status": "ok", "collection": "contacts", "record": {"id": "c1"}},
+        ),
+        (
+            "record_changes",
+            {"status": "ok", "collection": "contacts", "changes": [], "count": 0, "total": 0},
         ),
         (
             "schema_list",
@@ -186,6 +195,8 @@ def test_http_contract_doc_mentions_required_compatibility_surface():
         "GET /collections/{collection}/records/{record_id}",
         "PUT /collections/{collection}/records/{record_id}",
         "DELETE /collections/{collection}/records/{record_id}",
+        "GET /collections/{collection}/changes",
+        "GET /collections/{collection}/records/{record_id}/changes",
         "GET /schemas",
         "GET /schemas/{collection}",
         "GET /schemas/{collection}?versions=true&limit=10",

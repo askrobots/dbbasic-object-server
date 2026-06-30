@@ -148,6 +148,8 @@ Current endpoints:
 - `GET /collections/{collection}/records/{record_id}`
 - `PUT /collections/{collection}/records/{record_id}`
 - `DELETE /collections/{collection}/records/{record_id}`
+- `GET /collections/{collection}/changes`
+- `GET /collections/{collection}/records/{record_id}/changes`
 - `GET /schemas`
 - `GET /schemas/{collection}`
 - `GET /schemas/{collection}?versions=true&limit=10`
@@ -247,6 +249,7 @@ rules the rest of the server will use:
 - `object_source.py` reads, updates, versions, and rolls back source files
 - `object_state.py` reads and writes runtime-owned TSV-backed object state
 - `object_records.py` reads and writes TSV-backed collection records under `data/collections/`
+- `object_record_changes.py` keeps append-only collection record change history
 - `object_files.py` lists and reads object-owned files under `data/files/`
 - `object_logs.py` reads and appends TSV-backed object logs, rotates/compresses old logs, and provides `_logger`
 - `object_metadata.py` summarizes source, state, logs, files, and versions
