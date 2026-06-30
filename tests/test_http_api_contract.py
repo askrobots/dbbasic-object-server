@@ -22,6 +22,8 @@ def test_contract_keeps_objects_paths_as_public_surface():
     assert http_api_contract.SCHEMA_PATH == "/schemas/{collection}"
     assert http_api_contract.EVENTS_PATH == "/events"
     assert http_api_contract.EVENT_SUBSCRIPTIONS_PATH == "/events/subscriptions"
+    assert http_api_contract.PACKAGES_PATH == "/packages"
+    assert http_api_contract.PACKAGE_PATH == "/packages/{package_id}"
     assert http_api_contract.PERMISSIONS_POLICY_PATH == "/permissions/policy"
     assert http_api_contract.PERMISSIONS_CHECK_PATH == "/permissions/check"
     assert http_api_contract.PERMISSIONS_AUDIT_PATH == "/permissions/audit"
@@ -101,6 +103,18 @@ def test_contract_keeps_existing_introspection_query_flags():
         (
             "event_subscription",
             {"status": "ok", "subscription": {"id": "scroll"}},
+        ),
+        (
+            "package_list",
+            {"status": "ok", "packages": [], "count": 0},
+        ),
+        (
+            "package",
+            {"status": "ok", "package": {"id": "hello-world"}},
+        ),
+        (
+            "package_dry_run",
+            {"status": "ok", "dry_run": {"package": {"id": "hello-world"}}},
         ),
         (
             "create_object",
@@ -231,6 +245,9 @@ def test_http_contract_doc_mentions_required_compatibility_surface():
         "GET /events/subscriptions",
         "POST /events/subscriptions",
         "DELETE /events/subscriptions",
+        "GET /packages",
+        "GET /packages/{package_id}",
+        "GET /packages/{package_id}?dry_run=true",
         "POST /objects",
         "GET /objects/{object_id}",
         "PUT /objects/{object_id}?source=true",

@@ -17,6 +17,7 @@ flowchart TD
     A --> N["Backup and restore"]
     A --> O["Traffic limits"]
     A --> P["Permissions model"]
+    A --> Q["Package manifests"]
 
     B --> F["Object namespace"]
     B --> G["Execution result shape"]
@@ -50,6 +51,8 @@ flowchart TD
 - `permissions-model.md` - server-side access modes, role/object/action rules,
   ownership, sharing, row/field filters, subscriptions, temporary paid access,
   route enforcement, and audit readback.
+- `runtime-contract.md#packages` and `http-api-contract.md#packages` - package
+  manifest layout, package discovery, and non-mutating install dry-runs.
 
 ## Documentation Rules
 

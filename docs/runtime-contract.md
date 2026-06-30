@@ -651,6 +651,66 @@ Set either value to `0` to disable that part of pruning. Pruning deletes only
 by any subscription `last_event_id` so the daemon does not lose its delivery
 cursor.
 
+## Packages
+
+Packages are the DBBASIC way to ship reusable app pieces without turning every
+app into a separate deploy process. A package is a directory containing a
+manifest plus package-owned objects, schemas, permissions, seed data, and
+migrations:
+
+```text
+packages/{package_id}/
+  dbbasic-package.json
+  objects/
+  schemas/
+  permissions/
+  seed/
+  migrations/
+```
+
+Package source can be overridden with:
+
+```text
+DBBASIC_PACKAGES_DIR=/path/to/packages
+```
+
+The current public helper module is `object_packages.py`. It exposes read-only
+package discovery and non-mutating install planning:
+
+```python
+list_packages(root="packages")
+get_package(package_id, root="packages")
+dry_run_package(package_id, root="packages", base_dir="data", object_roots=None)
+```
+
+The manifest format is JSON so Python 3.10 installs do not need another parser.
+The first required manifest is:
+
+```json
+{
+  "id": "hello-world",
+  "name": "Hello World",
+  "version": "0.1.0",
+  "description": "Minimal DBBASIC package",
+  "compatibility": {"object_server": ">=0.0.1"},
+  "dependencies": [],
+  "objects": [{"id": "hello_world", "path": "objects/hello/world.py"}],
+  "schemas": [],
+  "permissions": [],
+  "seed": [],
+  "migrations": []
+}
+```
+
+Package paths are package-relative. Absolute paths, null bytes, and `..`
+traversal are rejected. Dry-runs report what would be created, replaced,
+merged, applied, or skipped without writing object source or data.
+
+Package install/update writes are intentionally not public yet. They need
+server-enforced permissions, package changelogs, install audit entries, backup
+checks, rollback, and a stricter review boundary before a public server should
+allow a package to change live source or data.
+
 ## Public Safety
 
 Tests and docs should use only safe placeholder values:

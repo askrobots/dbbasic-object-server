@@ -803,6 +803,141 @@ Response:
 }
 ```
 
+## Packages
+
+Packages are DBBASIC bundles: objects, schemas, permissions, seed data, and
+migrations collected under one package directory. GitHub can host the source,
+but Scroll/Object Server should inspect and later install packages through the
+DBBASIC API so backups, dry-runs, changelogs, and rollback points stay part of
+the object loop.
+
+The first public package endpoint is read-only. It can list packages and return
+a dry-run plan, but it does not mutate source, data, schemas, or permissions.
+
+Package directory shape:
+
+```text
+packages/{package_id}/
+  dbbasic-package.json
+  objects/
+  schemas/
+  permissions/
+  seed/
+  migrations/
+```
+
+List packages:
+
+```http
+GET /packages
+Authorization: Token <token>
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "packages": [
+    {
+      "id": "hello-world",
+      "name": "Hello World",
+      "version": "0.1.0",
+      "description": "Small package proving DBBASIC package discovery and dry-run planning.",
+      "status": "available",
+      "object_count": 1,
+      "schema_count": 0,
+      "permission_count": 0,
+      "seed_count": 0,
+      "migration_count": 0,
+      "dependency_count": 0
+    }
+  ],
+  "count": 1
+}
+```
+
+Read one manifest:
+
+```http
+GET /packages/{package_id}
+Authorization: Token <token>
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "package": {
+    "id": "hello-world",
+    "name": "Hello World",
+    "version": "0.1.0",
+    "description": "Small package proving DBBASIC package discovery and dry-run planning.",
+    "compatibility": {"object_server": ">=0.0.1"},
+    "dependencies": [],
+    "objects": [
+      {"id": "hello_world", "path": "objects/hello/world.py"}
+    ],
+    "schemas": [],
+    "permissions": [],
+    "seed": [],
+    "migrations": []
+  }
+}
+```
+
+Dry-run a future install/update:
+
+```http
+GET /packages/{package_id}?dry_run=true
+Authorization: Token <token>
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "dry_run": {
+    "package": {
+      "id": "hello-world",
+      "name": "Hello World",
+      "version": "0.1.0",
+      "description": "Small package proving DBBASIC package discovery and dry-run planning.",
+      "status": "available",
+      "object_count": 1,
+      "schema_count": 0,
+      "permission_count": 0,
+      "seed_count": 0,
+      "migration_count": 0,
+      "dependency_count": 0
+    },
+    "mode": "dry_run",
+    "install_enabled": false,
+    "safe_to_install": true,
+    "objects": [
+      {
+        "id": "hello_world",
+        "path": "objects/hello/world.py",
+        "exists": true,
+        "action": "create",
+        "installed": false
+      }
+    ],
+    "schemas": [],
+    "permissions": [],
+    "seed": [],
+    "migrations": [],
+    "warnings": []
+  }
+}
+```
+
+Package ids are route-safe lowercase names such as `hello-world` or
+`crm-starter`. Package manifests use relative paths only. Absolute paths,
+`..`, and source/data writes are rejected at this layer.
+
 ## Schemas
 
 ```http

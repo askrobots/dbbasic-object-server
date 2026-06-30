@@ -160,6 +160,7 @@ Create `/etc/dbbasic-object-server.env`:
 ```text
 DBBASIC_OBJECTS_DIR=/var/lib/dbbasic-object-server/objects
 DBBASIC_DATA_DIR=/var/lib/dbbasic-object-server/data
+DBBASIC_PACKAGES_DIR=/opt/dbbasic-object-server/packages
 DBBASIC_ENABLE_SOURCE_WRITES=false
 DBBASIC_ADMIN_TOKEN=replace-with-a-generated-token
 DBBASIC_MAX_REQUEST_BYTES=1048576
@@ -328,6 +329,15 @@ DBBASIC_EVENT_KEEP_SECONDS=604800
 Set either value to `0` to disable that retention rule. Subscriptions stay in
 place, and any event referenced by a subscription `last_event_id` is protected so
 the daemon keeps its delivery cursor.
+
+## Packages
+
+Packages are read from `DBBASIC_PACKAGES_DIR`. The public server currently
+supports package listing and dry-run planning only.
+
+Keep install/update writes disabled until backup checks, changelog entries,
+permission enforcement, package rollback, and source/data audit trails are
+enforced by the server.
 
 ## Minimal Object
 

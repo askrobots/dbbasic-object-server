@@ -90,6 +90,7 @@ This repository currently contains:
 - `object_schemas.py` - schema metadata for generated UI, validation rules, field permissions, and relations
 - `object_events.py` - daemon-compatible event publishing and subscription state helpers
   for record mutations, triggers, listeners, and webhooks
+- `object_packages.py` - package manifest discovery and non-mutating install dry-runs
 - `object_field_permissions.py` - schema-level `edit/read/hidden` enforcement for collection record fields
 - `object_permission_audit.py` - JSONL-backed permission decision audit reads and writes
 - `object_permission_store.py` - JSON-backed permission policy persistence
@@ -101,13 +102,19 @@ This repository currently contains:
 - `deployment_checks.py` - single-VM filesystem ownership and permission checks
 
 It does not yet contain the full private prototype, cluster runtime, dashboard,
-sample applications, package system, or production installer.
+sample applications, package installer/updater, or production installer.
 
 ## Object Source Directories
 
 New DBBASIC object source should live under `objects/`.
 
 Set `DBBASIC_OBJECTS_DIR` to point at a custom object source directory during migration or deployment.
+
+Installable DBBASIC packages should live under `packages/{package_id}/`.
+Each package currently uses `dbbasic-package.json` plus package-owned `objects/`,
+`schemas/`, `permissions/`, `seed/`, and `migrations/` paths. The public server
+can list packages and return dry-run install plans, but package installs are not
+enabled yet.
 
 ## Minimal Server
 
@@ -164,6 +171,9 @@ Current endpoints:
 - `GET /events/subscriptions`
 - `POST /events/subscriptions`
 - `DELETE /events/subscriptions`
+- `GET /packages`
+- `GET /packages/{package_id}`
+- `GET /packages/{package_id}?dry_run=true`
 - `GET /objects?format=json`
 - `GET /objects/{object_id}`
 - `POST /objects/{object_id}`
@@ -188,6 +198,7 @@ metadata, and versions require:
 ```bash
 export DBBASIC_ADMIN_TOKEN=replace-with-a-local-dev-token
 export DBBASIC_DATA_DIR=./data
+export DBBASIC_PACKAGES_DIR=./packages
 export DBBASIC_MAX_REQUEST_BYTES=1048576
 export DBBASIC_MAX_CONCURRENT_REQUESTS=64
 export DBBASIC_MAX_CONCURRENT_EXECUTIONS=8
@@ -264,6 +275,8 @@ rules the rest of the server will use:
 - `object_events.py` publishes events and subscriptions into `data/state/events/state.tsv`
   and collection record mutations emit metadata-only `collection.record.*` events; event
   retention keeps the delivery queue bounded while change history stays durable
+- `object_packages.py` reads `packages/{package_id}/dbbasic-package.json` and builds
+  non-mutating dry-run install plans for Scroll/package manager workflows
 - `object_files.py` lists and reads object-owned files under `data/files/`
 - `object_logs.py` reads and appends TSV-backed object logs, rotates/compresses old logs, and provides `_logger`
 - `object_metadata.py` summarizes source, state, logs, files, and versions

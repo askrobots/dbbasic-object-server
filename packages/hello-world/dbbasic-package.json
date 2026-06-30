@@ -1,0 +1,20 @@
+{
+  "id": "hello-world",
+  "name": "Hello World",
+  "version": "0.1.0",
+  "description": "Small package proving DBBASIC package discovery and dry-run planning.",
+  "compatibility": {
+    "object_server": ">=0.0.1"
+  },
+  "dependencies": [],
+  "objects": [
+    {
+      "id": "hello_world",
+      "path": "objects/hello/world.py"
+    }
+  ],
+  "schemas": [],
+  "permissions": [],
+  "seed": [],
+  "migrations": []
+}

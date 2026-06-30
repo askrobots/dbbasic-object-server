@@ -2,6 +2,7 @@ import asyncio
 import json
 
 import object_execution
+import object_packages
 import object_permission_audit
 import object_permission_store
 import object_server
@@ -139,6 +140,15 @@ def enable_admin_token(monkeypatch):
 
 def save_permission_policy(data_dir, policy):
     object_permission_store.replace_policy(policy, data_dir)
+
+
+def write_package(root, package_id, payload, files=()):
+    package_dir = root / package_id
+    package_dir.mkdir(parents=True)
+    (package_dir / object_packages.MANIFEST_FILE).write_text(json.dumps(payload))
+    for relative_path, content in files:
+        write_source(package_dir / relative_path, content)
+    return package_dir
 
 
 def claim_limit_slot(limiter, limit):
@@ -4131,6 +4141,91 @@ def test_events_api_rejects_bad_payloads(tmp_path, monkeypatch):
 
     assert status == 400
     assert "callback_url" in payload["error"]
+
+
+def test_packages_api_requires_admin_token(tmp_path, monkeypatch):
+    packages_root = tmp_path / "packages"
+    monkeypatch.setenv("DBBASIC_PACKAGES_DIR", str(packages_root))
+    monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)
+
+    status, _, payload = request("/packages", headers=auth_headers())
+
+    assert status == 403
+    assert payload == {
+        "status": "error",
+        "error": "Package listing requires DBBASIC_ADMIN_TOKEN.",
+    }
+
+
+def test_packages_api_lists_package_detail_and_dry_run(tmp_path, monkeypatch):
+    packages_root = tmp_path / "packages"
+    data_dir = tmp_path / "data"
+    object_root = tmp_path / "objects"
+    write_source(object_root / "hello" / "world.py", "def GET(request): return {}\n")
+    write_package(
+        packages_root,
+        "hello-world",
+        {
+            "id": "hello-world",
+            "name": "Hello World",
+            "version": "0.1.0",
+            "description": "Safe package fixture",
+            "objects": [{"id": "hello_world", "path": "objects/hello/world.py"}],
+            "schemas": [],
+            "permissions": [],
+            "seed": [],
+            "migrations": [],
+        },
+        files=(("objects/hello/world.py", "def GET(request): return {}\n"),),
+    )
+    monkeypatch.setenv("DBBASIC_PACKAGES_DIR", str(packages_root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(object_root))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/packages", headers=auth_headers())
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["count"] == 1
+    assert payload["packages"][0]["id"] == "hello-world"
+    assert payload["packages"][0]["object_count"] == 1
+
+    status, _, payload = request("/packages/hello-world", headers=auth_headers())
+
+    assert status == 200
+    assert payload["package"]["id"] == "hello-world"
+    assert payload["package"]["objects"] == [
+        {"id": "hello_world", "path": "objects/hello/world.py"}
+    ]
+
+    status, _, payload = request(
+        "/packages/hello-world",
+        query_string="dry_run=true",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["dry_run"]["safe_to_install"] is True
+    assert payload["dry_run"]["install_enabled"] is False
+    assert payload["dry_run"]["objects"][0]["action"] == "replace"
+    assert payload["dry_run"]["warnings"] == []
+
+
+def test_packages_api_rejects_invalid_and_missing_packages(tmp_path, monkeypatch):
+    packages_root = tmp_path / "packages"
+    monkeypatch.setenv("DBBASIC_PACKAGES_DIR", str(packages_root))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/packages/../bad", headers=auth_headers())
+
+    assert status == 400
+    assert "Invalid package id" in payload["error"]
+
+    status, _, payload = request("/packages/missing", headers=auth_headers())
+
+    assert status == 404
+    assert "Package not found" in payload["error"]
 
 
 def test_object_execution_returns_405_when_get_is_missing(tmp_path, monkeypatch):

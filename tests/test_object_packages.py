@@ -1,0 +1,145 @@
+import json
+
+import pytest
+
+import object_packages
+
+
+def write_package(root, package_id, payload, files=()):
+    package_dir = root / package_id
+    package_dir.mkdir(parents=True)
+    (package_dir / object_packages.MANIFEST_FILE).write_text(json.dumps(payload))
+    for relative_path, content in files:
+        path = package_dir / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+    return package_dir
+
+
+def manifest(package_id="crm-starter", **overrides):
+    payload = {
+        "id": package_id,
+        "name": "CRM Starter",
+        "version": "0.1.0",
+        "description": "Contacts and deals",
+        "compatibility": {"object_server": ">=0.0.1"},
+        "dependencies": [{"id": "hello-world", "version": ">=0.1.0"}],
+        "objects": [{"id": "crm_contacts", "path": "objects/crm/contacts.py"}],
+        "schemas": [{"collection": "contacts", "path": "schemas/contacts.json"}],
+        "permissions": [{"path": "permissions/policy.json"}],
+        "seed": [{"collection": "contacts", "path": "seed/contacts.tsv"}],
+        "migrations": [{"id": "001_init", "path": "migrations/001_init.py"}],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_list_packages_returns_manifest_summaries(tmp_path):
+    packages_root = tmp_path / "packages"
+    write_package(packages_root, "hello-world", manifest("hello-world"))
+    write_package(packages_root, "crm-starter", manifest("crm-starter"))
+    write_package(packages_root, "Bad.Name", manifest("Bad.Name"))
+
+    packages = object_packages.list_packages(root=packages_root)
+
+    assert [package["id"] for package in packages] == ["crm-starter", "hello-world"]
+    assert packages[0]["status"] == "available"
+    assert packages[0]["object_count"] == 1
+    assert packages[0]["schema_count"] == 1
+    assert packages[0]["dependency_count"] == 1
+
+
+def test_get_package_normalizes_manifest(tmp_path):
+    packages_root = tmp_path / "packages"
+    write_package(packages_root, "crm-starter", manifest())
+
+    package = object_packages.get_package("crm-starter", root=packages_root)
+
+    assert package["id"] == "crm-starter"
+    assert package["objects"] == [{"id": "crm_contacts", "path": "objects/crm/contacts.py"}]
+    assert package["schemas"] == [{"collection": "contacts", "path": "schemas/contacts.json"}]
+    assert package["dependencies"] == [{"id": "hello-world", "version": ">=0.1.0"}]
+
+
+def test_dry_run_reports_create_replace_merge_apply_and_missing_files(tmp_path):
+    packages_root = tmp_path / "packages"
+    data_dir = tmp_path / "data"
+    object_root = tmp_path / "objects"
+    (object_root / "crm").mkdir(parents=True)
+    (object_root / "crm" / "contacts.py").write_text("def GET(request): return {}\n")
+    (data_dir / "schemas").mkdir(parents=True)
+    (data_dir / "schemas" / "contacts.json").write_text('{"fields":[]}\n')
+    (data_dir / "collections" / "contacts").mkdir(parents=True)
+    (data_dir / "collections" / "contacts" / "records.tsv").write_text("id\tname\nc1\tAlice\n")
+    (data_dir / object_packages.PACKAGE_MIGRATIONS_DIR / "crm-starter").mkdir(parents=True)
+    (data_dir / object_packages.PACKAGE_MIGRATIONS_DIR / "crm-starter" / "001_init.json").write_text("{}\n")
+
+    write_package(
+        packages_root,
+        "crm-starter",
+        manifest(),
+        files=(
+            ("objects/crm/contacts.py", "def GET(request): return {}\n"),
+            ("schemas/contacts.json", '{"fields":[]}\n'),
+            ("permissions/policy.json", "{}\n"),
+            ("seed/contacts.tsv", "id\tname\nc2\tBob\n"),
+        ),
+    )
+
+    plan = object_packages.dry_run_package(
+        "crm-starter",
+        root=packages_root,
+        base_dir=data_dir,
+        object_roots=[object_root],
+    )
+
+    assert plan["mode"] == "dry_run"
+    assert plan["install_enabled"] is False
+    assert plan["safe_to_install"] is False
+    assert plan["objects"][0]["action"] == "replace"
+    assert plan["schemas"][0]["action"] == "replace"
+    assert plan["permissions"][0]["action"] == "merge"
+    assert plan["seed"][0]["action"] == "merge"
+    assert plan["migrations"][0]["action"] == "skip"
+    assert plan["warnings"] == ["Missing package migration file: migrations/001_init.py"]
+
+
+def test_dry_run_is_safe_when_declared_files_exist(tmp_path):
+    packages_root = tmp_path / "packages"
+    write_package(
+        packages_root,
+        "hello-world",
+        {
+            "id": "hello-world",
+            "name": "Hello World",
+            "version": "0.1.0",
+            "objects": [{"id": "hello_world", "path": "objects/hello/world.py"}],
+        },
+        files=(("objects/hello/world.py", "def GET(request): return {}\n"),),
+    )
+
+    plan = object_packages.dry_run_package("hello-world", root=packages_root)
+
+    assert plan["safe_to_install"] is True
+    assert plan["warnings"] == []
+    assert plan["objects"][0]["action"] == "create"
+
+
+def test_package_manifest_rejects_unsafe_paths_and_ids(tmp_path):
+    packages_root = tmp_path / "packages"
+    write_package(
+        packages_root,
+        "bad-package",
+        manifest("bad-package", objects=[{"id": "bad/id", "path": "../secret.py"}]),
+    )
+
+    with pytest.raises(object_packages.InvalidPackageManifestError):
+        object_packages.get_package("bad-package", root=packages_root)
+
+    with pytest.raises(object_packages.InvalidPackageIdError):
+        object_packages.get_package("../bad", root=packages_root)
+
+
+def test_missing_package_raises(tmp_path):
+    with pytest.raises(object_packages.PackageNotFoundError):
+        object_packages.get_package("missing", root=tmp_path / "packages")

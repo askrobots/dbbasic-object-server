@@ -30,6 +30,7 @@ import object_metadata
 import object_permission_audit
 import object_permission_store
 import object_permissions
+import object_packages
 import object_rate_limit
 import object_record_changes
 import object_records
@@ -59,6 +60,7 @@ PERMISSION_TRUST_HEADERS_ENV = "DBBASIC_PERMISSION_TRUST_HEADERS"
 RECORD_EVENTS_ENV = "DBBASIC_ENABLE_RECORD_EVENTS"
 EVENT_KEEP_COUNT_ENV = "DBBASIC_EVENT_KEEP_COUNT"
 EVENT_KEEP_SECONDS_ENV = "DBBASIC_EVENT_KEEP_SECONDS"
+PACKAGES_DIR_ENV = "DBBASIC_PACKAGES_DIR"
 DEFAULT_MAX_REQUEST_BYTES = 1_048_576
 DEFAULT_MAX_CONCURRENT_REQUESTS = 64
 DEFAULT_MAX_CONCURRENT_EXECUTIONS = 8
@@ -302,6 +304,15 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
 
         if path == http_api_contract.EVENT_SUBSCRIPTIONS_PATH:
             await _handle_event_subscriptions(send, method, query, body, headers)
+            return
+
+        if path == http_api_contract.PACKAGES_PATH:
+            await _handle_packages(send, method, headers)
+            return
+
+        if path.startswith(f"{http_api_contract.PACKAGES_PATH}/"):
+            package_id = path.removeprefix(f"{http_api_contract.PACKAGES_PATH}/")
+            await _handle_package(send, method, package_id, query, headers)
             return
 
         if path == http_api_contract.OBJECTS_PATH:
@@ -882,6 +893,95 @@ async def _handle_event_subscriptions(
         return
 
     await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+
+
+async def _handle_packages(
+    send,
+    method: str,
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Package listing requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    try:
+        packages = object_packages.list_packages(root=_packages_dir())
+    except object_packages.InvalidPackageManifestError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=500)
+        return
+
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "packages": packages,
+            "count": len(packages),
+        },
+    )
+
+
+async def _handle_package(
+    send,
+    method: str,
+    package_id: str,
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Package detail requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    try:
+        dry_run = _optional_query_bool(query, "dry_run") is True
+        if dry_run:
+            payload = {
+                "status": "ok",
+                "dry_run": object_packages.dry_run_package(
+                    package_id,
+                    root=_packages_dir(),
+                    base_dir=_data_dir(),
+                ),
+            }
+        else:
+            payload = {
+                "status": "ok",
+                "package": object_packages.get_package(
+                    package_id,
+                    root=_packages_dir(),
+                ),
+            }
+    except object_packages.InvalidPackageIdError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_packages.PackageNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+    except object_packages.InvalidPackageManifestError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=500)
+        return
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    await _send_json(send, payload)
 
 
 async def _handle_object_get(
@@ -3441,6 +3541,10 @@ def _schema_version_manager() -> object_schema_versions.SchemaVersionManager:
 
 def _data_dir() -> str:
     return os.environ.get(DATA_DIR_ENV, object_versions.DEFAULT_DATA_DIR)
+
+
+def _packages_dir() -> str:
+    return os.environ.get(PACKAGES_DIR_ENV, object_packages.PACKAGES_DIR)
 
 
 def _max_concurrent_requests() -> int:
