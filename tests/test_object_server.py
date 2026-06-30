@@ -2524,6 +2524,111 @@ def test_permissions_policy_get_returns_default_policy(tmp_path, monkeypatch):
     }
 
 
+def test_permissions_status_requires_admin_token_configuration(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)
+
+    status, _, payload = request("/permissions/status")
+
+    assert status == 403
+    assert payload == {"status": "error", "error": "Permissions API requires DBBASIC_ADMIN_TOKEN."}
+
+
+def test_permissions_status_reports_default_policy_blocker(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/permissions/status", headers=auth_headers())
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["permissions"]["enforcement_enabled"] is False
+    assert payload["permissions"]["audit_enabled"] is False
+    assert payload["permissions"]["trusted_headers_enabled"] is False
+    assert payload["permissions"]["admin_token_configured"] is True
+    assert payload["identity"]["accounts"] == {"count": 0, "active": 0, "disabled": 0}
+    assert payload["identity"]["users"] == {"count": 0, "active": 0, "disabled": 0}
+    assert payload["identity"]["sessions"] == {"count": 0, "active": 0, "revoked": 0}
+    assert payload["policy"]["access_mode"] == "role_based"
+    assert payload["policy"]["policy_file_exists"] is False
+    assert payload["policy"]["rules_count"] == 0
+    assert payload["readiness"] == {
+        "can_enable_enforcement": False,
+        "blockers": ["Role-based policy has no grants; non-admin traffic will be denied."],
+    }
+    assert "Permission enforcement is off." in payload["warnings"]
+    assert "object execution and mutation routes" in payload["coverage"]["policy_checked"]
+
+
+def test_permissions_status_reports_identity_counts_and_ready_policy(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_AUDIT_ENV, "true")
+    monkeypatch.setenv(object_server.REQUIRE_KNOWN_IDENTITY_USERS_ENV, "true")
+    enable_admin_token(monkeypatch)
+    save_permission_policy(
+        data_dir,
+        {
+            "access_mode": "role_based",
+            "roles": {"sales": {"label": "Sales"}},
+            "user_roles": {"u_7": ["sales"]},
+            "rules": [
+                {
+                    "effect": "allow",
+                    "principal": "role:sales",
+                    "actions": ["read"],
+                    "collection": "contacts",
+                    "row_filter": {"owner_id": "$user_id"},
+                }
+            ],
+        },
+    )
+    request(
+        "/identity/accounts",
+        method="POST",
+        body=json.dumps({"account_id": "acme", "name": "Acme"}).encode(),
+        headers=auth_headers(),
+    )
+    request(
+        "/identity/users",
+        method="POST",
+        body=json.dumps({"user_id": "u_7", "account_id": "acme", "roles": ["sales"]}).encode(),
+        headers=auth_headers(),
+    )
+    request(
+        "/identity/sessions",
+        method="POST",
+        body=json.dumps({"user_id": "u_7", "label": "scroll"}).encode(),
+        headers=auth_headers(),
+    )
+
+    status, _, payload = request("/permissions/status", headers=auth_headers())
+
+    assert status == 200
+    assert payload["permissions"]["audit_enabled"] is True
+    assert payload["permissions"]["require_known_identity_users"] is True
+    assert payload["identity"]["accounts"] == {"count": 1, "active": 1, "disabled": 0}
+    assert payload["identity"]["users"] == {"count": 1, "active": 1, "disabled": 0}
+    assert payload["identity"]["sessions"]["count"] == 1
+    assert payload["identity"]["sessions"]["active"] == 1
+    assert payload["policy"]["policy_file_exists"] is True
+    assert payload["policy"]["rules_count"] == 1
+    assert payload["policy"]["allow_rules"] == 1
+    assert payload["policy"]["principals"] == ["role:sales"]
+    assert payload["policy"]["collections"] == ["contacts"]
+    assert payload["readiness"] == {"can_enable_enforcement": True, "blockers": []}
+
+
+def test_permissions_status_rejects_non_get_methods(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/permissions/status", method="POST", headers=auth_headers())
+
+    assert status == 405
+    assert payload == {"status": "error", "error": "Method not allowed"}
+
+
 def test_permissions_policy_put_persists_policy(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))

@@ -80,6 +80,7 @@ py-modules = [
     "object_packages",
     "object_permission_audit",
     "object_permission_store",
+    "object_permission_status",
     "object_permissions",
     "object_rate_limit",
     "object_record_changes",

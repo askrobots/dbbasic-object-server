@@ -35,6 +35,7 @@ IDENTITY_USER_PATH = "/identity/users/{user_id}"
 IDENTITY_SESSIONS_PATH = "/identity/sessions"
 IDENTITY_SESSION_PATH = "/identity/sessions/{session_id}"
 PERMISSIONS_POLICY_PATH = "/permissions/policy"
+PERMISSIONS_STATUS_PATH = "/permissions/status"
 PERMISSIONS_CHECK_PATH = "/permissions/check"
 PERMISSIONS_AUDIT_PATH = "/permissions/audit"
 
@@ -90,6 +91,9 @@ RESPONSE_FIELDS: dict[str, frozenset[str]] = {
     "rollback": frozenset({"status", "message", "version_id", "object_id"}),
     "destroy_object": frozenset({"status", "message", "object_id"}),
     "permissions_policy": frozenset({"status", "policy"}),
+    "permissions_status": frozenset(
+        {"status", "permissions", "identity", "policy", "coverage", "readiness", "warnings"}
+    ),
     "permissions_check": frozenset({"status", "decision"}),
     "permissions_audit": frozenset({"status", "entries", "count"}),
 }

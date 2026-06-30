@@ -35,6 +35,7 @@ def test_contract_keeps_objects_paths_as_public_surface():
     assert http_api_contract.IDENTITY_SESSIONS_PATH == "/identity/sessions"
     assert http_api_contract.IDENTITY_SESSION_PATH == "/identity/sessions/{session_id}"
     assert http_api_contract.PERMISSIONS_POLICY_PATH == "/permissions/policy"
+    assert http_api_contract.PERMISSIONS_STATUS_PATH == "/permissions/status"
     assert http_api_contract.PERMISSIONS_CHECK_PATH == "/permissions/check"
     assert http_api_contract.PERMISSIONS_AUDIT_PATH == "/permissions/audit"
 
@@ -259,6 +260,18 @@ def test_contract_keeps_existing_introspection_query_flags():
             {"status": "ok", "policy": {"access_mode": "role_based"}},
         ),
         (
+            "permissions_status",
+            {
+                "status": "ok",
+                "permissions": {"enforcement_enabled": False},
+                "identity": {"users": {"count": 0}},
+                "policy": {"valid": True},
+                "coverage": {"policy_checked": []},
+                "readiness": {"can_enable_enforcement": False, "blockers": []},
+                "warnings": [],
+            },
+        ),
+        (
             "permissions_check",
             {"status": "ok", "decision": {"allowed": True}},
         ),
@@ -333,6 +346,7 @@ def test_http_contract_doc_mentions_required_compatibility_surface():
         "DELETE /objects/{object_id}?destroy=true",
         "GET /permissions/policy",
         "PUT /permissions/policy",
+        "GET /permissions/status",
         "POST /permissions/check",
         "GET /permissions/audit",
         "source=true",

@@ -276,6 +276,18 @@ That endpoint returns the normalized `user_id`, `account_id`, roles,
 subscriptions, auth method, and permission-mode flags the server will use for
 route checks.
 
+Operators and Scroll can inspect permission rollout readiness through:
+
+```http
+GET /permissions/status
+Authorization: Token <admin-token>
+```
+
+That endpoint summarizes the active mode flags, identity counts, persisted
+policy shape, covered route groups, blockers, and warnings. It is meant to be
+used before enabling enforcement on a live app. A role-based policy with no
+rules is reported as a blocker because non-admin traffic would be denied.
+
 ## Access Modes
 
 Access modes answer who gets through the front door.

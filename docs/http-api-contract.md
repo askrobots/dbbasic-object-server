@@ -368,6 +368,53 @@ Content-Type: application/json
 The policy is stored under `data/permissions/policy.json`. Missing policy files
 load as a conservative `role_based` policy with no grants.
 
+## Permissions Status
+
+Scroll and operators can inspect whether the active identity and permission
+configuration is ready for enforcement:
+
+```http
+GET /permissions/status
+Authorization: Token <admin-token>
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "permissions": {
+    "enforcement_enabled": false,
+    "audit_enabled": true,
+    "trusted_headers_enabled": false,
+    "require_known_identity_users": true,
+    "admin_token_configured": true
+  },
+  "identity": {
+    "accounts": {"count": 1, "active": 1, "disabled": 0},
+    "users": {"count": 3, "active": 3, "disabled": 0},
+    "sessions": {"count": 2, "active": 1, "revoked": 1}
+  },
+  "policy": {
+    "valid": true,
+    "policy_file_exists": true,
+    "access_mode": "role_based",
+    "rules_count": 4,
+    "allow_rules": 3,
+    "deny_rules": 1
+  },
+  "readiness": {
+    "can_enable_enforcement": true,
+    "blockers": []
+  },
+  "warnings": []
+}
+```
+
+This endpoint is intentionally read-only. It does not enable enforcement; it
+shows the operator what would make that rollout unsafe, such as an invalid policy
+file or a role-based policy with no grants.
+
 ## Permissions Check
 
 Scroll and admin tools can ask the server to evaluate one permission decision.

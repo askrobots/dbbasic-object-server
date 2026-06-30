@@ -33,6 +33,7 @@ import object_metadata
 import object_package_changes
 import object_permission_audit
 import object_permission_store
+import object_permission_status
 import object_permissions
 import object_packages
 import object_rate_limit
@@ -329,6 +330,10 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
 
         if path == http_api_contract.PERMISSIONS_POLICY_PATH:
             await _handle_permissions_policy(send, method, body, headers)
+            return
+
+        if path == http_api_contract.PERMISSIONS_STATUS_PATH:
+            await _handle_permissions_status(send, method, headers)
             return
 
         if path == http_api_contract.PERMISSIONS_CHECK_PATH:
@@ -852,6 +857,38 @@ def _health_payload(*, include_metrics: bool) -> dict[str, Any]:
         payload["metrics"] = metrics
 
     return payload
+
+
+async def _handle_permissions_status(
+    send,
+    method: str,
+    headers: dict[str, str],
+) -> None:
+    gate_error = _permissions_gate_error(headers)
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    await _send_json(send, _permissions_status_payload())
+
+
+def _permissions_status_payload() -> dict[str, Any]:
+    return object_permission_status.build_permissions_status(
+        base_dir=_data_dir(),
+        permissions={
+            "enforcement_enabled": _permission_enforcement_enabled(),
+            "audit_enabled": _permission_audit_enabled(),
+            "trusted_headers_enabled": _env_enabled(PERMISSION_TRUST_HEADERS_ENV),
+            "require_known_identity_users": _env_enabled(REQUIRE_KNOWN_IDENTITY_USERS_ENV),
+            "admin_token_configured": bool(os.environ.get(ADMIN_TOKEN_ENV, "")),
+        },
+        require_known_identity_users_env=REQUIRE_KNOWN_IDENTITY_USERS_ENV,
+    )
 
 
 async def _handle_permissions_policy(
