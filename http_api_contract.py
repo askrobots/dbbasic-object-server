@@ -20,6 +20,8 @@ COLLECTION_CHANGES_PATH = "/collections/{collection}/changes"
 COLLECTION_RECORD_CHANGES_PATH = "/collections/{collection}/records/{record_id}/changes"
 SCHEMAS_PATH = "/schemas"
 SCHEMA_PATH = "/schemas/{collection}"
+EVENTS_PATH = "/events"
+EVENT_SUBSCRIPTIONS_PATH = "/events/subscriptions"
 PERMISSIONS_POLICY_PATH = "/permissions/policy"
 PERMISSIONS_CHECK_PATH = "/permissions/check"
 PERMISSIONS_AUDIT_PATH = "/permissions/audit"
@@ -41,6 +43,12 @@ RESPONSE_FIELDS: dict[str, frozenset[str]] = {
     "record_changes": frozenset({"status", "collection", "changes", "count", "total"}),
     "schema_list": frozenset({"status", "schemas", "count"}),
     "schema": frozenset({"status", "schema"}),
+    "event_list": frozenset({"status", "events", "count", "total"}),
+    "event": frozenset({"status", "event"}),
+    "event_subscription_list": frozenset(
+        {"status", "subscriptions", "count", "total"}
+    ),
+    "event_subscription": frozenset({"status", "subscription"}),
     "create_object": frozenset({"status", "object_id", "message"}),
     "error": frozenset({"status", "error"}),
     "source": frozenset({"status", "object_id", "source"}),

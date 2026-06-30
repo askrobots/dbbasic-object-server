@@ -88,6 +88,7 @@ This repository currently contains:
 - `object_logs.py` - TSV-backed object log reads, appends, rotation, compression, retention, and runtime logger helper
 - `object_metadata.py` - conservative object metadata summaries
 - `object_schemas.py` - schema metadata for generated UI, validation rules, field permissions, and relations
+- `object_events.py` - daemon-compatible event publishing and subscription state helpers
 - `object_field_permissions.py` - schema-level `edit/read/hidden` enforcement for collection record fields
 - `object_permission_audit.py` - JSONL-backed permission decision audit reads and writes
 - `object_permission_store.py` - JSON-backed permission policy persistence
@@ -250,6 +251,7 @@ rules the rest of the server will use:
 - `object_state.py` reads and writes runtime-owned TSV-backed object state
 - `object_records.py` reads and writes TSV-backed collection records under `data/collections/`
 - `object_record_changes.py` keeps append-only collection record change history
+- `object_events.py` publishes events and subscriptions into `data/state/events/state.tsv`
 - `object_files.py` lists and reads object-owned files under `data/files/`
 - `object_logs.py` reads and appends TSV-backed object logs, rotates/compresses old logs, and provides `_logger`
 - `object_metadata.py` summarizes source, state, logs, files, and versions

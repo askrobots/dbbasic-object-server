@@ -666,6 +666,98 @@ Future trigger/listener code can publish durable `collection.record.created`,
 `collection.record.updated`, and `collection.record.deleted` events from the
 same facts.
 
+## Events
+
+Events are the daemon-compatible notification surface for triggers, listeners,
+webhooks, and future worker-style objects. They are intentionally separate from
+record change history. Change history is the durable audit trail; events are the
+delivery queue.
+
+The current endpoints are admin-gated:
+
+```http
+GET /events?event_type=collection.record.created&limit=100&offset=0
+Authorization: Token <token>
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "events": [
+    {
+      "id": "evt_0123456789abcdef",
+      "event_type": "collection.record.created",
+      "payload": {"collection": "contacts", "record_id": "c1"},
+      "source": "records",
+      "actor": "admin",
+      "timestamp": 1782734400,
+      "created_at": "2026-06-29T12:00:00Z"
+    }
+  ],
+  "count": 1,
+  "total": 1,
+  "limit": 100,
+  "offset": 0,
+  "has_more": false
+}
+```
+
+Publish one event:
+
+```http
+POST /events
+Authorization: Token <token>
+Content-Type: application/json
+```
+
+```json
+{
+  "event_type": "collection.record.created",
+  "source": "records",
+  "payload": {"collection": "contacts", "record_id": "c1"}
+}
+```
+
+Successful publishes return `201`.
+
+Subscriptions are stored in the same daemon-compatible `events` object state:
+
+```http
+GET /events/subscriptions?event_type=collection.record.created
+POST /events/subscriptions
+DELETE /events/subscriptions?event_type=collection.record.created&subscriber_id=scroll
+Authorization: Token <token>
+```
+
+Create or replace a subscription:
+
+```json
+{
+  "event_type": "collection.record.created",
+  "subscriber_id": "scroll",
+  "callback_url": "https://example.com/hooks/dbbasic"
+}
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "subscription": {
+    "id": "scroll",
+    "event_type": "collection.record.created",
+    "callback_url": "https://example.com/hooks/dbbasic",
+    "created_at": 1782734400,
+    "created_at_iso": "2026-06-29T12:00:00Z",
+    "created_by": "admin",
+    "last_event_id": null
+  }
+}
+```
+
 ## Schemas
 
 ```http

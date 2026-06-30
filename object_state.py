@@ -18,7 +18,6 @@ from typing import Any
 from object_namespace import validate_object_id
 from object_versions import DEFAULT_DATA_DIR, InvalidObjectIdError
 
-
 STATE_FILE = "state.tsv"
 
 
@@ -42,6 +41,14 @@ class ObjectStateManager:
         self._state = get_object_state(self.object_id, self.base_dir)
         self._state[key] = value
         _write_object_state(self.state_file, self._state, timestamp=time.time())
+
+    def delete(self, key: str) -> None:
+        """Delete one state value and persist the object state file."""
+        _validate_state_key(key)
+        self._state = get_object_state(self.object_id, self.base_dir)
+        if key in self._state:
+            del self._state[key]
+            _write_object_state(self.state_file, self._state, timestamp=time.time())
 
     def get_all(self) -> dict[str, Any]:
         """Return all loaded state values."""

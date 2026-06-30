@@ -84,6 +84,21 @@ def test_object_state_manager_reload_reads_fresh_state(tmp_path):
     assert second.get("count") == 2
 
 
+def test_object_state_manager_deletes_and_persists_values(tmp_path):
+    data_dir = tmp_path / "data"
+    manager = object_state.ObjectStateManager("basics_counter", base_dir=data_dir)
+
+    manager.set("count", 3)
+    manager.set("name", "counter")
+    manager.delete("count")
+    manager.delete("missing")
+
+    assert manager.get_all() == {"name": "counter"}
+    assert object_state.get_object_state("basics_counter", base_dir=data_dir) == {
+        "name": "counter"
+    }
+
+
 def test_object_state_manager_writes_timestamp_format(tmp_path):
     manager = object_state.ObjectStateManager("basics_counter", base_dir=tmp_path / "data")
 

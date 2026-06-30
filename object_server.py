@@ -21,6 +21,7 @@ from typing import Any
 
 import http_api_contract
 import object_collections
+import object_events
 import object_execution
 import object_field_permissions
 import object_files
@@ -285,6 +286,14 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
 
         if path == http_api_contract.PERMISSIONS_AUDIT_PATH:
             await _handle_permissions_audit(send, method, query, headers)
+            return
+
+        if path == http_api_contract.EVENTS_PATH:
+            await _handle_events(send, method, query, body, headers)
+            return
+
+        if path == http_api_contract.EVENT_SUBSCRIPTIONS_PATH:
+            await _handle_event_subscriptions(send, method, query, body, headers)
             return
 
         if path == http_api_contract.OBJECTS_PATH:
@@ -658,6 +667,177 @@ async def _handle_permissions_audit(
             "count": len(entries),
         },
     )
+
+
+async def _handle_events(
+    send,
+    method: str,
+    query: dict[str, str],
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    gate_error = _admin_token_gate_error(headers, f"Events API requires {ADMIN_TOKEN_ENV}.")
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    if method == "GET":
+        try:
+            since = None
+            if "since" in query:
+                since = _query_int(query, "since", minimum=0)
+            limit = _query_int(query, "limit", default=100, minimum=1, maximum=1000)
+            offset = _query_int(query, "offset", default=0, minimum=0)
+            events = object_events.list_events(
+                event_type=_optional_query_text(query, "event_type"),
+                since=since,
+                base_dir=_data_dir(),
+                limit=limit,
+                offset=offset,
+            )
+        except (object_events.InvalidEventTypeError, ValueError) as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        except OSError as exc:
+            await _send_json(
+                send,
+                {"status": "error", "error": f"Could not read events: {exc}"},
+                status=500,
+            )
+            return
+
+        await _send_json(send, {"status": "ok", **events})
+        return
+
+    if method == "POST":
+        try:
+            payload = _parse_json_body(body)
+            event = object_events.publish_event(
+                _required_payload_text(payload, "event_type"),
+                payload=payload.get("payload", {}),
+                source=_payload_text(payload, "source", "api"),
+                actor=_record_change_actor(headers),
+                base_dir=_data_dir(),
+            )
+        except (object_events.InvalidEventTypeError, ValueError) as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        except OSError as exc:
+            await _send_json(
+                send,
+                {"status": "error", "error": f"Could not publish event: {exc}"},
+                status=500,
+            )
+            return
+
+        await _send_json(send, {"status": "ok", "event": event}, status=201)
+        return
+
+    await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+
+
+async def _handle_event_subscriptions(
+    send,
+    method: str,
+    query: dict[str, str],
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    gate_error = _admin_token_gate_error(headers, f"Events API requires {ADMIN_TOKEN_ENV}.")
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    if method == "GET":
+        try:
+            limit = _query_int(query, "limit", default=100, minimum=1, maximum=1000)
+            offset = _query_int(query, "offset", default=0, minimum=0)
+            subscriptions = object_events.list_subscriptions(
+                event_type=_optional_query_text(query, "event_type"),
+                base_dir=_data_dir(),
+                limit=limit,
+                offset=offset,
+            )
+        except (object_events.InvalidEventTypeError, ValueError) as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        except OSError as exc:
+            await _send_json(
+                send,
+                {"status": "error", "error": f"Could not read event subscriptions: {exc}"},
+                status=500,
+            )
+            return
+
+        await _send_json(send, {"status": "ok", **subscriptions})
+        return
+
+    if method == "POST":
+        try:
+            payload = _parse_json_body(body)
+            subscription = object_events.subscribe_event(
+                _required_payload_text(payload, "event_type"),
+                subscriber_id=_optional_payload_text(payload, "subscriber_id"),
+                callback_url=_payload_text(payload, "callback_url", ""),
+                actor=_record_change_actor(headers),
+                base_dir=_data_dir(),
+            )
+        except (
+            object_events.InvalidEventTypeError,
+            object_events.InvalidSubscriberIdError,
+            ValueError,
+        ) as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        except OSError as exc:
+            await _send_json(
+                send,
+                {"status": "error", "error": f"Could not save event subscription: {exc}"},
+                status=500,
+            )
+            return
+
+        await _send_json(send, {"status": "ok", "subscription": subscription}, status=201)
+        return
+
+    if method == "DELETE":
+        try:
+            subscription = object_events.delete_subscription(
+                _required_query_text(query, "event_type"),
+                _required_query_text(query, "subscriber_id"),
+                base_dir=_data_dir(),
+            )
+        except (
+            object_events.InvalidEventTypeError,
+            object_events.InvalidSubscriberIdError,
+            ValueError,
+        ) as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        except object_events.SubscriptionNotFoundError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+            return
+        except OSError as exc:
+            await _send_json(
+                send,
+                {"status": "error", "error": f"Could not delete event subscription: {exc}"},
+                status=500,
+            )
+            return
+
+        await _send_json(
+            send,
+            {
+                "status": "ok",
+                "deleted": True,
+                "subscription": subscription,
+            },
+        )
+        return
+
+    await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
 
 
 async def _handle_object_get(
@@ -2738,6 +2918,13 @@ def _optional_query_text(query: dict[str, str], key: str) -> str | None:
         return None
     value = query[key].strip()
     return value or None
+
+
+def _required_query_text(query: dict[str, str], key: str) -> str:
+    value = _optional_query_text(query, key)
+    if value is None:
+        raise ValueError(f"Query parameter '{key}' is required")
+    return value
 
 
 def _optional_query_bool(query: dict[str, str], key: str) -> bool | None:

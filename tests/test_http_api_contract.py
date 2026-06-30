@@ -20,6 +20,8 @@ def test_contract_keeps_objects_paths_as_public_surface():
     )
     assert http_api_contract.SCHEMAS_PATH == "/schemas"
     assert http_api_contract.SCHEMA_PATH == "/schemas/{collection}"
+    assert http_api_contract.EVENTS_PATH == "/events"
+    assert http_api_contract.EVENT_SUBSCRIPTIONS_PATH == "/events/subscriptions"
     assert http_api_contract.PERMISSIONS_POLICY_PATH == "/permissions/policy"
     assert http_api_contract.PERMISSIONS_CHECK_PATH == "/permissions/check"
     assert http_api_contract.PERMISSIONS_AUDIT_PATH == "/permissions/audit"
@@ -79,6 +81,22 @@ def test_contract_keeps_existing_introspection_query_flags():
         (
             "schema",
             {"status": "ok", "schema": {"name": "invoices", "fields": []}},
+        ),
+        (
+            "event_list",
+            {"status": "ok", "events": [], "count": 0, "total": 0},
+        ),
+        (
+            "event",
+            {"status": "ok", "event": {"id": "evt_1", "event_type": "invoice.created"}},
+        ),
+        (
+            "event_subscription_list",
+            {"status": "ok", "subscriptions": [], "count": 0, "total": 0},
+        ),
+        (
+            "event_subscription",
+            {"status": "ok", "subscription": {"id": "scroll"}},
         ),
         (
             "create_object",
@@ -203,6 +221,11 @@ def test_http_contract_doc_mentions_required_compatibility_surface():
         "GET /schemas/{collection}?version=1",
         "PUT /schemas/{collection}",
         "POST /schemas/{collection}",
+        "GET /events",
+        "POST /events",
+        "GET /events/subscriptions",
+        "POST /events/subscriptions",
+        "DELETE /events/subscriptions",
         "POST /objects",
         "GET /objects/{object_id}",
         "PUT /objects/{object_id}?source=true",

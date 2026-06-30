@@ -573,6 +573,15 @@ The daemon marks messages as `processing`, `completed`, `pending`, `expired`, or
 
 ## Event State
 
+The public helper module is `object_events.py`. It writes event and subscription
+state into:
+
+```text
+data/state/events/state.tsv
+```
+
+This keeps the HTTP API, Scroll, and the daemon on one event shape.
+
 Event subscription keys begin with:
 
 ```text
@@ -600,6 +609,21 @@ Events include:
 - `timestamp`
 
 The daemon delivers matching events to the subscription callback URL and records `last_event_id`.
+
+The current HTTP event API is admin-gated:
+
+```http
+GET /events
+POST /events
+GET /events/subscriptions
+POST /events/subscriptions
+DELETE /events/subscriptions?event_type=invoice.created&subscriber_id=scroll
+Authorization: Token <token>
+```
+
+Record change history is still the durable audit trail. Events are for
+notifications, triggers, listeners, webhooks, and future worker/actor-style
+flows that need to react to those facts.
 
 ## Public Safety
 

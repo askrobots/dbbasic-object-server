@@ -3847,6 +3847,143 @@ def test_object_execution_appends_error_log(tmp_path, monkeypatch):
     assert "RuntimeError: boom" in log["error"]
 
 
+def test_events_api_requires_admin_token(monkeypatch):
+    monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)
+
+    status, _, payload = request("/events", headers=auth_headers())
+
+    assert status == 403
+    assert payload == {
+        "status": "error",
+        "error": "Events API requires DBBASIC_ADMIN_TOKEN.",
+    }
+
+
+def test_events_api_publishes_and_lists_daemon_compatible_events(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/events",
+        method="POST",
+        body=json.dumps(
+            {
+                "event_type": "collection.record.created",
+                "source": "records",
+                "payload": {"collection": "contacts", "record_id": "c1"},
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 201
+    assert payload["status"] == "ok"
+    event = payload["event"]
+    assert event["event_type"] == "collection.record.created"
+    assert event["source"] == "records"
+    assert event["actor"] == "admin"
+
+    state_file = data_dir / "state" / "events" / "state.tsv"
+    row = state_file.read_text().strip().split("\t")
+    assert row[0].startswith("event_")
+    assert json.loads(row[1]) == event
+
+    status, _, payload = request(
+        "/events",
+        query_string="event_type=collection.record.created",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["count"] == 1
+    assert payload["total"] == 1
+    assert payload["events"] == [event]
+
+
+def test_event_subscription_api_creates_lists_and_deletes(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/events/subscriptions",
+        method="POST",
+        body=json.dumps(
+            {
+                "event_type": "collection.record.updated",
+                "subscriber_id": "scroll",
+                "callback_url": "https://example.com/hooks/dbbasic",
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 201
+    subscription = payload["subscription"]
+    assert subscription["id"] == "scroll"
+    assert subscription["event_type"] == "collection.record.updated"
+    assert subscription["callback_url"] == "https://example.com/hooks/dbbasic"
+    assert subscription["last_event_id"] is None
+
+    status, _, payload = request(
+        "/events/subscriptions",
+        query_string="event_type=collection.record.updated",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["subscriptions"] == [subscription]
+
+    status, _, payload = request(
+        "/events/subscriptions",
+        method="DELETE",
+        query_string="event_type=collection.record.updated&subscriber_id=scroll",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["deleted"] is True
+    assert payload["subscription"] == subscription
+
+    status, _, payload = request("/events/subscriptions", headers=auth_headers())
+
+    assert status == 200
+    assert payload["subscriptions"] == []
+
+
+def test_events_api_rejects_bad_payloads(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/events",
+        method="POST",
+        body=json.dumps({"event_type": "bad event"}).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 400
+    assert payload["status"] == "error"
+    assert "Invalid event type" in payload["error"]
+
+    status, _, payload = request(
+        "/events/subscriptions",
+        method="POST",
+        body=json.dumps(
+            {
+                "event_type": "invoice.created",
+                "callback_url": "ftp://example.com/hook",
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 400
+    assert "callback_url" in payload["error"]
+
+
 def test_object_execution_returns_405_when_get_is_missing(tmp_path, monkeypatch):
     root = tmp_path / "objects"
     write_source(root / "basics" / "poster.py", "def POST(request):\n    return {'ok': True}\n")
