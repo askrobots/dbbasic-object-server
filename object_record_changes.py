@@ -1,7 +1,7 @@
 """Append-only change logs for TSV-backed collection records.
 
 Record changes are the durable facts behind generated admin history screens and
-future event publication. Events and listener delivery can fail or be retried;
+record event publication. Events and listener delivery can fail or be retried;
 this file records what actually changed.
 """
 

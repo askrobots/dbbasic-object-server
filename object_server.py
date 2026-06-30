@@ -56,6 +56,7 @@ TRUSTED_IN_PROCESS_OBJECTS_ENV = "DBBASIC_TRUSTED_IN_PROCESS_OBJECTS"
 PERMISSION_ENFORCEMENT_ENV = "DBBASIC_ENABLE_PERMISSION_ENFORCEMENT"
 PERMISSION_AUDIT_ENV = "DBBASIC_ENABLE_PERMISSION_AUDIT"
 PERMISSION_TRUST_HEADERS_ENV = "DBBASIC_PERMISSION_TRUST_HEADERS"
+RECORD_EVENTS_ENV = "DBBASIC_ENABLE_RECORD_EVENTS"
 DEFAULT_MAX_REQUEST_BYTES = 1_048_576
 DEFAULT_MAX_CONCURRENT_REQUESTS = 64
 DEFAULT_MAX_CONCURRENT_EXECUTIONS = 8
@@ -64,6 +65,11 @@ DEFAULT_RATE_LIMIT_WINDOW_SECONDS = 60
 DEFAULT_OBJECT_TIMEOUT_SECONDS = 0.0
 TRUE_VALUES = {"1", "true", "yes", "on"}
 SENSITIVE_GET_FLAGS = {"source", "state", "logs", "metadata", "versions", "files", "file"}
+RECORD_EVENT_TYPES = {
+    "create": "collection.record.created",
+    "update": "collection.record.updated",
+    "delete": "collection.record.deleted",
+}
 
 _runtime = PythonObjectRuntime()
 
@@ -1799,7 +1805,7 @@ async def _handle_collection_record_create(
         return
 
     try:
-        object_record_changes.append_record_change(
+        change = object_record_changes.append_record_change(
             collection=collection,
             record_id=record["id"],
             action="create",
@@ -1815,6 +1821,8 @@ async def _handle_collection_record_create(
             status=500,
         )
         return
+
+    _publish_record_change_event(change)
 
     await _send_json(
         send,
@@ -2025,7 +2033,7 @@ async def _handle_collection_record_update(
         return
 
     try:
-        object_record_changes.append_record_change(
+        change = object_record_changes.append_record_change(
             collection=collection,
             record_id=record_id,
             action="update",
@@ -2041,6 +2049,8 @@ async def _handle_collection_record_update(
             status=500,
         )
         return
+
+    _publish_record_change_event(change)
 
     await _send_json(
         send,
@@ -2113,7 +2123,7 @@ async def _handle_collection_record_delete(
         return
 
     try:
-        object_record_changes.append_record_change(
+        change = object_record_changes.append_record_change(
             collection=collection,
             record_id=record_id,
             action="delete",
@@ -2129,6 +2139,8 @@ async def _handle_collection_record_delete(
             status=500,
         )
         return
+
+    _publish_record_change_event(change)
 
     await _send_json(
         send,
@@ -3277,6 +3289,43 @@ def _record_change_actor(headers: dict[str, str]) -> str:
     if subject.roles:
         return ",".join(subject.roles)
     return "api"
+
+
+def _publish_record_change_event(change: dict[str, Any]) -> dict[str, Any] | None:
+    if not _record_events_enabled():
+        return None
+
+    event_type = RECORD_EVENT_TYPES.get(str(change.get("action", "")))
+    if event_type is None:
+        return None
+
+    payload = {
+        "change_id": change.get("change_id"),
+        "collection": change.get("collection"),
+        "record_id": change.get("record_id"),
+        "action": change.get("action"),
+        "actor": change.get("actor"),
+        "timestamp": change.get("timestamp"),
+        "changed_fields": change.get("changed_fields", []),
+    }
+
+    try:
+        return object_events.publish_event(
+            event_type,
+            payload=payload,
+            source="record_changes",
+            actor=str(change.get("actor") or "api"),
+            base_dir=_data_dir(),
+        )
+    except (OSError, ValueError):
+        return None
+
+
+def _record_events_enabled() -> bool:
+    value = os.environ.get(RECORD_EVENTS_ENV)
+    if value is None:
+        return True
+    return value.strip().lower() in TRUE_VALUES
 
 
 def _admin_token_gate_error(

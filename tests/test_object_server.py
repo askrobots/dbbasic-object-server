@@ -945,6 +945,115 @@ def test_collection_record_mutations_append_change_history(tmp_path, monkeypatch
     assert record_payload["changes"][0]["action"] == "update"
 
 
+def test_collection_record_mutations_publish_metadata_events(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\nc2\tGrace\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    create_status, _, _ = request(
+        "/collections/contacts/records",
+        method="POST",
+        body=json.dumps({"id": "c3", "name": "Katherine"}).encode("utf-8"),
+        headers=auth_headers(),
+    )
+    update_status, _, _ = request(
+        "/collections/contacts/records/c1",
+        method="PUT",
+        body=json.dumps({"name": "Ada Lovelace"}).encode("utf-8"),
+        headers=auth_headers(),
+    )
+    delete_status, _, _ = request(
+        "/collections/contacts/records/c2",
+        method="DELETE",
+        headers=auth_headers(),
+    )
+
+    assert create_status == 201
+    assert update_status == 200
+    assert delete_status == 200
+
+    status, _, payload = request(
+        "/events",
+        query_string="limit=10",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    events_by_type = {event["event_type"]: event for event in payload["events"]}
+    assert set(events_by_type) == {
+        "collection.record.created",
+        "collection.record.updated",
+        "collection.record.deleted",
+    }
+
+    update_event = events_by_type["collection.record.updated"]
+    assert update_event["source"] == "record_changes"
+    assert update_event["actor"] == "admin"
+    assert update_event["payload"]["collection"] == "contacts"
+    assert update_event["payload"]["record_id"] == "c1"
+    assert update_event["payload"]["action"] == "update"
+    assert update_event["payload"]["changed_fields"] == ["name"]
+    assert "before" not in update_event["payload"]
+    assert "after" not in update_event["payload"]
+
+    state_file = data_dir / "state" / "events" / "state.tsv"
+    rows = state_file.read_text().splitlines()
+    assert len(rows) == 3
+    assert all(row.startswith("event_") for row in rows)
+
+
+def test_collection_record_events_can_be_disabled(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("DBBASIC_ENABLE_RECORD_EVENTS", "false")
+    enable_admin_token(monkeypatch)
+
+    status, _, _ = request(
+        "/collections/contacts/records",
+        method="POST",
+        body=json.dumps({"id": "c2", "name": "Grace"}).encode("utf-8"),
+        headers=auth_headers(),
+    )
+    events_status, _, events_payload = request("/events", headers=auth_headers())
+
+    assert status == 201
+    assert events_status == 200
+    assert events_payload["events"] == []
+
+
+def test_collection_record_event_publish_failure_does_not_break_mutation(
+    tmp_path,
+    monkeypatch,
+):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    def fail_publish(*args, **kwargs):
+        raise OSError("event state unavailable")
+
+    monkeypatch.setattr(object_server.object_events, "publish_event", fail_publish)
+
+    status, _, payload = request(
+        "/collections/contacts/records",
+        method="POST",
+        body=json.dumps({"id": "c2", "name": "Grace"}).encode("utf-8"),
+        headers=auth_headers(),
+    )
+    history_status, _, history_payload = request(
+        "/collections/contacts/changes",
+        headers=auth_headers(),
+    )
+
+    assert status == 201
+    assert payload["record"] == {"id": "c2", "name": "Grace"}
+    assert history_status == 200
+    assert history_payload["changes"][0]["action"] == "create"
+
+
 def test_collection_change_history_requires_admin_token(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")

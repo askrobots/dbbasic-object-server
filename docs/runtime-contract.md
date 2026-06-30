@@ -606,7 +606,10 @@ Events include:
 - `id`
 - `event_type`
 - `payload`
+- `source`
+- `actor`
 - `timestamp`
+- `created_at`
 
 The daemon delivers matching events to the subscription callback URL and records `last_event_id`.
 
@@ -623,7 +626,15 @@ Authorization: Token <token>
 
 Record change history is still the durable audit trail. Events are for
 notifications, triggers, listeners, webhooks, and future worker/actor-style
-flows that need to react to those facts.
+flows that need to react to those facts. By default, collection record `POST`,
+`PUT`, and `DELETE` mutations publish metadata-only
+`collection.record.created`, `collection.record.updated`, and
+`collection.record.deleted` events from the saved change entry. Set
+`DBBASIC_ENABLE_RECORD_EVENTS=false` to disable that publication path.
+
+Record mutation event payloads include `change_id`, `collection`, `record_id`,
+`action`, `actor`, `timestamp`, and `changed_fields`. They do not include full
+`before` or `after` snapshots until subscriber permission filtering exists.
 
 ## Public Safety
 

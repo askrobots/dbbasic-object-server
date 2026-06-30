@@ -661,10 +661,10 @@ under:
 data/record_changes/{collection}/changes.jsonl
 ```
 
-This is an audit and admin-history surface, not the event-delivery mechanism.
-Future trigger/listener code can publish durable `collection.record.created`,
-`collection.record.updated`, and `collection.record.deleted` events from the
-same facts.
+This is the durable audit and admin-history surface. When record events are
+enabled, successful `POST`, `PUT`, and `DELETE` mutations also publish
+`collection.record.created`, `collection.record.updated`, and
+`collection.record.deleted` events from the same change entry.
 
 ## Events
 
@@ -672,6 +672,12 @@ Events are the daemon-compatible notification surface for triggers, listeners,
 webhooks, and future worker-style objects. They are intentionally separate from
 record change history. Change history is the durable audit trail; events are the
 delivery queue.
+
+Collection record mutations publish metadata-only events by default. Set
+`DBBASIC_ENABLE_RECORD_EVENTS=false` to turn that off. Event payloads include
+the change id, collection, record id, action, actor, timestamp, and changed
+field names; they intentionally do not copy full `before` or `after` snapshots
+until subscriber permissions are enforced.
 
 The current endpoints are admin-gated:
 
@@ -689,8 +695,16 @@ Response:
     {
       "id": "evt_0123456789abcdef",
       "event_type": "collection.record.created",
-      "payload": {"collection": "contacts", "record_id": "c1"},
-      "source": "records",
+      "payload": {
+        "change_id": "chg_0123456789abcdef",
+        "collection": "contacts",
+        "record_id": "c1",
+        "action": "create",
+        "actor": "admin",
+        "timestamp": "2026-06-29T12:00:00Z",
+        "changed_fields": ["id", "name"]
+      },
+      "source": "record_changes",
       "actor": "admin",
       "timestamp": 1782734400,
       "created_at": "2026-06-29T12:00:00Z"
@@ -715,7 +729,7 @@ Content-Type: application/json
 ```json
 {
   "event_type": "collection.record.created",
-  "source": "records",
+  "source": "record_changes",
   "payload": {"collection": "contacts", "record_id": "c1"}
 }
 ```

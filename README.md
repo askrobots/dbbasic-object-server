@@ -89,6 +89,7 @@ This repository currently contains:
 - `object_metadata.py` - conservative object metadata summaries
 - `object_schemas.py` - schema metadata for generated UI, validation rules, field permissions, and relations
 - `object_events.py` - daemon-compatible event publishing and subscription state helpers
+  for record mutations, triggers, listeners, and webhooks
 - `object_field_permissions.py` - schema-level `edit/read/hidden` enforcement for collection record fields
 - `object_permission_audit.py` - JSONL-backed permission decision audit reads and writes
 - `object_permission_store.py` - JSON-backed permission policy persistence
@@ -191,6 +192,7 @@ export DBBASIC_RATE_LIMIT_WINDOW_SECONDS=60
 export DBBASIC_ENABLE_PERMISSION_AUDIT=false
 export DBBASIC_ENABLE_PERMISSION_ENFORCEMENT=false
 export DBBASIC_PERMISSION_TRUST_HEADERS=false
+export DBBASIC_ENABLE_RECORD_EVENTS=true
 ```
 
 The value above is a placeholder. Each real deployment must generate its own
@@ -252,6 +254,7 @@ rules the rest of the server will use:
 - `object_records.py` reads and writes TSV-backed collection records under `data/collections/`
 - `object_record_changes.py` keeps append-only collection record change history
 - `object_events.py` publishes events and subscriptions into `data/state/events/state.tsv`
+  and collection record mutations emit metadata-only `collection.record.*` events
 - `object_files.py` lists and reads object-owned files under `data/files/`
 - `object_logs.py` reads and appends TSV-backed object logs, rotates/compresses old logs, and provides `_logger`
 - `object_metadata.py` summarizes source, state, logs, files, and versions
