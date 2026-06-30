@@ -4229,6 +4229,142 @@ def test_packages_api_lists_package_detail_and_dry_run(tmp_path, monkeypatch):
     assert history["changes"][0]["change_id"] == payload["change"]["change_id"]
 
 
+def test_package_install_api_requires_admin_and_enable_flag(tmp_path, monkeypatch):
+    packages_root = tmp_path / "packages"
+    monkeypatch.setenv("DBBASIC_PACKAGES_DIR", str(packages_root))
+    monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("DBBASIC_ENABLE_PACKAGE_INSTALLS", raising=False)
+
+    status, _, payload = request("/packages/hello-world/install", method="POST", body=b"{}")
+
+    assert status == 403
+    assert payload == {
+        "status": "error",
+        "error": "Package installs require DBBASIC_ADMIN_TOKEN.",
+    }
+
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/packages/hello-world/install",
+        method="POST",
+        body=b"{}",
+        headers=auth_headers(),
+    )
+
+    assert status == 403
+    assert payload == {
+        "status": "error",
+        "error": "Package installs are disabled. Set DBBASIC_ENABLE_PACKAGE_INSTALLS=true.",
+    }
+
+
+def test_package_install_api_installs_and_records_changes(tmp_path, monkeypatch):
+    packages_root = tmp_path / "packages"
+    data_dir = tmp_path / "data"
+    object_root = tmp_path / "objects"
+    write_package(
+        packages_root,
+        "hello-world",
+        {
+            "id": "hello-world",
+            "name": "Hello World",
+            "version": "0.1.0",
+            "description": "Safe package fixture",
+            "objects": [{"id": "hello_world", "path": "objects/hello/world.py"}],
+            "schemas": [{"collection": "contacts", "path": "schemas/contacts.json"}],
+            "permissions": [],
+            "seed": [{"collection": "contacts", "path": "seed/contacts.tsv"}],
+            "migrations": [],
+        },
+        files=(
+            ("objects/hello/world.py", "def GET(request): return {'status': 'ok'}\n"),
+            ("schemas/contacts.json", '{"name":"contacts","fields":[{"name":"id","type":"text"}]}\n'),
+            ("seed/contacts.tsv", "id\tname\nc1\tAlice\n"),
+        ),
+    )
+    monkeypatch.setenv("DBBASIC_PACKAGES_DIR", str(packages_root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(object_root))
+    monkeypatch.setenv("DBBASIC_ENABLE_PACKAGE_INSTALLS", "true")
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/packages/hello-world/install",
+        method="POST",
+        body=b"{}",
+        headers=auth_headers(),
+    )
+
+    assert status == 201
+    assert payload["status"] == "ok"
+    assert payload["install"]["mode"] == "install"
+    assert payload["install"]["objects"][0]["destination"] == "hello/world.py"
+    assert payload["changes"]["requested"]["action"] == "install_requested"
+    assert payload["changes"]["installed"]["action"] == "installed"
+    assert (object_root / "hello" / "world.py").is_file()
+    assert (data_dir / "schemas" / "contacts.json").is_file()
+    assert (data_dir / "collections" / "contacts" / "records.tsv").is_file()
+
+    status, _, history = request(
+        "/packages/hello-world/changes",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert [change["action"] for change in history["changes"]] == [
+        "installed",
+        "install_requested",
+    ]
+
+
+def test_package_install_api_records_failed_replace(tmp_path, monkeypatch):
+    packages_root = tmp_path / "packages"
+    data_dir = tmp_path / "data"
+    object_root = tmp_path / "objects"
+    write_source(object_root / "hello" / "world.py", "def GET(request): return {'old': True}\n")
+    write_package(
+        packages_root,
+        "hello-world",
+        {
+            "id": "hello-world",
+            "name": "Hello World",
+            "version": "0.1.0",
+            "objects": [{"id": "hello_world", "path": "objects/hello/world.py"}],
+        },
+        files=(("objects/hello/world.py", "def GET(request): return {'new': True}\n"),),
+    )
+    monkeypatch.setenv("DBBASIC_PACKAGES_DIR", str(packages_root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(object_root))
+    monkeypatch.setenv("DBBASIC_ENABLE_PACKAGE_INSTALLS", "true")
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/packages/hello-world/install",
+        method="POST",
+        body=b"{}",
+        headers=auth_headers(),
+    )
+
+    assert status == 409
+    assert "allow_replace=true" in payload["error"]
+    assert payload["changes"]["requested"]["action"] == "install_requested"
+    assert payload["changes"]["failed"]["action"] == "failed"
+    assert (object_root / "hello" / "world.py").read_text() == "def GET(request): return {'old': True}\n"
+
+    status, _, history = request(
+        "/packages/hello-world/changes",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert [change["action"] for change in history["changes"]] == [
+        "failed",
+        "install_requested",
+    ]
+
+
 def test_package_changes_api_requires_admin_token(monkeypatch):
     monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)
 

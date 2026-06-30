@@ -90,7 +90,7 @@ This repository currently contains:
 - `object_schemas.py` - schema metadata for generated UI, validation rules, field permissions, and relations
 - `object_events.py` - daemon-compatible event publishing and subscription state helpers
   for record mutations, triggers, listeners, and webhooks
-- `object_packages.py` - package manifest discovery and non-mutating install dry-runs
+- `object_packages.py` - package manifest discovery, dry-runs, and conservative install writes
 - `object_package_changes.py` - append-only package dry-run/install/rollback changelog helpers
 - `object_field_permissions.py` - schema-level `edit/read/hidden` enforcement for collection record fields
 - `object_permission_audit.py` - JSONL-backed permission decision audit reads and writes
@@ -103,7 +103,7 @@ This repository currently contains:
 - `deployment_checks.py` - single-VM filesystem ownership and permission checks
 
 It does not yet contain the full private prototype, cluster runtime, dashboard,
-sample applications, package installer/updater, or production installer.
+sample applications, full package updater/rollback flow, or production installer.
 
 ## Object Source Directories
 
@@ -114,10 +114,14 @@ Set `DBBASIC_OBJECTS_DIR` to point at a custom object source directory during mi
 Installable DBBASIC packages should live under `packages/{package_id}/`.
 Each package currently uses `dbbasic-package.json` plus package-owned `objects/`,
 `schemas/`, `permissions/`, `seed/`, and `migrations/` paths. The public server
-can list packages and return dry-run install plans, but package installs are not
-enabled yet. Dry-runs append compact package changelog entries under
+can list packages, return dry-run install plans, and run conservative installs
+when `DBBASIC_ENABLE_PACKAGE_INSTALLS=true` and `DBBASIC_ADMIN_TOKEN` are both
+set. Installs currently create/replace objects and schemas, create seed TSV
+files only when data does not already exist, and reject permission/migration
+writes until those merge/run semantics are explicit. Dry-runs and installs
+append compact package changelog entries under
 `data/package_changes/{package_id}/changes.jsonl` so Scroll can show what was
-reviewed before installs are allowed.
+reviewed, installed, or rejected.
 
 ## Minimal Server
 
@@ -177,6 +181,7 @@ Current endpoints:
 - `GET /packages`
 - `GET /packages/{package_id}`
 - `GET /packages/{package_id}?dry_run=true`
+- `POST /packages/{package_id}/install`
 - `GET /packages/{package_id}/changes`
 - `GET /objects?format=json`
 - `GET /objects/{object_id}`
@@ -203,6 +208,7 @@ metadata, and versions require:
 export DBBASIC_ADMIN_TOKEN=replace-with-a-local-dev-token
 export DBBASIC_DATA_DIR=./data
 export DBBASIC_PACKAGES_DIR=./packages
+export DBBASIC_ENABLE_PACKAGE_INSTALLS=false
 export DBBASIC_MAX_REQUEST_BYTES=1048576
 export DBBASIC_MAX_CONCURRENT_REQUESTS=64
 export DBBASIC_MAX_CONCURRENT_EXECUTIONS=8
@@ -280,8 +286,8 @@ rules the rest of the server will use:
   and collection record mutations emit metadata-only `collection.record.*` events; event
   retention keeps the delivery queue bounded while change history stays durable
 - `object_packages.py` reads `packages/{package_id}/dbbasic-package.json` and builds
-  non-mutating dry-run install plans for Scroll/package manager workflows
-- `object_package_changes.py` records package dry-runs and future install/rollback
+  dry-run/install plans for Scroll/package manager workflows
+- `object_package_changes.py` records package dry-runs, installs, failures, and future rollbacks
   facts as append-only JSONL under `data/package_changes/`
 - `object_files.py` lists and reads object-owned files under `data/files/`
 - `object_logs.py` reads and appends TSV-backed object logs, rotates/compresses old logs, and provides `_logger`

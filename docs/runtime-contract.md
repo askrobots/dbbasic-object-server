@@ -674,13 +674,14 @@ Package source can be overridden with:
 DBBASIC_PACKAGES_DIR=/path/to/packages
 ```
 
-The current public helper module is `object_packages.py`. It exposes read-only
-package discovery and non-mutating install planning:
+The current public helper module is `object_packages.py`. It exposes package
+discovery, non-mutating install planning, and conservative install writes:
 
 ```python
 list_packages(root="packages")
 get_package(package_id, root="packages")
 dry_run_package(package_id, root="packages", base_dir="data", object_roots=None)
+install_package(package_id, root="packages", base_dir="data", object_roots=None, allow_replace=False)
 ```
 
 The manifest format is JSON so Python 3.10 installs do not need another parser.
@@ -706,6 +707,16 @@ Package paths are package-relative. Absolute paths, null bytes, and `..`
 traversal are rejected. Dry-runs report what would be created, replaced,
 merged, applied, or skipped without writing object source or data.
 
+The first install contract is intentionally conservative:
+
+- objects are written under the configured object root
+- schemas are validated and written under `data/schemas/`
+- seed TSV is created only when the target collection records file does not
+  already exist
+- existing objects and schemas require `allow_replace=True`
+- permission files and migrations are rejected until explicit merge and run
+  semantics are added
+
 Package change history lives here:
 
 ```text
@@ -721,14 +732,20 @@ dry_run_change_details(plan)
 ```
 
 The current server appends a `dry_run` change for
-`GET /packages/{package_id}?dry_run=true`. The details are intentionally
-compact: package identity, safe/install flags, action counts by package section,
-and warnings. Package source is not copied into the changelog.
+`GET /packages/{package_id}?dry_run=true`. It appends `install_requested` and
+then either `installed` or `failed` for
+`POST /packages/{package_id}/install`. The details are intentionally compact:
+package identity, safe/install flags, action counts by package section, and
+warnings. Package source is not copied into the changelog.
 
-Package install/update writes are intentionally not public yet. They need
-server-enforced permissions, package changelogs, install audit entries, backup
-checks, rollback, and a stricter review boundary before a public server should
-allow a package to change live source or data.
+Package install writes require both admin auth and:
+
+```text
+DBBASIC_ENABLE_PACKAGE_INSTALLS=true
+```
+
+Keep this disabled on public staging unless the route is on a private admin
+surface and backups have been tested.
 
 ## Public Safety
 

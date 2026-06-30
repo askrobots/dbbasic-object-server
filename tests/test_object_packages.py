@@ -125,6 +125,178 @@ def test_dry_run_is_safe_when_declared_files_exist(tmp_path):
     assert plan["objects"][0]["action"] == "create"
 
 
+def test_install_package_creates_objects_schemas_and_seed(tmp_path):
+    packages_root = tmp_path / "packages"
+    data_dir = tmp_path / "data"
+    object_root = tmp_path / "objects"
+    write_package(
+        packages_root,
+        "hello-world",
+        {
+            "id": "hello-world",
+            "name": "Hello World",
+            "version": "0.1.0",
+            "objects": [{"id": "hello_world", "path": "objects/hello/world.py"}],
+            "schemas": [{"collection": "contacts", "path": "schemas/contacts.json"}],
+            "permissions": [],
+            "seed": [{"collection": "contacts", "path": "seed/contacts.tsv"}],
+            "migrations": [],
+        },
+        files=(
+            ("objects/hello/world.py", "def GET(request): return {'status': 'ok'}\n"),
+            ("schemas/contacts.json", '{"name":"contacts","fields":[{"name":"id","type":"text"}]}\n'),
+            ("seed/contacts.tsv", "id\tname\nc1\tAlice\n"),
+        ),
+    )
+
+    result = object_packages.install_package(
+        "hello-world",
+        root=packages_root,
+        base_dir=data_dir,
+        object_roots=[object_root],
+    )
+
+    assert result["mode"] == "install"
+    assert result["install_enabled"] is True
+    assert result["objects"][0]["destination"] == "hello/world.py"
+    assert (object_root / "hello" / "world.py").read_text() == "def GET(request): return {'status': 'ok'}\n"
+    schema = json.loads((data_dir / "schemas" / "contacts.json").read_text())
+    assert schema["name"] == "contacts"
+    assert schema["field_count"] == 1
+    assert (data_dir / "collections" / "contacts" / "records.tsv").read_text() == "id\tname\nc1\tAlice\n"
+
+
+def test_install_package_refuses_existing_objects_without_replace(tmp_path):
+    packages_root = tmp_path / "packages"
+    object_root = tmp_path / "objects"
+    (object_root / "hello").mkdir(parents=True)
+    (object_root / "hello" / "world.py").write_text("def GET(request): return {'old': True}\n")
+    write_package(
+        packages_root,
+        "hello-world",
+        {
+            "id": "hello-world",
+            "name": "Hello World",
+            "version": "0.1.0",
+            "objects": [{"id": "hello_world", "path": "objects/hello/world.py"}],
+        },
+        files=(("objects/hello/world.py", "def GET(request): return {'new': True}\n"),),
+    )
+
+    with pytest.raises(object_packages.PackageInstallError, match="allow_replace=true"):
+        object_packages.install_package(
+            "hello-world",
+            root=packages_root,
+            object_roots=[object_root],
+        )
+
+    assert (object_root / "hello" / "world.py").read_text() == "def GET(request): return {'old': True}\n"
+
+
+def test_install_package_replaces_objects_when_allowed(tmp_path):
+    packages_root = tmp_path / "packages"
+    object_root = tmp_path / "objects"
+    (object_root / "hello").mkdir(parents=True)
+    (object_root / "hello" / "world.py").write_text("def GET(request): return {'old': True}\n")
+    write_package(
+        packages_root,
+        "hello-world",
+        {
+            "id": "hello-world",
+            "name": "Hello World",
+            "version": "0.1.0",
+            "objects": [{"id": "hello_world", "path": "objects/hello/world.py"}],
+        },
+        files=(("objects/hello/world.py", "def GET(request): return {'new': True}\n"),),
+    )
+
+    result = object_packages.install_package(
+        "hello-world",
+        root=packages_root,
+        object_roots=[object_root],
+        allow_replace=True,
+    )
+
+    assert result["objects"][0]["action"] == "replace"
+    assert (object_root / "hello" / "world.py").read_text() == "def GET(request): return {'new': True}\n"
+
+
+def test_install_package_rejects_unsupported_permission_and_migration_writes(tmp_path):
+    packages_root = tmp_path / "packages"
+    write_package(
+        packages_root,
+        "crm-starter",
+        manifest(),
+        files=(
+            ("objects/crm/contacts.py", "def GET(request): return {}\n"),
+            ("schemas/contacts.json", '{"fields":[]}\n'),
+            ("permissions/policy.json", "{}\n"),
+            ("seed/contacts.tsv", "id\tname\nc2\tBob\n"),
+            ("migrations/001_init.py", "def run(): pass\n"),
+        ),
+    )
+
+    with pytest.raises(object_packages.PackageInstallError) as exc:
+        object_packages.install_package("crm-starter", root=packages_root)
+
+    assert "permission installs" in str(exc.value)
+    assert "migration execution" in str(exc.value)
+
+
+def test_install_package_refuses_existing_seed_data(tmp_path):
+    packages_root = tmp_path / "packages"
+    data_dir = tmp_path / "data"
+    (data_dir / "collections" / "contacts").mkdir(parents=True)
+    (data_dir / "collections" / "contacts" / "records.tsv").write_text("id\tname\nc1\tAlice\n")
+    write_package(
+        packages_root,
+        "seeded",
+        {
+            "id": "seeded",
+            "name": "Seeded",
+            "version": "0.1.0",
+            "seed": [{"collection": "contacts", "path": "seed/contacts.tsv"}],
+        },
+        files=(("seed/contacts.tsv", "id\tname\nc2\tBob\n"),),
+    )
+
+    with pytest.raises(object_packages.PackageInstallError, match="Seed data already exists"):
+        object_packages.install_package("seeded", root=packages_root, base_dir=data_dir)
+
+    assert (data_dir / "collections" / "contacts" / "records.tsv").read_text() == "id\tname\nc1\tAlice\n"
+
+
+def test_install_package_validates_schema_before_writing_objects(tmp_path):
+    packages_root = tmp_path / "packages"
+    data_dir = tmp_path / "data"
+    object_root = tmp_path / "objects"
+    write_package(
+        packages_root,
+        "bad-schema",
+        {
+            "id": "bad-schema",
+            "name": "Bad Schema",
+            "version": "0.1.0",
+            "objects": [{"id": "hello_world", "path": "objects/hello/world.py"}],
+            "schemas": [{"collection": "contacts", "path": "schemas/contacts.json"}],
+        },
+        files=(
+            ("objects/hello/world.py", "def GET(request): return {'status': 'ok'}\n"),
+            ("schemas/contacts.json", '{"name":"other","fields":[]}\n'),
+        ),
+    )
+
+    with pytest.raises(object_packages.PackageInstallError, match="schema is invalid"):
+        object_packages.install_package(
+            "bad-schema",
+            root=packages_root,
+            base_dir=data_dir,
+            object_roots=[object_root],
+        )
+
+    assert not (object_root / "hello" / "world.py").exists()
+
+
 def test_package_manifest_rejects_unsafe_paths_and_ids(tmp_path):
     packages_root = tmp_path / "packages"
     write_package(

@@ -1,19 +1,23 @@
-"""DBBASIC package manifest discovery and dry-run planning.
+"""DBBASIC package manifest discovery, dry-run planning, and gated installs.
 
 Packages are installable bundles of objects, schemas, permissions, seed data,
-and migrations. This module only reads manifests and builds dry-run plans; it
-does not mutate a live server.
+and migrations. Installs are intentionally conservative: object and schema files
+can be created or replaced, seed files can be created, and permissions/migrations
+wait for explicit merge/run semantics.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 import object_collections
-from object_namespace import resolve_object_id, validate_object_id
+import object_schemas
+from object_namespace import get_object_roots, object_id_from_path, resolve_object_id, validate_object_id
 from object_versions import DEFAULT_DATA_DIR
 
 PACKAGES_DIR = "packages"
@@ -35,6 +39,10 @@ class PackageNotFoundError(LookupError):
 
 class InvalidPackageManifestError(ValueError):
     """Raised when a package manifest is invalid."""
+
+
+class PackageInstallError(RuntimeError):
+    """Raised when a package install would be unsafe or unsupported."""
 
 
 def validate_package_id(package_id: str) -> bool:
@@ -118,6 +126,117 @@ def dry_run_package(
         "seed": seed,
         "migrations": migrations,
         "warnings": warnings,
+    }
+
+
+def install_package(
+    package_id: str,
+    *,
+    root: Path | str = PACKAGES_DIR,
+    base_dir: Path | str = DEFAULT_DATA_DIR,
+    object_roots: Iterable[Path] | None = None,
+    allow_replace: bool = False,
+) -> dict[str, Any]:
+    """Install a package using the conservative public write contract."""
+    roots = list(object_roots) if object_roots is not None else get_object_roots()
+    if not roots:
+        raise PackageInstallError("Package installs require at least one object root")
+
+    package_dir = _package_dir(package_id, root)
+    package = _load_package(package_id, package_dir)
+    base = Path(base_dir)
+    plan = dry_run_package(package_id, root=root, base_dir=base, object_roots=roots)
+
+    blockers = _install_blockers(plan, package=package, allow_replace=allow_replace)
+    if blockers:
+        raise PackageInstallError("; ".join(blockers))
+
+    object_writes = []
+    for entry, planned in zip(package["objects"], plan["objects"], strict=True):
+        source = _package_file(package_dir, entry["path"])
+        existing = resolve_object_id(entry["id"], roots)
+        destination_root = _root_for_path(existing, roots) if existing is not None else roots[0]
+        if destination_root is None:
+            raise PackageInstallError(f"Existing object is outside configured object roots: {entry['id']}")
+        destination = existing or _object_destination(entry, destination_root)
+        _ensure_inside(destination, destination_root, label="object")
+        try:
+            mapped_id = object_id_from_path(destination, destination_root)
+        except ValueError as exc:
+            raise PackageInstallError(
+                f"Package object path is not a valid object destination: {entry['path']}"
+            ) from exc
+        if mapped_id != entry["id"]:
+            raise PackageInstallError(
+                f"Package object path does not map to object id {entry['id']}: {entry['path']}"
+            )
+        object_writes.append((planned, destination, destination_root, source.read_bytes()))
+
+    schema_writes = []
+    for entry, planned in zip(package["schemas"], plan["schemas"], strict=True):
+        source = _package_file(package_dir, entry["path"])
+        try:
+            payload = json.loads(source.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise PackageInstallError(f"Package schema contains invalid JSON: {entry['path']}") from exc
+        try:
+            normalized = object_schemas.normalize_schema(entry["collection"], payload, source="manual")
+        except ValueError as exc:
+            raise PackageInstallError(f"Package schema is invalid: {entry['path']}") from exc
+        schema_writes.append((entry, planned, normalized))
+
+    seed_writes = []
+    for entry, planned in zip(package["seed"], plan["seed"], strict=True):
+        source = _package_file(package_dir, entry["path"])
+        destination = base / "collections" / entry["collection"] / "records.tsv"
+        _ensure_inside(destination, base / "collections", label="seed")
+        seed_writes.append((entry, planned, destination, source.read_bytes()))
+
+    installed_objects = []
+    for planned, destination, destination_root, content in object_writes:
+        _write_file_atomic_bytes(destination, content)
+        installed_objects.append(
+            {
+                **planned,
+                "status": "written",
+                "destination": _relative_display_path(destination, destination_root),
+            }
+        )
+
+    installed_schemas = []
+    for entry, planned, normalized in schema_writes:
+        object_schemas.replace_schema(entry["collection"], normalized, base_dir=base)
+        installed_schemas.append(
+            {
+                **planned,
+                "status": "written",
+                "destination": f"schemas/{entry['collection']}.json",
+            }
+        )
+
+    installed_seed = []
+    for entry, planned, destination, content in seed_writes:
+        _write_file_atomic_bytes(destination, content)
+        installed_seed.append(
+            {
+                **planned,
+                "status": "written",
+                "destination": f"collections/{entry['collection']}/records.tsv",
+            }
+        )
+
+    return {
+        "package": plan["package"],
+        "mode": "install",
+        "install_enabled": True,
+        "allow_replace": allow_replace,
+        "safe_to_install": True,
+        "objects": installed_objects,
+        "schemas": installed_schemas,
+        "permissions": plan["permissions"],
+        "seed": installed_seed,
+        "migrations": plan["migrations"],
+        "warnings": [],
     }
 
 
@@ -420,6 +539,108 @@ def _package_file_status(package_dir: Path, relative_path: str) -> dict[str, boo
         "exists": inside and candidate.is_file(),
         "inside_package": inside,
     }
+
+
+def _install_blockers(
+    plan: Mapping[str, Any],
+    *,
+    package: Mapping[str, Any],
+    allow_replace: bool,
+) -> list[str]:
+    blockers = [str(warning) for warning in plan.get("warnings", [])]
+
+    if package["permissions"]:
+        blockers.append("Package permission installs are not implemented yet")
+    if package["migrations"]:
+        blockers.append("Package migration execution is not implemented yet")
+
+    if not allow_replace:
+        for entry in plan["objects"]:
+            if entry["action"] == "replace":
+                blockers.append(f"Object already exists; set allow_replace=true: {entry['id']}")
+        for entry in plan["schemas"]:
+            if entry["action"] == "replace":
+                blockers.append(
+                    f"Schema already exists; set allow_replace=true: {entry['collection']}"
+                )
+
+    for entry in plan["seed"]:
+        if entry["installed"]:
+            blockers.append(f"Seed data already exists and will not be overwritten: {entry['collection']}")
+
+    return blockers
+
+
+def _package_file(package_dir: Path, relative_path: str) -> Path:
+    status = _package_file_status(package_dir, relative_path)
+    if not status["inside_package"]:
+        raise PackageInstallError(f"Package file escapes package directory: {relative_path}")
+    if not status["exists"]:
+        raise PackageInstallError(f"Package file does not exist: {relative_path}")
+    return package_dir / relative_path
+
+
+def _object_destination(entry: Mapping[str, str], object_root: Path) -> Path:
+    relative = Path(entry["path"])
+    if relative.parts and relative.parts[0] == "objects":
+        relative = Path(*relative.parts[1:])
+    if not relative.parts or relative.suffix != ".py":
+        raise PackageInstallError(f"Package object path must point to a Python file: {entry['path']}")
+    destination = object_root / relative
+    _ensure_inside(destination, object_root, label="object")
+    return destination
+
+
+def _ensure_inside(path: Path, root: Path, *, label: str) -> None:
+    resolved_path = path.resolve(strict=False)
+    resolved_root = root.resolve(strict=False)
+    try:
+        resolved_path.relative_to(resolved_root)
+    except ValueError as exc:
+        raise PackageInstallError(f"Package {label} destination escapes its root: {path}") from exc
+
+
+def _root_for_path(path: Path | None, roots: Iterable[Path]) -> Path | None:
+    if path is None:
+        return None
+    for root in roots:
+        try:
+            _ensure_inside(path, root, label="object")
+        except PackageInstallError:
+            continue
+        return root
+    return None
+
+
+def _write_file_atomic_bytes(path: Path, content: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_name = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            "wb",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as tmp:
+            tmp_name = tmp.name
+            tmp.write(content)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.replace(tmp_name, path)
+    finally:
+        if tmp_name:
+            try:
+                Path(tmp_name).unlink()
+            except FileNotFoundError:
+                pass
+
+
+def _relative_display_path(path: Path, root: Path) -> str:
+    try:
+        return path.resolve(strict=False).relative_to(root.resolve(strict=False)).as_posix()
+    except ValueError:
+        return path.name
 
 
 def _safe_relative_path(value: str, *, package_id: str, section: str) -> str:

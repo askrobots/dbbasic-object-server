@@ -1,8 +1,8 @@
 """Append-only change logs for DBBASIC packages.
 
 Package changes are the durable package manager facts behind dry-run, install,
-failure, and rollback screens. The current public server only records dry-run
-plans; install/update writes are intentionally not implemented yet.
+failure, and rollback screens. The public server records dry-run plans and
+gated install attempts, including failed installs.
 """
 
 from __future__ import annotations

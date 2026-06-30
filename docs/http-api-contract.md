@@ -811,10 +811,10 @@ but Scroll/Object Server should inspect and later install packages through the
 DBBASIC API so backups, dry-runs, changelogs, and rollback points stay part of
 the object loop.
 
-The first public package endpoint is read-only. It can list packages and return
-a dry-run plan, but it does not mutate source, data, schemas, or permissions.
-Dry-runs do append compact package changelog rows so operators can see which
-packages were reviewed before installs become writable.
+The first public package surface can list packages, return dry-run plans, and
+perform conservative installs when both admin auth and the explicit package
+install flag are enabled. Dry-runs and installs append compact package changelog
+rows so operators can see which packages were reviewed, installed, or rejected.
 
 Package directory shape:
 
@@ -955,6 +955,86 @@ Response:
 }
 ```
 
+Install a reviewed package:
+
+```http
+POST /packages/{package_id}/install
+Authorization: Token <token>
+Content-Type: application/json
+
+{"allow_replace": false}
+```
+
+Package installs require:
+
+```text
+DBBASIC_ADMIN_TOKEN=...
+DBBASIC_ENABLE_PACKAGE_INSTALLS=true
+```
+
+The first install implementation is deliberately narrow:
+
+- object files are written under the configured object root
+- schema JSON is validated and written under `data/schemas/`
+- seed TSV is written only when `data/collections/{collection}/records.tsv`
+  does not already exist
+- replacing objects or schemas requires `{"allow_replace": true}`
+- package permissions and migrations are rejected until merge/run semantics are
+  explicit
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "install": {
+    "package": {
+      "id": "hello-world",
+      "name": "Hello World",
+      "version": "0.1.0",
+      "description": "Small package proving DBBASIC package discovery and dry-run planning.",
+      "status": "available",
+      "object_count": 1,
+      "schema_count": 0,
+      "permission_count": 0,
+      "seed_count": 0,
+      "migration_count": 0,
+      "dependency_count": 0
+    },
+    "mode": "install",
+    "install_enabled": true,
+    "allow_replace": false,
+    "safe_to_install": true,
+    "objects": [
+      {
+        "id": "hello_world",
+        "path": "objects/hello/world.py",
+        "exists": true,
+        "action": "create",
+        "installed": false,
+        "status": "written",
+        "destination": "hello/world.py"
+      }
+    ],
+    "schemas": [],
+    "permissions": [],
+    "seed": [],
+    "migrations": [],
+    "warnings": []
+  },
+  "changes": {
+    "requested": {
+      "change_id": "20260630T120100Z-hello-world-install_requested-1a2b3c4d",
+      "action": "install_requested"
+    },
+    "installed": {
+      "change_id": "20260630T120101Z-hello-world-installed-5e6f7a8b",
+      "action": "installed"
+    }
+  }
+}
+```
+
 Read package changelog:
 
 ```http
@@ -999,7 +1079,8 @@ Response:
 
 Package ids are route-safe lowercase names such as `hello-world` or
 `crm-starter`. Package manifests use relative paths only. Absolute paths,
-`..`, and source/data writes are rejected at this layer.
+`..`, null bytes, unsupported permission/migration writes, and unsafe
+source/data destinations are rejected at this layer.
 
 ## Schemas
 

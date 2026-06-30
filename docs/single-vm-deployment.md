@@ -333,13 +333,15 @@ the daemon keeps its delivery cursor.
 ## Packages
 
 Packages are read from `DBBASIC_PACKAGES_DIR`. The public server currently
-supports package listing and dry-run planning only. Dry-run requests append
+supports package listing, dry-run planning, and package installs only when
+`DBBASIC_ENABLE_PACKAGE_INSTALLS=true`. Dry-run and install requests append
 compact audit rows under
 `/var/lib/dbbasic-object-server/data/package_changes/{package_id}/changes.jsonl`.
 
-Keep install/update writes disabled until backup checks, changelog entries,
-permission enforcement, package rollback, and source/data audit trails are
-enforced by the server.
+Keep `DBBASIC_ENABLE_PACKAGE_INSTALLS=false` on public staging unless `/packages`
+is reachable only from a private admin surface. The first install path writes
+objects and schemas, creates seed TSV files only when no data exists, and rejects
+permissions/migrations until merge/run semantics are explicit.
 
 ## Minimal Object
 

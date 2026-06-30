@@ -62,6 +62,7 @@ RECORD_EVENTS_ENV = "DBBASIC_ENABLE_RECORD_EVENTS"
 EVENT_KEEP_COUNT_ENV = "DBBASIC_EVENT_KEEP_COUNT"
 EVENT_KEEP_SECONDS_ENV = "DBBASIC_EVENT_KEEP_SECONDS"
 PACKAGES_DIR_ENV = "DBBASIC_PACKAGES_DIR"
+PACKAGE_INSTALLS_ENABLED_ENV = "DBBASIC_ENABLE_PACKAGE_INSTALLS"
 DEFAULT_MAX_REQUEST_BYTES = 1_048_576
 DEFAULT_MAX_CONCURRENT_REQUESTS = 64
 DEFAULT_MAX_CONCURRENT_EXECUTIONS = 8
@@ -314,7 +315,9 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
         if path.startswith(f"{http_api_contract.PACKAGES_PATH}/"):
             package_tail = path.removeprefix(f"{http_api_contract.PACKAGES_PATH}/")
             package_parts = package_tail.split("/")
-            if len(package_parts) == 2 and package_parts[1] == "changes":
+            if len(package_parts) == 2 and package_parts[1] == "install":
+                await _handle_package_install(send, method, package_parts[0], body, headers)
+            elif len(package_parts) == 2 and package_parts[1] == "changes":
                 await _handle_package_changes(send, method, package_parts[0], query, headers)
             else:
                 await _handle_package(send, method, package_tail, query, headers)
@@ -1003,6 +1006,137 @@ async def _handle_package(
         return
 
     await _send_json(send, payload)
+
+
+async def _handle_package_install(
+    send,
+    method: str,
+    package_id: str,
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    if method != "POST":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Package installs require {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    if not _env_enabled(PACKAGE_INSTALLS_ENABLED_ENV):
+        await _send_json(
+            send,
+            {
+                "status": "error",
+                "error": f"Package installs are disabled. Set {PACKAGE_INSTALLS_ENABLED_ENV}=true.",
+            },
+            status=403,
+        )
+        return
+
+    plan = None
+    requested_change = None
+
+    try:
+        payload = _parse_json_body(body)
+        allow_replace = _optional_payload_bool(payload, "allow_replace") is True
+        plan = object_packages.dry_run_package(
+            package_id,
+            root=_packages_dir(),
+            base_dir=_data_dir(),
+        )
+        requested_change = object_package_changes.append_package_change(
+            package_id=package_id,
+            action="install_requested",
+            package_version=plan["package"].get("version"),
+            actor=_record_change_actor(headers),
+            details=object_package_changes.dry_run_change_details(plan),
+            base_dir=_data_dir(),
+        )
+        install_result = object_packages.install_package(
+            package_id,
+            root=_packages_dir(),
+            base_dir=_data_dir(),
+            allow_replace=allow_replace,
+        )
+        installed_change = object_package_changes.append_package_change(
+            package_id=package_id,
+            action="installed",
+            package_version=install_result["package"].get("version"),
+            actor=_record_change_actor(headers),
+            details=object_package_changes.dry_run_change_details(install_result),
+            base_dir=_data_dir(),
+        )
+    except object_packages.InvalidPackageIdError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_packages.PackageNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+    except object_packages.PackageInstallError as exc:
+        failed_details: dict[str, Any] = {"error": str(exc)}
+        failed_version = None
+        if plan is not None:
+            failed_details = {
+                **object_package_changes.dry_run_change_details(plan),
+                "error": str(exc),
+            }
+            failed_version = plan["package"].get("version")
+        try:
+            failed_change = object_package_changes.append_package_change(
+                package_id=package_id,
+                action="failed",
+                package_version=failed_version,
+                actor=_record_change_actor(headers),
+                message=str(exc),
+                details=failed_details,
+                base_dir=_data_dir(),
+            )
+        except Exception:
+            failed_change = None
+        changes = {"failed": failed_change}
+        if requested_change is not None:
+            changes["requested"] = requested_change
+        await _send_json(
+            send,
+            {
+                "status": "error",
+                "error": str(exc),
+                "changes": changes,
+            },
+            status=409,
+        )
+        return
+    except object_packages.InvalidPackageManifestError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=500)
+        return
+    except object_package_changes.InvalidPackageChangeError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=500)
+        return
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except OSError as exc:
+        await _send_json(send, {"status": "error", "error": f"Package install failed: {exc}"}, status=500)
+        return
+
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "install": install_result,
+            "changes": {
+                "requested": requested_change,
+                "installed": installed_change,
+            },
+        },
+        status=201,
+    )
 
 
 async def _handle_package_changes(
@@ -3003,6 +3137,15 @@ def _parse_post_payload(body: bytes, query: dict[str, str]) -> dict[str, Any]:
         payload.setdefault(key, value)
 
     return payload
+
+
+def _optional_payload_bool(payload: dict[str, Any], key: str) -> bool | None:
+    if key not in payload:
+        return None
+    value = payload[key]
+    if isinstance(value, bool):
+        return value
+    raise ValueError(f"Request JSON field '{key}' must be a boolean")
 
 
 def _payload_text(payload: dict[str, Any], key: str, default: str) -> str:
