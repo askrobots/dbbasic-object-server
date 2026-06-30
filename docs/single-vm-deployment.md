@@ -333,7 +333,9 @@ the daemon keeps its delivery cursor.
 ## Packages
 
 Packages are read from `DBBASIC_PACKAGES_DIR`. The public server currently
-supports package listing and dry-run planning only.
+supports package listing and dry-run planning only. Dry-run requests append
+compact audit rows under
+`/var/lib/dbbasic-object-server/data/package_changes/{package_id}/changes.jsonl`.
 
 Keep install/update writes disabled until backup checks, changelog entries,
 permission enforcement, package rollback, and source/data audit trails are
@@ -603,6 +605,9 @@ The portable runtime backup set is:
 /var/lib/dbbasic-object-server/data/state
 /var/lib/dbbasic-object-server/data/logs
 /var/lib/dbbasic-object-server/data/versions
+/var/lib/dbbasic-object-server/data/schema_versions
+/var/lib/dbbasic-object-server/data/record_changes
+/var/lib/dbbasic-object-server/data/package_changes
 /var/lib/dbbasic-object-server/data/files
 /var/lib/dbbasic-object-server/data/schemas
 /var/lib/dbbasic-object-server/data/collections

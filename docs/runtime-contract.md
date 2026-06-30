@@ -93,10 +93,10 @@ contract.
 
 Runtime backups should use `object_backup.py`. The portable archive contains
 object source plus `data/state/`, `data/logs/`, `data/versions/`,
-`data/record_changes/`, `data/files/`, `data/schemas/`, and
-`data/collections/`. It deliberately leaves deployment secrets, service files,
-virtualenvs, git history, lock files, temp files, and ephemeral rate-limit files
-outside the archive.
+`data/schema_versions/`, `data/record_changes/`, `data/package_changes/`,
+`data/files/`, `data/schemas/`, and `data/collections/`. It deliberately leaves
+deployment secrets, service files, virtualenvs, git history, lock files, temp
+files, and ephemeral rate-limit files outside the archive.
 
 ## Object Execution Result
 
@@ -705,6 +705,25 @@ The first required manifest is:
 Package paths are package-relative. Absolute paths, null bytes, and `..`
 traversal are rejected. Dry-runs report what would be created, replaced,
 merged, applied, or skipped without writing object source or data.
+
+Package change history lives here:
+
+```text
+data/package_changes/{package_id}/changes.jsonl
+```
+
+The public helper module is `object_package_changes.py`. It exposes:
+
+```python
+append_package_change(package_id, action, package_version=None, actor="api", details=None, base_dir="data")
+list_package_changes(package_id, base_dir="data", limit=100, offset=0)
+dry_run_change_details(plan)
+```
+
+The current server appends a `dry_run` change for
+`GET /packages/{package_id}?dry_run=true`. The details are intentionally
+compact: package identity, safe/install flags, action counts by package section,
+and warnings. Package source is not copied into the changelog.
 
 Package install/update writes are intentionally not public yet. They need
 server-enforced permissions, package changelogs, install audit entries, backup

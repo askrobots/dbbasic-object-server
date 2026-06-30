@@ -27,6 +27,7 @@ import object_field_permissions
 import object_files
 import object_logs
 import object_metadata
+import object_package_changes
 import object_permission_audit
 import object_permission_store
 import object_permissions
@@ -311,8 +312,12 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
             return
 
         if path.startswith(f"{http_api_contract.PACKAGES_PATH}/"):
-            package_id = path.removeprefix(f"{http_api_contract.PACKAGES_PATH}/")
-            await _handle_package(send, method, package_id, query, headers)
+            package_tail = path.removeprefix(f"{http_api_contract.PACKAGES_PATH}/")
+            package_parts = package_tail.split("/")
+            if len(package_parts) == 2 and package_parts[1] == "changes":
+                await _handle_package_changes(send, method, package_parts[0], query, headers)
+            else:
+                await _handle_package(send, method, package_tail, query, headers)
             return
 
         if path == http_api_contract.OBJECTS_PATH:
@@ -952,13 +957,23 @@ async def _handle_package(
     try:
         dry_run = _optional_query_bool(query, "dry_run") is True
         if dry_run:
+            plan = object_packages.dry_run_package(
+                package_id,
+                root=_packages_dir(),
+                base_dir=_data_dir(),
+            )
+            change = object_package_changes.append_package_change(
+                package_id=package_id,
+                action="dry_run",
+                package_version=plan["package"].get("version"),
+                actor=_record_change_actor(headers),
+                details=object_package_changes.dry_run_change_details(plan),
+                base_dir=_data_dir(),
+            )
             payload = {
                 "status": "ok",
-                "dry_run": object_packages.dry_run_package(
-                    package_id,
-                    root=_packages_dir(),
-                    base_dir=_data_dir(),
-                ),
+                "dry_run": plan,
+                "change": change,
             }
         else:
             payload = {
@@ -977,11 +992,56 @@ async def _handle_package(
     except object_packages.InvalidPackageManifestError as exc:
         await _send_json(send, {"status": "error", "error": str(exc)}, status=500)
         return
+    except object_package_changes.InvalidPackageChangeError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=500)
+        return
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except OSError as exc:
+        await _send_json(send, {"status": "error", "error": f"Could not record package change: {exc}"}, status=500)
+        return
+
+    await _send_json(send, payload)
+
+
+async def _handle_package_changes(
+    send,
+    method: str,
+    package_id: str,
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Package change history requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    try:
+        limit = _query_int(query, "limit", default=100, minimum=1, maximum=1000)
+        offset = _query_int(query, "offset", default=0, minimum=0)
+        changes = object_package_changes.list_package_changes(
+            package_id,
+            base_dir=_data_dir(),
+            limit=limit,
+            offset=offset,
+        )
+    except object_packages.InvalidPackageIdError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
     except ValueError as exc:
         await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
         return
 
-    await _send_json(send, payload)
+    await _send_json(send, {"status": "ok", **changes})
 
 
 async def _handle_object_get(

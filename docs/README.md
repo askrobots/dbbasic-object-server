@@ -52,7 +52,7 @@ flowchart TD
   ownership, sharing, row/field filters, subscriptions, temporary paid access,
   route enforcement, and audit readback.
 - `runtime-contract.md#packages` and `http-api-contract.md#packages` - package
-  manifest layout, package discovery, and non-mutating install dry-runs.
+  manifest layout, package discovery, dry-runs, and package change history.
 
 ## Documentation Rules
 

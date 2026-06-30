@@ -24,6 +24,7 @@ def test_contract_keeps_objects_paths_as_public_surface():
     assert http_api_contract.EVENT_SUBSCRIPTIONS_PATH == "/events/subscriptions"
     assert http_api_contract.PACKAGES_PATH == "/packages"
     assert http_api_contract.PACKAGE_PATH == "/packages/{package_id}"
+    assert http_api_contract.PACKAGE_CHANGES_PATH == "/packages/{package_id}/changes"
     assert http_api_contract.PERMISSIONS_POLICY_PATH == "/permissions/policy"
     assert http_api_contract.PERMISSIONS_CHECK_PATH == "/permissions/check"
     assert http_api_contract.PERMISSIONS_AUDIT_PATH == "/permissions/audit"
@@ -114,7 +115,21 @@ def test_contract_keeps_existing_introspection_query_flags():
         ),
         (
             "package_dry_run",
-            {"status": "ok", "dry_run": {"package": {"id": "hello-world"}}},
+            {
+                "status": "ok",
+                "dry_run": {"package": {"id": "hello-world"}},
+                "change": {"change_id": "chg_1"},
+            },
+        ),
+        (
+            "package_changes",
+            {
+                "status": "ok",
+                "package_id": "hello-world",
+                "changes": [],
+                "count": 0,
+                "total": 0,
+            },
         ),
         (
             "create_object",
@@ -248,6 +263,7 @@ def test_http_contract_doc_mentions_required_compatibility_surface():
         "GET /packages",
         "GET /packages/{package_id}",
         "GET /packages/{package_id}?dry_run=true",
+        "GET /packages/{package_id}/changes",
         "POST /objects",
         "GET /objects/{object_id}",
         "PUT /objects/{object_id}?source=true",

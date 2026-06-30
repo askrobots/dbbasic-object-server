@@ -28,6 +28,7 @@ RUNTIME_DATA_DIRS = (
     "versions",
     "schema_versions",
     "record_changes",
+    "package_changes",
     "files",
     "schemas",
     "collections",

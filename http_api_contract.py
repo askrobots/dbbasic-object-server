@@ -24,6 +24,7 @@ EVENTS_PATH = "/events"
 EVENT_SUBSCRIPTIONS_PATH = "/events/subscriptions"
 PACKAGES_PATH = "/packages"
 PACKAGE_PATH = "/packages/{package_id}"
+PACKAGE_CHANGES_PATH = "/packages/{package_id}/changes"
 PERMISSIONS_POLICY_PATH = "/permissions/policy"
 PERMISSIONS_CHECK_PATH = "/permissions/check"
 PERMISSIONS_AUDIT_PATH = "/permissions/audit"
@@ -54,7 +55,8 @@ RESPONSE_FIELDS: dict[str, frozenset[str]] = {
     "event_subscription": frozenset({"status", "subscription"}),
     "package_list": frozenset({"status", "packages", "count"}),
     "package": frozenset({"status", "package"}),
-    "package_dry_run": frozenset({"status", "dry_run"}),
+    "package_dry_run": frozenset({"status", "dry_run", "change"}),
+    "package_changes": frozenset({"status", "package_id", "changes", "count", "total"}),
     "create_object": frozenset({"status", "object_id", "message"}),
     "error": frozenset({"status", "error"}),
     "source": frozenset({"status", "object_id", "source"}),

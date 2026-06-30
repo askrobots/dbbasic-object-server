@@ -4210,6 +4210,35 @@ def test_packages_api_lists_package_detail_and_dry_run(tmp_path, monkeypatch):
     assert payload["dry_run"]["install_enabled"] is False
     assert payload["dry_run"]["objects"][0]["action"] == "replace"
     assert payload["dry_run"]["warnings"] == []
+    assert payload["change"]["package_id"] == "hello-world"
+    assert payload["change"]["package_version"] == "0.1.0"
+    assert payload["change"]["action"] == "dry_run"
+    assert payload["change"]["actor"] == "admin"
+    assert payload["change"]["details"]["objects"] == {"replace": 1}
+    assert payload["change"]["details"]["safe_to_install"] is True
+
+    status, _, history = request(
+        "/packages/hello-world/changes",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert history["package_id"] == "hello-world"
+    assert history["count"] == 1
+    assert history["total"] == 1
+    assert history["changes"][0]["change_id"] == payload["change"]["change_id"]
+
+
+def test_package_changes_api_requires_admin_token(monkeypatch):
+    monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)
+
+    status, _, payload = request("/packages/hello-world/changes", headers=auth_headers())
+
+    assert status == 403
+    assert payload == {
+        "status": "error",
+        "error": "Package change history requires DBBASIC_ADMIN_TOKEN.",
+    }
 
 
 def test_packages_api_rejects_invalid_and_missing_packages(tmp_path, monkeypatch):
@@ -4226,6 +4255,20 @@ def test_packages_api_rejects_invalid_and_missing_packages(tmp_path, monkeypatch
 
     assert status == 404
     assert "Package not found" in payload["error"]
+
+    status, _, payload = request("/packages/bad.name/changes", headers=auth_headers())
+
+    assert status == 400
+    assert "Invalid package id" in payload["error"]
+
+    status, _, payload = request(
+        "/packages/hello-world/changes",
+        query_string="limit=0",
+        headers=auth_headers(),
+    )
+
+    assert status == 400
+    assert "limit" in payload["error"]
 
 
 def test_object_execution_returns_405_when_get_is_missing(tmp_path, monkeypatch):

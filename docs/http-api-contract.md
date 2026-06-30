@@ -813,6 +813,8 @@ the object loop.
 
 The first public package endpoint is read-only. It can list packages and return
 a dry-run plan, but it does not mutate source, data, schemas, or permissions.
+Dry-runs do append compact package changelog rows so operators can see which
+packages were reviewed before installs become writable.
 
 Package directory shape:
 
@@ -930,7 +932,68 @@ Response:
     "seed": [],
     "migrations": [],
     "warnings": []
+  },
+  "change": {
+    "change_id": "20260630T120000Z-hello-world-dry_run-0f1e2d3c",
+    "timestamp": "2026-06-30T12:00:00+00:00",
+    "package_id": "hello-world",
+    "package_version": "0.1.0",
+    "action": "dry_run",
+    "actor": "admin",
+    "message": "Dry run package install",
+    "details": {
+      "safe_to_install": true,
+      "install_enabled": false,
+      "objects": {"create": 1},
+      "schemas": {},
+      "permissions": {},
+      "seed": {},
+      "migrations": {},
+      "warnings": []
+    }
   }
+}
+```
+
+Read package changelog:
+
+```http
+GET /packages/{package_id}/changes?limit=100&offset=0
+Authorization: Token <token>
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "package_id": "hello-world",
+  "changes": [
+    {
+      "change_id": "20260630T120000Z-hello-world-dry_run-0f1e2d3c",
+      "timestamp": "2026-06-30T12:00:00+00:00",
+      "package_id": "hello-world",
+      "package_version": "0.1.0",
+      "action": "dry_run",
+      "actor": "admin",
+      "message": "Dry run package install",
+      "details": {
+        "safe_to_install": true,
+        "install_enabled": false,
+        "objects": {"create": 1},
+        "schemas": {},
+        "permissions": {},
+        "seed": {},
+        "migrations": {},
+        "warnings": []
+      }
+    }
+  ],
+  "count": 1,
+  "total": 1,
+  "limit": 100,
+  "offset": 0,
+  "has_more": false
 }
 ```
 

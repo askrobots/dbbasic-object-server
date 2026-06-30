@@ -91,6 +91,7 @@ This repository currently contains:
 - `object_events.py` - daemon-compatible event publishing and subscription state helpers
   for record mutations, triggers, listeners, and webhooks
 - `object_packages.py` - package manifest discovery and non-mutating install dry-runs
+- `object_package_changes.py` - append-only package dry-run/install/rollback changelog helpers
 - `object_field_permissions.py` - schema-level `edit/read/hidden` enforcement for collection record fields
 - `object_permission_audit.py` - JSONL-backed permission decision audit reads and writes
 - `object_permission_store.py` - JSON-backed permission policy persistence
@@ -114,7 +115,9 @@ Installable DBBASIC packages should live under `packages/{package_id}/`.
 Each package currently uses `dbbasic-package.json` plus package-owned `objects/`,
 `schemas/`, `permissions/`, `seed/`, and `migrations/` paths. The public server
 can list packages and return dry-run install plans, but package installs are not
-enabled yet.
+enabled yet. Dry-runs append compact package changelog entries under
+`data/package_changes/{package_id}/changes.jsonl` so Scroll can show what was
+reviewed before installs are allowed.
 
 ## Minimal Server
 
@@ -174,6 +177,7 @@ Current endpoints:
 - `GET /packages`
 - `GET /packages/{package_id}`
 - `GET /packages/{package_id}?dry_run=true`
+- `GET /packages/{package_id}/changes`
 - `GET /objects?format=json`
 - `GET /objects/{object_id}`
 - `POST /objects/{object_id}`
@@ -277,6 +281,8 @@ rules the rest of the server will use:
   retention keeps the delivery queue bounded while change history stays durable
 - `object_packages.py` reads `packages/{package_id}/dbbasic-package.json` and builds
   non-mutating dry-run install plans for Scroll/package manager workflows
+- `object_package_changes.py` records package dry-runs and future install/rollback
+  facts as append-only JSONL under `data/package_changes/`
 - `object_files.py` lists and reads object-owned files under `data/files/`
 - `object_logs.py` reads and appends TSV-backed object logs, rotates/compresses old logs, and provides `_logger`
 - `object_metadata.py` summarizes source, state, logs, files, and versions
