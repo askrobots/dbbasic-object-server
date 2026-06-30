@@ -61,6 +61,7 @@ TRUSTED_IN_PROCESS_OBJECTS_ENV = "DBBASIC_TRUSTED_IN_PROCESS_OBJECTS"
 PERMISSION_ENFORCEMENT_ENV = "DBBASIC_ENABLE_PERMISSION_ENFORCEMENT"
 PERMISSION_AUDIT_ENV = "DBBASIC_ENABLE_PERMISSION_AUDIT"
 PERMISSION_TRUST_HEADERS_ENV = "DBBASIC_PERMISSION_TRUST_HEADERS"
+REQUIRE_KNOWN_IDENTITY_USERS_ENV = "DBBASIC_REQUIRE_KNOWN_IDENTITY_USERS"
 RECORD_EVENTS_ENV = "DBBASIC_ENABLE_RECORD_EVENTS"
 EVENT_KEEP_COUNT_ENV = "DBBASIC_EVENT_KEEP_COUNT"
 EVENT_KEEP_SECONDS_ENV = "DBBASIC_EVENT_KEEP_SECONDS"
@@ -292,6 +293,26 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
             await _send_request_too_large(send, exc)
             return
 
+        if path == http_api_contract.IDENTITY_ACCOUNTS_PATH:
+            await _handle_identity_accounts(send, method, body, headers)
+            return
+
+        identity_account_prefix = http_api_contract.IDENTITY_ACCOUNTS_PATH + "/"
+        if path.startswith(identity_account_prefix):
+            account_id = path[len(identity_account_prefix):]
+            await _handle_identity_account(send, method, account_id, headers)
+            return
+
+        if path == http_api_contract.IDENTITY_USERS_PATH:
+            await _handle_identity_users(send, method, query, body, headers)
+            return
+
+        identity_user_prefix = http_api_contract.IDENTITY_USERS_PATH + "/"
+        if path.startswith(identity_user_prefix):
+            user_id = path[len(identity_user_prefix):]
+            await _handle_identity_user(send, method, user_id, headers)
+            return
+
         if path == http_api_contract.IDENTITY_SESSIONS_PATH:
             await _handle_identity_sessions(send, method, body, headers)
             return
@@ -508,6 +529,158 @@ async def _handle_identity(send, method: str, headers: dict[str, str]) -> None:
     )
 
 
+async def _handle_identity_accounts(
+    send,
+    method: str,
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    gate_error = _admin_token_gate_error(headers, f"Identity accounts require {ADMIN_TOKEN_ENV}.")
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    if method == "GET":
+        accounts = object_identity.list_accounts(base_dir=_data_dir())
+        await _send_json(
+            send,
+            {
+                "status": "ok",
+                "accounts": accounts,
+                "count": len(accounts),
+            },
+        )
+        return
+
+    if method == "POST":
+        try:
+            payload = _parse_json_body(body)
+            account = object_identity.create_account(payload, base_dir=_data_dir())
+        except ValueError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+
+        await _send_json(send, {"status": "ok", "account": account}, status=201)
+        return
+
+    await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+
+
+async def _handle_identity_account(
+    send,
+    method: str,
+    account_id: str,
+    headers: dict[str, str],
+) -> None:
+    gate_error = _admin_token_gate_error(headers, f"Identity accounts require {ADMIN_TOKEN_ENV}.")
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    if "/" in account_id or not account_id:
+        await _send_json(send, {"status": "error", "error": "Invalid account id"}, status=400)
+        return
+
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    try:
+        account = object_identity.get_account(account_id, base_dir=_data_dir())
+    except object_identity.InvalidIdentityPayloadError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_identity.AccountNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+
+    await _send_json(send, {"status": "ok", "account": account})
+
+
+async def _handle_identity_users(
+    send,
+    method: str,
+    query: dict[str, str],
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    gate_error = _admin_token_gate_error(headers, f"Identity users require {ADMIN_TOKEN_ENV}.")
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    if method == "GET":
+        try:
+            users = object_identity.list_users(
+                account_id=query.get("account_id"),
+                base_dir=_data_dir(),
+            )
+        except object_identity.InvalidIdentityPayloadError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+
+        await _send_json(
+            send,
+            {
+                "status": "ok",
+                "users": users,
+                "count": len(users),
+            },
+        )
+        return
+
+    if method == "POST":
+        try:
+            payload = _parse_json_body(body)
+            user = object_identity.create_user(payload, base_dir=_data_dir())
+        except object_identity.AccountNotFoundError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+            return
+        except ValueError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+
+        await _send_json(send, {"status": "ok", "user": user}, status=201)
+        return
+
+    await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+
+
+async def _handle_identity_user(
+    send,
+    method: str,
+    user_id: str,
+    headers: dict[str, str],
+) -> None:
+    gate_error = _admin_token_gate_error(headers, f"Identity users require {ADMIN_TOKEN_ENV}.")
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    if "/" in user_id or not user_id:
+        await _send_json(send, {"status": "error", "error": "Invalid user id"}, status=400)
+        return
+
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    try:
+        user = object_identity.get_user(user_id, base_dir=_data_dir())
+    except object_identity.InvalidIdentityPayloadError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_identity.UserNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+
+    await _send_json(send, {"status": "ok", "user": user})
+
+
 async def _handle_identity_sessions(
     send,
     method: str,
@@ -535,7 +708,17 @@ async def _handle_identity_sessions(
     if method == "POST":
         try:
             payload = _parse_json_body(body)
-            result = object_identity.create_session(payload, base_dir=_data_dir())
+            result = object_identity.create_session(
+                payload,
+                base_dir=_data_dir(),
+                require_known_user=_env_enabled(REQUIRE_KNOWN_IDENTITY_USERS_ENV),
+            )
+        except object_identity.UserNotFoundError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+            return
+        except object_identity.AccountNotFoundError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+            return
         except ValueError as exc:
             await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
             return
@@ -655,6 +838,7 @@ def _health_payload(*, include_metrics: bool) -> dict[str, Any]:
             "permission_enforcement_enabled": _permission_enforcement_enabled(),
             "permission_audit_enabled": _permission_audit_enabled(),
             "permission_trust_headers": _env_enabled(PERMISSION_TRUST_HEADERS_ENV),
+            "require_known_identity_users": _env_enabled(REQUIRE_KNOWN_IDENTITY_USERS_ENV),
             "event_keep_count": _event_keep_count(),
             "event_keep_seconds": _event_keep_seconds(),
         },

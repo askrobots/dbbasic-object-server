@@ -228,6 +228,173 @@ def test_identity_endpoint_reports_admin_token_subject(monkeypatch):
     assert payload["auth"]["method"] == "admin_token"
 
 
+def test_identity_accounts_create_list_and_get(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    enable_admin_token(monkeypatch)
+
+    status, _, created = request(
+        "/identity/accounts",
+        method="POST",
+        body=json.dumps(
+            {
+                "account_id": "acme",
+                "name": "Acme Corp",
+                "subscriptions": ["pro"],
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 201
+    assert created["status"] == "ok"
+    assert created["account"]["account_id"] == "acme"
+    assert created["account"]["subscriptions"] == ["pro"]
+
+    status, _, listed = request("/identity/accounts", headers=auth_headers())
+
+    assert status == 200
+    assert listed["accounts"] == [created["account"]]
+    assert listed["count"] == 1
+
+    status, _, fetched = request("/identity/accounts/acme", headers=auth_headers())
+
+    assert status == 200
+    assert fetched["account"] == created["account"]
+
+
+def test_identity_users_create_list_filter_and_get(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    enable_admin_token(monkeypatch)
+
+    request(
+        "/identity/accounts",
+        method="POST",
+        body=json.dumps({"account_id": "acme"}).encode(),
+        headers=auth_headers(),
+    )
+    status, _, created = request(
+        "/identity/users",
+        method="POST",
+        body=json.dumps(
+            {
+                "user_id": "u_7",
+                "account_id": "acme",
+                "email": "alice@example.com",
+                "roles": ["sales"],
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 201
+    assert created["status"] == "ok"
+    assert created["user"]["user_id"] == "u_7"
+    assert created["user"]["account_id"] == "acme"
+    assert created["user"]["roles"] == ["sales"]
+
+    status, _, listed = request(
+        "/identity/users",
+        query_string="account_id=acme",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert listed["users"] == [created["user"]]
+    assert listed["count"] == 1
+
+    status, _, fetched = request("/identity/users/u_7", headers=auth_headers())
+
+    assert status == 200
+    assert fetched["user"] == created["user"]
+
+
+def test_identity_account_and_user_routes_are_admin_gated(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)
+
+    status, _, account_payload = request("/identity/accounts")
+    status_user, _, user_payload = request("/identity/users")
+
+    assert status == 403
+    assert account_payload == {
+        "status": "error",
+        "error": "Identity accounts require DBBASIC_ADMIN_TOKEN.",
+    }
+    assert status_user == 403
+    assert user_payload == {
+        "status": "error",
+        "error": "Identity users require DBBASIC_ADMIN_TOKEN.",
+    }
+
+
+def test_identity_session_uses_registered_user_profile(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    enable_admin_token(monkeypatch)
+
+    request(
+        "/identity/accounts",
+        method="POST",
+        body=json.dumps(
+            {
+                "account_id": "acme",
+                "subscriptions": ["pro"],
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+    request(
+        "/identity/users",
+        method="POST",
+        body=json.dumps(
+            {
+                "user_id": "u_7",
+                "account_id": "acme",
+                "roles": ["sales"],
+                "subscriptions": ["team"],
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    status, _, created = request(
+        "/identity/sessions",
+        method="POST",
+        body=json.dumps({"user_id": "u_7", "label": "scroll"}).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 201
+    assert created["session"]["account_id"] == "acme"
+    assert created["session"]["roles"] == ["sales"]
+    assert created["session"]["subscriptions"] == ["team", "pro"]
+
+    status, _, identity = request(
+        "/identity",
+        headers=[("authorization", f"Bearer {created['token']}")],
+    )
+
+    assert status == 200
+    assert identity["subject"]["account_id"] == "acme"
+    assert identity["subject"]["roles"] == ["sales"]
+    assert identity["subject"]["subscriptions"] == ["team", "pro"]
+
+
+def test_identity_session_strict_known_user_mode(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.REQUIRE_KNOWN_IDENTITY_USERS_ENV, "true")
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/identity/sessions",
+        method="POST",
+        body=json.dumps({"user_id": "missing"}).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 404
+    assert payload == {"status": "error", "error": "User not found: missing"}
+
+
 def test_identity_session_create_and_use(tmp_path, monkeypatch):
     monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
     enable_admin_token(monkeypatch)

@@ -3,6 +3,146 @@ from datetime import datetime, timedelta, timezone
 import object_identity
 
 
+def test_create_account_stores_public_payload(tmp_path):
+    account = object_identity.create_account(
+        {
+            "account_id": "acme",
+            "name": "Acme Corp",
+            "subscriptions": ["pro", "pro", "support"],
+        },
+        base_dir=tmp_path,
+    )
+
+    assert account["account_id"] == "acme"
+    assert account["name"] == "Acme Corp"
+    assert account["status"] == "active"
+    assert account["subscriptions"] == ["pro", "support"]
+
+    assert object_identity.get_account("acme", base_dir=tmp_path) == account
+    assert object_identity.list_accounts(base_dir=tmp_path) == [account]
+
+
+def test_create_user_stores_roles_and_requires_known_account(tmp_path):
+    object_identity.create_account({"account_id": "acme"}, base_dir=tmp_path)
+
+    user = object_identity.create_user(
+        {
+            "user_id": "u_7",
+            "account_id": "acme",
+            "email": "alice@example.com",
+            "display_name": "Alice",
+            "roles": ["sales", "sales", "manager"],
+            "subscriptions": ["team"],
+        },
+        base_dir=tmp_path,
+    )
+
+    assert user["user_id"] == "u_7"
+    assert user["account_id"] == "acme"
+    assert user["email"] == "alice@example.com"
+    assert user["roles"] == ["sales", "manager"]
+
+    assert object_identity.get_user("u_7", base_dir=tmp_path) == user
+    assert object_identity.list_users(base_dir=tmp_path) == [user]
+    assert object_identity.list_users(account_id="acme", base_dir=tmp_path) == [user]
+    assert object_identity.list_users(account_id="other", base_dir=tmp_path) == []
+
+    try:
+        object_identity.create_user(
+            {"user_id": "u_8", "account_id": "missing"},
+            base_dir=tmp_path,
+        )
+    except object_identity.AccountNotFoundError as exc:
+        assert str(exc) == "Account not found: missing"
+    else:
+        raise AssertionError("unknown account should fail")
+
+
+def test_create_identity_records_reject_duplicates(tmp_path):
+    object_identity.create_account({"account_id": "acme"}, base_dir=tmp_path)
+    object_identity.create_user({"user_id": "u_7"}, base_dir=tmp_path)
+
+    try:
+        object_identity.create_account({"account_id": "acme"}, base_dir=tmp_path)
+    except object_identity.InvalidIdentityPayloadError as exc:
+        assert str(exc) == "Account already exists: acme"
+    else:
+        raise AssertionError("duplicate account should fail")
+
+    try:
+        object_identity.create_user({"user_id": "u_7"}, base_dir=tmp_path)
+    except object_identity.InvalidIdentityPayloadError as exc:
+        assert str(exc) == "User already exists: u_7"
+    else:
+        raise AssertionError("duplicate user should fail")
+
+
+def test_registered_user_defaults_session_roles_account_and_subscriptions(tmp_path):
+    object_identity.create_account(
+        {"account_id": "acme", "subscriptions": ["pro"]},
+        base_dir=tmp_path,
+    )
+    object_identity.create_user(
+        {
+            "user_id": "u_7",
+            "account_id": "acme",
+            "roles": ["sales"],
+            "subscriptions": ["team"],
+        },
+        base_dir=tmp_path,
+    )
+
+    result = object_identity.create_session({"user_id": "u_7"}, base_dir=tmp_path)
+
+    assert result["session"]["account_id"] == "acme"
+    assert result["session"]["roles"] == ["sales"]
+    assert result["session"]["subscriptions"] == ["team", "pro"]
+
+
+def test_session_rejects_disabled_user_or_account(tmp_path):
+    object_identity.create_account({"account_id": "acme"}, base_dir=tmp_path)
+    object_identity.create_user(
+        {"user_id": "u_7", "account_id": "acme", "status": "disabled"},
+        base_dir=tmp_path,
+    )
+
+    try:
+        object_identity.create_session({"user_id": "u_7"}, base_dir=tmp_path)
+    except object_identity.InvalidSessionPayloadError as exc:
+        assert str(exc) == "User is not active: u_7"
+    else:
+        raise AssertionError("disabled user should not receive a session")
+
+    object_identity.create_account(
+        {"account_id": "closed", "status": "disabled"},
+        base_dir=tmp_path,
+    )
+    object_identity.create_user(
+        {"user_id": "u_8", "account_id": "closed"},
+        base_dir=tmp_path,
+    )
+
+    try:
+        object_identity.create_session({"user_id": "u_8"}, base_dir=tmp_path)
+    except object_identity.InvalidSessionPayloadError as exc:
+        assert str(exc) == "Account is not active: closed"
+    else:
+        raise AssertionError("disabled account should not receive a session")
+
+
+def test_session_can_require_registered_user(tmp_path):
+    try:
+        object_identity.create_session(
+            {"user_id": "u_missing"},
+            base_dir=tmp_path,
+            require_known_user=True,
+        )
+    except object_identity.UserNotFoundError as exc:
+        assert str(exc) == "User not found: u_missing"
+    else:
+        raise AssertionError("strict sessions should require a known user")
+
+
 def test_create_session_stores_hash_and_resolves_subject(tmp_path):
     now = datetime.now(timezone.utc)
 

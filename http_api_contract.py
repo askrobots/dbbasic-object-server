@@ -28,6 +28,10 @@ PACKAGE_INSTALL_PATH = "/packages/{package_id}/install"
 PACKAGE_RESTORE_PATH = "/packages/{package_id}/restore"
 PACKAGE_CHANGES_PATH = "/packages/{package_id}/changes"
 IDENTITY_PATH = "/identity"
+IDENTITY_ACCOUNTS_PATH = "/identity/accounts"
+IDENTITY_ACCOUNT_PATH = "/identity/accounts/{account_id}"
+IDENTITY_USERS_PATH = "/identity/users"
+IDENTITY_USER_PATH = "/identity/users/{user_id}"
 IDENTITY_SESSIONS_PATH = "/identity/sessions"
 IDENTITY_SESSION_PATH = "/identity/sessions/{session_id}"
 PERMISSIONS_POLICY_PATH = "/permissions/policy"
@@ -67,6 +71,10 @@ RESPONSE_FIELDS: dict[str, frozenset[str]] = {
     ),
     "package_changes": frozenset({"status", "package_id", "changes", "count", "total"}),
     "identity": frozenset({"status", "subject", "auth", "permissions"}),
+    "identity_account_list": frozenset({"status", "accounts", "count"}),
+    "identity_account": frozenset({"status", "account"}),
+    "identity_user_list": frozenset({"status", "users", "count"}),
+    "identity_user": frozenset({"status", "user"}),
     "identity_session_list": frozenset({"status", "sessions", "count"}),
     "identity_session": frozenset({"status", "session"}),
     "create_object": frozenset({"status", "object_id", "message"}),

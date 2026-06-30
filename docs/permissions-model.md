@@ -86,7 +86,8 @@ If the file does not exist, the server uses a conservative default:
 }
 ```
 
-The policy endpoints are admin-gated until real user sessions exist:
+The policy endpoints are still admin-gated while broader login, account
+management, and permission editing mature:
 
 ```http
 GET /permissions/policy
@@ -109,6 +110,21 @@ Content-Type: application/json
   }
 }
 ```
+
+Identity subjects can come from trusted headers, the admin token, or DBBASIC
+session tokens. The session tokens are backed by a small local registry:
+
+```text
+data/identity/accounts.tsv
+data/identity/users.tsv
+data/identity/sessions.tsv
+```
+
+Accounts carry tenant/subscription defaults. Users carry account membership,
+roles, and user-level subscriptions. A session minted for a registered user can
+inherit that account, role, and subscription data, giving permission checks the
+same subject shape whether the request came from Scroll, a gateway, or a future
+DBBASIC login object.
 
 Scroll and tests can preview decisions without persisting draft rules:
 

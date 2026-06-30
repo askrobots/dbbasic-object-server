@@ -177,6 +177,72 @@ current staging server safe while giving future login/session gateways and
 Scroll one stable endpoint for the active account, user, roles, and
 subscriptions.
 
+### Identity Accounts And Users
+
+The server has a small file-backed identity registry so sessions can be minted
+from known users instead of every client inventing its own subject payload. These
+routes are admin-gated.
+
+Accounts are stored under `data/identity/accounts.tsv`:
+
+```http
+GET /identity/accounts
+Authorization: Token <admin-token>
+```
+
+```http
+POST /identity/accounts
+Authorization: Token <admin-token>
+Content-Type: application/json
+```
+
+```json
+{
+  "account_id": "acme",
+  "name": "Acme Corp",
+  "subscriptions": ["pro"]
+}
+```
+
+Users are stored under `data/identity/users.tsv`:
+
+```http
+GET /identity/users
+Authorization: Token <admin-token>
+```
+
+```http
+GET /identity/users?account_id=acme
+Authorization: Token <admin-token>
+```
+
+```http
+POST /identity/users
+Authorization: Token <admin-token>
+Content-Type: application/json
+```
+
+```json
+{
+  "user_id": "u_7",
+  "account_id": "acme",
+  "email": "alice@example.com",
+  "display_name": "Alice",
+  "roles": ["sales"],
+  "subscriptions": ["team"]
+}
+```
+
+Single-record reads are:
+
+```http
+GET /identity/accounts/acme
+GET /identity/users/u_7
+```
+
+`status` can be `active` or `disabled`. Disabled accounts and users cannot mint
+new sessions.
+
 ### Identity Sessions
 
 The server can mint scoped subject tokens for Scroll, gateways, or controlled
@@ -222,6 +288,12 @@ Response:
   "token": "returned-once"
 }
 ```
+
+If `user_id` already exists in `data/identity/users.tsv`, omitted `account_id`,
+`roles`, and `subscriptions` are filled from the registered user and account.
+This lets Scroll or a login gateway mint a session without duplicating policy
+metadata in every request. If `DBBASIC_REQUIRE_KNOWN_IDENTITY_USERS=true`, the
+server rejects sessions for unknown users.
 
 List sessions:
 

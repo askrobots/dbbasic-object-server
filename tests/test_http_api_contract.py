@@ -27,6 +27,13 @@ def test_contract_keeps_objects_paths_as_public_surface():
     assert http_api_contract.PACKAGE_INSTALL_PATH == "/packages/{package_id}/install"
     assert http_api_contract.PACKAGE_RESTORE_PATH == "/packages/{package_id}/restore"
     assert http_api_contract.PACKAGE_CHANGES_PATH == "/packages/{package_id}/changes"
+    assert http_api_contract.IDENTITY_PATH == "/identity"
+    assert http_api_contract.IDENTITY_ACCOUNTS_PATH == "/identity/accounts"
+    assert http_api_contract.IDENTITY_ACCOUNT_PATH == "/identity/accounts/{account_id}"
+    assert http_api_contract.IDENTITY_USERS_PATH == "/identity/users"
+    assert http_api_contract.IDENTITY_USER_PATH == "/identity/users/{user_id}"
+    assert http_api_contract.IDENTITY_SESSIONS_PATH == "/identity/sessions"
+    assert http_api_contract.IDENTITY_SESSION_PATH == "/identity/sessions/{session_id}"
     assert http_api_contract.PERMISSIONS_POLICY_PATH == "/permissions/policy"
     assert http_api_contract.PERMISSIONS_CHECK_PATH == "/permissions/check"
     assert http_api_contract.PERMISSIONS_AUDIT_PATH == "/permissions/audit"
@@ -160,6 +167,22 @@ def test_contract_keeps_existing_introspection_query_flags():
                 "auth": {"method": "anonymous"},
                 "permissions": {"enforcement_enabled": False},
             },
+        ),
+        (
+            "identity_account_list",
+            {"status": "ok", "accounts": [], "count": 0},
+        ),
+        (
+            "identity_account",
+            {"status": "ok", "account": {"account_id": "acme"}},
+        ),
+        (
+            "identity_user_list",
+            {"status": "ok", "users": [], "count": 0},
+        ),
+        (
+            "identity_user",
+            {"status": "ok", "user": {"user_id": "u_7"}},
         ),
         (
             "identity_session_list",
