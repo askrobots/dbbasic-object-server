@@ -10,6 +10,7 @@ import argparse
 import io
 import json
 import os
+import re
 import tarfile
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -20,8 +21,10 @@ from object_namespace import DEFAULT_OBJECTS_DIR, OBJECTS_DIR_ENV
 from object_versions import DEFAULT_DATA_DIR
 
 DATA_DIR_ENV = "DBBASIC_DATA_DIR"
+BACKUPS_DIR_ENV = "DBBASIC_BACKUPS_DIR"
 BACKUP_FORMAT_VERSION = 1
 MANIFEST_NAME = "dbbasic-backup-manifest.json"
+BACKUPS_DIR = "backups"
 RUNTIME_DATA_DIRS = (
     "state",
     "logs",
@@ -35,6 +38,7 @@ RUNTIME_DATA_DIRS = (
 )
 SKIP_PARTS = {"__pycache__", ".git", ".venv", "node_modules"}
 SKIP_SUFFIXES = (".pyc", ".pyo", ".tmp", ".lock")
+RESTORE_POINT_LABEL_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,127}$")
 
 
 class BackupError(Exception):
@@ -156,6 +160,27 @@ def create_runtime_backup(
     )
 
 
+def create_runtime_restore_point(
+    label: str,
+    *,
+    objects_dir: Path | str | None = None,
+    data_dir: Path | str | None = None,
+    backups_dir: Path | str | None = None,
+    created_at: str | None = None,
+) -> BackupSummary:
+    """Create a named runtime backup under the configured restore-point directory."""
+    clean_label = _restore_point_label(label)
+    timestamp = created_at or _utc_timestamp()
+    output_dir = _backups_dir(backups_dir, data_dir=data_dir)
+    output_path = output_dir / f"{_backup_filename_timestamp(timestamp)}-{clean_label}.tar.gz"
+    return create_runtime_backup(
+        output_path,
+        objects_dir=objects_dir,
+        data_dir=data_dir,
+        created_at=timestamp,
+    )
+
+
 def verify_runtime_backup(backup_path: Path | str) -> BackupVerification:
     """Inspect a runtime backup archive without extracting it."""
     path = Path(backup_path)
@@ -271,6 +296,31 @@ def _data_dir(value: Path | str | None) -> Path:
     if value is not None:
         return Path(value)
     return Path(os.environ.get(DATA_DIR_ENV, DEFAULT_DATA_DIR))
+
+
+def _backups_dir(value: Path | str | None, *, data_dir: Path | str | None) -> Path:
+    if value is not None:
+        return Path(value)
+    env_value = os.environ.get(BACKUPS_DIR_ENV)
+    if env_value:
+        return Path(env_value)
+    return _data_dir(data_dir) / BACKUPS_DIR
+
+
+def _restore_point_label(value: str) -> str:
+    label = str(value).strip().lower()
+    if not RESTORE_POINT_LABEL_RE.fullmatch(label):
+        raise BackupRestoreError(f"invalid restore point label: {value!r}")
+    return label
+
+
+def _backup_filename_timestamp(timestamp: str) -> str:
+    compact = timestamp.replace("+00:00", "Z")
+    compact = compact.replace("-", "").replace(":", "").replace(".", "")
+    compact = compact.replace("+", "")
+    if not compact.endswith("Z"):
+        compact = f"{compact}Z"
+    return compact
 
 
 def _runtime_sources(objects_dir: Path, data_dir: Path) -> list[tuple[Path, PurePosixPath]]:

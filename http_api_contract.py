@@ -57,7 +57,7 @@ RESPONSE_FIELDS: dict[str, frozenset[str]] = {
     "package_list": frozenset({"status", "packages", "count"}),
     "package": frozenset({"status", "package"}),
     "package_dry_run": frozenset({"status", "dry_run", "change"}),
-    "package_install": frozenset({"status", "install", "changes"}),
+    "package_install": frozenset({"status", "install", "changes", "restore_point"}),
     "package_changes": frozenset({"status", "package_id", "changes", "count", "total"}),
     "create_object": frozenset({"status", "object_id", "message"}),
     "error": frozenset({"status", "error"}),

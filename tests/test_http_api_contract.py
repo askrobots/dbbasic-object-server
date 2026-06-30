@@ -128,6 +128,7 @@ def test_contract_keeps_existing_introspection_query_flags():
                 "status": "ok",
                 "install": {"package": {"id": "hello-world"}},
                 "changes": {"requested": {"change_id": "chg_1"}},
+                "restore_point": {"path": "data/backups/restore.tar.gz"},
             },
         ),
         (

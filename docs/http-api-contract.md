@@ -981,6 +981,8 @@ The first install implementation is deliberately narrow:
 - replacing objects or schemas requires `{"allow_replace": true}`
 - package permissions and migrations are rejected until merge/run semantics are
   explicit
+- a runtime restore point is created before any live object, schema, or seed
+  file is changed
 
 Response:
 
@@ -1020,7 +1022,15 @@ Response:
     "permissions": [],
     "seed": [],
     "migrations": [],
-    "warnings": []
+    "warnings": [],
+    "restore_point": {
+      "path": "data/backups/20260630T120100Z-package-hello-world.tar.gz",
+      "format_version": 1,
+      "created_at": "2026-06-30T12:01:00Z",
+      "files": 14,
+      "bytes": 12345,
+      "warnings": []
+    }
   },
   "changes": {
     "requested": {
@@ -1031,6 +1041,14 @@ Response:
       "change_id": "20260630T120101Z-hello-world-installed-5e6f7a8b",
       "action": "installed"
     }
+  },
+  "restore_point": {
+    "path": "data/backups/20260630T120100Z-package-hello-world.tar.gz",
+    "format_version": 1,
+    "created_at": "2026-06-30T12:01:00Z",
+    "files": 14,
+    "bytes": 12345,
+    "warnings": []
   }
 }
 ```

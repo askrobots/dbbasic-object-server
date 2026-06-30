@@ -66,6 +66,25 @@ The command writes `dbbasic-backup-manifest.json` inside the archive. The
 manifest records the format version, timestamp, included roots, file count, byte
 count, and warnings.
 
+## Restore Points
+
+Server-side mutations that can rewrite multiple runtime files should create a
+restore point before writing. Package installs use:
+
+```python
+object_backup.create_runtime_restore_point("package-hello-world")
+```
+
+By default, restore points are written under:
+
+```text
+data/backups/
+```
+
+Set `DBBASIC_BACKUPS_DIR` to move those archives to a mounted backup volume or
+another operator-managed path. Runtime backup archives do not include
+`data/backups/`, so restore points do not recursively back up other archives.
+
 ## Verify
 
 ```bash

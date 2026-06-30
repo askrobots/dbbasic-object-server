@@ -142,6 +142,37 @@ def test_create_runtime_backup_includes_runtime_files_and_manifest(tmp_path):
     ]
 
 
+def test_create_runtime_restore_point_uses_data_backups_and_excludes_existing_backups(tmp_path):
+    objects_dir, data_dir = make_runtime_tree(tmp_path)
+    write_file(data_dir / "backups" / "old-runtime.tar.gz", "old backup")
+
+    summary = object_backup.create_runtime_restore_point(
+        "package-hello-world",
+        objects_dir=objects_dir,
+        data_dir=data_dir,
+        created_at="2026-01-01T00:00:00Z",
+    )
+
+    backup = Path(summary.path)
+    assert backup.parent == data_dir / "backups"
+    assert backup.name == "20260101T000000Z-package-hello-world.tar.gz"
+    names = archive_names(backup)
+    assert "objects/site/home.py" in names
+    assert "data/backups/old-runtime.tar.gz" not in names
+
+    manifest = read_manifest(backup)
+    assert manifest["created_at"] == "2026-01-01T00:00:00Z"
+
+
+def test_create_runtime_restore_point_rejects_unsafe_labels(tmp_path):
+    with pytest.raises(object_backup.BackupRestoreError, match="invalid restore point label"):
+        object_backup.create_runtime_restore_point(
+            "../bad",
+            objects_dir=tmp_path / "objects",
+            data_dir=tmp_path / "data",
+        )
+
+
 def test_restore_runtime_backup_restores_objects_state_logs_versions_and_files(tmp_path):
     objects_dir, data_dir = make_runtime_tree(tmp_path)
     backup = tmp_path / "runtime.tar.gz"

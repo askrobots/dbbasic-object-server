@@ -736,13 +736,18 @@ The current server appends a `dry_run` change for
 then either `installed` or `failed` for
 `POST /packages/{package_id}/install`. The details are intentionally compact:
 package identity, safe/install flags, action counts by package section, and
-warnings. Package source is not copied into the changelog.
+warnings. Successful installs include restore-point metadata. Package source is
+not copied into the changelog.
 
 Package install writes require both admin auth and:
 
 ```text
 DBBASIC_ENABLE_PACKAGE_INSTALLS=true
 ```
+
+The HTTP install route creates a runtime restore point before object, schema, or
+seed writes. Restore points default to `data/backups/`; set
+`DBBASIC_BACKUPS_DIR` to place them on a separate backup volume.
 
 Keep this disabled on public staging unless the route is on a private admin
 surface and backups have been tested.

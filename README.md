@@ -98,7 +98,7 @@ This repository currently contains:
 - `object_permissions.py` - server-side access modes, role/object/action checks,
   ownership, sharing, subscriptions, temporary grants, and row/field filters
 - `object_versions.py` - source version metadata, content snapshots, and rollback
-- `object_backup.py` - runtime backup, verification, and safe restore helpers
+- `object_backup.py` - runtime backup, restore-point, verification, and safe restore helpers
 - `object_daemon.py` - background worker for scheduler, queue, events, and cleanup
 - `deployment_checks.py` - single-VM filesystem ownership and permission checks
 
@@ -118,7 +118,8 @@ can list packages, return dry-run install plans, and run conservative installs
 when `DBBASIC_ENABLE_PACKAGE_INSTALLS=true` and `DBBASIC_ADMIN_TOKEN` are both
 set. Installs currently create/replace objects and schemas, create seed TSV
 files only when data does not already exist, and reject permission/migration
-writes until those merge/run semantics are explicit. Dry-runs and installs
+writes until those merge/run semantics are explicit. The HTTP install route
+creates a restore point before live files are changed. Dry-runs and installs
 append compact package changelog entries under
 `data/package_changes/{package_id}/changes.jsonl` so Scroll can show what was
 reviewed, installed, or rejected.
@@ -207,6 +208,7 @@ metadata, and versions require:
 ```bash
 export DBBASIC_ADMIN_TOKEN=replace-with-a-local-dev-token
 export DBBASIC_DATA_DIR=./data
+export DBBASIC_BACKUPS_DIR=./data/backups
 export DBBASIC_PACKAGES_DIR=./packages
 export DBBASIC_ENABLE_PACKAGE_INSTALLS=false
 export DBBASIC_MAX_REQUEST_BYTES=1048576

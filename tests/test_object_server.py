@@ -1,5 +1,6 @@
 import asyncio
 import json
+import tarfile
 
 import object_execution
 import object_packages
@@ -4263,6 +4264,7 @@ def test_package_install_api_installs_and_records_changes(tmp_path, monkeypatch)
     packages_root = tmp_path / "packages"
     data_dir = tmp_path / "data"
     object_root = tmp_path / "objects"
+    write_source(object_root / "site" / "home.py", "def GET(request): return {'before': True}\n")
     write_package(
         packages_root,
         "hello-world",
@@ -4300,11 +4302,17 @@ def test_package_install_api_installs_and_records_changes(tmp_path, monkeypatch)
     assert payload["status"] == "ok"
     assert payload["install"]["mode"] == "install"
     assert payload["install"]["objects"][0]["destination"] == "hello/world.py"
+    assert payload["install"]["restore_point"] == payload["restore_point"]
+    assert payload["restore_point"]["path"].endswith("-package-hello-world.tar.gz")
     assert payload["changes"]["requested"]["action"] == "install_requested"
     assert payload["changes"]["installed"]["action"] == "installed"
     assert (object_root / "hello" / "world.py").is_file()
     assert (data_dir / "schemas" / "contacts.json").is_file()
     assert (data_dir / "collections" / "contacts" / "records.tsv").is_file()
+    with tarfile.open(payload["restore_point"]["path"], "r:*") as archive:
+        names = archive.getnames()
+    assert "objects/site/home.py" in names
+    assert "objects/hello/world.py" not in names
 
     status, _, history = request(
         "/packages/hello-world/changes",
@@ -4316,6 +4324,7 @@ def test_package_install_api_installs_and_records_changes(tmp_path, monkeypatch)
         "installed",
         "install_requested",
     ]
+    assert history["changes"][0]["details"]["restore_point"]["path"] == payload["restore_point"]["path"]
 
 
 def test_package_install_api_records_failed_replace(tmp_path, monkeypatch):
@@ -4352,6 +4361,57 @@ def test_package_install_api_records_failed_replace(tmp_path, monkeypatch):
     assert payload["changes"]["requested"]["action"] == "install_requested"
     assert payload["changes"]["failed"]["action"] == "failed"
     assert (object_root / "hello" / "world.py").read_text() == "def GET(request): return {'old': True}\n"
+    assert not (data_dir / "backups").exists()
+
+    status, _, history = request(
+        "/packages/hello-world/changes",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert [change["action"] for change in history["changes"]] == [
+        "failed",
+        "install_requested",
+    ]
+
+
+def test_package_install_api_fails_before_writes_when_restore_point_fails(tmp_path, monkeypatch):
+    packages_root = tmp_path / "packages"
+    data_dir = tmp_path / "data"
+    object_root = tmp_path / "objects"
+    bad_backups_dir = tmp_path / "not-a-directory"
+    bad_backups_dir.write_text("not a directory")
+    write_package(
+        packages_root,
+        "hello-world",
+        {
+            "id": "hello-world",
+            "name": "Hello World",
+            "version": "0.1.0",
+            "objects": [{"id": "hello_world", "path": "objects/hello/world.py"}],
+        },
+        files=(("objects/hello/world.py", "def GET(request): return {'new': True}\n"),),
+    )
+    monkeypatch.setenv("DBBASIC_PACKAGES_DIR", str(packages_root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(object_root))
+    monkeypatch.setenv("DBBASIC_BACKUPS_DIR", str(bad_backups_dir))
+    monkeypatch.setenv("DBBASIC_ENABLE_PACKAGE_INSTALLS", "true")
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/packages/hello-world/install",
+        method="POST",
+        body=b"{}",
+        headers=auth_headers(),
+    )
+
+    assert status == 500
+    assert payload["status"] == "error"
+    assert "Package install failed" in payload["error"]
+    assert payload["changes"]["requested"]["action"] == "install_requested"
+    assert payload["changes"]["failed"]["action"] == "failed"
+    assert not (object_root / "hello" / "world.py").exists()
 
     status, _, history = request(
         "/packages/hello-world/changes",

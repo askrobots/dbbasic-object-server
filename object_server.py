@@ -17,9 +17,10 @@ import urllib.parse
 from collections import Counter, deque
 from datetime import datetime, timezone
 from importlib import metadata as importlib_metadata
-from typing import Any
+from typing import Any, Mapping
 
 import http_api_contract
+import object_backup
 import object_collections
 import object_events
 import object_execution
@@ -1058,18 +1059,32 @@ async def _handle_package_install(
             details=object_package_changes.dry_run_change_details(plan),
             base_dir=_data_dir(),
         )
+
+        restore_point: dict[str, Any] | None = None
+
+        def create_restore_point(_: Mapping[str, Any]) -> dict[str, Any]:
+            nonlocal restore_point
+            summary = object_backup.create_runtime_restore_point(
+                f"package-{package_id}",
+                data_dir=_data_dir(),
+            )
+            restore_point = _backup_summary_payload(summary)
+            return restore_point
+
         install_result = object_packages.install_package(
             package_id,
             root=_packages_dir(),
             base_dir=_data_dir(),
             allow_replace=allow_replace,
+            before_write=create_restore_point,
         )
+        restore_point = install_result.get("restore_point", restore_point)
         installed_change = object_package_changes.append_package_change(
             package_id=package_id,
             action="installed",
             package_version=install_result["package"].get("version"),
             actor=_record_change_actor(headers),
-            details=object_package_changes.dry_run_change_details(install_result),
+            details=_package_change_details(install_result, restore_point=restore_point),
             base_dir=_data_dir(),
         )
     except object_packages.InvalidPackageIdError as exc:
@@ -1079,29 +1094,13 @@ async def _handle_package_install(
         await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
         return
     except object_packages.PackageInstallError as exc:
-        failed_details: dict[str, Any] = {"error": str(exc)}
-        failed_version = None
-        if plan is not None:
-            failed_details = {
-                **object_package_changes.dry_run_change_details(plan),
-                "error": str(exc),
-            }
-            failed_version = plan["package"].get("version")
-        try:
-            failed_change = object_package_changes.append_package_change(
-                package_id=package_id,
-                action="failed",
-                package_version=failed_version,
-                actor=_record_change_actor(headers),
-                message=str(exc),
-                details=failed_details,
-                base_dir=_data_dir(),
-            )
-        except Exception:
-            failed_change = None
-        changes = {"failed": failed_change}
-        if requested_change is not None:
-            changes["requested"] = requested_change
+        failed_change = _try_append_package_install_failure(
+            package_id=package_id,
+            plan=plan,
+            headers=headers,
+            error=str(exc),
+        )
+        changes = _package_install_changes(requested_change, failed=failed_change)
         await _send_json(
             send,
             {
@@ -1122,7 +1121,21 @@ async def _handle_package_install(
         await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
         return
     except OSError as exc:
-        await _send_json(send, {"status": "error", "error": f"Package install failed: {exc}"}, status=500)
+        failed_change = _try_append_package_install_failure(
+            package_id=package_id,
+            plan=plan,
+            headers=headers,
+            error=str(exc),
+        )
+        await _send_json(
+            send,
+            {
+                "status": "error",
+                "error": f"Package install failed: {exc}",
+                "changes": _package_install_changes(requested_change, failed=failed_change),
+            },
+            status=500,
+        )
         return
 
     await _send_json(
@@ -1134,6 +1147,7 @@ async def _handle_package_install(
                 "requested": requested_change,
                 "installed": installed_change,
             },
+            "restore_point": restore_point,
         },
         status=201,
     )
@@ -1176,6 +1190,70 @@ async def _handle_package_changes(
         return
 
     await _send_json(send, {"status": "ok", **changes})
+
+
+def _backup_summary_payload(summary: object_backup.BackupSummary) -> dict[str, Any]:
+    return {
+        "path": summary.path,
+        "format_version": summary.format_version,
+        "created_at": summary.created_at,
+        "files": summary.files,
+        "bytes": summary.bytes,
+        "warnings": summary.warnings,
+    }
+
+
+def _package_change_details(
+    plan: Mapping[str, Any],
+    *,
+    restore_point: Mapping[str, Any] | None = None,
+    error: str | None = None,
+) -> dict[str, Any]:
+    details = object_package_changes.dry_run_change_details(plan)
+    if restore_point is not None:
+        details["restore_point"] = dict(restore_point)
+    if error:
+        details["error"] = error
+    return details
+
+
+def _try_append_package_install_failure(
+    *,
+    package_id: str,
+    plan: Mapping[str, Any] | None,
+    headers: dict[str, str],
+    error: str,
+) -> dict[str, Any] | None:
+    failed_details: dict[str, Any] = {"error": error}
+    failed_version = None
+    if plan is not None:
+        failed_details = _package_change_details(plan, error=error)
+        failed_version = plan["package"].get("version")
+
+    try:
+        return object_package_changes.append_package_change(
+            package_id=package_id,
+            action="failed",
+            package_version=failed_version,
+            actor=_record_change_actor(headers),
+            message=error,
+            details=failed_details,
+            base_dir=_data_dir(),
+        )
+    except Exception:
+        return None
+
+
+def _package_install_changes(
+    requested_change: Mapping[str, Any] | None,
+    *,
+    failed: Mapping[str, Any] | None = None,
+) -> dict[str, Any | None]:
+    changes: dict[str, Any | None] = {}
+    if requested_change is not None:
+        changes["requested"] = dict(requested_change)
+    changes["failed"] = dict(failed) if failed is not None else None
+    return changes
 
 
 async def _handle_object_get(

@@ -221,6 +221,69 @@ def test_install_package_replaces_objects_when_allowed(tmp_path):
     assert (object_root / "hello" / "world.py").read_text() == "def GET(request): return {'new': True}\n"
 
 
+def test_install_package_runs_before_write_hook_after_validation(tmp_path):
+    packages_root = tmp_path / "packages"
+    object_root = tmp_path / "objects"
+    write_package(
+        packages_root,
+        "hello-world",
+        {
+            "id": "hello-world",
+            "name": "Hello World",
+            "version": "0.1.0",
+            "objects": [{"id": "hello_world", "path": "objects/hello/world.py"}],
+        },
+        files=(("objects/hello/world.py", "def GET(request): return {'new': True}\n"),),
+    )
+    calls = []
+
+    def before_write(plan):
+        calls.append(plan["package"]["id"])
+        assert not (object_root / "hello" / "world.py").exists()
+        return {"path": "restore-point.tar.gz"}
+
+    result = object_packages.install_package(
+        "hello-world",
+        root=packages_root,
+        object_roots=[object_root],
+        before_write=before_write,
+    )
+
+    assert calls == ["hello-world"]
+    assert result["restore_point"] == {"path": "restore-point.tar.gz"}
+    assert (object_root / "hello" / "world.py").is_file()
+
+
+def test_install_package_does_not_run_before_write_hook_when_blocked(tmp_path):
+    packages_root = tmp_path / "packages"
+    object_root = tmp_path / "objects"
+    (object_root / "hello").mkdir(parents=True)
+    (object_root / "hello" / "world.py").write_text("def GET(request): return {'old': True}\n")
+    write_package(
+        packages_root,
+        "hello-world",
+        {
+            "id": "hello-world",
+            "name": "Hello World",
+            "version": "0.1.0",
+            "objects": [{"id": "hello_world", "path": "objects/hello/world.py"}],
+        },
+        files=(("objects/hello/world.py", "def GET(request): return {'new': True}\n"),),
+    )
+    calls = []
+
+    with pytest.raises(object_packages.PackageInstallError):
+        object_packages.install_package(
+            "hello-world",
+            root=packages_root,
+            object_roots=[object_root],
+            before_write=lambda plan: calls.append(plan["package"]["id"]),
+        )
+
+    assert calls == []
+    assert (object_root / "hello" / "world.py").read_text() == "def GET(request): return {'old': True}\n"
+
+
 def test_install_package_rejects_unsupported_permission_and_migration_writes(tmp_path):
     packages_root = tmp_path / "packages"
     write_package(

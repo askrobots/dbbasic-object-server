@@ -13,7 +13,7 @@ import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 import object_collections
 import object_schemas
@@ -136,6 +136,7 @@ def install_package(
     base_dir: Path | str = DEFAULT_DATA_DIR,
     object_roots: Iterable[Path] | None = None,
     allow_replace: bool = False,
+    before_write: Callable[[Mapping[str, Any]], Mapping[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
     """Install a package using the conservative public write contract."""
     roots = list(object_roots) if object_roots is not None else get_object_roots()
@@ -192,6 +193,8 @@ def install_package(
         _ensure_inside(destination, base / "collections", label="seed")
         seed_writes.append((entry, planned, destination, source.read_bytes()))
 
+    restore_point = before_write(plan) if before_write is not None else None
+
     installed_objects = []
     for planned, destination, destination_root, content in object_writes:
         _write_file_atomic_bytes(destination, content)
@@ -225,7 +228,7 @@ def install_package(
             }
         )
 
-    return {
+    result = {
         "package": plan["package"],
         "mode": "install",
         "install_enabled": True,
@@ -238,6 +241,9 @@ def install_package(
         "migrations": plan["migrations"],
         "warnings": [],
     }
+    if restore_point is not None:
+        result["restore_point"] = dict(restore_point)
+    return result
 
 
 def _package_dir(package_id: str, root: Path | str) -> Path:

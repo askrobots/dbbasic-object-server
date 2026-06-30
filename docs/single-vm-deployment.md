@@ -160,8 +160,10 @@ Create `/etc/dbbasic-object-server.env`:
 ```text
 DBBASIC_OBJECTS_DIR=/var/lib/dbbasic-object-server/objects
 DBBASIC_DATA_DIR=/var/lib/dbbasic-object-server/data
+DBBASIC_BACKUPS_DIR=/var/lib/dbbasic-object-server/data/backups
 DBBASIC_PACKAGES_DIR=/opt/dbbasic-object-server/packages
 DBBASIC_ENABLE_SOURCE_WRITES=false
+DBBASIC_ENABLE_PACKAGE_INSTALLS=false
 DBBASIC_ADMIN_TOKEN=replace-with-a-generated-token
 DBBASIC_MAX_REQUEST_BYTES=1048576
 DBBASIC_MAX_CONCURRENT_REQUESTS=64
@@ -337,6 +339,10 @@ supports package listing, dry-run planning, and package installs only when
 `DBBASIC_ENABLE_PACKAGE_INSTALLS=true`. Dry-run and install requests append
 compact audit rows under
 `/var/lib/dbbasic-object-server/data/package_changes/{package_id}/changes.jsonl`.
+Package installs create a runtime restore point before writing source, schema,
+or seed files. Restore points default to
+`/var/lib/dbbasic-object-server/data/backups/`; set `DBBASIC_BACKUPS_DIR` if
+they should live on another mounted volume.
 
 Keep `DBBASIC_ENABLE_PACKAGE_INSTALLS=false` on public staging unless `/packages`
 is reachable only from a private admin surface. The first install path writes
