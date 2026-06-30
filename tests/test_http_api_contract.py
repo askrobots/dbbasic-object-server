@@ -153,6 +153,15 @@ def test_contract_keeps_existing_introspection_query_flags():
             },
         ),
         (
+            "identity",
+            {
+                "status": "ok",
+                "subject": {"authenticated": False},
+                "auth": {"method": "anonymous"},
+                "permissions": {"enforcement_enabled": False},
+            },
+        ),
+        (
             "create_object",
             {"status": "ok", "object_id": "u_42_deals", "message": "created"},
         ),

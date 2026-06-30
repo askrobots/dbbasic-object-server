@@ -291,6 +291,10 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
             await _send_request_too_large(send, exc)
             return
 
+        if path == http_api_contract.IDENTITY_PATH:
+            await _handle_identity(send, method, headers)
+            return
+
         if path == http_api_contract.PERMISSIONS_POLICY_PATH:
             await _handle_permissions_policy(send, method, body, headers)
             return
@@ -467,6 +471,30 @@ async def _handle_health(
 
 def _is_detailed_health(query: dict[str, str]) -> bool:
     return query.get("capacity") == "true" or query.get("metrics") == "true"
+
+
+async def _handle_identity(send, method: str, headers: dict[str, str]) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    subject, auth_method = _permission_identity(headers)
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "subject": _permission_subject_payload(subject),
+            "auth": {
+                "method": auth_method,
+                "trusted_headers_enabled": _env_enabled(PERMISSION_TRUST_HEADERS_ENV),
+                "trusted_headers_present": _trusted_identity_headers_present(headers),
+            },
+            "permissions": {
+                "enforcement_enabled": _permission_enforcement_enabled(),
+                "audit_enabled": _permission_audit_enabled(),
+            },
+        },
+    )
 
 
 async def _send_rate_limit_if_needed(
@@ -3859,21 +3887,41 @@ def _permission_audit_enabled() -> bool:
 
 
 def _permission_subject(headers: dict[str, str]) -> object_permissions.PermissionSubject:
+    return _permission_identity(headers)[0]
+
+
+def _permission_identity(
+    headers: dict[str, str],
+) -> tuple[object_permissions.PermissionSubject, str]:
     token = _authorization_token(headers)
     admin_token = os.environ.get(ADMIN_TOKEN_ENV, "")
     if token and admin_token and hmac.compare_digest(token, admin_token):
-        return object_permissions.PermissionSubject(user_id="admin", roles=("admin",))
+        return object_permissions.PermissionSubject(user_id="admin", roles=("admin",)), "admin_token"
 
     if not _env_enabled(PERMISSION_TRUST_HEADERS_ENV):
-        return object_permissions.PermissionSubject.anonymous()
+        return object_permissions.PermissionSubject.anonymous(), "anonymous"
 
     user_id = _optional_header_text(headers, "x-dbbasic-user-id")
     account_id = _optional_header_text(headers, "x-dbbasic-account-id")
-    return object_permissions.PermissionSubject(
+    subject = object_permissions.PermissionSubject(
         user_id=user_id,
         account_id=account_id,
         roles=_csv_header(headers.get("x-dbbasic-roles", "")),
         subscriptions=_csv_header(headers.get("x-dbbasic-subscriptions", "")),
+    )
+    method = "trusted_headers" if _trusted_identity_headers_present(headers) else "anonymous"
+    return subject, method
+
+
+def _trusted_identity_headers_present(headers: dict[str, str]) -> bool:
+    return any(
+        _optional_header_text(headers, name) is not None
+        for name in (
+            "x-dbbasic-user-id",
+            "x-dbbasic-account-id",
+            "x-dbbasic-roles",
+            "x-dbbasic-subscriptions",
+        )
     )
 
 

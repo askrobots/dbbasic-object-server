@@ -128,6 +128,53 @@ Retry-After: 30
 }
 ```
 
+## Identity
+
+Scroll and gateway code can inspect the subject the object server will use for
+permission checks:
+
+```http
+GET /identity
+Authorization: Token <token>
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "subject": {
+    "user_id": "7",
+    "account_id": "acme",
+    "roles": ["sales"],
+    "subscriptions": ["pro"],
+    "authenticated": true
+  },
+  "auth": {
+    "method": "trusted_headers",
+    "trusted_headers_enabled": true,
+    "trusted_headers_present": true
+  },
+  "permissions": {
+    "enforcement_enabled": true,
+    "audit_enabled": true
+  }
+}
+```
+
+Current auth methods are:
+
+- `anonymous` - no trusted identity was accepted.
+- `admin_token` - `Authorization: Token <DBBASIC_ADMIN_TOKEN>` or Bearer matched
+  the server admin token.
+- `trusted_headers` - `DBBASIC_PERMISSION_TRUST_HEADERS=true` and at least one
+  `X-DBBASIC-*` identity header was present.
+
+Trusted identity headers are ignored unless explicitly enabled. This keeps the
+current staging server safe while giving future login/session gateways and
+Scroll one stable endpoint for the active account, user, roles, and
+subscriptions.
+
 ## Permissions Policy
 
 The public server now has a persisted permission policy shape. The endpoints are

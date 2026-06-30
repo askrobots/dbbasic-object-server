@@ -235,6 +235,17 @@ Supported headers:
 Only enable trusted headers behind infrastructure that strips or overwrites
 client-supplied copies.
 
+The active subject can be inspected through:
+
+```http
+GET /identity
+Authorization: Token <token>
+```
+
+That endpoint returns the normalized `user_id`, `account_id`, roles,
+subscriptions, auth method, and permission-mode flags the server will use for
+route checks.
+
 ## Access Modes
 
 Access modes answer who gets through the front door.

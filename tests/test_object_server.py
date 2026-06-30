@@ -184,6 +184,104 @@ def test_health_endpoint_returns_ok():
     assert payload == {"status": "ok"}
 
 
+def test_identity_endpoint_returns_anonymous_subject(monkeypatch):
+    monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("DBBASIC_PERMISSION_TRUST_HEADERS", raising=False)
+
+    status, _, payload = request("/identity")
+
+    assert status == 200
+    assert payload == {
+        "status": "ok",
+        "subject": {
+            "user_id": None,
+            "account_id": None,
+            "roles": [],
+            "subscriptions": [],
+            "authenticated": False,
+        },
+        "auth": {
+            "method": "anonymous",
+            "trusted_headers_enabled": False,
+            "trusted_headers_present": False,
+        },
+        "permissions": {
+            "enforcement_enabled": False,
+            "audit_enabled": False,
+        },
+    }
+
+
+def test_identity_endpoint_reports_admin_token_subject(monkeypatch):
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/identity", headers=auth_headers())
+
+    assert status == 200
+    assert payload["subject"] == {
+        "user_id": "admin",
+        "account_id": None,
+        "roles": ["admin"],
+        "subscriptions": [],
+        "authenticated": True,
+    }
+    assert payload["auth"]["method"] == "admin_token"
+
+
+def test_identity_endpoint_ignores_untrusted_identity_headers(monkeypatch):
+    monkeypatch.delenv("DBBASIC_PERMISSION_TRUST_HEADERS", raising=False)
+    headers = [
+        ("x-dbbasic-user-id", "7"),
+        ("x-dbbasic-account-id", "acme"),
+        ("x-dbbasic-roles", "sales"),
+    ]
+
+    status, _, payload = request("/identity", headers=headers)
+
+    assert status == 200
+    assert payload["subject"]["user_id"] is None
+    assert payload["subject"]["account_id"] is None
+    assert payload["subject"]["roles"] == []
+    assert payload["auth"] == {
+        "method": "anonymous",
+        "trusted_headers_enabled": False,
+        "trusted_headers_present": True,
+    }
+
+
+def test_identity_endpoint_reports_trusted_header_subject(monkeypatch):
+    monkeypatch.setenv("DBBASIC_PERMISSION_TRUST_HEADERS", "true")
+    headers = [
+        ("x-dbbasic-user-id", "7"),
+        ("x-dbbasic-account-id", "acme"),
+        ("x-dbbasic-roles", "sales,manager,sales"),
+        ("x-dbbasic-subscriptions", "pro,temporary"),
+    ]
+
+    status, _, payload = request("/identity", headers=headers)
+
+    assert status == 200
+    assert payload["subject"] == {
+        "user_id": "7",
+        "account_id": "acme",
+        "roles": ["sales", "manager"],
+        "subscriptions": ["pro", "temporary"],
+        "authenticated": True,
+    }
+    assert payload["auth"] == {
+        "method": "trusted_headers",
+        "trusted_headers_enabled": True,
+        "trusted_headers_present": True,
+    }
+
+
+def test_identity_endpoint_rejects_non_get_methods():
+    status, _, payload = request("/identity", method="POST")
+
+    assert status == 405
+    assert payload == {"status": "error", "error": "Method not allowed"}
+
+
 def test_health_endpoint_bypasses_request_concurrency_limit(monkeypatch):
     monkeypatch.setenv(object_server.MAX_CONCURRENT_REQUESTS_ENV, "1")
     token = claim_limit_slot(object_server._request_limiter, 1)
