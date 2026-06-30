@@ -600,6 +600,7 @@ Subscriptions include:
 - `event_type`
 - `callback_url`
 - `last_event_id`
+- `delivery`
 
 Events include:
 
@@ -611,7 +612,12 @@ Events include:
 - `timestamp`
 - `created_at`
 
-The daemon delivers matching events to the subscription callback URL and records `last_event_id`.
+The daemon delivers matching events to the subscription callback URL and records
+delivery status on the subscription. `delivery.status` is `idle`, `ok`, or
+`failed`, with attempt counts, success/failure counts, the last HTTP status
+code, and the last error text. `last_event_id` advances only after successful
+delivery. A failed callback leaves the cursor in place so the daemon can retry
+instead of silently skipping the event.
 
 The current HTTP event API is admin-gated:
 
@@ -649,7 +655,8 @@ DBBASIC_EVENT_KEEP_SECONDS=604800
 Set either value to `0` to disable that part of pruning. Pruning deletes only
 `event_` rows. It does not delete `sub_` rows, and it protects the event id held
 by any subscription `last_event_id` so the daemon does not lose its delivery
-cursor.
+cursor. If a subscription has a failed delivery attempt, pruning also protects
+the failed event id so retry state remains visible to Scroll and the daemon.
 
 ## Packages
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -244,6 +245,7 @@ def subscribe_event(
         "created_at_iso": _utc_timestamp(),
         "created_by": _clean_text(actor, default="api"),
         "last_event_id": None,
+        "delivery": _delivery_defaults(),
     }
 
     manager = _state_manager(base_dir)
@@ -272,7 +274,7 @@ def list_subscriptions(
             continue
         if event_type is not None and subscription.get("event_type") != event_type:
             continue
-        subscriptions.append(subscription)
+        subscriptions.append(_subscription_with_defaults(subscription))
 
     subscriptions.sort(
         key=lambda item: (_coerce_int(item.get("created_at")), str(item.get("id", ""))),
@@ -311,7 +313,47 @@ def delete_subscription(
         )
 
     manager.delete(key)
-    return current
+    return _subscription_with_defaults(current)
+
+
+def record_subscription_delivery(
+    subscription: Mapping[str, Any],
+    event: Mapping[str, Any],
+    *,
+    success: bool,
+    status_code: int | None = None,
+    error: str | None = None,
+    now: int | None = None,
+) -> dict[str, Any]:
+    """Return subscription state updated with one callback delivery attempt."""
+    timestamp = int(time.time() if now is None else now)
+    event_id = str(event.get("id", "") or "")
+    updated = _subscription_with_defaults(subscription)
+    delivery = _delivery_with_defaults(updated.get("delivery"))
+    delivery["attempts"] = _coerce_int(delivery.get("attempts")) + 1
+    delivery["last_attempted_event_id"] = event_id or None
+    delivery["last_attempt_at"] = timestamp
+    delivery["last_attempt_at_iso"] = _utc_timestamp_from(timestamp)
+    delivery["last_status_code"] = status_code
+
+    if success:
+        delivery["status"] = "ok"
+        delivery["successes"] = _coerce_int(delivery.get("successes")) + 1
+        delivery["last_success_event_id"] = event_id or None
+        delivery["last_success_at"] = timestamp
+        delivery["last_success_at_iso"] = _utc_timestamp_from(timestamp)
+        delivery["last_error"] = None
+        updated["last_event_id"] = event_id or updated.get("last_event_id")
+    else:
+        delivery["status"] = "failed"
+        delivery["failures"] = _coerce_int(delivery.get("failures")) + 1
+        delivery["last_failure_event_id"] = event_id or None
+        delivery["last_failure_at"] = timestamp
+        delivery["last_failure_at_iso"] = _utc_timestamp_from(timestamp)
+        delivery["last_error"] = _clean_error(error)
+
+    updated["delivery"] = delivery
+    return updated
 
 
 def _state_manager(base_dir: Path | str) -> object_state.ObjectStateManager:
@@ -324,6 +366,40 @@ def _event_state_key(event: dict[str, Any]) -> str:
 
 def _subscription_state_key(event_type: str, subscriber_id: str) -> str:
     return f"sub_{event_type}_{subscriber_id}"
+
+
+def _subscription_with_defaults(subscription: Mapping[str, Any]) -> dict[str, Any]:
+    updated = dict(subscription)
+    updated.setdefault("last_event_id", None)
+    updated["delivery"] = _delivery_with_defaults(updated.get("delivery"))
+    return updated
+
+
+def _delivery_defaults() -> dict[str, Any]:
+    return {
+        "status": "idle",
+        "attempts": 0,
+        "successes": 0,
+        "failures": 0,
+        "last_attempted_event_id": None,
+        "last_attempt_at": None,
+        "last_attempt_at_iso": None,
+        "last_success_event_id": None,
+        "last_success_at": None,
+        "last_success_at_iso": None,
+        "last_failure_event_id": None,
+        "last_failure_at": None,
+        "last_failure_at_iso": None,
+        "last_status_code": None,
+        "last_error": None,
+    }
+
+
+def _delivery_with_defaults(value: Any) -> dict[str, Any]:
+    delivery = _delivery_defaults()
+    if isinstance(value, Mapping):
+        delivery.update(dict(value))
+    return delivery
 
 
 def _clean_event_type(event_type: str) -> str:
@@ -405,6 +481,12 @@ def _subscription_last_event_ids(state: dict[str, Any]) -> set[str]:
         last_event_id = subscription.get("last_event_id")
         if isinstance(last_event_id, str) and last_event_id:
             protected.add(last_event_id)
+        delivery = subscription.get("delivery")
+        if isinstance(delivery, Mapping) and delivery.get("status") == "failed":
+            for field in ("last_attempted_event_id", "last_failure_event_id"):
+                event_id = delivery.get(field)
+                if isinstance(event_id, str) and event_id:
+                    protected.add(event_id)
     return protected
 
 
@@ -468,6 +550,13 @@ def _clean_text(value: str, *, default: str) -> str:
     return text or default
 
 
+def _clean_error(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    return text[:500]
+
+
 def _coerce_int(value: Any, *, default: int = 0) -> int:
     try:
         return int(value)
@@ -477,3 +566,7 @@ def _coerce_int(value: Any, *, default: int = 0) -> int:
 
 def _utc_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _utc_timestamp_from(timestamp: int) -> str:
+    return datetime.fromtimestamp(timestamp, timezone.utc).isoformat().replace("+00:00", "Z")

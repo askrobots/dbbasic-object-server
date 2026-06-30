@@ -764,8 +764,10 @@ Response:
 `keep_count=0` disables count-based pruning. `keep_seconds=0` disables
 age-based pruning. Subscriptions are never deleted by event pruning, and the
 event referenced by a subscription `last_event_id` is protected to avoid
-surprise replay. Configure the default publish/daemon cleanup policy with
-`DBBASIC_EVENT_KEEP_COUNT` and `DBBASIC_EVENT_KEEP_SECONDS`.
+surprise replay. Failed delivery attempts are protected too, so the daemon and
+Scroll can still see the pending retry event. Configure the default
+publish/daemon cleanup policy with `DBBASIC_EVENT_KEEP_COUNT` and
+`DBBASIC_EVENT_KEEP_SECONDS`.
 
 Subscriptions are stored in the same daemon-compatible `events` object state:
 
@@ -798,10 +800,32 @@ Response:
     "created_at": 1782734400,
     "created_at_iso": "2026-06-29T12:00:00Z",
     "created_by": "admin",
-    "last_event_id": null
+    "last_event_id": null,
+    "delivery": {
+      "status": "idle",
+      "attempts": 0,
+      "successes": 0,
+      "failures": 0,
+      "last_attempted_event_id": null,
+      "last_attempt_at": null,
+      "last_attempt_at_iso": null,
+      "last_success_event_id": null,
+      "last_success_at": null,
+      "last_success_at_iso": null,
+      "last_failure_event_id": null,
+      "last_failure_at": null,
+      "last_failure_at_iso": null,
+      "last_status_code": null,
+      "last_error": null
+    }
   }
 }
 ```
+
+The daemon updates `delivery` after each callback attempt. Successful delivery
+sets `status=ok` and advances `last_event_id`; failed delivery sets
+`status=failed`, records the last error/status, and leaves `last_event_id`
+unchanged so the event can be retried.
 
 ## Packages
 

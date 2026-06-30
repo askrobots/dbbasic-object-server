@@ -292,6 +292,9 @@ def test_process_events_delivers_matching_event(tmp_path, monkeypatch):
     delivered = []
 
     class FakeResponse:
+        def getcode(self):
+            return 204
+
         def __enter__(self):
             return self
 
@@ -312,3 +315,59 @@ def test_process_events_delivers_matching_event(tmp_path, monkeypatch):
     assert timeout == 5
     updated = json.loads(events.state_manager.get("sub_test.event_sub_001"))
     assert updated["last_event_id"] == "evt_001"
+    assert updated["delivery"]["status"] == "ok"
+    assert updated["delivery"]["attempts"] == 1
+    assert updated["delivery"]["successes"] == 1
+    assert updated["delivery"]["last_status_code"] == 204
+
+
+def test_process_events_records_failure_without_advancing_cursor(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    write_object(tmp_path / "objects" / "triggers" / "events.py")
+
+    runtime = FakeRuntime()
+    events = runtime.add("events", FakeObject())
+
+    now = int(time.time())
+    events.state_manager.set(
+        "sub_test.event_sub_001",
+        json.dumps(
+            {
+                "id": "sub_001",
+                "event_type": "test.event",
+                "callback_url": "http://127.0.0.1:9999/hook",
+                "last_event_id": None,
+            }
+        ),
+    )
+    for index in (1, 2):
+        events.state_manager.set(
+            f"event_{now + index}_evt_00{index}",
+            json.dumps(
+                {
+                    "id": f"evt_00{index}",
+                    "event_type": "test.event",
+                    "payload": {"value": index},
+                    "timestamp": now + index,
+                }
+            ),
+        )
+
+    attempts = []
+
+    def fake_urlopen(request, timeout):
+        attempts.append((request, timeout))
+        raise object_daemon.urllib.error.URLError("callback down")
+
+    monkeypatch.setattr(object_daemon.urllib.request, "urlopen", fake_urlopen)
+
+    object_daemon.process_events(runtime)
+
+    assert len(attempts) == 1
+    updated = json.loads(events.state_manager.get("sub_test.event_sub_001"))
+    assert updated["last_event_id"] is None
+    assert updated["delivery"]["status"] == "failed"
+    assert updated["delivery"]["attempts"] == 1
+    assert updated["delivery"]["failures"] == 1
+    assert updated["delivery"]["last_attempted_event_id"] == "evt_001"
+    assert "callback down" in updated["delivery"]["last_error"]

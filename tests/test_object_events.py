@@ -88,6 +88,8 @@ def test_subscribe_list_and_delete_subscription(tmp_path, monkeypatch):
     state_file = data_dir / "state" / "events" / "state.tsv"
     assert state_file.read_text().split("\t", 1)[0] == "sub_collection.record.updated_scroll"
     assert subscription["last_event_id"] is None
+    assert subscription["delivery"]["status"] == "idle"
+    assert subscription["delivery"]["attempts"] == 0
 
     payload = object_events.list_subscriptions(
         event_type="collection.record.updated",
@@ -105,6 +107,49 @@ def test_subscribe_list_and_delete_subscription(tmp_path, monkeypatch):
 
     assert deleted == subscription
     assert object_events.list_subscriptions(base_dir=data_dir)["subscriptions"] == []
+
+
+def test_record_subscription_delivery_tracks_success_and_failure(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    subscription = object_events.subscribe_event(
+        "collection.record.updated",
+        subscriber_id="scroll",
+        callback_url="https://example.com/hooks/dbbasic",
+        base_dir=data_dir,
+    )
+    event = {"id": "evt_001", "event_type": "collection.record.updated"}
+
+    failed = object_events.record_subscription_delivery(
+        subscription,
+        event,
+        success=False,
+        status_code=500,
+        error="callback failed",
+        now=100,
+    )
+
+    assert failed["last_event_id"] is None
+    assert failed["delivery"]["status"] == "failed"
+    assert failed["delivery"]["attempts"] == 1
+    assert failed["delivery"]["failures"] == 1
+    assert failed["delivery"]["last_failure_event_id"] == "evt_001"
+    assert failed["delivery"]["last_error"] == "callback failed"
+
+    succeeded = object_events.record_subscription_delivery(
+        failed,
+        event,
+        success=True,
+        status_code=204,
+        now=101,
+    )
+
+    assert succeeded["last_event_id"] == "evt_001"
+    assert succeeded["delivery"]["status"] == "ok"
+    assert succeeded["delivery"]["attempts"] == 2
+    assert succeeded["delivery"]["successes"] == 1
+    assert succeeded["delivery"]["last_success_event_id"] == "evt_001"
+    assert succeeded["delivery"]["last_status_code"] == 204
+    assert succeeded["delivery"]["last_error"] is None
 
 
 def test_prune_events_removes_old_overflow_and_corrupt_rows_but_keeps_cursor(
@@ -155,6 +200,40 @@ def test_prune_events_removes_old_overflow_and_corrupt_rows_but_keeps_cursor(
     assert [event["id"] for event in events] == [newest["id"], protected["id"]]
     assert old_unprotected["id"] not in {event["id"] for event in events}
     assert object_events.list_subscriptions(base_dir=data_dir)["subscriptions"][0]["last_event_id"] == protected["id"]
+
+
+def test_prune_events_keeps_failed_delivery_attempt(tmp_path):
+    data_dir = tmp_path / "data"
+
+    failed_event = object_events.publish_event("invoice.created", payload={"id": "failed"}, base_dir=data_dir)
+    old_unprotected = object_events.publish_event("invoice.created", payload={"id": "old"}, base_dir=data_dir)
+    subscription = object_events.subscribe_event(
+        "invoice.created",
+        subscriber_id="scroll",
+        callback_url="https://example.com/hooks/dbbasic",
+        base_dir=data_dir,
+    )
+    subscription = object_events.record_subscription_delivery(
+        subscription,
+        failed_event,
+        success=False,
+        error="callback down",
+        now=102,
+    )
+    manager = object_state.ObjectStateManager(object_events.EVENTS_OBJECT_ID, base_dir=data_dir)
+    manager.set("sub_invoice.created_scroll", json.dumps(subscription))
+
+    result = object_events.prune_events(
+        base_dir=data_dir,
+        keep_count=None,
+        keep_seconds=1,
+        now=max(failed_event["timestamp"], old_unprotected["timestamp"]) + 10,
+    )
+
+    assert result["protected"] == 1
+    events = object_events.list_events(base_dir=data_dir)["events"]
+    assert [event["id"] for event in events] == [failed_event["id"]]
+    assert old_unprotected["id"] not in {event["id"] for event in events}
 
 
 def test_publish_event_can_prune_with_retention_options(tmp_path, monkeypatch):
@@ -223,6 +302,10 @@ def test_event_helpers_ignore_corrupt_state_rows(tmp_path):
     assert object_events.list_events(base_dir=data_dir, since=1)["events"] == [
         {"id": "evt_ok", "event_type": "invoice.created", "timestamp": 1}
     ]
-    assert object_events.list_subscriptions(base_dir=data_dir)["subscriptions"] == [
-        {"id": "scroll", "event_type": "invoice.created", "created_at": 1}
-    ]
+    subscriptions = object_events.list_subscriptions(base_dir=data_dir)["subscriptions"]
+    assert len(subscriptions) == 1
+    assert subscriptions[0]["id"] == "scroll"
+    assert subscriptions[0]["event_type"] == "invoice.created"
+    assert subscriptions[0]["created_at"] == 1
+    assert subscriptions[0]["last_event_id"] is None
+    assert subscriptions[0]["delivery"]["status"] == "idle"

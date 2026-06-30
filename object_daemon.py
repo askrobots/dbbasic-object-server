@@ -292,6 +292,7 @@ def process_events(runtime: ObjectRuntime):
 
         # Deliver events
         for event in pending:
+            status_code = None
             try:
                 req = urllib.request.Request(
                     callback_url,
@@ -300,14 +301,30 @@ def process_events(runtime: ObjectRuntime):
                     method='POST',
                 )
                 with urllib.request.urlopen(req, timeout=5) as resp:
-                    pass  # Best effort
+                    if hasattr(resp, 'getcode'):
+                        status_code = resp.getcode()
+                    else:
+                        status_code = getattr(resp, 'status', None)
                 log(f"Events: delivered {event['event_type']} ({event['id']}) to {sub['id']}")
+                sub = object_events.record_subscription_delivery(
+                    sub,
+                    event,
+                    success=True,
+                    status_code=status_code,
+                )
+                obj.state_manager.set(sub_key, json.dumps(sub))
             except (urllib.error.URLError, OSError) as e:
+                status_code = getattr(e, 'code', None)
                 log(f"Events: failed to deliver to {callback_url}: {e}", 'WARN')
-
-            # Update last_event_id after each delivery
-            sub['last_event_id'] = event['id']
-            obj.state_manager.set(sub_key, json.dumps(sub))
+                sub = object_events.record_subscription_delivery(
+                    sub,
+                    event,
+                    success=False,
+                    status_code=status_code,
+                    error=str(e),
+                )
+                obj.state_manager.set(sub_key, json.dumps(sub))
+                break
 
 
 # --- Rate Limit Cleanup ---

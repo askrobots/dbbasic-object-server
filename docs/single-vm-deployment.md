@@ -331,7 +331,9 @@ DBBASIC_EVENT_KEEP_SECONDS=604800
 
 Set either value to `0` to disable that retention rule. Subscriptions stay in
 place, and any event referenced by a subscription `last_event_id` is protected so
-the daemon keeps its delivery cursor.
+the daemon keeps its delivery cursor. Failed delivery attempts are protected too,
+so callback failures stay visible and retryable until delivery succeeds or the
+subscription is repaired.
 
 ## Packages
 

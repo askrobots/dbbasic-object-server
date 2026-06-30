@@ -205,6 +205,10 @@ Execution currently uses `python_object_runtime.py`, a direct Python loader. It
 is useful for proving the loop, but it is not the production sandbox or security
 boundary.
 
+Event subscriptions expose delivery status for Scroll and daemon operators:
+`idle`, `ok`, or `failed`, with attempt counts, last status code, and last error.
+The daemon advances `last_event_id` only after a successful callback.
+
 Permission policy/check/audit endpoints, object listing, source, state, logs,
 metadata, and versions require:
 
