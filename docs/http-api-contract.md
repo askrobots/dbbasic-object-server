@@ -648,6 +648,9 @@ Response:
 ```json
 {
   "status": "ok",
+  "message": "Schema updated to version 1",
+  "version_id": 1,
+  "collection": "invoices",
   "schema": {
     "name": "invoices",
     "title": "Invoices",
@@ -739,17 +742,125 @@ Response:
 }
 ```
 
+List schema versions:
+
+```http
+GET /schemas/{collection}?versions=true&limit=10
+Authorization: Token <token>
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "collection": "invoices",
+  "versions": [
+    {
+      "version_id": 2,
+      "timestamp": "2026-06-29T12:00:00",
+      "author": "admin",
+      "message": "Add margin field",
+      "hash": "..."
+    },
+    {
+      "version_id": 1,
+      "timestamp": "2026-06-29T11:50:00",
+      "author": "admin",
+      "message": "Initial schema",
+      "hash": "..."
+    }
+  ],
+  "count": 2
+}
+```
+
+Read one schema version:
+
+```http
+GET /schemas/{collection}?version=1
+Authorization: Token <token>
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "collection": "invoices",
+  "version": {
+    "version_id": 1,
+    "timestamp": "2026-06-29T11:50:00",
+    "author": "admin",
+    "message": "Initial schema",
+    "hash": "...",
+    "content": "{...}",
+    "schema": {
+      "name": "invoices",
+      "title": "Invoices",
+      "source": "manual",
+      "version": 1,
+      "fields": [],
+      "field_count": 0
+    }
+  }
+}
+```
+
+Rollback is non-destructive. It creates a new latest version containing the old
+schema content and then replaces the live schema file:
+
+```http
+POST /schemas/{collection}
+Content-Type: application/json
+Authorization: Token <token>
+```
+
+Request:
+
+```json
+{
+  "action": "rollback",
+  "version_id": 1,
+  "author": "admin",
+  "message": "Restore first invoice form"
+}
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "message": "Rolled back schema to version 1",
+  "version_id": 1,
+  "new_version_id": 3,
+  "collection": "invoices",
+  "schema": {
+    "name": "invoices",
+    "title": "Invoices",
+    "source": "manual",
+    "version": 1,
+    "fields": [],
+    "field_count": 0
+  }
+}
+```
+
 Schema files live under:
 
 ```text
 data/schemas/{collection}.json
+data/schema_versions/{collection}/metadata.tsv
+data/schema_versions/{collection}/vN.json
 ```
 
 Manual schemas can be replaced through the admin-token gated `PUT` route. Writes
-are atomic file replacements under `data/schemas/`. If a collection has no
-manual schema, the server may return an empty derived schema for that collection
-so Scroll can still show the collection and later attach fields. Missing schemas
-return `404`; unsafe schema names return `400`.
+are atomic file replacements under `data/schemas/`, and each write records a
+schema version. If a collection has no manual schema, the server may return an
+empty derived schema for that collection so Scroll can still show the collection
+and later attach fields. Missing schemas return `404`; unsafe schema names
+return `400`.
 
 Schema `permissions` and `ui` fields are preserved for generated admin screens.
 With permission enforcement enabled, schema `permissions` also refine record

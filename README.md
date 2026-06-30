@@ -150,7 +150,10 @@ Current endpoints:
 - `DELETE /collections/{collection}/records/{record_id}`
 - `GET /schemas`
 - `GET /schemas/{collection}`
+- `GET /schemas/{collection}?versions=true&limit=10`
+- `GET /schemas/{collection}?version=1`
 - `PUT /schemas/{collection}`
+- `POST /schemas/{collection}` with `{"action": "rollback", "version_id": 1}`
 - `GET /objects?format=json`
 - `GET /objects/{object_id}`
 - `POST /objects/{object_id}`
@@ -224,6 +227,11 @@ basic types, restrict enum values, and reject computed/read-only fields. Unknown
 fields still work so DBBASIC can stay schemaless until a collection needs more
 structure.
 
+Admin schema writes also keep a changelog under
+`data/schema_versions/{collection}/`. Scroll can list previous versions, inspect
+the JSON that was written, and roll back by creating a new version from an older
+one.
+
 Production user/session auth still needs to replace the temporary admin-token
 gate before general use.
 
@@ -243,6 +251,7 @@ rules the rest of the server will use:
 - `object_logs.py` reads and appends TSV-backed object logs, rotates/compresses old logs, and provides `_logger`
 - `object_metadata.py` summarizes source, state, logs, files, and versions
 - `object_permission_audit.py` records and reads route permission decisions
+- `object_schema_versions.py` keeps schema changelogs and rollback history
 - `object_versions.py` keeps source history as `metadata.tsv` plus `vN.txt` files
 - `object_backup.py` archives and safely restores object source plus runtime data
 - `object_daemon.py` runs scheduled, queued, and event work

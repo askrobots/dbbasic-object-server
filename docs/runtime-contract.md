@@ -470,9 +470,21 @@ schema field permissions only after the broader policy has allowed the row.
 Schema writes are available through the admin-only replacement path. They are
 atomic file replacements under `data/schemas/` and preserve UI/view metadata so
 Scroll can save generated form, table, dashboard, validation, relation, and field
-permission definitions. User-level schema editing still needs real sessions,
-permission checks, and audit trails before it should be exposed outside trusted
-admin tooling.
+permission definitions.
+
+Every admin schema write also records a schema version under:
+
+```text
+data/schema_versions/{collection}/metadata.tsv
+data/schema_versions/{collection}/vN.json
+```
+
+Rollbacks are non-destructive. A rollback creates a new latest version from an
+older schema JSON file and then replaces `data/schemas/{collection}.json`. This
+gives admin tools and Scroll a change log for who changed a schema, what message
+they left, and what can be restored. User-level schema editing still needs real
+sessions and broader permission checks before it should be exposed outside
+trusted admin tooling.
 
 ## Scheduler State
 

@@ -52,6 +52,12 @@ def make_runtime_tree(tmp_path):
         "1\t2026-01-01T00:00:00Z\ttest\tinitial\tabc\n",
     )
     write_file(data_dir / "versions" / "site_home" / "v1.txt", "def GET(request):\n    return {}\n")
+    write_file(
+        data_dir / "schema_versions" / "contacts" / "metadata.tsv",
+        "version_id\ttimestamp\tauthor\tmessage\thash\n"
+        "1\t2026-01-01T00:00:00Z\ttest\tinitial\tabc\n",
+    )
+    write_file(data_dir / "schema_versions" / "contacts" / "v1.json", '{"fields": []}\n')
     write_file(data_dir / "files" / "site_home" / "upload.txt", "file payload\n")
     write_file(data_dir / "schemas" / "contacts.json", '{"fields": [{"name": "id"}]}\n')
     write_file(data_dir / "collections" / "contacts" / "records.tsv", "id\tname\nc1\tAda\n")
@@ -91,6 +97,8 @@ def test_create_runtime_backup_includes_runtime_files_and_manifest(tmp_path):
     assert "data/logs/site_home/log-20260101-000000.tsv.gz" in names
     assert "data/versions/site_home/metadata.tsv" in names
     assert "data/versions/site_home/v1.txt" in names
+    assert "data/schema_versions/contacts/metadata.tsv" in names
+    assert "data/schema_versions/contacts/v1.json" in names
     assert "data/files/site_home/upload.txt" in names
     assert "data/schemas/contacts.json" in names
     assert "data/collections/contacts/records.tsv" in names
@@ -104,16 +112,17 @@ def test_create_runtime_backup_includes_runtime_files_and_manifest(tmp_path):
     manifest = read_manifest(backup)
     assert manifest["format_version"] == object_backup.BACKUP_FORMAT_VERSION
     assert manifest["created_at"] == "2026-01-01T00:00:00Z"
-    assert manifest["files"] == summary.files == 9
+    assert manifest["files"] == summary.files == 11
     assert "deployment secrets are not included" in manifest["notes"]
 
     verification = object_backup.verify_runtime_backup(backup)
     assert verification.ok
-    assert verification.files == 9
+    assert verification.files == 11
     assert verification.entries == [
         "data/collections",
         "data/files",
         "data/logs",
+        "data/schema_versions",
         "data/schemas",
         "data/state",
         "data/versions",
@@ -134,9 +143,10 @@ def test_restore_runtime_backup_restores_objects_state_logs_versions_and_files(t
         data_dir=restored_data,
     )
 
-    assert summary.files == 9
+    assert summary.files == 11
     assert (restored_objects / "site" / "home.py").read_text().startswith("def GET")
     assert object_state.get_object_state("site_home", base_dir=restored_data) == {"count": 3}
+    assert (restored_data / "schema_versions" / "contacts" / "v1.json").exists()
 
     logs = object_logs.get_object_logs("site_home", base_dir=restored_data)
     assert [entry["message"] for entry in logs] == ["current served", "rotated served"]
@@ -227,7 +237,7 @@ def test_cli_create_verify_and_restore_json(tmp_path, capsys):
     )
     create_payload = json.loads(capsys.readouterr().out)
     assert create_exit == 0
-    assert create_payload["files"] == 9
+    assert create_payload["files"] == 11
 
     verify_exit = object_backup.main(["verify", str(backup), "--json"])
     verify_payload = json.loads(capsys.readouterr().out)
@@ -247,7 +257,7 @@ def test_cli_create_verify_and_restore_json(tmp_path, capsys):
     )
     restore_payload = json.loads(capsys.readouterr().out)
     assert restore_exit == 0
-    assert restore_payload["files"] == 9
+    assert restore_payload["files"] == 11
 
 
 def _add_manifest(archive: tarfile.TarFile, *, files: int, bytes_count: int):

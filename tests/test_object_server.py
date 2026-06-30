@@ -1602,6 +1602,9 @@ def test_schema_put_writes_manual_schema(tmp_path, monkeypatch):
     assert status == 200
     assert payload == {
         "status": "ok",
+        "message": "Schema updated to version 1",
+        "version_id": 1,
+        "collection": "invoices",
         "schema": {
             "name": "invoices",
             "title": "Invoices",
@@ -1627,8 +1630,9 @@ def test_schema_put_writes_manual_schema(tmp_path, monkeypatch):
         },
     }
     assert detail_status == 200
-    assert detail_payload == payload
+    assert detail_payload == {"status": "ok", "schema": payload["schema"]}
     assert (data_dir / "schemas" / "invoices.json").exists()
+    assert (data_dir / "schema_versions" / "invoices" / "v1.json").exists()
 
 
 def test_schema_put_accepts_nested_schema_payload(tmp_path, monkeypatch):
@@ -1648,6 +1652,180 @@ def test_schema_put_accepts_nested_schema_payload(tmp_path, monkeypatch):
     assert payload["schema"]["fields"] == [
         {"name": "email", "type": "email", "required": False}
     ]
+
+
+def test_schema_versions_endpoint_lists_history_newest_first(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    request(
+        "/schemas/invoices",
+        method="PUT",
+        body=json.dumps(
+            {
+                "schema": {"fields": [{"name": "invoice_date", "type": "date"}]},
+                "author": "admin",
+                "message": "first schema",
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+    request(
+        "/schemas/invoices",
+        method="PUT",
+        body=json.dumps(
+            {
+                "schema": {"fields": [{"name": "invoice_date", "type": "date"}, {"name": "total"}]},
+                "author": "admin",
+                "message": "second schema",
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    status, _, payload = request(
+        "/schemas/invoices",
+        query_string="versions=true&limit=10",
+        headers=auth_headers(),
+    )
+    limited_status, _, limited_payload = request(
+        "/schemas/invoices",
+        query_string="versions=true&limit=1",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["collection"] == "invoices"
+    assert [version["version_id"] for version in payload["versions"]] == [2, 1]
+    assert [version["message"] for version in payload["versions"]] == [
+        "second schema",
+        "first schema",
+    ]
+    assert all("content" not in version for version in payload["versions"])
+    assert limited_status == 200
+    assert [version["version_id"] for version in limited_payload["versions"]] == [2]
+
+
+def test_schema_versions_endpoint_requires_authorization_header(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    (data_dir / "schemas").mkdir(parents=True)
+    (data_dir / "schemas" / "invoices.json").write_text('{"fields": []}\n')
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/schemas/invoices", query_string="versions=true")
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
+
+
+def test_schema_version_endpoint_returns_content_and_schema(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    request(
+        "/schemas/invoices",
+        method="PUT",
+        body=json.dumps(
+            {
+                "schema": {
+                    "title": "Invoices",
+                    "fields": [{"name": "invoice_date", "type": "date"}],
+                },
+                "author": "admin",
+                "message": "first schema",
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    status, _, payload = request(
+        "/schemas/invoices",
+        query_string="version=1",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["collection"] == "invoices"
+    assert payload["version"]["version_id"] == 1
+    assert payload["version"]["message"] == "first schema"
+    assert payload["version"]["schema"]["fields"] == [
+        {"name": "invoice_date", "type": "date", "required": False}
+    ]
+    assert '"invoice_date"' in payload["version"]["content"]
+
+
+def test_schema_rollback_creates_new_latest_version(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    request(
+        "/schemas/invoices",
+        method="PUT",
+        body=json.dumps({"fields": [{"name": "invoice_date", "type": "date"}]}).encode(),
+        headers=auth_headers(),
+    )
+    request(
+        "/schemas/invoices",
+        method="PUT",
+        body=json.dumps({"fields": [{"name": "invoice_date", "type": "date"}, {"name": "total"}]}).encode(),
+        headers=auth_headers(),
+    )
+
+    status, _, payload = request(
+        "/schemas/invoices",
+        method="POST",
+        body=json.dumps(
+            {
+                "action": "rollback",
+                "version_id": 1,
+                "author": "admin",
+                "message": "restore first",
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+    detail_status, _, detail_payload = request("/schemas/invoices", headers=auth_headers())
+    history_status, _, history_payload = request(
+        "/schemas/invoices",
+        query_string="versions=true&limit=10",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["message"] == "Rolled back schema to version 1"
+    assert payload["version_id"] == 1
+    assert payload["new_version_id"] == 3
+    assert payload["schema"]["fields"] == [
+        {"name": "invoice_date", "type": "date", "required": False}
+    ]
+    assert detail_status == 200
+    assert detail_payload["schema"]["fields"] == payload["schema"]["fields"]
+    assert history_status == 200
+    assert [version["version_id"] for version in history_payload["versions"]] == [3, 2, 1]
+    assert history_payload["versions"][0]["message"] == "restore first"
+
+
+def test_schema_rollback_returns_404_for_missing_version(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/schemas/invoices",
+        method="POST",
+        body=json.dumps({"action": "rollback", "version_id": 99}).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 404
+    assert payload == {
+        "status": "error",
+        "error": "Version 99 not found for schema invoices",
+    }
 
 
 def test_schema_put_rejects_invalid_payload(tmp_path, monkeypatch):

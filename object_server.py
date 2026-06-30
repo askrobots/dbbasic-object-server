@@ -31,6 +31,7 @@ import object_permission_store
 import object_permissions
 import object_rate_limit
 import object_records
+import object_schema_versions
 import object_schemas
 import object_source
 import object_state
@@ -341,7 +342,7 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
 
         if path.startswith(f"{http_api_contract.SCHEMAS_PATH}/"):
             schema = path.removeprefix(f"{http_api_contract.SCHEMAS_PATH}/")
-            await _handle_schema(send, method, schema, body, headers)
+            await _handle_schema(send, method, schema, query, body, headers)
             return
 
         if path.startswith(f"{http_api_contract.OBJECTS_PATH}/"):
@@ -1875,13 +1876,14 @@ async def _handle_schema_get(
     schema: str,
     headers: dict[str, str],
 ) -> None:
-    await _handle_schema(send, method, schema, b"", headers)
+    await _handle_schema(send, method, schema, {}, b"", headers)
 
 
 async def _handle_schema(
     send,
     method: str,
     schema: str,
+    query: dict[str, str],
     body: bytes,
     headers: dict[str, str],
 ) -> None:
@@ -1889,7 +1891,18 @@ async def _handle_schema(
         if method == "PUT":
             await _handle_schema_put(send, schema, body, headers)
             return
+        if method == "POST":
+            await _handle_schema_post(send, schema, body, headers)
+            return
         await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    if query.get("versions") == "true":
+        await _handle_schema_versions_get(send, schema, query, headers)
+        return
+
+    if "version" in query:
+        await _handle_schema_version_get(send, schema, query, headers)
         return
 
     gate_error = _admin_token_gate_error(
@@ -1940,12 +1953,24 @@ async def _handle_schema_put(
     try:
         payload = _parse_json_body(body)
         schema_payload = _schema_payload_from_request(payload)
+        normalized_schema = object_schemas.normalize_schema(schema, schema_payload, source="manual")
+        author = _payload_text(payload, "author", "api")
+        message = _payload_text(payload, "message", "Updated schema via API")
+        version_id = _schema_version_manager().save_version(
+            schema=schema,
+            content=object_schema_versions.schema_version_content(normalized_schema),
+            author=author,
+            message=message,
+        )
         saved_schema = object_schemas.replace_schema(
             schema,
-            schema_payload,
+            normalized_schema,
             base_dir=_data_dir(),
         )
     except object_schemas.InvalidSchemaNameError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_schema_versions.InvalidSchemaNameError as exc:
         await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
         return
     except ValueError as exc:
@@ -1959,6 +1984,175 @@ async def _handle_schema_put(
         send,
         {
             "status": "ok",
+            "message": f"Schema updated to version {version_id}",
+            "version_id": version_id,
+            "collection": schema,
+            "schema": saved_schema,
+        },
+    )
+
+
+async def _handle_schema_post(
+    send,
+    schema: str,
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    try:
+        payload = _parse_json_body(body)
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    if payload.get("action") != "rollback":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    await _handle_schema_rollback_post(send, schema, payload, headers)
+
+
+async def _handle_schema_versions_get(
+    send,
+    schema: str,
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Schema versions require {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    try:
+        object_schemas.get_schema(schema, base_dir=_data_dir())
+        limit = _query_int(query, "limit", default=10, minimum=1, maximum=100)
+        versions = _schema_version_manager().get_history(schema, limit=limit)
+    except object_schemas.InvalidSchemaNameError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_schemas.SchemaNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+    except object_schema_versions.InvalidSchemaNameError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "collection": schema,
+            "versions": versions,
+            "count": len(versions),
+        },
+    )
+
+
+async def _handle_schema_version_get(
+    send,
+    schema: str,
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Schema version detail requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    try:
+        version_id = _query_int(query, "version", minimum=1)
+        version = _schema_version_manager().get_version(schema, version_id)
+    except object_schema_versions.InvalidSchemaNameError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    if version is None:
+        await _send_json(
+            send,
+            {"status": "error", "error": f"Version {version_id} not found for schema {schema}"},
+            status=404,
+        )
+        return
+
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "collection": schema,
+            "version": _schema_version_payload(version),
+        },
+    )
+
+
+async def _handle_schema_rollback_post(
+    send,
+    schema: str,
+    payload: dict[str, Any],
+    headers: dict[str, str],
+) -> None:
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Schema rollback requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    try:
+        version_id = _payload_int(payload, "version_id", minimum=1)
+        author = _payload_text(payload, "author", "api")
+        message = _payload_text(payload, "message", f"Rollback schema to version {version_id}")
+        new_version_id = _schema_version_manager().rollback(
+            schema=schema,
+            to_version=version_id,
+            author=author,
+            message=message,
+        )
+        new_version = _schema_version_manager().get_version(schema, new_version_id)
+        if new_version is None:
+            raise object_schema_versions.SchemaVersionNotFoundError(
+                f"Version {new_version_id} not found for schema {schema}"
+            )
+        schema_payload = json.loads(new_version["content"])
+        saved_schema = object_schemas.replace_schema(schema, schema_payload, base_dir=_data_dir())
+    except object_schemas.InvalidSchemaNameError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_schema_versions.InvalidSchemaNameError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_schema_versions.SchemaVersionNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+    except (json.JSONDecodeError, ValueError) as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except OSError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=500)
+        return
+
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "message": f"Rolled back schema to version {version_id}",
+            "version_id": version_id,
+            "new_version_id": new_version_id,
+            "collection": schema,
             "schema": saved_schema,
         },
     )
@@ -1970,6 +2164,17 @@ def _object_source_payload(source) -> dict[str, str]:
         "path": source.relative_path.as_posix(),
         "owner": _object_owner(source.object_id),
     }
+
+
+def _schema_version_payload(version: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(version)
+    content = payload.get("content")
+    if isinstance(content, str):
+        try:
+            payload["schema"] = json.loads(content)
+        except json.JSONDecodeError:
+            pass
+    return payload
 
 
 def _object_owner(object_id: str) -> str:
@@ -2743,6 +2948,10 @@ def _env_enabled(name: str) -> bool:
 
 def _version_manager() -> object_versions.VersionManager:
     return object_versions.VersionManager(_data_dir())
+
+
+def _schema_version_manager() -> object_schema_versions.SchemaVersionManager:
+    return object_schema_versions.SchemaVersionManager(_data_dir())
 
 
 def _data_dir() -> str:

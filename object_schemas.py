@@ -88,7 +88,7 @@ def replace_schema(
         raise InvalidSchemaNameError(f"Invalid schema name: {schema}")
 
     base = Path(base_dir)
-    normalized = _normalize_schema(schema, payload, source="manual")
+    normalized = normalize_schema(schema, payload, source="manual")
     root = _schema_root(base)
     root.mkdir(parents=True, exist_ok=True)
     path = _schema_path(schema, base)
@@ -117,6 +117,18 @@ def replace_schema(
                 pass
 
     return normalized
+
+
+def normalize_schema(
+    schema: str,
+    payload: Mapping[str, Any],
+    *,
+    source: str = "manual",
+) -> dict[str, Any]:
+    """Validate schema metadata and return canonical JSON-compatible data."""
+    if not validate_schema_name(schema):
+        raise InvalidSchemaNameError(f"Invalid schema name: {schema}")
+    return _normalize_schema(schema, payload, source=source)
 
 
 def _iter_manual_schema_names(base_dir: Path) -> list[str]:
