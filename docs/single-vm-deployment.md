@@ -164,6 +164,7 @@ DBBASIC_BACKUPS_DIR=/var/lib/dbbasic-object-server/data/backups
 DBBASIC_PACKAGES_DIR=/opt/dbbasic-object-server/packages
 DBBASIC_ENABLE_SOURCE_WRITES=false
 DBBASIC_ENABLE_PACKAGE_INSTALLS=false
+DBBASIC_ENABLE_PACKAGE_RESTORE=false
 DBBASIC_ADMIN_TOKEN=replace-with-a-generated-token
 DBBASIC_MAX_REQUEST_BYTES=1048576
 DBBASIC_MAX_CONCURRENT_REQUESTS=64
@@ -344,10 +345,16 @@ or seed files. Restore points default to
 `/var/lib/dbbasic-object-server/data/backups/`; set `DBBASIC_BACKUPS_DIR` if
 they should live on another mounted volume.
 
-Keep `DBBASIC_ENABLE_PACKAGE_INSTALLS=false` on public staging unless `/packages`
-is reachable only from a private admin surface. The first install path writes
-objects and schemas, creates seed TSV files only when no data exists, and rejects
-permissions/migrations until merge/run semantics are explicit.
+Package restore is separate and requires `DBBASIC_ENABLE_PACKAGE_RESTORE=true`.
+It restores a recorded install restore point with overwrite and snapshot
+pruning, so package-created runtime files are removed if they were not in the
+archive.
+
+Keep `DBBASIC_ENABLE_PACKAGE_INSTALLS=false` and
+`DBBASIC_ENABLE_PACKAGE_RESTORE=false` on public staging unless `/packages` is
+reachable only from a private admin surface. The first install path writes
+objects and schemas, creates seed TSV files only when no data exists, and
+rejects permissions/migrations until merge/run semantics are explicit.
 
 ## Minimal Object
 

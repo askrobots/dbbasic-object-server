@@ -17,6 +17,7 @@ import urllib.parse
 from collections import Counter, deque
 from datetime import datetime, timezone
 from importlib import metadata as importlib_metadata
+from pathlib import Path
 from typing import Any, Mapping
 
 import http_api_contract
@@ -41,7 +42,7 @@ import object_schemas
 import object_source
 import object_state
 import object_versions
-from object_namespace import iter_object_sources, parse_user_object_id
+from object_namespace import get_object_roots, iter_object_sources, parse_user_object_id
 from object_versions import InvalidObjectIdError
 from python_object_runtime import MethodNotSupportedError, PythonObjectRuntime
 
@@ -64,6 +65,7 @@ EVENT_KEEP_COUNT_ENV = "DBBASIC_EVENT_KEEP_COUNT"
 EVENT_KEEP_SECONDS_ENV = "DBBASIC_EVENT_KEEP_SECONDS"
 PACKAGES_DIR_ENV = "DBBASIC_PACKAGES_DIR"
 PACKAGE_INSTALLS_ENABLED_ENV = "DBBASIC_ENABLE_PACKAGE_INSTALLS"
+PACKAGE_RESTORE_ENABLED_ENV = "DBBASIC_ENABLE_PACKAGE_RESTORE"
 DEFAULT_MAX_REQUEST_BYTES = 1_048_576
 DEFAULT_MAX_CONCURRENT_REQUESTS = 64
 DEFAULT_MAX_CONCURRENT_EXECUTIONS = 8
@@ -318,6 +320,8 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
             package_parts = package_tail.split("/")
             if len(package_parts) == 2 and package_parts[1] == "install":
                 await _handle_package_install(send, method, package_parts[0], body, headers)
+            elif len(package_parts) == 2 and package_parts[1] == "restore":
+                await _handle_package_restore(send, method, package_parts[0], body, headers)
             elif len(package_parts) == 2 and package_parts[1] == "changes":
                 await _handle_package_changes(send, method, package_parts[0], query, headers)
             else:
@@ -1153,6 +1157,145 @@ async def _handle_package_install(
     )
 
 
+async def _handle_package_restore(
+    send,
+    method: str,
+    package_id: str,
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    if method != "POST":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Package restore requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    if not _env_enabled(PACKAGE_RESTORE_ENABLED_ENV):
+        await _send_json(
+            send,
+            {
+                "status": "error",
+                "error": f"Package restore is disabled. Set {PACKAGE_RESTORE_ENABLED_ENV}=true.",
+            },
+            status=403,
+        )
+        return
+
+    from_change: dict[str, Any] | None = None
+    restore_point: dict[str, Any] | None = None
+
+    try:
+        payload = _parse_json_body(body)
+        if _required_payload_text(payload, "confirm") != "restore-runtime":
+            raise ValueError("Request JSON field 'confirm' must be 'restore-runtime'")
+        change_id = _required_payload_text(payload, "change_id")
+        from_change = object_package_changes.get_package_change(
+            package_id,
+            change_id,
+            base_dir=_data_dir(),
+        )
+        if from_change is None:
+            await _send_json(
+                send,
+                {"status": "error", "error": f"Package change not found: {change_id}"},
+                status=404,
+            )
+            return
+
+        restore_point = _restore_point_from_package_change(from_change)
+        restore_summary = object_backup.restore_runtime_backup(
+            restore_point["path"],
+            objects_dir=_primary_objects_dir(),
+            data_dir=_data_dir(),
+            overwrite=True,
+            prune_extra=True,
+        )
+        requested_change = object_package_changes.append_package_change(
+            package_id=package_id,
+            action="restore_requested",
+            package_version=from_change.get("package_version"),
+            actor=_record_change_actor(headers),
+            details=_package_restore_change_details(
+                from_change,
+                restore_point,
+                restore=restore_summary.to_dict(),
+            ),
+            base_dir=_data_dir(),
+        )
+        rolled_back_change = object_package_changes.append_package_change(
+            package_id=package_id,
+            action="rolled_back",
+            package_version=from_change.get("package_version"),
+            actor=_record_change_actor(headers),
+            details=_package_restore_change_details(
+                from_change,
+                restore_point,
+                restore=restore_summary.to_dict(),
+            ),
+            base_dir=_data_dir(),
+        )
+    except (object_packages.InvalidPackageIdError, object_package_changes.InvalidPackageChangeError) as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except (ValueError, object_backup.BackupRestoreError) as exc:
+        failed_change = _try_append_package_restore_failure(
+            package_id=package_id,
+            from_change=from_change,
+            restore_point=restore_point,
+            headers=headers,
+            error=str(exc),
+        )
+        await _send_json(
+            send,
+            {
+                "status": "error",
+                "error": str(exc),
+                "changes": _package_restore_changes(failed=failed_change),
+            },
+            status=400,
+        )
+        return
+    except OSError as exc:
+        failed_change = _try_append_package_restore_failure(
+            package_id=package_id,
+            from_change=from_change,
+            restore_point=restore_point,
+            headers=headers,
+            error=str(exc),
+        )
+        await _send_json(
+            send,
+            {
+                "status": "error",
+                "error": f"Package restore failed: {exc}",
+                "changes": _package_restore_changes(failed=failed_change),
+            },
+            status=500,
+        )
+        return
+
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "restore": restore_summary.to_dict(),
+            "restore_point": restore_point,
+            "from_change": from_change,
+            "changes": {
+                "requested": requested_change,
+                "rolled_back": rolled_back_change,
+            },
+        },
+    )
+
+
 async def _handle_package_changes(
     send,
     method: str,
@@ -1254,6 +1397,101 @@ def _package_install_changes(
         changes["requested"] = dict(requested_change)
     changes["failed"] = dict(failed) if failed is not None else None
     return changes
+
+
+def _restore_point_from_package_change(change: Mapping[str, Any]) -> dict[str, Any]:
+    details = change.get("details")
+    if not isinstance(details, Mapping):
+        raise object_backup.BackupRestoreError("Package change has no restore point details")
+
+    restore_point = details.get("restore_point")
+    if not isinstance(restore_point, Mapping):
+        raise object_backup.BackupRestoreError("Package change has no restore point")
+
+    restore_path = restore_point.get("path")
+    if not isinstance(restore_path, str) or not restore_path.strip() or "\x00" in restore_path:
+        raise object_backup.BackupRestoreError("Package restore point path is not safe")
+
+    candidate = Path(restore_path)
+    allowed_root = Path(
+        os.environ.get(object_backup.BACKUPS_DIR_ENV)
+        or (Path(_data_dir()) / object_backup.BACKUPS_DIR)
+    )
+    resolved_candidate = candidate.resolve(strict=False)
+    resolved_allowed = allowed_root.resolve(strict=False)
+    try:
+        resolved_candidate.relative_to(resolved_allowed)
+    except ValueError as exc:
+        raise object_backup.BackupRestoreError(
+            "Package restore point is outside the configured backup directory"
+        ) from exc
+
+    payload = dict(restore_point)
+    payload["path"] = str(candidate)
+    return payload
+
+
+def _package_restore_change_details(
+    from_change: Mapping[str, Any],
+    restore_point: Mapping[str, Any],
+    *,
+    restore: Mapping[str, Any] | None = None,
+    error: str | None = None,
+) -> dict[str, Any]:
+    details: dict[str, Any] = {
+        "from_change": {
+            "change_id": from_change.get("change_id"),
+            "timestamp": from_change.get("timestamp"),
+            "action": from_change.get("action"),
+            "package_version": from_change.get("package_version"),
+        },
+        "restore_mode": "runtime_snapshot",
+        "restore_point": dict(restore_point),
+    }
+    if restore is not None:
+        details["restore"] = dict(restore)
+    if error:
+        details["error"] = error
+    return details
+
+
+def _try_append_package_restore_failure(
+    *,
+    package_id: str,
+    from_change: Mapping[str, Any] | None,
+    restore_point: Mapping[str, Any] | None,
+    headers: dict[str, str],
+    error: str,
+) -> dict[str, Any] | None:
+    details: dict[str, Any] = {"error": error}
+    package_version = None
+    if from_change is not None:
+        package_version = from_change.get("package_version")
+        details = _package_restore_change_details(
+            from_change,
+            restore_point or {},
+            error=error,
+        )
+
+    try:
+        return object_package_changes.append_package_change(
+            package_id=package_id,
+            action="failed",
+            package_version=package_version,
+            actor=_record_change_actor(headers),
+            message=error,
+            details=details,
+            base_dir=_data_dir(),
+        )
+    except Exception:
+        return None
+
+
+def _package_restore_changes(
+    *,
+    failed: Mapping[str, Any] | None = None,
+) -> dict[str, Any | None]:
+    return {"failed": dict(failed) if failed is not None else None}
 
 
 async def _handle_object_get(
@@ -3826,6 +4064,10 @@ def _data_dir() -> str:
 
 def _packages_dir() -> str:
     return os.environ.get(PACKAGES_DIR_ENV, object_packages.PACKAGES_DIR)
+
+
+def _primary_objects_dir() -> str:
+    return str(get_object_roots()[0])
 
 
 def _max_concurrent_requests() -> int:

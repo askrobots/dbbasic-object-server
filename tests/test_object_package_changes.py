@@ -69,6 +69,36 @@ def test_list_package_changes_paginates(tmp_path):
     assert payload["changes"][0]["action"] == "install_requested"
 
 
+def test_get_package_change_returns_one_entry_by_id(tmp_path):
+    data_dir = tmp_path / "data"
+    first = object_package_changes.append_package_change(
+        package_id="hello-world",
+        action="restore_requested",
+        package_version="0.1.0",
+        base_dir=data_dir,
+    )
+    object_package_changes.append_package_change(
+        package_id="hello-world",
+        action="rolled_back",
+        package_version="0.1.0",
+        base_dir=data_dir,
+    )
+
+    assert (
+        object_package_changes.get_package_change(
+            "hello-world",
+            first["change_id"],
+            base_dir=data_dir,
+        )
+        == first
+    )
+    assert object_package_changes.get_package_change(
+        "hello-world",
+        "missing-change",
+        base_dir=data_dir,
+    ) is None
+
+
 def test_package_changes_return_empty_for_valid_package_without_log(tmp_path):
     payload = object_package_changes.list_package_changes(
         "hello-world",

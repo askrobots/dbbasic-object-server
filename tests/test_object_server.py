@@ -1,8 +1,10 @@
 import asyncio
 import json
 import tarfile
+from pathlib import Path
 
 import object_execution
+import object_package_changes
 import object_packages
 import object_permission_audit
 import object_permission_store
@@ -4423,6 +4425,153 @@ def test_package_install_api_fails_before_writes_when_restore_point_fails(tmp_pa
         "failed",
         "install_requested",
     ]
+
+
+def test_package_restore_api_requires_admin_and_enable_flag(monkeypatch):
+    monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)
+
+    status, _, payload = request(
+        "/packages/hello-world/restore",
+        method="POST",
+        body=b"{}",
+        headers=auth_headers(),
+    )
+
+    assert status == 403
+    assert payload == {
+        "status": "error",
+        "error": "Package restore requires DBBASIC_ADMIN_TOKEN.",
+    }
+
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/packages/hello-world/restore",
+        method="POST",
+        body=b"{}",
+        headers=auth_headers(),
+    )
+
+    assert status == 403
+    assert payload == {
+        "status": "error",
+        "error": "Package restore is disabled. Set DBBASIC_ENABLE_PACKAGE_RESTORE=true.",
+    }
+
+
+def test_package_restore_api_restores_install_restore_point_and_prunes_new_files(tmp_path, monkeypatch):
+    packages_root = tmp_path / "packages"
+    data_dir = tmp_path / "data"
+    object_root = tmp_path / "objects"
+    write_source(object_root / "site" / "home.py", "def GET(request): return {'before': True}\n")
+    write_package(
+        packages_root,
+        "hello-world",
+        {
+            "id": "hello-world",
+            "name": "Hello World",
+            "version": "0.1.0",
+            "objects": [{"id": "hello_world", "path": "objects/hello/world.py"}],
+            "schemas": [{"collection": "contacts", "path": "schemas/contacts.json"}],
+            "seed": [{"collection": "contacts", "path": "seed/contacts.tsv"}],
+        },
+        files=(
+            ("objects/hello/world.py", "def GET(request): return {'new': True}\n"),
+            ("schemas/contacts.json", '{"name":"contacts","fields":[{"name":"id","type":"text"}]}\n'),
+            ("seed/contacts.tsv", "id\tname\nc1\tAlice\n"),
+        ),
+    )
+    monkeypatch.setenv("DBBASIC_PACKAGES_DIR", str(packages_root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(object_root))
+    monkeypatch.setenv("DBBASIC_ENABLE_PACKAGE_INSTALLS", "true")
+    monkeypatch.setenv("DBBASIC_ENABLE_PACKAGE_RESTORE", "true")
+    enable_admin_token(monkeypatch)
+
+    status, _, install_payload = request(
+        "/packages/hello-world/install",
+        method="POST",
+        body=b"{}",
+        headers=auth_headers(),
+    )
+
+    assert status == 201
+    installed_change_id = install_payload["changes"]["installed"]["change_id"]
+    restore_point_path = install_payload["restore_point"]["path"]
+    assert (object_root / "hello" / "world.py").is_file()
+    assert (data_dir / "schemas" / "contacts.json").is_file()
+    assert (data_dir / "collections" / "contacts" / "records.tsv").is_file()
+
+    status, _, restore_payload = request(
+        "/packages/hello-world/restore",
+        method="POST",
+        body=json.dumps(
+            {
+                "change_id": installed_change_id,
+                "confirm": "restore-runtime",
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert restore_payload["status"] == "ok"
+    assert restore_payload["restore_point"]["path"] == restore_point_path
+    assert restore_payload["restore"]["overwritten"] is True
+    assert restore_payload["restore"]["pruned_files"] >= 3
+    assert restore_payload["changes"]["requested"]["action"] == "restore_requested"
+    assert restore_payload["changes"]["rolled_back"]["action"] == "rolled_back"
+    assert (
+        restore_payload["changes"]["rolled_back"]["details"]["from_change"]["change_id"]
+        == installed_change_id
+    )
+    assert not (object_root / "hello" / "world.py").exists()
+    assert not (data_dir / "schemas" / "contacts.json").exists()
+    assert not (data_dir / "collections" / "contacts" / "records.tsv").exists()
+    assert (object_root / "site" / "home.py").is_file()
+    assert Path(restore_point_path).exists()
+
+    status, _, history = request(
+        "/packages/hello-world/changes",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert [change["action"] for change in history["changes"]] == [
+        "rolled_back",
+        "restore_requested",
+        "install_requested",
+    ]
+
+
+def test_package_restore_api_rejects_changes_without_restore_points(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("DBBASIC_ENABLE_PACKAGE_RESTORE", "true")
+    enable_admin_token(monkeypatch)
+    change = object_package_changes.append_package_change(
+        package_id="hello-world",
+        action="dry_run",
+        package_version="0.1.0",
+        base_dir=data_dir,
+    )
+
+    status, _, payload = request(
+        "/packages/hello-world/restore",
+        method="POST",
+        body=json.dumps(
+            {
+                "change_id": change["change_id"],
+                "confirm": "restore-runtime",
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 400
+    assert payload["status"] == "error"
+    assert "no restore point" in payload["error"]
+    assert payload["changes"]["failed"]["action"] == "failed"
 
 
 def test_package_changes_api_requires_admin_token(monkeypatch):

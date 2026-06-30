@@ -223,6 +223,48 @@ def test_restore_refuses_to_overwrite_existing_runtime_files(tmp_path):
     assert result.overwritten is True
 
 
+def test_restore_runtime_backup_can_prune_extra_runtime_files(tmp_path):
+    objects_dir, data_dir = make_runtime_tree(tmp_path)
+    backup = tmp_path / "runtime.tar.gz"
+    object_backup.create_runtime_backup(backup, objects_dir=objects_dir, data_dir=data_dir)
+
+    restored_objects = tmp_path / "restored" / "objects"
+    restored_data = tmp_path / "restored" / "data"
+    object_backup.restore_runtime_backup(backup, objects_dir=restored_objects, data_dir=restored_data)
+
+    write_file(restored_objects / "new" / "package_object.py", "def GET(request): return {}\n")
+    write_file(restored_data / "collections" / "new" / "records.tsv", "id\tname\nn1\tnew\n")
+    write_file(restored_data / "backups" / "keep-this.tar.gz", "backup payload\n")
+
+    result = object_backup.restore_runtime_backup(
+        backup,
+        objects_dir=restored_objects,
+        data_dir=restored_data,
+        overwrite=True,
+        prune_extra=True,
+    )
+
+    assert result.pruned_files == 2
+    assert result.pruned_dirs >= 2
+    assert not (restored_objects / "new" / "package_object.py").exists()
+    assert not (restored_data / "collections" / "new" / "records.tsv").exists()
+    assert (restored_data / "backups" / "keep-this.tar.gz").exists()
+
+
+def test_restore_runtime_backup_prune_requires_overwrite(tmp_path):
+    objects_dir, data_dir = make_runtime_tree(tmp_path)
+    backup = tmp_path / "runtime.tar.gz"
+    object_backup.create_runtime_backup(backup, objects_dir=objects_dir, data_dir=data_dir)
+
+    with pytest.raises(object_backup.BackupRestoreError, match="prune_extra requires overwrite"):
+        object_backup.restore_runtime_backup(
+            backup,
+            objects_dir=tmp_path / "restored" / "objects",
+            data_dir=tmp_path / "restored" / "data",
+            prune_extra=True,
+        )
+
+
 def test_verify_and_restore_reject_path_traversal_member(tmp_path):
     backup = tmp_path / "bad.tar.gz"
     with tarfile.open(backup, "w:gz") as archive:

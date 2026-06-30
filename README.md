@@ -119,10 +119,13 @@ when `DBBASIC_ENABLE_PACKAGE_INSTALLS=true` and `DBBASIC_ADMIN_TOKEN` are both
 set. Installs currently create/replace objects and schemas, create seed TSV
 files only when data does not already exist, and reject permission/migration
 writes until those merge/run semantics are explicit. The HTTP install route
-creates a restore point before live files are changed. Dry-runs and installs
-append compact package changelog entries under
+creates a restore point before live files are changed. A separate package
+restore endpoint can restore one of those recorded runtime snapshots when
+`DBBASIC_ENABLE_PACKAGE_RESTORE=true`; it prunes package-created runtime files
+that were not present in the snapshot. Dry-runs, installs, and restores append
+compact package changelog entries under
 `data/package_changes/{package_id}/changes.jsonl` so Scroll can show what was
-reviewed, installed, or rejected.
+reviewed, installed, restored, or rejected.
 
 ## Minimal Server
 
@@ -211,6 +214,7 @@ export DBBASIC_DATA_DIR=./data
 export DBBASIC_BACKUPS_DIR=./data/backups
 export DBBASIC_PACKAGES_DIR=./packages
 export DBBASIC_ENABLE_PACKAGE_INSTALLS=false
+export DBBASIC_ENABLE_PACKAGE_RESTORE=false
 export DBBASIC_MAX_REQUEST_BYTES=1048576
 export DBBASIC_MAX_CONCURRENT_REQUESTS=64
 export DBBASIC_MAX_CONCURRENT_EXECUTIONS=8

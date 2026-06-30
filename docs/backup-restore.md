@@ -85,6 +85,14 @@ Set `DBBASIC_BACKUPS_DIR` to move those archives to a mounted backup volume or
 another operator-managed path. Runtime backup archives do not include
 `data/backups/`, so restore points do not recursively back up other archives.
 
+Package restore uses the recorded restore point from a package install change,
+not an arbitrary package path. The HTTP restore route calls
+`restore_runtime_backup(..., overwrite=True, prune_extra=True)` so files created
+by the package are removed if they were not present in the snapshot. Pruning is
+limited to known runtime roots such as `objects/`, `data/state/`,
+`data/logs/`, `data/collections/`, `data/schemas/`, and
+`data/package_changes/`; `data/backups/` is left alone.
+
 ## Verify
 
 ```bash
@@ -117,6 +125,20 @@ python -m object_backup restore \
 
 By default, restore refuses to overwrite existing files. Use `--overwrite` only
 after deciding that the target runtime may be replaced.
+
+Use `--prune-extra` with `--overwrite` when restoring a full runtime snapshot
+over an existing runtime and you want files not present in the archive removed
+from supported runtime roots:
+
+```bash
+python -m object_backup restore \
+  /var/backups/dbbasic-object-server/runtime-YYYYMMDD-HHMMSS.tar.gz \
+  --objects-dir /var/lib/dbbasic-object-server/objects \
+  --data-dir /var/lib/dbbasic-object-server/data \
+  --overwrite \
+  --prune-extra \
+  --json
+```
 
 After restore, run health and object checks against the restored runtime before
 promoting it. For example, start the server against the restored directories:

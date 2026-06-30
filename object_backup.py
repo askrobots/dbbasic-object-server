@@ -87,6 +87,8 @@ class RestoreSummary:
     files: int
     bytes: int
     overwritten: bool
+    pruned_files: int = 0
+    pruned_dirs: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -237,8 +239,12 @@ def restore_runtime_backup(
     objects_dir: Path | str,
     data_dir: Path | str,
     overwrite: bool = False,
+    prune_extra: bool = False,
 ) -> RestoreSummary:
     """Restore a runtime backup into explicit object and data directories."""
+    if prune_extra and not overwrite:
+        raise BackupRestoreError("prune_extra requires overwrite=True")
+
     backup = Path(backup_path)
     objects_path = Path(objects_dir)
     data_path = Path(data_dir)
@@ -259,6 +265,16 @@ def restore_runtime_backup(
                 continue
             if destination.exists() and not overwrite:
                 raise BackupRestoreError(f"restore target already exists: {destination}")
+
+        pruned_files = 0
+        pruned_dirs = 0
+        if prune_extra:
+            keep_paths = {destination.resolve(strict=False) for _, destination in planned}
+            pruned_files, pruned_dirs = _prune_extra_runtime_paths(
+                objects_path,
+                data_path,
+                keep_paths,
+            )
 
         restored_files = 0
         restored_bytes = 0
@@ -283,6 +299,8 @@ def restore_runtime_backup(
         files=restored_files,
         bytes=restored_bytes,
         overwritten=overwrite,
+        pruned_files=pruned_files,
+        pruned_dirs=pruned_dirs,
     )
 
 
@@ -328,6 +346,37 @@ def _runtime_sources(objects_dir: Path, data_dir: Path) -> list[tuple[Path, Pure
     for name in RUNTIME_DATA_DIRS:
         sources.append((data_dir / name, PurePosixPath("data") / name))
     return sources
+
+
+def _restore_roots(objects_dir: Path, data_dir: Path) -> list[Path]:
+    return [objects_dir, *(data_dir / name for name in RUNTIME_DATA_DIRS)]
+
+
+def _prune_extra_runtime_paths(
+    objects_dir: Path,
+    data_dir: Path,
+    keep_paths: set[Path],
+) -> tuple[int, int]:
+    pruned_files = 0
+    pruned_dirs = 0
+    for root in _restore_roots(objects_dir, data_dir):
+        if not root.exists() or not root.is_dir():
+            continue
+        paths = sorted(root.rglob("*"), key=lambda path: len(path.parts), reverse=True)
+        for path in paths:
+            if path.resolve(strict=False) in keep_paths:
+                continue
+            if path.is_symlink() or path.is_file():
+                path.unlink()
+                pruned_files += 1
+                continue
+            if path.is_dir():
+                try:
+                    path.rmdir()
+                except OSError:
+                    continue
+                pruned_dirs += 1
+    return pruned_files, pruned_dirs
 
 
 def _iter_backup_members(
@@ -531,6 +580,7 @@ def main(argv: list[str] | None = None) -> int:
     restore.add_argument("--objects-dir", type=Path, required=True)
     restore.add_argument("--data-dir", type=Path, required=True)
     restore.add_argument("--overwrite", action="store_true")
+    restore.add_argument("--prune-extra", action="store_true")
     restore.add_argument("--json", action="store_true")
 
     args = parser.parse_args(argv)
@@ -554,6 +604,7 @@ def main(argv: list[str] | None = None) -> int:
                 objects_dir=args.objects_dir,
                 data_dir=args.data_dir,
                 overwrite=args.overwrite,
+                prune_extra=args.prune_extra,
             )
             _print_result(result.to_dict(), json_output=args.json)
             return 0

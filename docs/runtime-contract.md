@@ -727,6 +727,7 @@ The public helper module is `object_package_changes.py`. It exposes:
 
 ```python
 append_package_change(package_id, action, package_version=None, actor="api", details=None, base_dir="data")
+get_package_change(package_id, change_id, base_dir="data")
 list_package_changes(package_id, base_dir="data", limit=100, offset=0)
 dry_run_change_details(plan)
 ```
@@ -748,6 +749,20 @@ DBBASIC_ENABLE_PACKAGE_INSTALLS=true
 The HTTP install route creates a runtime restore point before object, schema, or
 seed writes. Restore points default to `data/backups/`; set
 `DBBASIC_BACKUPS_DIR` to place them on a separate backup volume.
+
+Package restore is a separate admin-gated route:
+
+```text
+POST /packages/{package_id}/restore
+DBBASIC_ENABLE_PACKAGE_RESTORE=true
+{"change_id": "...", "confirm": "restore-runtime"}
+```
+
+The change id must refer to a package change that contains restore-point
+metadata. The server restores that runtime snapshot with overwrite and
+prune-extra enabled, then records `restore_requested` and `rolled_back` package
+change rows after the restore completes. This is a whole-runtime restore point,
+not a selective package uninstall.
 
 Keep this disabled on public staging unless the route is on a private admin
 surface and backups have been tested.

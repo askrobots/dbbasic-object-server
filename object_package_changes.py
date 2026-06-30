@@ -1,8 +1,8 @@
 """Append-only change logs for DBBASIC packages.
 
 Package changes are the durable package manager facts behind dry-run, install,
-failure, and rollback screens. The public server records dry-run plans and
-gated install attempts, including failed installs.
+failure, restore, and rollback screens. The public server records dry-run plans
+and gated package operations, including failed operations.
 """
 
 from __future__ import annotations
@@ -21,7 +21,14 @@ PACKAGE_CHANGES_DIR = "package_changes"
 CHANGES_FILE = "changes.jsonl"
 DEFAULT_CHANGE_LIMIT = 100
 MAX_CHANGE_LIMIT = 1000
-VALID_ACTIONS = {"dry_run", "install_requested", "installed", "failed", "rolled_back"}
+VALID_ACTIONS = {
+    "dry_run",
+    "install_requested",
+    "installed",
+    "restore_requested",
+    "failed",
+    "rolled_back",
+}
 
 _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
@@ -90,6 +97,21 @@ def list_package_changes(
         "offset": offset,
         "has_more": offset + len(window) < total,
     }
+
+
+def get_package_change(
+    package_id: str,
+    change_id: str,
+    *,
+    base_dir: Path | str = DEFAULT_DATA_DIR,
+) -> dict[str, Any] | None:
+    """Return one package change by id, or None when it is not in the log."""
+    clean_change_id = _clean_change_id(change_id)
+    path = package_changes_file(package_id, base_dir=base_dir)
+    for change in _read_changes(path):
+        if change.get("change_id") == clean_change_id:
+            return change
+    return None
 
 
 def package_changes_file(package_id: str, base_dir: Path | str = DEFAULT_DATA_DIR) -> Path:
@@ -212,11 +234,21 @@ def _clean_text(value: str, *, default: str) -> str:
     return text or default
 
 
+def _clean_change_id(value: str) -> str:
+    text = str(value).strip()
+    if not text:
+        raise InvalidPackageChangeError("Package change id must not be empty")
+    if len(text) > 256 or any(ord(character) < 32 for character in text):
+        raise InvalidPackageChangeError("Package change id is not safe")
+    return text
+
+
 def _default_message(action: str) -> str:
     return {
         "dry_run": "Dry run package install",
         "install_requested": "Requested package install",
         "installed": "Installed package",
+        "restore_requested": "Requested package restore",
         "failed": "Package operation failed",
         "rolled_back": "Rolled back package",
     }[action]

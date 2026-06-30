@@ -25,6 +25,7 @@ def test_contract_keeps_objects_paths_as_public_surface():
     assert http_api_contract.PACKAGES_PATH == "/packages"
     assert http_api_contract.PACKAGE_PATH == "/packages/{package_id}"
     assert http_api_contract.PACKAGE_INSTALL_PATH == "/packages/{package_id}/install"
+    assert http_api_contract.PACKAGE_RESTORE_PATH == "/packages/{package_id}/restore"
     assert http_api_contract.PACKAGE_CHANGES_PATH == "/packages/{package_id}/changes"
     assert http_api_contract.PERMISSIONS_POLICY_PATH == "/permissions/policy"
     assert http_api_contract.PERMISSIONS_CHECK_PATH == "/permissions/check"
@@ -129,6 +130,16 @@ def test_contract_keeps_existing_introspection_query_flags():
                 "install": {"package": {"id": "hello-world"}},
                 "changes": {"requested": {"change_id": "chg_1"}},
                 "restore_point": {"path": "data/backups/restore.tar.gz"},
+            },
+        ),
+        (
+            "package_restore",
+            {
+                "status": "ok",
+                "restore": {"backup_path": "data/backups/restore.tar.gz"},
+                "changes": {"rolled_back": {"change_id": "chg_2"}},
+                "restore_point": {"path": "data/backups/restore.tar.gz"},
+                "from_change": {"change_id": "chg_1"},
             },
         ),
         (

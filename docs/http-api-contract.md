@@ -1053,6 +1053,70 @@ Response:
 }
 ```
 
+Restore a package install restore point:
+
+```http
+POST /packages/{package_id}/restore
+Authorization: Token <token>
+Content-Type: application/json
+
+{"change_id": "20260630T120101Z-hello-world-installed-5e6f7a8b", "confirm": "restore-runtime"}
+```
+
+Package restore requires:
+
+```text
+DBBASIC_ADMIN_TOKEN=...
+DBBASIC_ENABLE_PACKAGE_RESTORE=true
+```
+
+The change id must point at a recorded package change with restore-point
+metadata. The server restores that runtime snapshot with overwrite and
+prune-extra enabled, then appends `restore_requested` and `rolled_back` package
+change rows. This is intentionally a whole-runtime rollback, not a selective
+package uninstall, and the restore path must live under the configured backup
+directory.
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "restore": {
+    "backup_path": "data/backups/20260630T120100Z-package-hello-world.tar.gz",
+    "objects_dir": "objects",
+    "data_dir": "data",
+    "files": 14,
+    "bytes": 12345,
+    "overwritten": true,
+    "pruned_files": 3,
+    "pruned_dirs": 2
+  },
+  "restore_point": {
+    "path": "data/backups/20260630T120100Z-package-hello-world.tar.gz",
+    "format_version": 1,
+    "created_at": "2026-06-30T12:01:00Z",
+    "files": 14,
+    "bytes": 12345,
+    "warnings": []
+  },
+  "from_change": {
+    "change_id": "20260630T120101Z-hello-world-installed-5e6f7a8b",
+    "action": "installed"
+  },
+  "changes": {
+    "requested": {
+      "change_id": "20260630T120200Z-hello-world-restore_requested-11223344",
+      "action": "restore_requested"
+    },
+    "rolled_back": {
+      "change_id": "20260630T120201Z-hello-world-rolled_back-55667788",
+      "action": "rolled_back"
+    }
+  }
+}
+```
+
 Read package changelog:
 
 ```http
