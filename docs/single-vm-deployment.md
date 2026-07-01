@@ -565,8 +565,9 @@ Back up the old config before changing it:
 sudo cp -a /etc/caddy/Caddyfile /etc/caddy/Caddyfile.before-dbbasic
 ```
 
-For the earliest public staging endpoint, expose only the hello object and
-health check until auth, permissions, and source visibility are ready:
+For the earliest public staging endpoint, expose only the hello object, health
+check, and current-session self-service route until auth, permissions, and
+source visibility are ready. Keep the broader identity admin routes blocked:
 
 ```caddyfile
 dbbasic.example.com {
@@ -576,6 +577,10 @@ dbbasic.example.com {
     }
 
     handle /health {
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    handle /identity/session {
         reverse_proxy 127.0.0.1:8001
     }
 
