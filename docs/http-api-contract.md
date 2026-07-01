@@ -431,6 +431,9 @@ Response:
   "status": "ok",
   "permissions": {
     "enforcement_enabled": false,
+    "enforcement_requested": false,
+    "enforcement_blocked": false,
+    "allow_unready_enforcement": false,
     "audit_enabled": true,
     "trusted_headers_enabled": false,
     "require_known_identity_users": true,
@@ -457,9 +460,12 @@ Response:
 }
 ```
 
-This endpoint is intentionally read-only. It does not enable enforcement; it
-shows the operator what would make that rollout unsafe, such as an invalid policy
-file or a role-based policy with no grants.
+This endpoint is intentionally read-only. `DBBASIC_ENABLE_PERMISSION_ENFORCEMENT=true`
+requests enforcement, but the server only makes `enforcement_enabled` effective
+when `readiness.can_enable_enforcement` is true. If readiness is blocked,
+`enforcement_requested` is true, `enforcement_enabled` is false, and
+`enforcement_blocked` is true. The explicit recovery/test override is
+`DBBASIC_ALLOW_UNREADY_PERMISSION_ENFORCEMENT=true`.
 
 ## Permissions Check
 
@@ -526,13 +532,15 @@ When a paid entitlement is missing, the decision can include:
 ## Permission Route Enforcement
 
 Permission policy checks can be applied to object and collection-record routes
-when explicitly enabled:
+when explicitly requested:
 
 ```text
 DBBASIC_ENABLE_PERMISSION_ENFORCEMENT=true
 ```
 
-When enforcement is enabled, denied route checks return the
+The request becomes effective only when `/permissions/status` reports no
+readiness blockers, unless `DBBASIC_ALLOW_UNREADY_PERMISSION_ENFORCEMENT=true`
+is also set. When enforcement is effective, denied route checks return the
 `http_status`, `reason`, and `code` from the permission decision before object
 source, state, logs, versions, execution, or collection-record data work runs.
 

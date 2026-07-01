@@ -61,6 +61,7 @@ RATE_LIMIT_TRUST_PROXY_HEADERS_ENV = "DBBASIC_RATE_LIMIT_TRUST_PROXY_HEADERS"
 OBJECT_TIMEOUT_SECONDS_ENV = "DBBASIC_OBJECT_TIMEOUT_SECONDS"
 TRUSTED_IN_PROCESS_OBJECTS_ENV = "DBBASIC_TRUSTED_IN_PROCESS_OBJECTS"
 PERMISSION_ENFORCEMENT_ENV = "DBBASIC_ENABLE_PERMISSION_ENFORCEMENT"
+PERMISSION_UNREADY_ENFORCEMENT_ENV = "DBBASIC_ALLOW_UNREADY_PERMISSION_ENFORCEMENT"
 PERMISSION_AUDIT_ENV = "DBBASIC_ENABLE_PERMISSION_AUDIT"
 PERMISSION_TRUST_HEADERS_ENV = "DBBASIC_PERMISSION_TRUST_HEADERS"
 REQUIRE_KNOWN_IDENTITY_USERS_ENV = "DBBASIC_REQUIRE_KNOWN_IDENTITY_USERS"
@@ -550,6 +551,8 @@ async def _handle_identity(send, method: str, headers: dict[str, str]) -> None:
             },
             "permissions": {
                 "enforcement_enabled": _permission_enforcement_enabled(),
+                "enforcement_requested": _permission_enforcement_requested(),
+                "enforcement_blocked": _permission_enforcement_blocked(),
                 "audit_enabled": _permission_audit_enabled(),
             },
         },
@@ -863,6 +866,9 @@ def _health_payload(*, include_metrics: bool) -> dict[str, Any]:
             "object_timeout_seconds": _object_timeout_seconds(),
             "trusted_in_process_objects": sorted(_trusted_in_process_object_ids()),
             "permission_enforcement_enabled": _permission_enforcement_enabled(),
+            "permission_enforcement_requested": _permission_enforcement_requested(),
+            "permission_enforcement_blocked": _permission_enforcement_blocked(),
+            "permission_allow_unready_enforcement": _permission_unready_enforcement_allowed(),
             "permission_audit_enabled": _permission_audit_enabled(),
             "permission_trust_headers": _env_enabled(PERMISSION_TRUST_HEADERS_ENV),
             "require_known_identity_users": _env_enabled(REQUIRE_KNOWN_IDENTITY_USERS_ENV),
@@ -904,6 +910,9 @@ def _permissions_status_payload() -> dict[str, Any]:
         base_dir=_data_dir(),
         permissions={
             "enforcement_enabled": _permission_enforcement_enabled(),
+            "enforcement_requested": _permission_enforcement_requested(),
+            "enforcement_blocked": _permission_enforcement_blocked(),
+            "allow_unready_enforcement": _permission_unready_enforcement_allowed(),
             "audit_enabled": _permission_audit_enabled(),
             "trusted_headers_enabled": _env_enabled(PERMISSION_TRUST_HEADERS_ENV),
             "require_known_identity_users": _env_enabled(REQUIRE_KNOWN_IDENTITY_USERS_ENV),
@@ -4256,15 +4265,35 @@ def _field_write_denied_message(fields: list[str]) -> str:
 
 
 def _permission_checks_enabled() -> bool:
-    return _permission_enforcement_enabled() or _permission_audit_enabled()
+    return _permission_enforcement_requested() or _permission_audit_enabled()
 
 
 def _permission_enforcement_enabled() -> bool:
-    return _env_enabled(PERMISSION_ENFORCEMENT_ENV)
+    if not _permission_enforcement_requested():
+        return False
+    if _permission_unready_enforcement_allowed():
+        return True
+    try:
+        readiness = object_permission_status.enforcement_readiness(base_dir=_data_dir())
+    except (OSError, ValueError):
+        return False
+    return bool(readiness.get("can_enable_enforcement"))
 
 
 def _permission_audit_enabled() -> bool:
-    return _env_enabled(PERMISSION_AUDIT_ENV) or _permission_enforcement_enabled()
+    return _env_enabled(PERMISSION_AUDIT_ENV) or _permission_enforcement_requested()
+
+
+def _permission_enforcement_requested() -> bool:
+    return _env_enabled(PERMISSION_ENFORCEMENT_ENV)
+
+
+def _permission_unready_enforcement_allowed() -> bool:
+    return _env_enabled(PERMISSION_UNREADY_ENFORCEMENT_ENV)
+
+
+def _permission_enforcement_blocked() -> bool:
+    return _permission_enforcement_requested() and not _permission_enforcement_enabled()
 
 
 def _permission_subject(headers: dict[str, str]) -> object_permissions.PermissionSubject:
@@ -4353,7 +4382,10 @@ def _append_permission_audit_entry(
         "action": action,
         "subject": _permission_subject_payload(subject),
         "enforced": enforced,
+        "enforcement_requested": _permission_enforcement_requested(),
     }
+    if entry["enforcement_requested"] and not enforced:
+        entry["enforcement_blocked"] = True
     if decision is not None:
         entry["decision"] = object_permissions.decision_to_dict(decision)
     if error is not None:

@@ -18,7 +18,7 @@ def build_permissions_status(
     """Return a read-only summary of permission rollout readiness."""
     identity = identity_status(base_dir=base_dir)
     policy = policy_status(base_dir=base_dir)
-    readiness = readiness_status(policy)
+    readiness = readiness_status(policy, identity=identity)
     warnings = status_warnings(
         permissions=permissions,
         identity=identity,
@@ -108,9 +108,22 @@ def policy_status(*, base_dir: Path | str) -> dict[str, Any]:
     }
 
 
-def readiness_status(policy: Mapping[str, Any]) -> dict[str, Any]:
+def enforcement_readiness(*, base_dir: Path | str) -> dict[str, Any]:
+    """Return the same readiness gate used by the HTTP server."""
+    identity = identity_status(base_dir=base_dir)
+    policy = policy_status(base_dir=base_dir)
+    return readiness_status(policy, identity=identity)
+
+
+def readiness_status(
+    policy: Mapping[str, Any],
+    *,
+    identity: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Return blockers that make permission enforcement unsafe to enable."""
     blockers: list[str] = []
+    if identity is not None and not identity["valid"]:
+        blockers.append("Identity store must be readable before enforcement rollout.")
     if not policy["valid"]:
         blockers.append("Permission policy must be valid before enforcement rollout.")
     elif (
@@ -135,8 +148,20 @@ def status_warnings(
 ) -> list[str]:
     """Return non-blocking warnings for the active permission setup."""
     warnings: list[str] = []
-    if not permissions["enforcement_enabled"]:
+    enforcement_requested = bool(
+        permissions.get("enforcement_requested", permissions.get("enforcement_enabled", False))
+    )
+    enforcement_enabled = bool(permissions.get("enforcement_enabled", False))
+    if permissions.get("enforcement_blocked"):
+        warnings.append(
+            "Permission enforcement was requested but readiness checks blocked rollout."
+        )
+    elif not enforcement_requested and not enforcement_enabled:
         warnings.append("Permission enforcement is off.")
+    if permissions.get("allow_unready_enforcement"):
+        warnings.append(
+            "Unready permission enforcement override is enabled; use only for manual recovery or tests."
+        )
     if not permissions["audit_enabled"]:
         warnings.append("Permission audit is off; enable audit mode before enforcement rollout.")
     if permissions["trusted_headers_enabled"]:

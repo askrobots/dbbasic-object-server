@@ -250,6 +250,7 @@ export DBBASIC_RATE_LIMIT_REQUESTS=1000
 export DBBASIC_RATE_LIMIT_WINDOW_SECONDS=60
 export DBBASIC_ENABLE_PERMISSION_AUDIT=false
 export DBBASIC_ENABLE_PERMISSION_ENFORCEMENT=false
+export DBBASIC_ALLOW_UNREADY_PERMISSION_ENFORCEMENT=false
 export DBBASIC_PERMISSION_TRUST_HEADERS=false
 export DBBASIC_ENABLE_RECORD_EVENTS=true
 export DBBASIC_EVENT_KEEP_COUNT=1000
@@ -402,8 +403,8 @@ code.
 
 Near-term work:
 
-- make permission enforcement safer to enable by default
 - connect file-backed sessions to a real login/auth gateway flow
+- make permission enforcement default-on after the login/auth gateway is wired
 - add CPU and memory isolation for untrusted object code
 - expose scheduler/queue/job status through the HTTP contract
 - add file upload/delete with quotas, content limits, permissions, and audit

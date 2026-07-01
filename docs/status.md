@@ -18,7 +18,7 @@ public users.
   restore points, and restore API
 - File-backed accounts, users, sessions, and permission subjects
 - Permission policy storage, check API, audit mode, readiness status, row
-  filters, field redaction, and opt-in enforcement
+  filters, field redaction, opt-in enforcement, and readiness-gated rollout
 - Request size limits, request concurrency limits, execution concurrency limits,
   rate limits, wall-clock timeout path, and health/capacity metrics
 - Runtime backups, restore helpers, deployment checks, GitHub Actions tests, and
@@ -38,7 +38,7 @@ public users.
 
 - Open signup where strangers can run arbitrary Python code
 - Public source writes
-- Default-on permissions for every route
+- Default-on permissions for every route after login/auth gateway integration
 - Browser login/session UX
 - CPU and memory isolation for untrusted object code
 - File upload/delete from untrusted users
@@ -48,8 +48,8 @@ public users.
 
 ## Next Work
 
-1. Make permission enforcement safer to enable by default.
-2. Connect sessions to a real login or trusted auth gateway flow.
+1. Connect sessions to a real login or trusted auth gateway flow.
+2. Make permission enforcement default-on after the login/auth gateway is wired.
 3. Expose scheduler, queue, job, and daemon status through HTTP.
 4. Add file upload/delete with quotas, content checks, permissions, and audit.
 5. Add CPU/memory isolation and a better worker boundary for untrusted code.

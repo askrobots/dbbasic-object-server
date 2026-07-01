@@ -177,7 +177,31 @@ editing mature.
 DBBASIC_ENABLE_PERMISSION_ENFORCEMENT=true
 ```
 
-When enforcement is enabled, protected routes call the same decision engine
+That flag requests enforcement. The server only makes it effective when the
+readiness checks from `/permissions/status` pass. If the policy is invalid, or
+the default role-based policy has no grants, the request stays in audit/shadow
+mode and responses continue to follow the pre-enforcement route behavior.
+Operators can see this through:
+
+```json
+{
+  "permissions": {
+    "enforcement_requested": true,
+    "enforcement_enabled": false,
+    "enforcement_blocked": true
+  }
+}
+```
+
+The explicit recovery/test override is:
+
+```text
+DBBASIC_ALLOW_UNREADY_PERMISSION_ENFORCEMENT=true
+```
+
+Do not use that override as a normal production setting.
+
+When enforcement is effective, protected routes call the same decision engine
 before serving or executing data:
 
 ```mermaid

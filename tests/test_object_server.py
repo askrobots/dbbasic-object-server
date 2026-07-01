@@ -237,6 +237,8 @@ def test_identity_endpoint_returns_anonymous_subject(monkeypatch):
         },
         "permissions": {
             "enforcement_enabled": False,
+            "enforcement_requested": False,
+            "enforcement_blocked": False,
             "audit_enabled": False,
         },
     }
@@ -1694,11 +1696,37 @@ def test_collection_record_writes_in_audit_mode_still_require_admin_token(tmp_pa
     assert entry["correlation_id"] == correlation_id
 
 
-def test_collection_records_enforcement_denies_default_policy(tmp_path, monkeypatch):
+def test_collection_records_enforcement_request_with_default_policy_stays_in_shadow_mode(
+    tmp_path,
+    monkeypatch,
+):
     data_dir = tmp_path / "data"
     write_records(data_dir, "contacts", "id\tname\n1\tAlice\n")
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
     monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+
+    status, _, payload = request("/collections/contacts/records")
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["collection"] == "contacts"
+    assert payload["records"] == [{"id": "1", "name": "Alice"}]
+    entries = object_permission_audit.get_permission_audit(data_dir)
+    assert entries[-1]["action"] == "read"
+    assert entries[-1]["collection"] == "contacts"
+    assert entries[-1]["object_id"] is None
+    assert entries[-1]["decision"]["allowed"] is False
+    assert entries[-1]["enforced"] is False
+    assert entries[-1]["enforcement_requested"] is True
+    assert entries[-1]["enforcement_blocked"] is True
+
+
+def test_collection_records_enforcement_can_force_default_policy(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\n1\tAlice\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+    monkeypatch.setenv(object_server.PERMISSION_UNREADY_ENFORCEMENT_ENV, "true")
 
     status, _, payload = request("/collections/contacts/records")
 
@@ -1709,6 +1737,8 @@ def test_collection_records_enforcement_denies_default_policy(tmp_path, monkeypa
     assert entries[-1]["collection"] == "contacts"
     assert entries[-1]["object_id"] is None
     assert entries[-1]["decision"]["allowed"] is False
+    assert entries[-1]["enforced"] is True
+    assert entries[-1]["enforcement_requested"] is True
 
 
 def test_collection_records_enforcement_filters_rows_for_trusted_subject(tmp_path, monkeypatch):
@@ -2587,6 +2617,9 @@ def test_permissions_status_reports_default_policy_blocker(tmp_path, monkeypatch
     assert status == 200
     assert payload["status"] == "ok"
     assert payload["permissions"]["enforcement_enabled"] is False
+    assert payload["permissions"]["enforcement_requested"] is False
+    assert payload["permissions"]["enforcement_blocked"] is False
+    assert payload["permissions"]["allow_unready_enforcement"] is False
     assert payload["permissions"]["audit_enabled"] is False
     assert payload["permissions"]["trusted_headers_enabled"] is False
     assert payload["permissions"]["admin_token_configured"] is True
@@ -2602,6 +2635,28 @@ def test_permissions_status_reports_default_policy_blocker(tmp_path, monkeypatch
     }
     assert "Permission enforcement is off." in payload["warnings"]
     assert "object execution and mutation routes" in payload["coverage"]["policy_checked"]
+
+
+def test_permissions_status_reports_blocked_enforcement_request(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/permissions/status", headers=auth_headers())
+
+    assert status == 200
+    assert payload["permissions"]["enforcement_enabled"] is False
+    assert payload["permissions"]["enforcement_requested"] is True
+    assert payload["permissions"]["enforcement_blocked"] is True
+    assert payload["permissions"]["audit_enabled"] is True
+    assert payload["readiness"] == {
+        "can_enable_enforcement": False,
+        "blockers": ["Role-based policy has no grants; non-admin traffic will be denied."],
+    }
+    assert (
+        "Permission enforcement was requested but readiness checks blocked rollout."
+        in payload["warnings"]
+    )
 
 
 def test_permissions_status_reports_identity_counts_and_ready_policy(tmp_path, monkeypatch):
@@ -2650,6 +2705,9 @@ def test_permissions_status_reports_identity_counts_and_ready_policy(tmp_path, m
 
     assert status == 200
     assert payload["permissions"]["audit_enabled"] is True
+    assert payload["permissions"]["enforcement_enabled"] is False
+    assert payload["permissions"]["enforcement_requested"] is False
+    assert payload["permissions"]["enforcement_blocked"] is False
     assert payload["permissions"]["require_known_identity_users"] is True
     assert payload["identity"]["accounts"] == {"count": 1, "active": 1, "disabled": 0}
     assert payload["identity"]["users"] == {"count": 1, "active": 1, "disabled": 0}
@@ -2963,7 +3021,10 @@ def test_permission_enforcement_is_disabled_by_default(tmp_path, monkeypatch):
     assert object_permission_audit.get_permission_audit(data_dir) == []
 
 
-def test_permission_enforcement_denies_execution_with_default_policy(tmp_path, monkeypatch):
+def test_permission_enforcement_request_with_default_policy_stays_in_shadow_mode(
+    tmp_path,
+    monkeypatch,
+):
     root = tmp_path / "objects"
     data_dir = tmp_path / "data"
     write_source(root / "site" / "home.py", "def GET(request):\n    return {'ok': True}\n")
@@ -2973,14 +3034,35 @@ def test_permission_enforcement_denies_execution_with_default_policy(tmp_path, m
 
     status, _, payload = request("/objects/site_home")
 
-    assert status == 403
-    assert payload == {"status": "error", "error": "no matching role rule", "code": "forbidden"}
+    assert status == 200
+    assert payload == {"ok": True}
     entries = object_permission_audit.get_permission_audit(data_dir)
     assert entries[-1]["action"] == "execute"
     assert entries[-1]["object_id"] == "site_home"
     assert entries[-1]["collection"] == "site"
     assert entries[-1]["decision"]["allowed"] is False
-    assert entries[-1]["enforced"] is True
+    assert entries[-1]["enforced"] is False
+    assert entries[-1]["enforcement_requested"] is True
+    assert entries[-1]["enforcement_blocked"] is True
+
+
+def test_permission_enforcement_can_force_default_policy(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {'ok': True}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+    monkeypatch.setenv(object_server.PERMISSION_UNREADY_ENFORCEMENT_ENV, "true")
+
+    status, _, payload = request("/objects/site_home")
+
+    assert status == 403
+    assert payload == {"status": "error", "error": "no matching role rule", "code": "forbidden"}
+    entry = object_permission_audit.get_permission_audit(data_dir)[-1]
+    assert entry["decision"]["allowed"] is False
+    assert entry["enforced"] is True
+    assert entry["enforcement_requested"] is True
 
 
 def test_permission_enforcement_allows_public_policy_execution(tmp_path, monkeypatch):

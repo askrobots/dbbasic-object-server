@@ -176,6 +176,7 @@ DBBASIC_RATE_LIMIT_WINDOW_SECONDS=60
 DBBASIC_RATE_LIMIT_TRUST_PROXY_HEADERS=true
 DBBASIC_ENABLE_PERMISSION_AUDIT=false
 DBBASIC_ENABLE_PERMISSION_ENFORCEMENT=false
+DBBASIC_ALLOW_UNREADY_PERMISSION_ENFORCEMENT=false
 DBBASIC_PERMISSION_TRUST_HEADERS=false
 DBBASIC_ENABLE_RECORD_EVENTS=true
 DBBASIC_EVENT_KEEP_COUNT=1000
@@ -211,11 +212,24 @@ audit mode first to watch route decisions without blocking users:
 DBBASIC_ENABLE_PERMISSION_AUDIT=true
 ```
 
-Only enable blocking after the persisted policy and auth gateway are confirmed:
+Request blocking only after the persisted policy and auth gateway are confirmed:
 
 ```text
 DBBASIC_ENABLE_PERMISSION_ENFORCEMENT=true
 ```
+
+That flag is a request, not a blind switch. The server checks the same
+readiness blockers exposed by `/permissions/status`; if the policy is invalid or
+the default role-based policy has no grants, the route stays in audit/shadow
+mode and `permissions.enforcement_blocked` reports `true`.
+
+For manual recovery or a narrow test, the readiness guard can be bypassed:
+
+```text
+DBBASIC_ALLOW_UNREADY_PERMISSION_ENFORCEMENT=true
+```
+
+Do not leave that override enabled on public staging.
 
 `DBBASIC_PERMISSION_TRUST_HEADERS=true` is only appropriate when a trusted proxy
 or auth gateway strips client-supplied identity headers and writes fresh
