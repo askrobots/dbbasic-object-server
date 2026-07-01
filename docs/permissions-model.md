@@ -126,6 +126,15 @@ inherit that account, role, and subscription data, giving permission checks the
 same subject shape whether the request came from Scroll, a gateway, or a future
 DBBASIC login object.
 
+New DBBASIC-created accounts, users, sessions, shared links, record IDs, and
+change/audit IDs should use UUIDv4 values. Imported systems can keep their old
+integer or slug IDs as compatibility columns, but new routes and generated UI
+should not depend on sequential IDs. This keeps SaaS-style tenant data,
+temporary links, subscriptions, shared records, and future package exports from
+being tied to one database sequence. The identity registry still accepts string
+IDs so Django/PostgreSQL data and older Scroll prototypes can migrate without a
+flag day.
+
 Scroll and tests can preview decisions without persisting draft rules:
 
 ```http

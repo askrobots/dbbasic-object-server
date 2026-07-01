@@ -80,6 +80,8 @@ This repository currently contains:
 - `python_object_runtime.py` - minimal direct Python object loader for early execution tests
 - `object_namespace.py` - object source discovery and object ID resolution
 - `object_execution.py` - structured object execution results and error capture
+- `object_correlation.py` - UUIDv4 request/action correlation IDs for logs,
+  source versions, audits, and error responses
 - `object_collections.py` - read-only collection summaries derived from objects, records, and permission policy
 - `object_records.py` - TSV-backed collection records for generated tables and forms
 - `object_source.py` - source read, update, version, and rollback operations
@@ -269,7 +271,16 @@ If `data/schemas/{collection}.json` exists, collection writes also use it for
 server-side validation. Known fields can require values, apply defaults, enforce
 basic types, restrict enum values, and reject computed/read-only fields. Unknown
 fields still work so DBBASIC can stay schemaless until a collection needs more
-structure.
+structure. This is the migration path for Django/PostgreSQL-style data too:
+legacy integer IDs and JSONB-like flexible fields can be imported as collection
+data, while new DBBASIC-facing resources should use UUIDv4 IDs for URL/API
+identity.
+
+Every HTTP response includes `X-DBBASIC-Correlation-ID`. Clients can send a
+UUIDv4 value in that header, or the server will create one. Source versions,
+source-change logs, object logs, permission audit entries, and execution error
+responses carry the same ID when available, so Scroll and AI tools can connect
+one action to the exact code, data, logs, and errors it produced.
 
 Admin schema writes also keep a changelog under
 `data/schema_versions/{collection}/`. Scroll can list previous versions, inspect
@@ -288,6 +299,7 @@ rules the rest of the server will use:
 - `python_object_runtime.py` loads simple Python objects for early execution tests
 - `object_namespace.py` maps object IDs to files under `objects/`
 - `object_execution.py` returns success or error results from object method runs
+- `object_correlation.py` keeps request/action correlation IDs as UUIDv4 values
 - `object_source.py` reads, updates, versions, and rolls back source files
 - `object_state.py` reads and writes runtime-owned TSV-backed object state
 - `object_records.py` reads and writes TSV-backed collection records under `data/collections/`
@@ -324,6 +336,8 @@ rules the rest of the server will use:
 - `basics_counter` maps to `objects/basics/counter.py`
 - `u_42_deals` maps to `objects/users/42/deals.py`
 - rollbacks create a new version instead of deleting history
+- URL/API-facing resource IDs should be UUIDv4 for new DBBASIC data; imported
+  legacy rows can keep compatibility IDs during migration
 - source updates through HTTP require `DBBASIC_ENABLE_SOURCE_WRITES=true` and an
   admin token
 - object listing and introspection reads require an admin token

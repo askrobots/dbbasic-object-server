@@ -35,6 +35,7 @@ def update_object_source(
     message: str,
     roots: Iterable[Path] | None = None,
     version_manager: VersionManager | None = None,
+    correlation_id: str | None = None,
 ) -> int:
     """Save a new source version and write it to the object file."""
     source_path = _resolve_existing_source(object_id, roots)
@@ -45,6 +46,7 @@ def update_object_source(
         content=new_code,
         author=author,
         message=message,
+        correlation_id=correlation_id,
     )
     _write_source(source_path, new_code)
     return version_id
@@ -57,6 +59,7 @@ def rollback_object_source(
     message: str,
     roots: Iterable[Path] | None = None,
     version_manager: VersionManager | None = None,
+    correlation_id: str | None = None,
 ) -> int:
     """Rollback source by creating a new version and writing its content."""
     source_path = _resolve_existing_source(object_id, roots)
@@ -67,6 +70,7 @@ def rollback_object_source(
         to_version=to_version,
         author=author,
         message=message,
+        correlation_id=correlation_id,
     )
     new_version = manager.get_version(object_id, new_version_id)
     if new_version is None:

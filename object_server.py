@@ -23,6 +23,7 @@ from typing import Any, Mapping
 import http_api_contract
 import object_backup
 import object_collections
+import object_correlation
 import object_events
 import object_execution
 import object_field_permissions
@@ -252,16 +253,34 @@ async def app(scope: dict[str, Any], receive, send) -> None:
     path = scope.get("path", "/")
     status_code = 500
     started_at = time.perf_counter()
+    request_headers = _parse_headers(scope.get("headers", []))
+    correlation_id = object_correlation.ensure_correlation_id(
+        request_headers.get(object_correlation.CORRELATION_ID_HEADER)
+    )
+    correlation_token = object_correlation.set_current_correlation_id(correlation_id)
 
     async def send_with_metrics(message):
         nonlocal status_code
         if message["type"] == "http.response.start":
             status_code = int(message.get("status", status_code))
+            headers = list(message.get("headers", []))
+            if not any(
+                name.lower() == object_correlation.CORRELATION_ID_HEADER.encode("latin-1")
+                for name, _value in headers
+            ):
+                headers.append(
+                    (
+                        object_correlation.CORRELATION_ID_HEADER.encode("latin-1"),
+                        correlation_id.encode("latin-1"),
+                    )
+                )
+            message = {**message, "headers": headers}
         await send(message)
 
     try:
         await _handle_http(scope, receive, send_with_metrics)
     finally:
+        object_correlation.reset_current_correlation_id(correlation_token)
         duration_ms = (time.perf_counter() - started_at) * 1000
         _metrics.record_request(method, path, status_code, duration_ms)
 
@@ -271,6 +290,9 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
     path = scope.get("path", "/")
     query = _parse_query(scope.get("query_string", b""))
     headers = _parse_headers(scope.get("headers", []))
+    correlation_id = object_correlation.current_correlation_id()
+    if correlation_id is not None:
+        headers[object_correlation.CORRELATION_ID_HEADER] = correlation_id
 
     if path == "/health":
         if _is_detailed_health(query) and await _send_rate_limit_if_needed(scope, headers, send):
@@ -2304,12 +2326,14 @@ async def _handle_object_rollback_post(
         version_id = _payload_int(payload, "version_id", minimum=1)
         author = _payload_text(payload, "author", "api")
         message = _payload_text(payload, "message", f"Rollback to version {version_id}")
+        correlation_id = object_correlation.current_correlation_id()
         new_version_id = object_source.rollback_object_source(
             object_id=object_id,
             to_version=version_id,
             author=author,
             message=message,
             version_manager=_version_manager(),
+            correlation_id=correlation_id,
         )
     except ValueError as exc:
         await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
@@ -2332,7 +2356,14 @@ async def _handle_object_rollback_post(
             "version_id": version_id,
             "new_version_id": new_version_id,
             "object_id": object_id,
+            "correlation_id": object_correlation.current_correlation_id(),
         },
+    )
+    _append_source_change_log(
+        object_id,
+        action="source_rollback",
+        version_id=new_version_id,
+        from_version_id=version_id,
     )
 
 
@@ -2382,6 +2413,7 @@ async def _handle_object_source_put(
 
     author = _payload_text(payload, "author", "api")
     message = _payload_text(payload, "message", "Updated via API")
+    correlation_id = object_correlation.current_correlation_id()
 
     try:
         version_id = object_source.update_object_source(
@@ -2390,6 +2422,7 @@ async def _handle_object_source_put(
             author=author,
             message=message,
             version_manager=_version_manager(),
+            correlation_id=correlation_id,
         )
     except InvalidObjectIdError as exc:
         await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
@@ -2405,8 +2438,10 @@ async def _handle_object_source_put(
             "message": f"Code updated to version {version_id}",
             "version_id": version_id,
             "object_id": object_id,
+            "correlation_id": object_correlation.current_correlation_id(),
         },
     )
+    _append_source_change_log(object_id, action="source_update", version_id=version_id)
 
 
 async def _execute_object_method(
@@ -2441,6 +2476,7 @@ async def _execute_object_method(
         object_id=object_id,
         method=method,
         payload=payload,
+        correlation_id=object_correlation.current_correlation_id(),
     )
     timeout_seconds = _object_timeout_seconds()
 
@@ -3559,6 +3595,7 @@ def _append_execution_log(result: object_execution.ObjectExecutionResult) -> Non
                 "DEBUG",
                 f"{result.method} completed successfully",
                 base_dir=_data_dir(),
+                correlation_id=result.correlation_id,
                 method=result.method,
                 status="success",
                 duration_ms=result.duration_ms,
@@ -3572,6 +3609,7 @@ def _append_execution_log(result: object_execution.ObjectExecutionResult) -> Non
             "ERROR",
             f"{result.method} failed: {error}",
             base_dir=_data_dir(),
+            correlation_id=result.correlation_id,
             method=result.method,
             status="error",
             duration_ms=result.duration_ms,
@@ -3580,6 +3618,34 @@ def _append_execution_log(result: object_execution.ObjectExecutionResult) -> Non
         )
     except Exception:
         # Logging is feedback for the dev loop; it should not change the object response.
+        pass
+
+
+def _append_source_change_log(
+    object_id: str,
+    *,
+    action: str,
+    version_id: int,
+    from_version_id: int | None = None,
+) -> None:
+    fields: dict[str, Any] = {
+        "action": action,
+        "version_id": version_id,
+    }
+    if from_version_id is not None:
+        fields["from_version_id"] = from_version_id
+
+    try:
+        object_logs.append_object_log(
+            object_id,
+            "INFO",
+            f"{action} version {version_id}",
+            base_dir=_data_dir(),
+            correlation_id=object_correlation.current_correlation_id(),
+            **fields,
+        )
+    except Exception:
+        # Source-change logs are operator feedback; source writes already succeeded.
         pass
 
 
@@ -4280,6 +4346,7 @@ def _append_permission_audit_entry(
 
     entry: dict[str, Any] = {
         "timestamp": _utc_timestamp(),
+        "correlation_id": object_correlation.current_correlation_id(),
         "method": method,
         "object_id": object_id,
         "collection": collection,
@@ -4756,6 +4823,7 @@ async def _send_execution_error(
         {
             "status": "error",
             "error": f"{prefix}{error_message}",
+            "correlation_id": result.correlation_id,
         },
         status=status,
     )

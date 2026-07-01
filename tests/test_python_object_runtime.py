@@ -135,6 +135,7 @@ def test_python_object_runtime_injects_logger(tmp_path):
     assert logs == [
         {
             "entry_id": logs[0]["entry_id"],
+            "correlation_id": "",
             "timestamp": logs[0]["timestamp"],
             "level": "INFO",
             "message": "Counter read",

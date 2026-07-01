@@ -388,6 +388,14 @@ Values are stored and returned as strings. Record writes preserve existing
 columns and append new columns from submitted fields. Record IDs are unique and
 cannot be changed by update.
 
+New DBBASIC-facing record IDs should be UUIDv4 strings. Imported application
+data can keep legacy IDs in compatibility columns, but new URLs, generated UI,
+change logs, and object references should not depend on sequential database
+integers. This came from the Django/PostgreSQL migration path: existing tables
+may arrive with integer primary keys and JSONB-style flexible data, while new
+DBBASIC resources need stable, non-enumerable IDs that can move between object
+servers and packages.
+
 If a manual schema exists for the collection, create/update validates known
 fields before writing the TSV:
 
@@ -406,6 +414,11 @@ fields before writing the TSV:
 Unknown fields are still allowed. This preserves the DBBASIC rule that schemas
 can tighten important collections without turning every object into a migration
 project.
+
+Schemas are metadata, not a mandatory deployment gate. A collection can start
+schemaless, accept extra fields, and later add schema metadata for generated
+forms, validation, relations, field permissions, and admin views. This keeps the
+fast object/data loop while still allowing stricter app surfaces when needed.
 
 The HTTP record routes are admin-gated by default. When permission audit or
 enforcement is enabled, read routes use the server permission policy. Record
@@ -429,6 +442,13 @@ The public helper module is `object_record_changes.py`. It exposes:
 append_record_change(collection, record_id, action, before, after, base_dir="data")
 list_record_changes(collection, record_id=None, base_dir="data", limit=100, offset=0)
 ```
+
+Request/action correlation IDs are UUIDv4 values. The ASGI app accepts
+`X-DBBASIC-Correlation-ID`, normalizes it only when it is a valid UUIDv4, and
+otherwise creates a new one. Source versions, source-change logs, object-owned
+logs, execution errors, and permission audits should carry the current
+correlation ID so Scroll and AI tooling can trace one action across code, data,
+logs, and rollback history.
 
 Entries are JSON Lines with:
 

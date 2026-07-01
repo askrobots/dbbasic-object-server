@@ -16,6 +16,7 @@ from multiprocessing.connection import Connection
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Protocol
 
+import object_correlation
 from object_namespace import resolve_object_id
 
 
@@ -27,6 +28,7 @@ class ObjectExecutionRequest:
     method: str = "GET"
     payload: Mapping[str, Any] | None = None
     path: Path | None = None
+    correlation_id: str | None = None
 
     def normalized_method(self) -> str:
         """Return the method name used by object runtimes."""
@@ -69,6 +71,7 @@ class ObjectExecutionResult:
     started_at: str
     finished_at: str
     duration_ms: float
+    correlation_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -81,6 +84,7 @@ class ObjectExecutionResult:
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "duration_ms": self.duration_ms,
+            "correlation_id": self.correlation_id,
         }
 
 
@@ -121,6 +125,26 @@ def execute_object(
     raise_on_error: bool = False,
 ) -> ObjectExecutionResult:
     """Execute an object and capture success or failure as structured data."""
+    correlation_id = object_correlation.ensure_correlation_id(
+        request.correlation_id or object_correlation.current_correlation_id()
+    )
+    request = _request_with_correlation_id(request, correlation_id)
+    token = object_correlation.set_current_correlation_id(correlation_id)
+
+    try:
+        return _execute_object_with_context(runtime, request, roots, raise_on_error=raise_on_error)
+    finally:
+        object_correlation.reset_current_correlation_id(token)
+
+
+def _execute_object_with_context(
+    runtime: ObjectRuntimeProtocol,
+    request: ObjectExecutionRequest,
+    roots: Iterable[Path] | None = None,
+    *,
+    raise_on_error: bool = False,
+) -> ObjectExecutionResult:
+    """Execute an object with a correlation context already installed."""
     started_perf = time.perf_counter()
     started_at = _utc_timestamp()
     method = request.normalized_method()
@@ -180,6 +204,11 @@ def execute_python_object_subprocess(
     raise_on_error: bool = False,
 ) -> ObjectExecutionResult:
     """Execute a Python object in a subprocess with a wall-clock timeout."""
+    correlation_id = object_correlation.ensure_correlation_id(
+        request.correlation_id or object_correlation.current_correlation_id()
+    )
+    request = _request_with_correlation_id(request, correlation_id)
+
     if timeout_seconds <= 0:
         from python_object_runtime import PythonObjectRuntime
 
@@ -277,6 +306,7 @@ def _finish_success(
         started_at=started_at,
         finished_at=_utc_timestamp(),
         duration_ms=_duration_ms(started_perf),
+        correlation_id=request.correlation_id,
     )
 
 
@@ -299,6 +329,20 @@ def _finish_error(
         started_at=started_at,
         finished_at=_utc_timestamp(),
         duration_ms=_duration_ms(started_perf),
+        correlation_id=request.correlation_id,
+    )
+
+
+def _request_with_correlation_id(
+    request: ObjectExecutionRequest,
+    correlation_id: str,
+) -> ObjectExecutionRequest:
+    return ObjectExecutionRequest(
+        object_id=request.object_id,
+        method=request.method,
+        payload=request.payload,
+        path=request.path,
+        correlation_id=correlation_id,
     )
 
 
@@ -314,6 +358,7 @@ def _request_with_resolved_path(
         method=request.method,
         payload=request.payload,
         path=resolve_object_id(request.object_id, roots),
+        correlation_id=request.correlation_id,
     )
 
 

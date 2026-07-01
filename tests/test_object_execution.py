@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+import object_correlation
 import object_execution
 
 
@@ -78,6 +79,28 @@ def test_execute_object_serializes_result_to_dict(tmp_path):
     assert result.to_dict()["ok"] is True
     assert result.to_dict()["result"] == {"count": 1}
     assert result.to_dict()["error"] is None
+
+
+def test_execute_object_preserves_correlation_id(tmp_path):
+    root = tmp_path / "objects"
+    source = write_object(root / "basics" / "counter.py")
+    runtime = FakeRuntime(FakeObject(output={"count": 1}))
+    correlation_id = "123e4567-e89b-42d3-a456-426614174000"
+
+    result = object_execution.execute_object(
+        runtime,
+        object_execution.ObjectExecutionRequest(
+            "basics_counter",
+            correlation_id=correlation_id,
+        ),
+        roots=[root],
+    )
+
+    assert result.ok
+    assert result.path == source
+    assert result.correlation_id == correlation_id
+    assert result.to_dict()["correlation_id"] == correlation_id
+    assert object_correlation.current_correlation_id() is None
 
 
 def test_execute_object_missing_source_returns_error_without_loading(tmp_path):

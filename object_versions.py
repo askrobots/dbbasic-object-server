@@ -22,7 +22,8 @@ from object_namespace import validate_object_id
 
 DEFAULT_DATA_DIR = "data"
 METADATA_FILE = "metadata.tsv"
-METADATA_FIELDS = ["version_id", "timestamp", "author", "message", "hash"]
+BASE_METADATA_FIELDS = ["version_id", "timestamp", "author", "message", "hash"]
+METADATA_FIELDS = [*BASE_METADATA_FIELDS, "correlation_id"]
 
 
 class VersionError(Exception):
@@ -51,6 +52,7 @@ class VersionManager:
         content: str,
         author: str,
         message: str,
+        correlation_id: str | None = None,
     ) -> int:
         """Save a new version and return its integer version ID."""
         obj_dir = self._object_dir(object_id, create=True)
@@ -74,6 +76,7 @@ class VersionManager:
                     "author": author,
                     "message": message,
                     "hash": content_hash,
+                    "correlation_id": correlation_id or "",
                 }
             )
 
@@ -124,6 +127,7 @@ class VersionManager:
         to_version: int,
         author: str,
         message: str,
+        correlation_id: str | None = None,
     ) -> int:
         """Create a new version containing content from an older version."""
         old_version = self.get_version(object_id, to_version)
@@ -135,6 +139,7 @@ class VersionManager:
             content=old_version["content"],
             author=author,
             message=message,
+            correlation_id=correlation_id,
         )
 
     def _object_dir(self, object_id: str, *, create: bool = False) -> Path:
@@ -170,7 +175,7 @@ class VersionManager:
         return versions
 
     def _normalize_metadata_row(self, row: dict[str, str | None]) -> dict[str, Any] | None:
-        if any(row.get(field) is None for field in METADATA_FIELDS):
+        if any(row.get(field) is None for field in BASE_METADATA_FIELDS):
             return None
 
         try:
@@ -178,13 +183,17 @@ class VersionManager:
         except ValueError:
             return None
 
-        return {
+        normalized = {
             "version_id": version_id,
             "timestamp": row["timestamp"] or "",
             "author": row["author"] or "",
             "message": row["message"] or "",
             "hash": row["hash"] or "",
         }
+        correlation_id = row.get("correlation_id") or ""
+        if correlation_id:
+            normalized["correlation_id"] = correlation_id
+        return normalized
 
     def _get_next_version_id(self, object_id: str) -> int:
         versions = self._read_metadata(object_id)

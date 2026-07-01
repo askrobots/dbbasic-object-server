@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import object_correlation
 from object_namespace import validate_object_id
 from object_versions import DEFAULT_DATA_DIR, InvalidObjectIdError
 
@@ -35,6 +36,7 @@ DEFAULT_LOG_KEEP_ROTATED = 32
 FALSE_VALUES = {"0", "false", "no", "off"}
 DEFAULT_LOG_FIELDS = [
     "entry_id",
+    "correlation_id",
     "timestamp",
     "level",
     "message",
@@ -130,6 +132,9 @@ def append_object_log(
     """Append one entry to ``data/logs/{object_id}/log.tsv``."""
     log_dir = object_log_dir(object_id, base_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
+
+    if fields.get("correlation_id") is None:
+        fields["correlation_id"] = object_correlation.current_correlation_id()
 
     entry = {
         "entry_id": uuid4().hex[:16],

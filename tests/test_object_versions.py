@@ -24,9 +24,29 @@ def test_save_first_version_creates_metadata_and_content_file(tmp_path):
     assert content.read_text() == "content v1"
 
     lines = metadata.read_text().strip().split("\n")
-    assert lines[0] == "version_id\ttimestamp\tauthor\tmessage\thash"
+    assert lines[0] == "version_id\ttimestamp\tauthor\tmessage\thash\tcorrelation_id"
     assert lines[1].startswith("1\t")
     assert "\tsystem\tInitial version\t" in lines[1]
+
+
+def test_save_version_records_correlation_id(tmp_path):
+    manager = object_versions.VersionManager(tmp_path / "data")
+    correlation_id = "123e4567-e89b-42d3-a456-426614174000"
+
+    manager.save_version(
+        "basics_counter",
+        "content v1",
+        "system",
+        "Initial version",
+        correlation_id=correlation_id,
+    )
+
+    version = manager.get_version("basics_counter", version_id=1)
+    history = manager.get_history("basics_counter")
+
+    assert version is not None
+    assert version["correlation_id"] == correlation_id
+    assert history[0]["correlation_id"] == correlation_id
 
 
 def test_save_multiple_versions_increment_ids(tmp_path):
@@ -177,3 +197,30 @@ def test_malformed_metadata_rows_are_ignored(tmp_path):
     assert [row["version_id"] for row in history] == [1]
     assert version is not None
     assert version["content"] == "good content"
+
+
+def test_legacy_metadata_without_correlation_id_still_reads(tmp_path):
+    manager = object_versions.VersionManager(tmp_path / "data")
+    version_dir = tmp_path / "data" / "versions" / "basics_counter"
+    version_dir.mkdir(parents=True)
+    (version_dir / "metadata.tsv").write_text(
+        "version_id\ttimestamp\tauthor\tmessage\thash\n"
+        "1\t2026-01-01T00:00:01\tuser\tlegacy row\tlegacy-hash\n"
+    )
+    (version_dir / "v1.txt").write_text("legacy content")
+
+    history = manager.get_history("basics_counter")
+    version = manager.get_version("basics_counter", version_id=1)
+
+    assert history == [
+        {
+            "version_id": 1,
+            "timestamp": "2026-01-01T00:00:01",
+            "author": "user",
+            "message": "legacy row",
+            "hash": "legacy-hash",
+        }
+    ]
+    assert version is not None
+    assert version["content"] == "legacy content"
+    assert "correlation_id" not in version

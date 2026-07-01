@@ -2,6 +2,7 @@ import gzip
 
 import pytest
 
+import object_correlation
 import object_logs
 import object_versions
 
@@ -131,6 +132,7 @@ def test_append_object_log_creates_tsv_entry(tmp_path):
     assert logs == [
         {
             "entry_id": entry["entry_id"],
+            "correlation_id": "",
             "timestamp": entry["timestamp"],
             "level": "DEBUG",
             "message": "GET completed successfully",
@@ -141,6 +143,24 @@ def test_append_object_log_creates_tsv_entry(tmp_path):
             "error": "",
         }
     ]
+
+
+def test_append_object_log_inherits_current_correlation_id(tmp_path):
+    correlation_id = "123e4567-e89b-42d3-a456-426614174000"
+    token = object_correlation.set_current_correlation_id(correlation_id)
+    try:
+        object_logs.append_object_log(
+            "basics_counter",
+            "INFO",
+            "inside object",
+            base_dir=tmp_path / "data",
+        )
+    finally:
+        object_correlation.reset_current_correlation_id(token)
+
+    logs = object_logs.get_object_logs("basics_counter", base_dir=tmp_path / "data")
+
+    assert logs[0]["correlation_id"] == correlation_id
 
 
 def test_append_object_log_extends_existing_header(tmp_path):

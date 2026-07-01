@@ -3,7 +3,9 @@ import json
 import tarfile
 from pathlib import Path
 
+import object_correlation
 import object_execution
+import object_logs
 import object_package_changes
 import object_packages
 import object_permission_audit
@@ -181,7 +183,35 @@ def test_health_endpoint_returns_ok():
 
     assert status == 200
     assert headers[b"content-type"] == b"application/json; charset=utf-8"
+    correlation_id = headers[b"x-dbbasic-correlation-id"].decode("latin-1")
+    assert object_correlation.normalize_correlation_id(correlation_id) == correlation_id
     assert payload == {"status": "ok"}
+
+
+def test_response_preserves_valid_correlation_header():
+    correlation_id = "123e4567-e89b-42d3-a456-426614174000"
+
+    status, headers, payload = request(
+        "/health",
+        headers=[("x-dbbasic-correlation-id", correlation_id)],
+    )
+
+    assert status == 200
+    assert payload == {"status": "ok"}
+    assert headers[b"x-dbbasic-correlation-id"].decode("latin-1") == correlation_id
+
+
+def test_response_replaces_invalid_correlation_header():
+    status, headers, payload = request(
+        "/health",
+        headers=[("x-dbbasic-correlation-id", "not-a-uuid")],
+    )
+
+    assert status == 200
+    assert payload == {"status": "ok"}
+    correlation_id = headers[b"x-dbbasic-correlation-id"].decode("latin-1")
+    assert correlation_id != "not-a-uuid"
+    assert object_correlation.normalize_correlation_id(correlation_id) == correlation_id
 
 
 def test_identity_endpoint_returns_anonymous_subject(monkeypatch):
@@ -1633,11 +1663,13 @@ def test_collection_record_writes_in_audit_mode_still_require_admin_token(tmp_pa
     write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
     monkeypatch.setenv(object_server.PERMISSION_AUDIT_ENV, "true")
+    correlation_id = "123e4567-e89b-42d3-a456-426614174000"
 
     status, _, payload = request(
         "/collections/contacts/records",
         method="POST",
         body=json.dumps({"id": "c2", "name": "Grace"}).encode("utf-8"),
+        headers=[("x-dbbasic-correlation-id", correlation_id)],
     )
 
     assert status == 403
@@ -1648,6 +1680,7 @@ def test_collection_record_writes_in_audit_mode_still_require_admin_token(tmp_pa
     entry = object_permission_audit.get_permission_audit(data_dir)[-1]
     assert entry["action"] == "create"
     assert entry["enforced"] is False
+    assert entry["correlation_id"] == correlation_id
 
 
 def test_collection_records_enforcement_denies_default_policy(tmp_path, monkeypatch):
@@ -3585,6 +3618,7 @@ def test_source_update_versions_source_and_immediately_runs_new_code(tmp_path, m
     monkeypatch.setenv("DBBASIC_ENABLE_SOURCE_WRITES", "true")
     enable_admin_token(monkeypatch)
     new_code = "def GET(request):\n    return {'count': 2}\n"
+    correlation_id = "123e4567-e89b-42d3-a456-426614174000"
 
     status, _, payload = request(
         "/objects/basics_counter",
@@ -3597,7 +3631,7 @@ def test_source_update_versions_source_and_immediately_runs_new_code(tmp_path, m
                 "message": "Update counter",
             }
         ).encode(),
-        headers=auth_headers(),
+        headers=[*auth_headers(), ("x-dbbasic-correlation-id", correlation_id)],
     )
 
     assert status == 200
@@ -3606,6 +3640,7 @@ def test_source_update_versions_source_and_immediately_runs_new_code(tmp_path, m
         "message": "Code updated to version 1",
         "version_id": 1,
         "object_id": "basics_counter",
+        "correlation_id": correlation_id,
     }
     assert source_path.read_text() == new_code
 
@@ -3615,6 +3650,12 @@ def test_source_update_versions_source_and_immediately_runs_new_code(tmp_path, m
     assert saved["content"] == new_code
     assert saved["author"] == "test-api"
     assert saved["message"] == "Update counter"
+    assert saved["correlation_id"] == correlation_id
+
+    logs = object_logs.get_object_logs("basics_counter", base_dir=data_dir)
+    assert logs[0]["action"] == "source_update"
+    assert logs[0]["version_id"] == "1"
+    assert logs[0]["correlation_id"] == correlation_id
 
     status, _, payload = request("/objects/basics_counter")
 
@@ -3772,6 +3813,7 @@ def test_rollback_versions_source_and_immediately_runs_old_code(tmp_path, monkey
     enable_source_writes(monkeypatch, root, data_dir)
     v1_code = "def GET(request):\n    return {'count': 1}\n"
     v2_code = "def GET(request):\n    return {'count': 2}\n"
+    correlation_id = "123e4567-e89b-42d3-a456-426614174000"
 
     update_source("basics_counter", v1_code, message="first")
     update_source("basics_counter", v2_code, message="second")
@@ -3792,7 +3834,7 @@ def test_rollback_versions_source_and_immediately_runs_old_code(tmp_path, monkey
                 "message": "Rollback to first",
             }
         ).encode(),
-        headers=auth_headers(),
+        headers=[*auth_headers(), ("x-dbbasic-correlation-id", correlation_id)],
     )
 
     assert status == 200
@@ -3802,6 +3844,7 @@ def test_rollback_versions_source_and_immediately_runs_old_code(tmp_path, monkey
         "version_id": 1,
         "new_version_id": 3,
         "object_id": "basics_counter",
+        "correlation_id": correlation_id,
     }
     assert source_path.read_text() == v1_code
 
@@ -3816,6 +3859,13 @@ def test_rollback_versions_source_and_immediately_runs_old_code(tmp_path, monkey
     assert latest is not None
     assert latest["content"] == v1_code
     assert latest["message"] == "Rollback to first"
+    assert latest["correlation_id"] == correlation_id
+
+    logs = object_logs.get_object_logs("basics_counter", base_dir=data_dir)
+    rollback_logs = [entry for entry in logs if entry.get("action") == "source_rollback"]
+    assert rollback_logs[-1]["correlation_id"] == correlation_id
+    assert rollback_logs[-1]["version_id"] == "3"
+    assert rollback_logs[-1]["from_version_id"] == "1"
 
 
 def test_rollback_returns_404_for_missing_version(tmp_path, monkeypatch):
@@ -4209,8 +4259,12 @@ def test_object_execution_logger_writes_object_logs(tmp_path, monkeypatch):
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
     enable_admin_token(monkeypatch)
+    correlation_id = "123e4567-e89b-42d3-a456-426614174000"
 
-    status, _, payload = request("/objects/basics_counter")
+    status, _, payload = request(
+        "/objects/basics_counter",
+        headers=[("x-dbbasic-correlation-id", correlation_id)],
+    )
 
     assert status == 200
     assert payload == {"ok": True}
@@ -4225,6 +4279,11 @@ def test_object_execution_logger_writes_object_logs(tmp_path, monkeypatch):
     messages = [entry["message"] for entry in payload["logs"]]
     assert "Counter was read" in messages
     assert "GET completed successfully" in messages
+    assert {
+        entry["correlation_id"]
+        for entry in payload["logs"]
+        if entry["message"] in {"Counter was read", "GET completed successfully"}
+    } == {correlation_id}
 
 
 def test_object_execution_passes_query_params_as_payload(tmp_path, monkeypatch):
@@ -4247,7 +4306,11 @@ def test_object_execution_returns_404_for_missing_object(tmp_path, monkeypatch):
     status, _, payload = request("/objects/missing_object")
 
     assert status == 404
-    assert payload == {"status": "error", "error": "Object not found: missing_object"}
+    assert payload["status"] == "error"
+    assert payload["error"] == "Object not found: missing_object"
+    assert object_correlation.normalize_correlation_id(payload["correlation_id"]) == payload[
+        "correlation_id"
+    ]
 
 
 def test_execution_concurrency_limit_returns_503_when_full(tmp_path, monkeypatch):
@@ -4301,10 +4364,11 @@ def test_object_execution_timeout_returns_504_and_logs(tmp_path, monkeypatch):
     status, _, payload = request("/objects/basics_slow")
 
     assert status == 504
-    assert payload == {
-        "status": "error",
-        "error": "Execution failed: GET timed out for object basics_slow after 0.5 seconds",
-    }
+    assert payload["status"] == "error"
+    assert payload["error"] == "Execution failed: GET timed out for object basics_slow after 0.5 seconds"
+    assert object_correlation.normalize_correlation_id(payload["correlation_id"]) == payload[
+        "correlation_id"
+    ]
 
     status, _, payload = request(
         "/objects/basics_slow",

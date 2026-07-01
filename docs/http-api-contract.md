@@ -35,6 +35,50 @@ also require `DBBASIC_ENABLE_SOURCE_WRITES=true`. The real role, object, and row
 permission system still needs to replace this temporary admin-only boundary
 before general use.
 
+## Correlation IDs
+
+Every HTTP response includes:
+
+```http
+X-DBBASIC-Correlation-ID: <uuid-v4>
+```
+
+Clients may send their own UUIDv4 correlation ID:
+
+```http
+X-DBBASIC-Correlation-ID: 123e4567-e89b-42d3-a456-426614174000
+```
+
+Missing, empty, or invalid values are replaced with a server-generated UUIDv4.
+The response header always contains the accepted value. Source update responses,
+rollback responses, and execution error bodies also include `correlation_id`.
+
+The same ID is written into source version metadata, source-change object logs,
+object-owned runtime logs, execution error logs, and permission audit entries
+when those records are created inside the request. Scroll and AI tools can use
+that ID to connect one user action to the source version, logs, permission
+decision, and runtime error it produced.
+
+## Resource IDs
+
+New DBBASIC-facing URL and API resources should use UUIDv4 IDs by default:
+
+- record IDs
+- account and user IDs
+- session/action/change IDs
+- package install and restore IDs
+- external links and imported resource handles
+
+Imported systems may keep legacy compatibility IDs. For example, a Django table
+with integer primary keys can be imported with its old ID preserved in a
+compatibility column, while the DBBASIC route-facing `id` should be UUIDv4 for
+new records. This keeps URLs non-enumerable, makes exports easier to merge, and
+avoids coupling object packages to one database sequence.
+
+The current identity registry still accepts existing string IDs so old clients,
+Scroll prototypes, and migration tools do not break while the public runtime is
+being extracted.
+
 ## Health
 
 Plain health is a public liveness check:
@@ -743,6 +787,11 @@ data/collections/{collection}/records.tsv
 
 The TSV file must have a header row and an `id` column. Values are returned as
 strings.
+
+For new DBBASIC-created records, `id` should be a UUIDv4 string. During
+migrations, imported rows may preserve legacy integer or slug IDs for
+compatibility, but new public routes and generated UI should not assume
+sequential IDs.
 
 Create one record:
 
