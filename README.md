@@ -140,6 +140,12 @@ compact package changelog entries under
 `data/package_changes/{package_id}/changes.jsonl` so Scroll can show what was
 reviewed, installed, restored, or rejected.
 
+The package direction is how AskRobots-style primitives move into DBBASIC:
+messages, projects, tasks, notes, files, articles, links, contacts, finance,
+events, workers, templates, catalog, time tracking, AI usage, objects, forums,
+documentation, and APIs should become reviewable packages instead of one
+hardcoded app surface.
+
 ## Minimal Server
 
 The current public ASGI server can list objects, return source for an existing
@@ -149,7 +155,8 @@ versions, read a specific version, read object state, read object logs, read
 object-owned files, read object metadata, list derived collections, read and
 write collection records, read and write schema metadata, manage file-backed
 accounts/users/sessions, inspect packages, run package dry-runs, install gated
-packages with restore points, and roll back source through the same write gate.
+packages with restore points, report admin runtime status, and roll back source
+through the same write gate.
 Object execution can return JSON data, HTML/text/binary responses through
 `content_type` and `body`, or a low-level `(status, headers, body)` tuple.
 
@@ -171,6 +178,7 @@ Current endpoints:
 - `GET /health`
 - `GET /health?capacity=true`
 - `GET /health?metrics=true`
+- `GET /admin/status`
 - `GET /permissions/policy`
 - `PUT /permissions/policy`
 - `GET /permissions/status`
@@ -270,8 +278,10 @@ The value above is a placeholder. Each real deployment must generate its own
 secret outside the source tree. Then send `Authorization: Token <token>` with
 the request. Detailed health via `capacity=true` or `metrics=true` also uses
 that token because it exposes runtime configuration and process capacity. Source
-updates and rollback are disabled by default. For local development only, also
-set:
+updates and rollback are disabled by default. `GET /admin/status` uses the same
+token and combines detailed health, inventory, capability flags, package
+posture, and permission readiness for Scroll/operator dashboards. For local
+development only, also set:
 
 ```bash
 export DBBASIC_ENABLE_SOURCE_WRITES=true
@@ -357,6 +367,9 @@ rules the rest of the server will use:
 - `deployment_checks.py` checks the single-VM filesystem layout before public exposure
 - detailed health reports uptime, request metrics, storage status, version,
   config, and request/object execution slot capacity
+- admin status combines detailed health, object/collection/schema/package
+  inventory, package install posture, capability flags, and permission readiness
+  for Scroll and staging dashboards
 - request bodies over `DBBASIC_MAX_REQUEST_BYTES` return `413 Payload Too Large`
 - traffic over `DBBASIC_RATE_LIMIT_REQUESTS` per `DBBASIC_RATE_LIMIT_WINDOW_SECONDS`
   returns `429 Too Many Requests`

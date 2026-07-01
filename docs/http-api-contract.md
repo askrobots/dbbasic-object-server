@@ -145,6 +145,86 @@ Response:
 and recent HTTP errors. This preserves the older dashboard/Scroll direction
 without exposing those details through the public liveness route.
 
+## Admin Status
+
+Admin status is the compact operator snapshot Scroll and staging dashboards can
+use instead of stitching together many routes on first load:
+
+```http
+GET /admin/status
+Authorization: Token <token>
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "timestamp": "2026-01-01T00:00:00+00:00",
+  "version": "0.0.1",
+  "station_id": "standalone",
+  "health": {
+    "status": "ok",
+    "metrics": {}
+  },
+  "inventory": {
+    "objects": 4,
+    "collections": 2,
+    "schemas": 2,
+    "packages": 3
+  },
+  "capabilities": {
+    "source_writes": {
+      "enabled": false,
+      "env": "DBBASIC_ENABLE_SOURCE_WRITES"
+    },
+    "package_installs": {
+      "enabled": false,
+      "env": "DBBASIC_ENABLE_PACKAGE_INSTALLS"
+    },
+    "permission_enforcement": {
+      "enabled": false,
+      "requested": false,
+      "blocked": true,
+      "env": "DBBASIC_ENABLE_PERMISSION_ENFORCEMENT"
+    }
+  },
+  "packages": [
+    {
+      "id": "system-dashboard",
+      "name": "System Dashboard",
+      "version": "0.1.0",
+      "status": "installed",
+      "install": {
+        "installed_count": 1,
+        "installable_count": 1,
+        "safe_to_install": true,
+        "install_enabled": false,
+        "warnings": []
+      },
+      "changes": {
+        "total": 1,
+        "latest": {
+          "action": "installed"
+        }
+      }
+    }
+  ],
+  "permissions": {
+    "enforcement_enabled": false,
+    "audit_enabled": false,
+    "readiness": {
+      "ready": false
+    },
+    "warnings": []
+  }
+}
+```
+
+If the server is degraded, the route may return `503` with the same response
+shape and `"status": "degraded"`. This route is admin-token gated because it
+contains configuration, package, and capacity details.
+
 ## Rate Limits
 
 When `DBBASIC_RATE_LIMIT_REQUESTS` is set above zero, the server rate-limits

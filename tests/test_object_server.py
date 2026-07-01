@@ -786,6 +786,106 @@ def test_health_metrics_keeps_old_dashboard_shape(monkeypatch):
     assert "top_paths" in payload["metrics"]
 
 
+def test_admin_status_requires_admin_token(monkeypatch):
+    monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)
+
+    status, _, payload = request("/admin/status", headers=auth_headers())
+
+    assert status == 403
+    assert payload == {
+        "status": "error",
+        "error": "Admin status requires DBBASIC_ADMIN_TOKEN.",
+    }
+
+
+def test_admin_status_reports_inventory_capabilities_and_package_posture(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    packages_root = tmp_path / "packages"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {'ok': True}\n")
+    schema_file = data_dir / "schemas" / "dbbasic_probe.json"
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text(
+        json.dumps(
+            {
+                "title": "Probe",
+                "fields": [{"name": "note", "type": "text"}],
+            }
+        )
+    )
+    write_records(data_dir, "dbbasic_probe", "id\tnote\nprobe_001\talready installed\n")
+    write_package(
+        packages_root,
+        "probe-pack",
+        {
+            "id": "probe-pack",
+            "name": "Probe Pack",
+            "version": "0.1.0",
+            "description": "Status fixture",
+            "objects": [{"id": "site_home", "path": "objects/site/home.py"}],
+            "schemas": [{"collection": "dbbasic_probe", "path": "schemas/dbbasic_probe.json"}],
+            "permissions": [],
+            "seed": [],
+            "migrations": [],
+        },
+        files=(
+            ("objects/site/home.py", "def GET(request): return {'ok': True}\n"),
+            (
+                "schemas/dbbasic_probe.json",
+                json.dumps({"title": "Probe", "fields": [{"name": "note", "type": "text"}]}),
+            ),
+        ),
+    )
+    object_package_changes.append_package_change(
+        package_id="probe-pack",
+        action="dry_run",
+        package_version="0.1.0",
+        actor="unit-test",
+        base_dir=data_dir,
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("DBBASIC_PACKAGES_DIR", str(packages_root))
+    monkeypatch.setenv(object_server.MAX_REQUEST_BYTES_ENV, "2048")
+    monkeypatch.setenv(object_server.MAX_CONCURRENT_REQUESTS_ENV, "3")
+    monkeypatch.setenv(object_server.MAX_CONCURRENT_EXECUTIONS_ENV, "2")
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/admin/status", headers=auth_headers())
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["version"] == "0.0.1"
+    assert payload["health"]["status"] == "ok"
+    assert "metrics" in payload["health"]
+    assert payload["inventory"] == {
+        "objects": 1,
+        "collections": 2,
+        "schemas": 2,
+        "packages": 1,
+    }
+    assert payload["capabilities"]["source_writes"] == {
+        "enabled": False,
+        "env": "DBBASIC_ENABLE_SOURCE_WRITES",
+    }
+    assert payload["capabilities"]["package_installs"] == {
+        "enabled": False,
+        "env": "DBBASIC_ENABLE_PACKAGE_INSTALLS",
+    }
+    assert payload["capabilities"]["limits"]["max_request_bytes"] == 2048
+    assert payload["capabilities"]["limits"]["max_concurrent_requests"] == 3
+    assert payload["capabilities"]["limits"]["max_concurrent_executions"] == 2
+    assert payload["permissions"]["enforcement_enabled"] is False
+    assert payload["permissions"]["audit_enabled"] is False
+    assert payload["packages"][0]["id"] == "probe-pack"
+    assert payload["packages"][0]["status"] == "installed"
+    assert payload["packages"][0]["install"]["installed_count"] == 2
+    assert payload["packages"][0]["install"]["installable_count"] == 2
+    assert payload["packages"][0]["install"]["install_enabled"] is False
+    assert payload["packages"][0]["changes"]["total"] == 1
+    assert payload["packages"][0]["changes"]["latest"]["action"] == "dry_run"
+
+
 def test_request_concurrency_limit_returns_503_when_full(monkeypatch):
     monkeypatch.setenv(object_server.MAX_CONCURRENT_REQUESTS_ENV, "1")
     token = claim_limit_slot(object_server._request_limiter, 1)

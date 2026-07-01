@@ -688,6 +688,12 @@ app into a separate deploy process. A package is a directory containing a
 manifest plus package-owned objects, schemas, permissions, seed data, and
 migrations:
 
+The intended package catalog starts from reusable app primitives: messages,
+projects, tasks, notes, files, articles, links, contacts, finance, events,
+workers, templates, catalog entries, time tracking, AI usage, objects, forums,
+documentation, and APIs. Those pieces should be installable and inspectable as
+packages, not buried inside one private monolith.
+
 ```text
 packages/{package_id}/
   dbbasic-package.json

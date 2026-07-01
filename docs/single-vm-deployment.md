@@ -566,9 +566,9 @@ sudo cp -a /etc/caddy/Caddyfile /etc/caddy/Caddyfile.before-dbbasic
 ```
 
 For the earliest public staging endpoint, expose only the hello object, system
-dashboard object, health check, and current-session self-service route until
-auth, permissions, and source visibility are ready. Keep the broader identity
-admin routes and `/objects` listing blocked:
+dashboard object, admin status route, health check, and current-session
+self-service route until auth, permissions, and source visibility are ready.
+Keep the broader identity admin routes and `/objects` listing blocked:
 
 ```caddyfile
 dbbasic.example.com {
@@ -578,6 +578,10 @@ dbbasic.example.com {
     }
 
     handle /health {
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    handle /admin/status {
         reverse_proxy 127.0.0.1:8001
     }
 
@@ -592,6 +596,14 @@ dbbasic.example.com {
     }
 
     handle /collections/dbbasic_probe/records* {
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    handle /collections/dbbasic_probe/changes {
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    handle /schemas/dbbasic_probe {
         reverse_proxy 127.0.0.1:8001
     }
 
@@ -622,21 +634,24 @@ Then test:
 ```bash
 curl https://dbbasic.example.com/
 curl https://dbbasic.example.com/health
+curl -H "Authorization: Token $DBBASIC_ADMIN_TOKEN" https://dbbasic.example.com/admin/status
 curl https://dbbasic.example.com/objects/site_home
 curl https://dbbasic.example.com/admin/write-probe
 curl https://dbbasic.example.com/objects
 ```
 
-The first four should return responses from the object server. The root and
+The first five should return responses from the object server. The root and
 `site_home` responses may be JSON or HTML depending on the object. The full
 `/objects` route should stay blocked by Caddy in this early staging mode.
 
 The `admin-write-probe` package may also expose the narrow
-`/collections/dbbasic_probe/records*` route. That route is still protected by
-the server-side admin-token gate. It exists to prove collection create/update/
-delete behavior through the public reverse proxy without exposing every
-collection route. Do not expose broad `/collections*`, `/objects*`, or source
-write routes on a public staging server.
+`/collections/dbbasic_probe/records*`, `/collections/dbbasic_probe/changes`,
+and `/schemas/dbbasic_probe` routes. Those routes are still protected by the
+server-side admin-token gate. They exist to prove collection create/update/
+delete behavior, record changelog reads, and schema reads through the public
+reverse proxy without exposing every collection or schema route. Do not expose
+broad `/collections*`, `/schemas*`, `/objects*`, or source write routes on a
+public staging server.
 
 ## Public Code Execution Controls
 

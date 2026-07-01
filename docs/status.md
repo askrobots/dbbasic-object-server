@@ -25,6 +25,8 @@ public users.
   filters, field redaction, opt-in enforcement, and readiness-gated rollout
 - Request size limits, request concurrency limits, execution concurrency limits,
   rate limits, wall-clock timeout path, and health/capacity metrics
+- Token-gated admin status with detailed health, inventory, capability flags,
+  package posture, and permission readiness for Scroll/operator dashboards
 - Runtime backups, restore helpers, deployment checks, GitHub Actions tests, and
   a working public staging deployment shape
 

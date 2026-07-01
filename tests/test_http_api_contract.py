@@ -27,6 +27,7 @@ def test_contract_keeps_objects_paths_as_public_surface():
     assert http_api_contract.PACKAGE_INSTALL_PATH == "/packages/{package_id}/install"
     assert http_api_contract.PACKAGE_RESTORE_PATH == "/packages/{package_id}/restore"
     assert http_api_contract.PACKAGE_CHANGES_PATH == "/packages/{package_id}/changes"
+    assert http_api_contract.ADMIN_STATUS_PATH == "/admin/status"
     assert http_api_contract.IDENTITY_PATH == "/identity"
     assert http_api_contract.IDENTITY_ACCOUNTS_PATH == "/identity/accounts"
     assert http_api_contract.IDENTITY_ACCOUNT_PATH == "/identity/accounts/{account_id}"
@@ -159,6 +160,18 @@ def test_contract_keeps_existing_introspection_query_flags():
                 "changes": [],
                 "count": 0,
                 "total": 0,
+            },
+        ),
+        (
+            "admin_status",
+            {
+                "status": "ok",
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "version": "0.0.1",
+                "health": {"status": "ok"},
+                "inventory": {"objects": 0},
+                "capabilities": {"source_writes": {"enabled": False}},
+                "packages": [],
             },
         ),
         (

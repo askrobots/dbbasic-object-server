@@ -379,6 +379,10 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
             await _handle_event_subscriptions(send, method, query, body, headers)
             return
 
+        if path == http_api_contract.ADMIN_STATUS_PATH:
+            await _handle_admin_status(send, method, headers)
+            return
+
         if path == http_api_contract.PACKAGES_PATH:
             await _handle_packages(send, method, headers)
             return
@@ -920,6 +924,176 @@ def _health_payload(*, include_metrics: bool) -> dict[str, Any]:
         payload["metrics"] = metrics
 
     return payload
+
+
+async def _handle_admin_status(
+    send,
+    method: str,
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Admin status requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    try:
+        payload = _admin_status_payload()
+    except object_packages.InvalidPackageManifestError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=500)
+        return
+    except OSError as exc:
+        await _send_json(
+            send,
+            {"status": "error", "error": f"Could not build admin status: {exc}"},
+            status=500,
+        )
+        return
+
+    status_code = 503 if payload["status"] == "degraded" else 200
+    await _send_json(send, payload, status=status_code)
+
+
+def _admin_status_payload() -> dict[str, Any]:
+    health = _health_payload(include_metrics=True)
+    collections = object_collections.list_collections(base_dir=_data_dir())
+    schemas = object_schemas.list_schemas(base_dir=_data_dir())
+    packages = _admin_package_summaries()
+    permissions = _permissions_status_payload()
+
+    return {
+        "status": health["status"],
+        "timestamp": health["timestamp"],
+        "version": health["version"],
+        "station_id": health["station_id"],
+        "health": health,
+        "inventory": {
+            "objects": health["objects"]["count"],
+            "collections": len(collections),
+            "schemas": len(schemas),
+            "packages": len(packages),
+        },
+        "capabilities": _admin_capabilities_payload(),
+        "packages": packages,
+        "permissions": {
+            "enforcement_enabled": permissions["permissions"]["enforcement_enabled"],
+            "audit_enabled": permissions["permissions"]["audit_enabled"],
+            "readiness": permissions["readiness"],
+            "warnings": permissions["warnings"],
+        },
+    }
+
+
+def _admin_capabilities_payload() -> dict[str, Any]:
+    return {
+        "source_writes": {
+            "enabled": _env_enabled(SOURCE_WRITES_ENV),
+            "env": SOURCE_WRITES_ENV,
+        },
+        "package_installs": {
+            "enabled": _env_enabled(PACKAGE_INSTALLS_ENABLED_ENV),
+            "env": PACKAGE_INSTALLS_ENABLED_ENV,
+        },
+        "package_restore": {
+            "enabled": _env_enabled(PACKAGE_RESTORE_ENABLED_ENV),
+            "env": PACKAGE_RESTORE_ENABLED_ENV,
+        },
+        "permission_enforcement": {
+            "enabled": _permission_enforcement_enabled(),
+            "requested": _permission_enforcement_requested(),
+            "blocked": _permission_enforcement_blocked(),
+            "env": PERMISSION_ENFORCEMENT_ENV,
+        },
+        "permission_audit": {
+            "enabled": _permission_audit_enabled(),
+            "env": PERMISSION_AUDIT_ENV,
+        },
+        "record_events": {
+            "enabled": _record_events_enabled(),
+            "env": RECORD_EVENTS_ENV,
+            "keep_count": _event_keep_count(),
+            "keep_seconds": _event_keep_seconds(),
+        },
+        "identity": {
+            "trusted_headers_enabled": _env_enabled(PERMISSION_TRUST_HEADERS_ENV),
+            "require_known_identity_users": _env_enabled(REQUIRE_KNOWN_IDENTITY_USERS_ENV),
+        },
+        "limits": {
+            "max_request_bytes": _max_request_bytes(),
+            "max_concurrent_requests": _max_concurrent_requests(),
+            "max_concurrent_executions": _max_concurrent_executions(),
+            "rate_limit_requests": _rate_limit_requests(),
+            "rate_limit_window_seconds": _rate_limit_window_seconds(),
+            "object_timeout_seconds": _object_timeout_seconds(),
+        },
+    }
+
+
+def _admin_package_summaries() -> list[dict[str, Any]]:
+    packages = object_packages.list_packages(root=_packages_dir())
+    return [_admin_package_summary(package) for package in packages]
+
+
+def _admin_package_summary(package: Mapping[str, Any]) -> dict[str, Any]:
+    package_id = str(package["id"])
+    plan = object_packages.dry_run_package(
+        package_id,
+        root=_packages_dir(),
+        base_dir=_data_dir(),
+    )
+    changes = object_package_changes.list_package_changes(
+        package_id,
+        base_dir=_data_dir(),
+        limit=1,
+    )
+    installed = _package_plan_installed_count(plan)
+    total = _package_plan_installable_count(plan)
+    summary = dict(package)
+    summary["status"] = _package_install_status(installed=installed, total=total)
+    summary["install"] = {
+        "installed_count": installed,
+        "installable_count": total,
+        "safe_to_install": bool(plan.get("safe_to_install")),
+        "install_enabled": _env_enabled(PACKAGE_INSTALLS_ENABLED_ENV),
+        "warnings": list(plan.get("warnings", [])),
+    }
+    summary["changes"] = {
+        "total": changes["total"],
+        "latest": changes["changes"][0] if changes["changes"] else None,
+    }
+    return summary
+
+
+def _package_plan_installed_count(plan: Mapping[str, Any]) -> int:
+    count = 0
+    for section in ("objects", "schemas", "seed"):
+        count += sum(1 for entry in plan.get(section, []) if entry.get("installed"))
+    count += sum(1 for entry in plan.get("migrations", []) if entry.get("applied"))
+    return count
+
+
+def _package_plan_installable_count(plan: Mapping[str, Any]) -> int:
+    return sum(
+        len(plan.get(section, []))
+        for section in ("objects", "schemas", "seed", "migrations")
+    )
+
+
+def _package_install_status(*, installed: int, total: int) -> str:
+    if total == 0:
+        return "available"
+    if installed == total:
+        return "installed"
+    if installed > 0:
+        return "partial"
+    return "available"
 
 
 async def _handle_permissions_status(

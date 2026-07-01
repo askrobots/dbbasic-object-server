@@ -27,6 +27,7 @@ PACKAGE_PATH = "/packages/{package_id}"
 PACKAGE_INSTALL_PATH = "/packages/{package_id}/install"
 PACKAGE_RESTORE_PATH = "/packages/{package_id}/restore"
 PACKAGE_CHANGES_PATH = "/packages/{package_id}/changes"
+ADMIN_STATUS_PATH = "/admin/status"
 IDENTITY_PATH = "/identity"
 IDENTITY_ACCOUNTS_PATH = "/identity/accounts"
 IDENTITY_ACCOUNT_PATH = "/identity/accounts/{account_id}"
@@ -72,6 +73,9 @@ RESPONSE_FIELDS: dict[str, frozenset[str]] = {
         {"status", "restore", "changes", "restore_point", "from_change"}
     ),
     "package_changes": frozenset({"status", "package_id", "changes", "count", "total"}),
+    "admin_status": frozenset(
+        {"status", "timestamp", "version", "health", "inventory", "capabilities", "packages"}
+    ),
     "identity": frozenset({"status", "subject", "auth", "permissions"}),
     "identity_account_list": frozenset({"status", "accounts", "count"}),
     "identity_account": frozenset({"status", "account"}),
