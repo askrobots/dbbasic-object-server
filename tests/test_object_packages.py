@@ -1,8 +1,12 @@
 import json
+from pathlib import Path
 
 import pytest
 
+import object_execution
 import object_packages
+import object_state
+import python_object_runtime
 
 
 def write_package(root, package_id, payload, files=()):
@@ -123,6 +127,50 @@ def test_dry_run_is_safe_when_declared_files_exist(tmp_path):
     assert plan["safe_to_install"] is True
     assert plan["warnings"] == []
     assert plan["objects"][0]["action"] == "create"
+
+
+def test_repository_system_dashboard_package_installs_and_executes(tmp_path):
+    packages_root = Path("packages")
+    data_dir = tmp_path / "data"
+    object_root = tmp_path / "objects"
+
+    package = object_packages.get_package("system-dashboard", root=packages_root)
+    plan = object_packages.dry_run_package(
+        "system-dashboard",
+        root=packages_root,
+        base_dir=data_dir,
+        object_roots=[object_root],
+    )
+
+    assert package["objects"] == [
+        {"id": "system_dashboard", "path": "objects/system/dashboard.py"}
+    ]
+    assert plan["safe_to_install"] is True
+    assert plan["objects"][0]["action"] == "create"
+
+    install = object_packages.install_package(
+        "system-dashboard",
+        root=packages_root,
+        base_dir=data_dir,
+        object_roots=[object_root],
+    )
+
+    assert install["objects"][0]["destination"] == "system/dashboard.py"
+    assert (object_root / "system" / "dashboard.py").is_file()
+
+    runtime = python_object_runtime.PythonObjectRuntime(base_dir=data_dir)
+    result = object_execution.execute_object(
+        runtime,
+        object_execution.ObjectExecutionRequest("system_dashboard"),
+        roots=[object_root],
+    )
+
+    assert result.ok is True
+    assert isinstance(result.result, tuple)
+    assert result.result[1] == "text/html; charset=utf-8"
+    assert "DBBASIC Object Dashboard" in result.result[0]
+    assert "packages/system-dashboard" in result.result[0]
+    assert object_state.get_object_state("system_dashboard", base_dir=data_dir)["served"] == 1
 
 
 def test_install_package_creates_objects_schemas_and_seed(tmp_path):

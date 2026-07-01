@@ -16,6 +16,7 @@ public users.
 - Event publishing, event retention, subscriptions, and callback delivery state
 - Package manifest discovery, dry-runs, gated installs, install changelogs,
   restore points, and restore API
+- A small installable `system-dashboard` package for public staging visibility
 - File-backed accounts, users, self-service session inspection/revocation, and
   permission subjects
 - Permission policy storage, check API, audit mode, readiness status, row

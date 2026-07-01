@@ -1,0 +1,20 @@
+{
+  "id": "system-dashboard",
+  "name": "System Dashboard",
+  "version": "0.1.0",
+  "description": "Small public staging dashboard served by a DBBASIC object.",
+  "compatibility": {
+    "object_server": ">=0.0.1"
+  },
+  "dependencies": [],
+  "objects": [
+    {
+      "id": "system_dashboard",
+      "path": "objects/system/dashboard.py"
+    }
+  ],
+  "schemas": [],
+  "permissions": [],
+  "seed": [],
+  "migrations": []
+}

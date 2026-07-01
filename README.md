@@ -106,10 +106,12 @@ This repository currently contains:
 - `object_backup.py` - runtime backup, restore-point, verification, and safe restore helpers
 - `object_daemon.py` - background worker for scheduler, queue, events, and cleanup
 - `deployment_checks.py` - single-VM filesystem ownership and permission checks
+- `packages/system-dashboard/` - small installable dashboard object for public
+  staging
 
-It does not yet contain the full private prototype, cluster runtime, dashboard,
-sample applications, production installer, public signup flow, or production
-isolation for untrusted user code.
+It does not yet contain the full private prototype, cluster runtime, full Scroll
+admin dashboard, sample applications, production installer, public signup flow,
+or production isolation for untrusted user code.
 
 ## Object Source Directories
 
@@ -117,7 +119,9 @@ New DBBASIC object source should live under `objects/`.
 
 Set `DBBASIC_OBJECTS_DIR` to point at a custom object source directory during migration or deployment.
 
-Installable DBBASIC packages should live under `packages/{package_id}/`.
+Installable DBBASIC packages should live under `packages/{package_id}/`. The
+current repository includes `hello-world` and `system-dashboard` as small package
+fixtures that can be installed on a controlled VM.
 Each package currently uses `dbbasic-package.json` plus package-owned `objects/`,
 `schemas/`, `permissions/`, `seed/`, and `migrations/` paths. The public server
 can list packages, return dry-run install plans, and run conservative installs
