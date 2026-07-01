@@ -1472,20 +1472,29 @@ async def _handle_permissions_status(
 
 
 def _permissions_status_payload() -> dict[str, Any]:
+    permissions = {
+        **_permission_readiness_inputs(),
+        "enforcement_enabled": _permission_enforcement_enabled(),
+        "enforcement_requested": _permission_enforcement_requested(),
+        "enforcement_blocked": _permission_enforcement_blocked(),
+        "allow_unready_enforcement": _permission_unready_enforcement_allowed(),
+        "audit_enabled": _permission_audit_enabled(),
+    }
     return object_permission_status.build_permissions_status(
         base_dir=_data_dir(),
-        permissions={
-            "enforcement_enabled": _permission_enforcement_enabled(),
-            "enforcement_requested": _permission_enforcement_requested(),
-            "enforcement_blocked": _permission_enforcement_blocked(),
-            "allow_unready_enforcement": _permission_unready_enforcement_allowed(),
-            "audit_enabled": _permission_audit_enabled(),
-            "trusted_headers_enabled": _env_enabled(PERMISSION_TRUST_HEADERS_ENV),
-            "require_known_identity_users": _env_enabled(REQUIRE_KNOWN_IDENTITY_USERS_ENV),
-            "admin_token_configured": bool(os.environ.get(ADMIN_TOKEN_ENV, "")),
-        },
+        permissions=permissions,
         require_known_identity_users_env=REQUIRE_KNOWN_IDENTITY_USERS_ENV,
     )
+
+
+def _permission_readiness_inputs() -> dict[str, Any]:
+    return {
+        "admin_token_configured": bool(os.environ.get(ADMIN_TOKEN_ENV, "")),
+        "trusted_headers_enabled": _env_enabled(PERMISSION_TRUST_HEADERS_ENV),
+        "require_known_identity_users": _env_enabled(REQUIRE_KNOWN_IDENTITY_USERS_ENV),
+        "session_login_enabled": _env_enabled(SESSION_LOGIN_ENV),
+        "session_login_token_configured": bool(os.environ.get(SESSION_LOGIN_TOKEN_ENV, "")),
+    }
 
 
 async def _handle_permissions_policy(
@@ -4895,7 +4904,10 @@ def _permission_enforcement_enabled() -> bool:
     if _permission_unready_enforcement_allowed():
         return True
     try:
-        readiness = object_permission_status.enforcement_readiness(base_dir=_data_dir())
+        readiness = object_permission_status.enforcement_readiness(
+            base_dir=_data_dir(),
+            permissions=_permission_readiness_inputs(),
+        )
     except (OSError, ValueError):
         return False
     return bool(readiness.get("can_enable_enforcement"))

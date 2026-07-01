@@ -22,7 +22,8 @@ public users.
 - File-backed accounts, users, self-service session inspection/revocation, and
   permission subjects
 - Permission policy storage, check API, audit mode, readiness status, row
-  filters, field redaction, opt-in enforcement, and readiness-gated rollout
+  filters, field redaction, opt-in enforcement, and rollout gates for recovery,
+  identity, and policy safety
 - Request size limits, request concurrency limits, execution concurrency limits,
   rate limits, wall-clock timeout path, and health/capacity metrics
 - Token-gated admin status with detailed health, inventory, capability flags,
@@ -60,7 +61,8 @@ public users.
 
 1. Connect guarded existing-user session minting to a real browser login or
    trusted auth gateway.
-2. Make permission enforcement default-on after the login/auth gateway is wired.
+2. Make permission enforcement default-on after the login/auth gateway and
+   starter policy are wired.
 3. Add event delivery controls after scheduler and queue controls stabilize.
 4. Add file upload/delete with quotas, content checks, permissions, and audit.
 5. Add CPU/memory isolation and a better worker boundary for untrusted code.

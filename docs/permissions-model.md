@@ -178,9 +178,19 @@ DBBASIC_ENABLE_PERMISSION_ENFORCEMENT=true
 ```
 
 That flag requests enforcement. The server only makes it effective when the
-readiness checks from `/permissions/status` pass. If the policy is invalid, or
-the default role-based policy has no grants, the request stays in audit/shadow
-mode and responses continue to follow the pre-enforcement route behavior.
+readiness checks from `/permissions/status` pass. If recovery, identity, or
+policy readiness is incomplete, the request stays in audit/shadow mode and
+responses continue to follow the pre-enforcement route behavior. Current
+blockers include:
+
+- no admin recovery token
+- unreadable identity store
+- invalid permission policy
+- `password` mode before a password verifier exists
+- `role_based` mode with no allow grants
+- private, registered, subscription, or role-based modes with no non-admin
+  identity path
+
 Operators can see this through:
 
 ```json
@@ -337,8 +347,10 @@ Authorization: Token <admin-token>
 
 That endpoint summarizes the active mode flags, identity counts, persisted
 policy shape, covered route groups, blockers, and warnings. It is meant to be
-used before enabling enforcement on a live app. A role-based policy with no
-rules is reported as a blocker because non-admin traffic would be denied.
+used before enabling enforcement on a live app. For identity-gated modes, one of
+these non-admin identity paths must exist before enforcement becomes effective:
+trusted proxy headers, guarded session login for existing users, or an active
+DBBASIC session.
 
 ## Access Modes
 

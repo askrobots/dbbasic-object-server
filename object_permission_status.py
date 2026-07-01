@@ -18,7 +18,7 @@ def build_permissions_status(
     """Return a read-only summary of permission rollout readiness."""
     identity = identity_status(base_dir=base_dir)
     policy = policy_status(base_dir=base_dir)
-    readiness = readiness_status(policy, identity=identity)
+    readiness = readiness_status(policy, identity=identity, permissions=permissions)
     warnings = status_warnings(
         permissions=permissions,
         identity=identity,
@@ -108,30 +108,56 @@ def policy_status(*, base_dir: Path | str) -> dict[str, Any]:
     }
 
 
-def enforcement_readiness(*, base_dir: Path | str) -> dict[str, Any]:
+def enforcement_readiness(
+    *,
+    base_dir: Path | str,
+    permissions: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Return the same readiness gate used by the HTTP server."""
     identity = identity_status(base_dir=base_dir)
     policy = policy_status(base_dir=base_dir)
-    return readiness_status(policy, identity=identity)
+    return readiness_status(policy, identity=identity, permissions=permissions)
 
 
 def readiness_status(
     policy: Mapping[str, Any],
     *,
     identity: Mapping[str, Any] | None = None,
+    permissions: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return blockers that make permission enforcement unsafe to enable."""
     blockers: list[str] = []
+    runtime = dict(permissions or {})
+
+    if runtime and not runtime.get("admin_token_configured", False):
+        blockers.append(
+            "Admin recovery token must be configured before enforcement rollout."
+        )
+
     if identity is not None and not identity["valid"]:
         blockers.append("Identity store must be readable before enforcement rollout.")
+
     if not policy["valid"]:
         blockers.append("Permission policy must be valid before enforcement rollout.")
-    elif (
-        policy["access_mode"] == "role_based"
-        and policy["rules_count"] == 0
-        and policy["user_roles_count"] == 0
-    ):
-        blockers.append("Role-based policy has no grants; non-admin traffic will be denied.")
+    else:
+        access_mode = policy["access_mode"]
+        if access_mode == "password":
+            blockers.append(
+                "Password access mode needs a password verifier before enforcement rollout."
+            )
+        if access_mode == "role_based" and policy["allow_rules"] == 0:
+            blockers.append(
+                "Role-based policy has no allow grants; non-admin traffic will be denied."
+            )
+        if (
+            identity is not None
+            and access_mode in {"registered", "subscription", "role_based", "private"}
+            and not _has_non_admin_identity_path(identity=identity, permissions=runtime)
+        ):
+            blockers.append(
+                "No non-admin identity path is available; enable trusted headers, "
+                "guarded session login, or create an active session before enforcement."
+            )
 
     return {
         "can_enable_enforcement": not blockers,
@@ -168,7 +194,11 @@ def status_warnings(
         warnings.append(
             "Trusted identity headers are enabled; the reverse proxy must strip client-supplied identity headers."
         )
-    elif identity["valid"] and identity["sessions"]["active"] == 0:
+    elif (
+        identity["valid"]
+        and identity["sessions"]["active"] == 0
+        and not _session_login_available(identity=identity, permissions=permissions)
+    ):
         warnings.append(
             "Trusted headers are off and no active DBBASIC sessions exist; non-admin requests will be anonymous."
         )
@@ -181,6 +211,30 @@ def status_warnings(
     if policy["valid"] and policy["access_mode"] == "public":
         warnings.append("Public access mode allows read/execute without identity.")
     return warnings
+
+
+def _has_non_admin_identity_path(
+    *,
+    identity: Mapping[str, Any],
+    permissions: Mapping[str, Any],
+) -> bool:
+    if permissions.get("trusted_headers_enabled"):
+        return True
+    if _session_login_available(identity=identity, permissions=permissions):
+        return True
+    return bool(identity["sessions"]["active"])
+
+
+def _session_login_available(
+    *,
+    identity: Mapping[str, Any],
+    permissions: Mapping[str, Any],
+) -> bool:
+    return bool(
+        permissions.get("session_login_enabled")
+        and permissions.get("session_login_token_configured")
+        and identity["users"]["active"] > 0
+    )
 
 
 def coverage_status() -> dict[str, list[str]]:

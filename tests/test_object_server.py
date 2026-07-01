@@ -2307,6 +2307,7 @@ def test_collection_records_enforcement_filters_rows_for_trusted_subject(tmp_pat
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
     monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
     monkeypatch.setenv(object_server.PERMISSION_TRUST_HEADERS_ENV, "true")
+    enable_admin_token(monkeypatch)
 
     status, _, payload = request(
         "/collections/contacts/records",
@@ -2360,6 +2361,7 @@ def test_collection_records_enforcement_paginates_after_row_filter(tmp_path, mon
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
     monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
     monkeypatch.setenv(object_server.PERMISSION_TRUST_HEADERS_ENV, "true")
+    enable_admin_token(monkeypatch)
 
     status, _, payload = request(
         "/collections/contacts/records",
@@ -2403,6 +2405,7 @@ def test_collection_record_detail_enforces_row_filter_and_fields(tmp_path, monke
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
     monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
     monkeypatch.setenv(object_server.PERMISSION_TRUST_HEADERS_ENV, "true")
+    enable_admin_token(monkeypatch)
     headers = [("x-dbbasic-user-id", "7"), ("x-dbbasic-roles", "sales")]
 
     allowed_status, _, allowed_payload = request(
@@ -2588,6 +2591,7 @@ def test_collection_records_enforcement_returns_payment_required(tmp_path, monke
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
     monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
     monkeypatch.setenv(object_server.PERMISSION_TRUST_HEADERS_ENV, "true")
+    enable_admin_token(monkeypatch)
 
     status, _, payload = request(
         "/collections/reports/records",
@@ -3162,6 +3166,8 @@ def test_permissions_status_reports_default_policy_blocker(tmp_path, monkeypatch
     assert payload["permissions"]["audit_enabled"] is False
     assert payload["permissions"]["trusted_headers_enabled"] is False
     assert payload["permissions"]["admin_token_configured"] is True
+    assert payload["permissions"]["session_login_enabled"] is False
+    assert payload["permissions"]["session_login_token_configured"] is False
     assert payload["identity"]["accounts"] == {"count": 0, "active": 0, "disabled": 0}
     assert payload["identity"]["users"] == {"count": 0, "active": 0, "disabled": 0}
     assert payload["identity"]["sessions"] == {"count": 0, "active": 0, "revoked": 0}
@@ -3170,7 +3176,11 @@ def test_permissions_status_reports_default_policy_blocker(tmp_path, monkeypatch
     assert payload["policy"]["rules_count"] == 0
     assert payload["readiness"] == {
         "can_enable_enforcement": False,
-        "blockers": ["Role-based policy has no grants; non-admin traffic will be denied."],
+        "blockers": [
+            "Role-based policy has no allow grants; non-admin traffic will be denied.",
+            "No non-admin identity path is available; enable trusted headers, "
+            "guarded session login, or create an active session before enforcement.",
+        ],
     }
     assert "Permission enforcement is off." in payload["warnings"]
     assert "object execution and mutation routes" in payload["coverage"]["policy_checked"]
@@ -3190,7 +3200,11 @@ def test_permissions_status_reports_blocked_enforcement_request(tmp_path, monkey
     assert payload["permissions"]["audit_enabled"] is True
     assert payload["readiness"] == {
         "can_enable_enforcement": False,
-        "blockers": ["Role-based policy has no grants; non-admin traffic will be denied."],
+        "blockers": [
+            "Role-based policy has no allow grants; non-admin traffic will be denied.",
+            "No non-admin identity path is available; enable trusted headers, "
+            "guarded session login, or create an active session before enforcement.",
+        ],
     }
     assert (
         "Permission enforcement was requested but readiness checks blocked rollout."
@@ -3258,6 +3272,57 @@ def test_permissions_status_reports_identity_counts_and_ready_policy(tmp_path, m
     assert payload["policy"]["principals"] == ["role:sales"]
     assert payload["policy"]["collections"] == ["contacts"]
     assert payload["readiness"] == {"can_enable_enforcement": True, "blockers": []}
+
+
+def test_permissions_status_accepts_guarded_session_login_as_identity_path(
+    tmp_path,
+    monkeypatch,
+):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.SESSION_LOGIN_ENV, "true")
+    monkeypatch.setenv(object_server.SESSION_LOGIN_TOKEN_ENV, "login-token")
+    enable_admin_token(monkeypatch)
+    save_permission_policy(
+        data_dir,
+        {
+            "access_mode": "role_based",
+            "roles": {"sales": {"label": "Sales"}},
+            "user_roles": {"u_7": ["sales"]},
+            "rules": [
+                {
+                    "effect": "allow",
+                    "principal": "role:sales",
+                    "actions": ["read"],
+                    "collection": "contacts",
+                }
+            ],
+        },
+    )
+    request(
+        "/identity/accounts",
+        method="POST",
+        body=json.dumps({"account_id": "acme", "name": "Acme"}).encode(),
+        headers=auth_headers(),
+    )
+    request(
+        "/identity/users",
+        method="POST",
+        body=json.dumps({"user_id": "u_7", "account_id": "acme", "roles": ["sales"]}).encode(),
+        headers=auth_headers(),
+    )
+
+    status, _, payload = request("/permissions/status", headers=auth_headers())
+
+    assert status == 200
+    assert payload["permissions"]["session_login_enabled"] is True
+    assert payload["permissions"]["session_login_token_configured"] is True
+    assert payload["identity"]["sessions"]["active"] == 0
+    assert payload["readiness"] == {"can_enable_enforcement": True, "blockers": []}
+    assert (
+        "Trusted headers are off and no active DBBASIC sessions exist; non-admin requests will be anonymous."
+        not in payload["warnings"]
+    )
 
 
 def test_permissions_status_rejects_non_get_methods(tmp_path, monkeypatch):
@@ -3678,6 +3743,47 @@ def test_permission_enforcement_uses_trusted_subject_headers(tmp_path, monkeypat
     assert entry["subject"]["account_id"] == "customer-acme"
     assert entry["subject"]["roles"] == ["sales"]
     assert entry["decision"]["reason"] == "sales can execute site home"
+
+
+def test_permission_enforcement_without_admin_recovery_token_stays_in_shadow_mode(
+    tmp_path,
+    monkeypatch,
+):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {'ok': True}\n")
+    save_permission_policy(
+        data_dir,
+        {
+            "access_mode": "role_based",
+            "rules": [
+                {
+                    "effect": "allow",
+                    "principal": "role:sales",
+                    "actions": ["execute"],
+                    "object_id": "site_home",
+                }
+            ],
+        },
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+    monkeypatch.setenv(object_server.PERMISSION_TRUST_HEADERS_ENV, "true")
+    monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)
+
+    status, _, payload = request(
+        "/objects/site_home",
+        headers=[("x-dbbasic-user-id", "8"), ("x-dbbasic-roles", "support")],
+    )
+
+    assert status == 200
+    assert payload == {"ok": True}
+    entry = object_permission_audit.get_permission_audit(data_dir)[-1]
+    assert entry["decision"]["allowed"] is False
+    assert entry["enforced"] is False
+    assert entry["enforcement_requested"] is True
+    assert entry["enforcement_blocked"] is True
 
 
 def test_permission_audit_shadow_mode_logs_without_blocking(tmp_path, monkeypatch):

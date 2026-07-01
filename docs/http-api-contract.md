@@ -778,7 +778,9 @@ Response:
     "audit_enabled": true,
     "trusted_headers_enabled": false,
     "require_known_identity_users": true,
-    "admin_token_configured": true
+    "admin_token_configured": true,
+    "session_login_enabled": true,
+    "session_login_token_configured": true
   },
   "identity": {
     "accounts": {"count": 1, "active": 1, "disabled": 0},
@@ -807,6 +809,12 @@ when `readiness.can_enable_enforcement` is true. If readiness is blocked,
 `enforcement_requested` is true, `enforcement_enabled` is false, and
 `enforcement_blocked` is true. The explicit recovery/test override is
 `DBBASIC_ALLOW_UNREADY_PERMISSION_ENFORCEMENT=true`.
+
+Readiness currently requires an admin recovery token, a valid policy, an
+available non-admin identity path for identity-gated modes, and at least one
+allow grant for `role_based` policy. The accepted identity paths are trusted
+proxy headers, guarded session login for existing users, or an already-active
+DBBASIC session.
 
 ## Permissions Check
 

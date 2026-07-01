@@ -308,7 +308,11 @@ Permission audit-only mode writes route decisions to
 the persisted `data/permissions/policy.json` policy to return `401`, `402`, or
 `403` before object routes run. Trusted user/account/role headers are disabled
 unless `DBBASIC_PERMISSION_TRUST_HEADERS=true` is set behind a proxy that strips
-client-supplied copies.
+client-supplied copies. Enforcement is readiness-gated: the server requires an
+admin recovery token, a valid policy, a non-admin identity path for registered,
+subscription, private, or role-based modes, and at least one allow grant for
+role-based policy before `DBBASIC_ENABLE_PERMISSION_ENFORCEMENT=true` becomes
+effective.
 
 Collection record routes are admin-token gated by default. Reads can use
 permission audit or enforcement with the `read` action. Writes require either
@@ -404,7 +408,8 @@ rules the rest of the server will use:
   unreviewed user code
 - optional permission audit logs route decisions without changing responses
 - optional permission enforcement checks object routes before source,
-  introspection, or execution work runs
+  introspection, or execution work runs, and stays in shadow mode until recovery,
+  identity, and policy readiness checks pass
 - `basics_counter` maps to `objects/basics/counter.py`
 - `u_42_deals` maps to `objects/users/42/deals.py`
 - rollbacks create a new version instead of deleting history
