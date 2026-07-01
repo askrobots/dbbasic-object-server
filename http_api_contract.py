@@ -29,6 +29,10 @@ PACKAGE_RESTORE_PATH = "/packages/{package_id}/restore"
 PACKAGE_CHANGES_PATH = "/packages/{package_id}/changes"
 ADMIN_STATUS_PATH = "/admin/status"
 DAEMON_STATUS_PATH = "/daemon/status"
+DAEMON_SCHEDULER_TASKS_PATH = "/daemon/scheduler/tasks"
+DAEMON_SCHEDULER_TASK_PATH = "/daemon/scheduler/tasks/{task_id}"
+DAEMON_QUEUE_MESSAGES_PATH = "/daemon/queue/messages"
+DAEMON_QUEUE_MESSAGE_PATH = "/daemon/queue/messages/{message_id}"
 IDENTITY_PATH = "/identity"
 IDENTITY_ACCOUNTS_PATH = "/identity/accounts"
 IDENTITY_ACCOUNT_PATH = "/identity/accounts/{account_id}"
@@ -80,6 +84,10 @@ RESPONSE_FIELDS: dict[str, frozenset[str]] = {
     "daemon_status": frozenset(
         {"status", "timestamp", "daemon", "scheduler", "queue", "events", "cleanup"}
     ),
+    "daemon_scheduler_task_list": frozenset({"status", "tasks", "count", "total"}),
+    "daemon_scheduler_task": frozenset({"status", "task"}),
+    "daemon_queue_message_list": frozenset({"status", "messages", "count", "total"}),
+    "daemon_queue_message": frozenset({"status", "message"}),
     "identity": frozenset({"status", "subject", "auth", "permissions"}),
     "identity_account_list": frozenset({"status", "accounts", "count"}),
     "identity_account": frozenset({"status", "account"}),

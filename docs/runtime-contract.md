@@ -695,6 +695,25 @@ rate-limit cleanup pressure. It does not execute daemon work and does not expose
 event payloads. This gives Scroll a Flower-style operator view without adding a
 separate queue dashboard service to the single-VM deployment.
 
+Trusted operators can also manage scheduler tasks and queue messages through
+admin-token-gated routes:
+
+```http
+GET /daemon/scheduler/tasks
+POST /daemon/scheduler/tasks
+PATCH /daemon/scheduler/tasks/{task_id}
+DELETE /daemon/scheduler/tasks/{task_id}
+GET /daemon/queue/messages
+POST /daemon/queue/messages
+PATCH /daemon/queue/messages/{message_id}
+DELETE /daemon/queue/messages/{message_id}
+```
+
+These routes write the same `task_` and `msg_` rows that `object_daemon.py`
+already polls. Task and message payloads are redacted by default so Scroll can
+show operator posture without leaking secrets into broad status views. Use
+`include_payload=true` only for trusted admin screens.
+
 ## Packages
 
 Packages are the DBBASIC way to ship reusable app pieces without turning every

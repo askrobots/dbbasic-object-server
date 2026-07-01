@@ -28,6 +28,11 @@ def test_contract_keeps_objects_paths_as_public_surface():
     assert http_api_contract.PACKAGE_RESTORE_PATH == "/packages/{package_id}/restore"
     assert http_api_contract.PACKAGE_CHANGES_PATH == "/packages/{package_id}/changes"
     assert http_api_contract.ADMIN_STATUS_PATH == "/admin/status"
+    assert http_api_contract.DAEMON_STATUS_PATH == "/daemon/status"
+    assert http_api_contract.DAEMON_SCHEDULER_TASKS_PATH == "/daemon/scheduler/tasks"
+    assert http_api_contract.DAEMON_SCHEDULER_TASK_PATH == "/daemon/scheduler/tasks/{task_id}"
+    assert http_api_contract.DAEMON_QUEUE_MESSAGES_PATH == "/daemon/queue/messages"
+    assert http_api_contract.DAEMON_QUEUE_MESSAGE_PATH == "/daemon/queue/messages/{message_id}"
     assert http_api_contract.IDENTITY_PATH == "/identity"
     assert http_api_contract.IDENTITY_ACCOUNTS_PATH == "/identity/accounts"
     assert http_api_contract.IDENTITY_ACCOUNT_PATH == "/identity/accounts/{account_id}"
@@ -185,6 +190,22 @@ def test_contract_keeps_existing_introspection_query_flags():
                 "events": {"events": {"total": 0}},
                 "cleanup": {"event_retention": {}},
             },
+        ),
+        (
+            "daemon_scheduler_task_list",
+            {"status": "ok", "tasks": [], "count": 0, "total": 0},
+        ),
+        (
+            "daemon_scheduler_task",
+            {"status": "ok", "task": {"id": "task_1"}},
+        ),
+        (
+            "daemon_queue_message_list",
+            {"status": "ok", "messages": [], "count": 0, "total": 0},
+        ),
+        (
+            "daemon_queue_message",
+            {"status": "ok", "message": {"id": "msg_1"}},
         ),
         (
             "identity",
@@ -364,6 +385,15 @@ def test_http_contract_doc_mentions_required_compatibility_surface():
         "GET /events/subscriptions",
         "POST /events/subscriptions",
         "DELETE /events/subscriptions",
+        "GET /daemon/status",
+        "GET /daemon/scheduler/tasks",
+        "POST /daemon/scheduler/tasks",
+        "PATCH /daemon/scheduler/tasks/{task_id}",
+        "DELETE /daemon/scheduler/tasks/{task_id}",
+        "GET /daemon/queue/messages",
+        "POST /daemon/queue/messages",
+        "PATCH /daemon/queue/messages/{message_id}",
+        "DELETE /daemon/queue/messages/{message_id}",
         "GET /packages",
         "GET /packages/{package_id}",
         "GET /packages/{package_id}?dry_run=true",

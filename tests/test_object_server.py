@@ -5,6 +5,7 @@ from pathlib import Path
 
 import object_correlation
 import object_execution
+import object_ids
 import object_logs
 import object_package_changes
 import object_packages
@@ -937,6 +938,149 @@ def test_daemon_status_reports_scheduler_queue_and_event_state(tmp_path, monkeyp
     assert payload["queue"]["messages"]["pending_visible"] == 1
     assert payload["events"]["events"]["latest"]["id"] == "evt"
     assert "payload" not in payload["events"]["events"]["latest"]
+
+
+def test_daemon_scheduler_task_api_creates_lists_updates_and_deletes(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, created = request(
+        "/daemon/scheduler/tasks",
+        method="POST",
+        body=json.dumps(
+            {
+                "object_id": "system_dashboard",
+                "method": "POST",
+                "type": "onetime",
+                "schedule": "2026-07-01T12:00:00Z",
+                "payload": {"refresh": True},
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 201
+    assert created["status"] == "ok"
+    task = created["task"]
+    assert object_ids.is_uuid4(task["id"])
+    assert task["object_id"] == "system_dashboard"
+    assert task["payload_present"] is True
+    assert "payload" not in task
+
+    status, _, listed = request("/daemon/scheduler/tasks", headers=auth_headers())
+
+    assert status == 200
+    assert listed["status"] == "ok"
+    assert listed["count"] == 1
+    assert listed["tasks"] == [task]
+
+    status, _, updated = request(
+        f"/daemon/scheduler/tasks/{task['id']}",
+        method="PATCH",
+        body=json.dumps({"status": "paused"}).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert updated["task"]["id"] == task["id"]
+    assert updated["task"]["status"] == "paused"
+
+    status, _, deleted = request(
+        f"/daemon/scheduler/tasks/{task['id']}",
+        method="DELETE",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert deleted["deleted"] is True
+    assert deleted["task"]["id"] == task["id"]
+
+
+def test_daemon_queue_message_api_enqueues_lists_retries_and_deletes(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, created = request(
+        "/daemon/queue/messages",
+        method="POST",
+        body=json.dumps(
+            {
+                "object_id": "system_dashboard",
+                "queue_name": "default",
+                "priority_level": 7,
+                "payload": {"refresh": True},
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 201
+    message = created["message"]
+    assert object_ids.is_uuid4(message["id"])
+    assert message["status"] == "pending"
+    assert message["message"]["object_id"] == "system_dashboard"
+    assert message["message"]["payload_present"] is True
+    assert "payload" not in message["message"]
+
+    status, _, listed = request(
+        "/daemon/queue/messages",
+        query_string="status=pending&queue_name=default",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert listed["count"] == 1
+    assert listed["messages"] == [message]
+
+    status, _, cancelled = request(
+        f"/daemon/queue/messages/{message['id']}",
+        method="PATCH",
+        body=json.dumps({"action": "cancel"}).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert cancelled["message"]["status"] == "cancelled"
+
+    status, _, retried = request(
+        f"/daemon/queue/messages/{message['id']}",
+        method="PATCH",
+        body=json.dumps({"action": "retry"}).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert retried["message"]["status"] == "pending"
+
+    status, _, deleted = request(
+        f"/daemon/queue/messages/{message['id']}",
+        method="DELETE",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert deleted["deleted"] is True
+    assert deleted["message"]["id"] == message["id"]
+
+
+def test_daemon_control_routes_require_admin_token(monkeypatch):
+    monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)
+
+    scheduler_status, _, scheduler_payload = request("/daemon/scheduler/tasks")
+    queue_status, _, queue_payload = request("/daemon/queue/messages")
+
+    assert scheduler_status == 403
+    assert scheduler_payload == {
+        "status": "error",
+        "error": "Daemon scheduler controls require DBBASIC_ADMIN_TOKEN.",
+    }
+    assert queue_status == 403
+    assert queue_payload == {
+        "status": "error",
+        "error": "Daemon queue controls require DBBASIC_ADMIN_TOKEN.",
+    }
 
 
 def test_request_concurrency_limit_returns_503_when_full(monkeypatch):

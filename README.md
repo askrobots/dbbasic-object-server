@@ -180,6 +180,14 @@ Current endpoints:
 - `GET /health?metrics=true`
 - `GET /admin/status`
 - `GET /daemon/status`
+- `GET /daemon/scheduler/tasks`
+- `POST /daemon/scheduler/tasks`
+- `PATCH /daemon/scheduler/tasks/{task_id}`
+- `DELETE /daemon/scheduler/tasks/{task_id}`
+- `GET /daemon/queue/messages`
+- `POST /daemon/queue/messages`
+- `PATCH /daemon/queue/messages/{message_id}`
+- `DELETE /daemon/queue/messages/{message_id}`
 - `GET /permissions/policy`
 - `PUT /permissions/policy`
 - `GET /permissions/status`
@@ -439,8 +447,8 @@ Near-term work:
   that mints sessions
 - make permission enforcement default-on after the login/auth gateway is wired
 - add CPU and memory isolation for untrusted object code
-- add scheduler/queue/event control routes after the read-only daemon status
-  surface is stable
+- finish event delivery controls after the scheduler/queue control surface is
+  stable
 - add file upload/delete with quotas, content limits, permissions, and audit
 - wire Scroll to the public identity, permission, package, event, backup, and
   dashboard APIs

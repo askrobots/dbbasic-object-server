@@ -589,6 +589,14 @@ dbbasic.example.com {
         reverse_proxy 127.0.0.1:8001
     }
 
+    handle /daemon/scheduler/tasks* {
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    handle /daemon/queue/messages* {
+        reverse_proxy 127.0.0.1:8001
+    }
+
     handle /dashboard {
         rewrite * /objects/system_dashboard
         reverse_proxy 127.0.0.1:8001

@@ -24,6 +24,7 @@ import http_api_contract
 import object_backup
 import object_collections
 import object_correlation
+import object_daemon_control
 import object_daemon_status
 import object_events
 import object_execution
@@ -386,6 +387,26 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
 
         if path == http_api_contract.DAEMON_STATUS_PATH:
             await _handle_daemon_status(send, method, headers)
+            return
+
+        if path == http_api_contract.DAEMON_SCHEDULER_TASKS_PATH:
+            await _handle_daemon_scheduler_tasks(send, method, query, body, headers)
+            return
+
+        daemon_scheduler_prefix = http_api_contract.DAEMON_SCHEDULER_TASKS_PATH + "/"
+        if path.startswith(daemon_scheduler_prefix):
+            task_id = path[len(daemon_scheduler_prefix):]
+            await _handle_daemon_scheduler_task(send, method, task_id, body, headers)
+            return
+
+        if path == http_api_contract.DAEMON_QUEUE_MESSAGES_PATH:
+            await _handle_daemon_queue_messages(send, method, query, body, headers)
+            return
+
+        daemon_queue_prefix = http_api_contract.DAEMON_QUEUE_MESSAGES_PATH + "/"
+        if path.startswith(daemon_queue_prefix):
+            message_id = path[len(daemon_queue_prefix):]
+            await _handle_daemon_queue_message(send, method, message_id, body, headers)
             return
 
         if path == http_api_contract.PACKAGES_PATH:
@@ -1000,6 +1021,265 @@ async def _handle_daemon_status(
         return
 
     await _send_json(send, payload)
+
+
+async def _handle_daemon_scheduler_tasks(
+    send,
+    method: str,
+    query: dict[str, str],
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    gate_error = _admin_token_gate_error(headers, f"Daemon scheduler controls require {ADMIN_TOKEN_ENV}.")
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    if method == "GET":
+        try:
+            tasks = object_daemon_control.list_scheduler_tasks(
+                base_dir=_data_dir(),
+                status=_optional_query_text(query, "status"),
+                limit=_query_int(query, "limit", default=100, minimum=1, maximum=1000),
+                offset=_query_int(query, "offset", default=0, minimum=0),
+                include_payload=_optional_query_bool(query, "include_payload") is True,
+            )
+        except (object_daemon_control.DaemonControlError, ValueError) as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        except OSError as exc:
+            await _send_json(
+                send,
+                {"status": "error", "error": f"Could not read scheduler tasks: {exc}"},
+                status=500,
+            )
+            return
+
+        await _send_json(send, {"status": "ok", **tasks})
+        return
+
+    if method == "POST":
+        try:
+            task = object_daemon_control.create_scheduler_task(
+                _parse_json_body(body),
+                actor=_record_change_actor(headers),
+                base_dir=_data_dir(),
+                include_payload=_optional_query_bool(query, "include_payload") is True,
+            )
+        except (
+            object_daemon_control.DaemonControlError,
+            InvalidObjectIdError,
+            ValueError,
+        ) as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        except OSError as exc:
+            await _send_json(
+                send,
+                {"status": "error", "error": f"Could not create scheduler task: {exc}"},
+                status=500,
+            )
+            return
+
+        await _send_json(send, {"status": "ok", "task": task}, status=201)
+        return
+
+    await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+
+
+async def _handle_daemon_scheduler_task(
+    send,
+    method: str,
+    task_id: str,
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    gate_error = _admin_token_gate_error(headers, f"Daemon scheduler controls require {ADMIN_TOKEN_ENV}.")
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    clean_task_id = urllib.parse.unquote(task_id)
+    if method in {"PATCH", "PUT"}:
+        try:
+            task = object_daemon_control.update_scheduler_task(
+                clean_task_id,
+                _parse_json_body(body),
+                actor=_record_change_actor(headers),
+                base_dir=_data_dir(),
+            )
+        except (
+            object_daemon_control.DaemonControlError,
+            InvalidObjectIdError,
+            ValueError,
+        ) as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        except object_daemon_control.DaemonItemNotFoundError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+            return
+        except OSError as exc:
+            await _send_json(
+                send,
+                {"status": "error", "error": f"Could not update scheduler task: {exc}"},
+                status=500,
+            )
+            return
+
+        await _send_json(send, {"status": "ok", "task": task})
+        return
+
+    if method == "DELETE":
+        try:
+            task = object_daemon_control.delete_scheduler_task(clean_task_id, base_dir=_data_dir())
+        except object_daemon_control.DaemonControlError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        except object_daemon_control.DaemonItemNotFoundError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+            return
+        except OSError as exc:
+            await _send_json(
+                send,
+                {"status": "error", "error": f"Could not delete scheduler task: {exc}"},
+                status=500,
+            )
+            return
+
+        await _send_json(send, {"status": "ok", "deleted": True, "task": task})
+        return
+
+    await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+
+
+async def _handle_daemon_queue_messages(
+    send,
+    method: str,
+    query: dict[str, str],
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    gate_error = _admin_token_gate_error(headers, f"Daemon queue controls require {ADMIN_TOKEN_ENV}.")
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    if method == "GET":
+        try:
+            messages = object_daemon_control.list_queue_messages(
+                base_dir=_data_dir(),
+                status=_optional_query_text(query, "status"),
+                queue_name=_optional_query_text(query, "queue_name"),
+                limit=_query_int(query, "limit", default=100, minimum=1, maximum=1000),
+                offset=_query_int(query, "offset", default=0, minimum=0),
+                include_payload=_optional_query_bool(query, "include_payload") is True,
+            )
+        except (object_daemon_control.DaemonControlError, ValueError) as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        except OSError as exc:
+            await _send_json(
+                send,
+                {"status": "error", "error": f"Could not read queue messages: {exc}"},
+                status=500,
+            )
+            return
+
+        await _send_json(send, {"status": "ok", **messages})
+        return
+
+    if method == "POST":
+        try:
+            message = object_daemon_control.enqueue_message(
+                _parse_json_body(body),
+                actor=_record_change_actor(headers),
+                base_dir=_data_dir(),
+                include_payload=_optional_query_bool(query, "include_payload") is True,
+            )
+        except (
+            object_daemon_control.DaemonControlError,
+            InvalidObjectIdError,
+            ValueError,
+        ) as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        except OSError as exc:
+            await _send_json(
+                send,
+                {"status": "error", "error": f"Could not enqueue message: {exc}"},
+                status=500,
+            )
+            return
+
+        await _send_json(send, {"status": "ok", "message": message}, status=201)
+        return
+
+    await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+
+
+async def _handle_daemon_queue_message(
+    send,
+    method: str,
+    message_id: str,
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    gate_error = _admin_token_gate_error(headers, f"Daemon queue controls require {ADMIN_TOKEN_ENV}.")
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    clean_message_id = urllib.parse.unquote(message_id)
+    if method in {"PATCH", "PUT"}:
+        try:
+            message = object_daemon_control.update_queue_message(
+                clean_message_id,
+                _parse_json_body(body),
+                actor=_record_change_actor(headers),
+                base_dir=_data_dir(),
+            )
+        except (object_daemon_control.DaemonControlError, ValueError) as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        except object_daemon_control.DaemonItemNotFoundError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+            return
+        except OSError as exc:
+            await _send_json(
+                send,
+                {"status": "error", "error": f"Could not update queue message: {exc}"},
+                status=500,
+            )
+            return
+
+        await _send_json(send, {"status": "ok", "message": message})
+        return
+
+    if method == "DELETE":
+        try:
+            message = object_daemon_control.delete_queue_message(clean_message_id, base_dir=_data_dir())
+        except object_daemon_control.DaemonControlError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        except object_daemon_control.DaemonItemNotFoundError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+            return
+        except OSError as exc:
+            await _send_json(
+                send,
+                {"status": "error", "error": f"Could not delete queue message: {exc}"},
+                status=500,
+            )
+            return
+
+        await _send_json(send, {"status": "ok", "deleted": True, "message": message})
+        return
+
+    await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
 
 
 def _admin_status_payload() -> dict[str, Any]:

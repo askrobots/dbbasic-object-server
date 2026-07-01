@@ -321,6 +321,118 @@ the same TSV state that the daemon uses so Scroll can show due scheduler tasks,
 visible/delayed queue messages, failed subscription delivery, event retention,
 and cleanup pressure without requiring a separate queue dashboard service.
 
+## Daemon Scheduler And Queue Controls
+
+Scheduler and queue controls are admin-token gated. They operate on the same
+`data/state/scheduler/state.tsv` and `data/state/queue/state.tsv` files that
+`object_daemon.py` already polls, so the HTTP API can manage work without
+introducing Celery, Redis, Flower, or a second queue service.
+
+These routes redact task/message payloads by default. Pass
+`include_payload=true` only on trusted operator screens.
+
+```http
+GET /daemon/scheduler/tasks?status=active&limit=100&offset=0
+POST /daemon/scheduler/tasks
+PATCH /daemon/scheduler/tasks/{task_id}
+DELETE /daemon/scheduler/tasks/{task_id}
+
+GET /daemon/queue/messages?status=pending&queue_name=default&limit=100&offset=0
+POST /daemon/queue/messages
+PATCH /daemon/queue/messages/{message_id}
+DELETE /daemon/queue/messages/{message_id}
+Authorization: Token <token>
+```
+
+Create one scheduled task:
+
+```json
+{
+  "object_id": "system_dashboard",
+  "method": "POST",
+  "type": "onetime",
+  "schedule": "2026-07-01T12:00:00Z",
+  "payload": {
+    "refresh": true
+  }
+}
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "task": {
+    "id": "018ff3f4-5f80-4df0-8e25-bcf6ad6fda01",
+    "object_id": "system_dashboard",
+    "method": "POST",
+    "type": "onetime",
+    "schedule": "2026-07-01T12:00:00Z",
+    "status": "active",
+    "next_run": 1782907200,
+    "payload_present": true
+  }
+}
+```
+
+Patch examples:
+
+```json
+{"status": "paused"}
+```
+
+```json
+{"next_run": "2026-07-01T13:00:00Z"}
+```
+
+Enqueue one message:
+
+```json
+{
+  "object_id": "system_dashboard",
+  "method": "POST",
+  "queue_name": "default",
+  "priority_level": 5,
+  "payload": {
+    "refresh": true
+  }
+}
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "message": {
+    "id": "2de66c27-149b-475b-a6f0-0c08a8d850f5",
+    "queue_name": "default",
+    "message": {
+      "object_id": "system_dashboard",
+      "method": "POST",
+      "payload_present": true
+    },
+    "priority_level": 5,
+    "status": "pending"
+  }
+}
+```
+
+Queue patch actions:
+
+```json
+{"action": "cancel"}
+```
+
+```json
+{"action": "retry"}
+```
+
+These controls are for trusted operators. They do not change the rule that
+untrusted object execution still needs a stronger worker boundary, quotas, and
+permission enforcement before public signup is safe.
+
 ## Rate Limits
 
 When `DBBASIC_RATE_LIMIT_REQUESTS` is set above zero, the server rate-limits
