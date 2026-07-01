@@ -242,6 +242,10 @@ def test_contract_keeps_existing_introspection_query_flags():
             {"status": "ok", "sessions": [], "count": 0},
         ),
         (
+            "identity_session_create",
+            {"status": "ok", "session": {"session_id": "sess_123"}, "token": "once"},
+        ),
+        (
             "identity_session",
             {"status": "ok", "session": {"session_id": "sess_123"}},
         ),

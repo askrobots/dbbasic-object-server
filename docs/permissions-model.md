@@ -291,8 +291,16 @@ POST /identity/sessions
 Authorization: Token <admin-token>
 ```
 
-Those sessions store only a token hash under `data/identity/sessions.tsv`.
-Requests can then send `Authorization: Token <session-token>` or
+The admin route can mint arbitrary operator-controlled sessions. For a login
+gateway or local trusted client, `POST /identity/session` can mint a session for
+an existing active user when `DBBASIC_ENABLE_SESSION_LOGIN=true` and the caller
+presents `DBBASIC_SESSION_LOGIN_TOKEN`. That token is separate from the admin
+token. The route accepts only `user_id`, `label`, and `ttl_seconds`; role,
+account, and subscription overrides are rejected so the subject comes from the
+registered user and account.
+
+Sessions store only a token hash under `data/identity/sessions.tsv`. Requests
+can then send `Authorization: Token <session-token>` or
 `Authorization: Bearer <session-token>`, and the server resolves the subject
 directly from its local identity store. This is the first built-in replacement
 for each app hand-rolling the same "current user, current account, current

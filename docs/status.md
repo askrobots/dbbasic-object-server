@@ -49,7 +49,7 @@ public users.
 - Open signup where strangers can run arbitrary Python code
 - Public source writes
 - Default-on permissions for every route after login/auth gateway integration
-- Browser login/session UX
+- Browser login/session UX on top of guarded existing-user session minting
 - CPU and memory isolation for untrusted object code
 - File upload/delete from untrusted users
 - Fully managed event delivery/admin control API
@@ -58,8 +58,8 @@ public users.
 
 ## Next Work
 
-1. Connect sessions to a real browser login or trusted auth gateway that mints
-   sessions.
+1. Connect guarded existing-user session minting to a real browser login or
+   trusted auth gateway.
 2. Make permission enforcement default-on after the login/auth gateway is wired.
 3. Add event delivery controls after scheduler and queue controls stabilize.
 4. Add file upload/delete with quotas, content checks, permissions, and audit.

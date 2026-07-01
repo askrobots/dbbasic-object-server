@@ -205,6 +205,7 @@ Current endpoints:
 - `GET /identity/sessions/{session_id}`
 - `DELETE /identity/sessions/{session_id}`
 - `GET /identity/session`
+- `POST /identity/session`
 - `DELETE /identity/session`
 - `GET /collections`
 - `GET /collections/{collection}`
@@ -279,6 +280,8 @@ export DBBASIC_ENABLE_PERMISSION_AUDIT=false
 export DBBASIC_ENABLE_PERMISSION_ENFORCEMENT=false
 export DBBASIC_ALLOW_UNREADY_PERMISSION_ENFORCEMENT=false
 export DBBASIC_PERMISSION_TRUST_HEADERS=false
+export DBBASIC_ENABLE_SESSION_LOGIN=false
+export DBBASIC_SESSION_LOGIN_TOKEN=
 export DBBASIC_ENABLE_RECORD_EVENTS=true
 export DBBASIC_EVENT_KEEP_COUNT=1000
 export DBBASIC_EVENT_KEEP_SECONDS=604800
@@ -338,9 +341,13 @@ the JSON that was written, and roll back by creating a new version from an older
 one.
 
 File-backed users and sessions exist. Session-token clients can inspect and
-revoke their own session without the admin token, but production browser login,
-external auth gateway integration, and default-on permission enforcement still
-need to be finished before general public use.
+revoke their own session without the admin token. A guarded
+`POST /identity/session` route can mint a session for an existing active user
+when `DBBASIC_ENABLE_SESSION_LOGIN=true` and the caller presents
+`DBBASIC_SESSION_LOGIN_TOKEN`; it refuses caller-supplied role, account, and
+subscription overrides so the session subject comes from the registry.
+Production browser login, external auth gateway integration, and default-on
+permission enforcement still need to be finished before general public use.
 
 ## Current Extraction Slice
 
@@ -385,6 +392,8 @@ rules the rest of the server will use:
 - daemon status reports scheduler tasks, queue messages, event delivery state,
   retention settings, and rate-limit cleanup posture without adding a separate
   Flower-style service
+- guarded session login can mint existing-user sessions with a dedicated
+  gateway token, without exposing the admin-only arbitrary session endpoint
 - request bodies over `DBBASIC_MAX_REQUEST_BYTES` return `413 Payload Too Large`
 - traffic over `DBBASIC_RATE_LIMIT_REQUESTS` per `DBBASIC_RATE_LIMIT_WINDOW_SECONDS`
   returns `429 Too Many Requests`
@@ -444,8 +453,8 @@ code.
 
 Near-term work:
 
-- connect file-backed sessions to a real browser login or trusted auth gateway
-  that mints sessions
+- connect guarded existing-user session minting to a real browser login or
+  trusted auth gateway
 - make permission enforcement default-on after the login/auth gateway is wired
 - add CPU and memory isolation for untrusted object code
 - finish event delivery controls after the scheduler/queue control surface is

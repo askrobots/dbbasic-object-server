@@ -67,6 +67,8 @@ PERMISSION_UNREADY_ENFORCEMENT_ENV = "DBBASIC_ALLOW_UNREADY_PERMISSION_ENFORCEME
 PERMISSION_AUDIT_ENV = "DBBASIC_ENABLE_PERMISSION_AUDIT"
 PERMISSION_TRUST_HEADERS_ENV = "DBBASIC_PERMISSION_TRUST_HEADERS"
 REQUIRE_KNOWN_IDENTITY_USERS_ENV = "DBBASIC_REQUIRE_KNOWN_IDENTITY_USERS"
+SESSION_LOGIN_ENV = "DBBASIC_ENABLE_SESSION_LOGIN"
+SESSION_LOGIN_TOKEN_ENV = "DBBASIC_SESSION_LOGIN_TOKEN"
 RECORD_EVENTS_ENV = "DBBASIC_ENABLE_RECORD_EVENTS"
 EVENT_KEEP_COUNT_ENV = "DBBASIC_EVENT_KEEP_COUNT"
 EVENT_KEEP_SECONDS_ENV = "DBBASIC_EVENT_KEEP_SECONDS"
@@ -350,7 +352,7 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
             return
 
         if path == http_api_contract.IDENTITY_CURRENT_SESSION_PATH:
-            await _handle_identity_current_session(send, method, headers)
+            await _handle_identity_current_session(send, method, body, headers)
             return
 
         if path == http_api_contract.IDENTITY_PATH:
@@ -845,10 +847,38 @@ async def _handle_identity_session(
 async def _handle_identity_current_session(
     send,
     method: str,
+    body: bytes,
     headers: dict[str, str],
 ) -> None:
-    if method not in {"GET", "DELETE"}:
+    if method not in {"GET", "POST", "DELETE"}:
         await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    if method == "POST":
+        gate_error = _session_login_gate_error(headers)
+        if gate_error is not None:
+            status, message = gate_error
+            await _send_json(send, {"status": "error", "error": message}, status=status)
+            return
+
+        try:
+            payload = _parse_json_body(body)
+            result = object_identity.create_session(
+                _identity_session_login_payload(payload),
+                base_dir=_data_dir(),
+                require_known_user=True,
+            )
+        except object_identity.UserNotFoundError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+            return
+        except object_identity.AccountNotFoundError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+            return
+        except ValueError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+
+        await _send_json(send, {"status": "ok", **result}, status=201)
         return
 
     session = _current_identity_session(headers)
@@ -1349,6 +1379,8 @@ def _admin_capabilities_payload() -> dict[str, Any]:
         "identity": {
             "trusted_headers_enabled": _env_enabled(PERMISSION_TRUST_HEADERS_ENV),
             "require_known_identity_users": _env_enabled(REQUIRE_KNOWN_IDENTITY_USERS_ENV),
+            "session_login_enabled": _env_enabled(SESSION_LOGIN_ENV),
+            "session_login_token_configured": bool(os.environ.get(SESSION_LOGIN_TOKEN_ENV, "")),
         },
         "limits": {
             "max_request_bytes": _max_request_bytes(),
@@ -4427,6 +4459,16 @@ def _parse_json_body(body: bytes) -> dict[str, Any]:
     return payload
 
 
+def _identity_session_login_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    allowed_fields = {"user_id", "label", "ttl_seconds"}
+    unsupported = sorted(set(payload) - allowed_fields)
+    if unsupported:
+        fields = ", ".join(unsupported)
+        raise ValueError(f"Unsupported session login field(s): {fields}")
+
+    return {key: payload[key] for key in allowed_fields if key in payload}
+
+
 def _record_payload_from_body(body: bytes, *, require_id: bool = False) -> dict[str, str]:
     payload = _parse_json_body(body)
     if not payload:
@@ -5088,6 +5130,21 @@ def _admin_token_gate_error(
 
     request_token = _authorization_token(headers)
     if request_token is None or not hmac.compare_digest(request_token, admin_token):
+        return (401, "Unauthorized")
+
+    return None
+
+
+def _session_login_gate_error(headers: dict[str, str]) -> tuple[int, str] | None:
+    if not _env_enabled(SESSION_LOGIN_ENV):
+        return (403, f"Session login is disabled. Set {SESSION_LOGIN_ENV}=true.")
+
+    login_token = os.environ.get(SESSION_LOGIN_TOKEN_ENV, "")
+    if not login_token:
+        return (403, f"Session login token is not configured. Set {SESSION_LOGIN_TOKEN_ENV}.")
+
+    request_token = _authorization_token(headers)
+    if request_token is None or not hmac.compare_digest(request_token, login_token):
         return (401, "Unauthorized")
 
     return None

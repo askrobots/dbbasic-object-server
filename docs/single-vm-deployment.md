@@ -178,6 +178,8 @@ DBBASIC_ENABLE_PERMISSION_AUDIT=false
 DBBASIC_ENABLE_PERMISSION_ENFORCEMENT=false
 DBBASIC_ALLOW_UNREADY_PERMISSION_ENFORCEMENT=false
 DBBASIC_PERMISSION_TRUST_HEADERS=false
+DBBASIC_ENABLE_SESSION_LOGIN=false
+DBBASIC_SESSION_LOGIN_TOKEN=
 DBBASIC_ENABLE_RECORD_EVENTS=true
 DBBASIC_EVENT_KEEP_COUNT=1000
 DBBASIC_EVENT_KEEP_SECONDS=604800
@@ -626,6 +628,10 @@ dbbasic.example.com {
     handle /identity/session {
         reverse_proxy 127.0.0.1:8001
     }
+
+    # This exposes GET/DELETE current-session checks. POST session login remains
+    # disabled unless DBBASIC_ENABLE_SESSION_LOGIN=true and
+    # DBBASIC_SESSION_LOGIN_TOKEN are set.
 
     handle /objects/site_home* {
         reverse_proxy 127.0.0.1:8001

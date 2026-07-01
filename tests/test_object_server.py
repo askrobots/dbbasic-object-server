@@ -611,24 +611,154 @@ def test_identity_current_session_can_revoke_itself(tmp_path, monkeypatch):
     assert session_payload == {"status": "error", "error": "Active session token required"}
 
 
-def test_identity_current_session_rejects_non_get_delete_methods(tmp_path, monkeypatch):
+def test_identity_current_session_login_is_disabled_by_default(tmp_path, monkeypatch):
     monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
-    enable_admin_token(monkeypatch)
-    _, _, created = request(
-        "/identity/sessions",
-        method="POST",
-        body=json.dumps({"user_id": "u_7"}).encode(),
-        headers=auth_headers(),
-    )
+    monkeypatch.delenv(object_server.SESSION_LOGIN_ENV, raising=False)
+    monkeypatch.delenv(object_server.SESSION_LOGIN_TOKEN_ENV, raising=False)
 
     status, _, payload = request(
         "/identity/session",
         method="POST",
-        headers=[("authorization", f"Token {created['token']}")],
+        body=json.dumps({"user_id": "u_7"}).encode(),
     )
 
-    assert status == 405
-    assert payload == {"status": "error", "error": "Method not allowed"}
+    assert status == 403
+    assert payload == {
+        "status": "error",
+        "error": "Session login is disabled. Set DBBASIC_ENABLE_SESSION_LOGIN=true.",
+    }
+
+
+def test_identity_current_session_login_requires_configured_login_token(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.SESSION_LOGIN_ENV, "true")
+    monkeypatch.delenv(object_server.SESSION_LOGIN_TOKEN_ENV, raising=False)
+
+    status, _, payload = request(
+        "/identity/session",
+        method="POST",
+        body=json.dumps({"user_id": "u_7"}).encode(),
+    )
+
+    assert status == 403
+    assert payload == {
+        "status": "error",
+        "error": "Session login token is not configured. Set DBBASIC_SESSION_LOGIN_TOKEN.",
+    }
+
+
+def test_identity_current_session_login_rejects_wrong_token(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.SESSION_LOGIN_ENV, "true")
+    monkeypatch.setenv(object_server.SESSION_LOGIN_TOKEN_ENV, "login-token")
+
+    status, _, payload = request(
+        "/identity/session",
+        method="POST",
+        body=json.dumps({"user_id": "u_7"}).encode(),
+        headers=[("authorization", "Token wrong")],
+    )
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
+
+
+def test_identity_current_session_login_uses_registered_user_profile(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.SESSION_LOGIN_ENV, "true")
+    monkeypatch.setenv(object_server.SESSION_LOGIN_TOKEN_ENV, "login-token")
+    enable_admin_token(monkeypatch)
+    request(
+        "/identity/accounts",
+        method="POST",
+        body=json.dumps({"account_id": "acme", "subscriptions": ["team"]}).encode(),
+        headers=auth_headers(),
+    )
+    request(
+        "/identity/users",
+        method="POST",
+        body=json.dumps(
+            {
+                "user_id": "u_7",
+                "account_id": "acme",
+                "roles": ["sales"],
+                "subscriptions": ["pro"],
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    status, _, created = request(
+        "/identity/session",
+        method="POST",
+        body=json.dumps({"user_id": "u_7", "label": "scroll", "ttl_seconds": 3600}).encode(),
+        headers=[("authorization", "Token login-token")],
+    )
+
+    assert status == 201
+    assert created["status"] == "ok"
+    assert created["token"]
+    assert created["session"]["user_id"] == "u_7"
+    assert created["session"]["account_id"] == "acme"
+    assert created["session"]["roles"] == ["sales"]
+    assert created["session"]["subscriptions"] == ["pro", "team"]
+    assert created["session"]["label"] == "scroll"
+    assert "token_hash" not in created["session"]
+
+    session_status, _, session_payload = request(
+        "/identity/session",
+        headers=[("authorization", f"Bearer {created['token']}")],
+    )
+
+    assert session_status == 200
+    assert session_payload["session"]["session_id"] == created["session"]["session_id"]
+
+
+def test_identity_current_session_login_rejects_role_overrides(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.SESSION_LOGIN_ENV, "true")
+    monkeypatch.setenv(object_server.SESSION_LOGIN_TOKEN_ENV, "login-token")
+
+    status, _, payload = request(
+        "/identity/session",
+        method="POST",
+        body=json.dumps(
+            {
+                "user_id": "u_7",
+                "account_id": "acme",
+                "roles": ["admin"],
+                "subscriptions": ["enterprise"],
+            }
+        ).encode(),
+        headers=[("authorization", "Token login-token")],
+    )
+
+    assert status == 400
+    assert payload == {
+        "status": "error",
+        "error": (
+            "Unsupported session login field(s): account_id, roles, subscriptions"
+        ),
+    }
+
+
+def test_identity_current_session_login_requires_known_active_user(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.SESSION_LOGIN_ENV, "true")
+    monkeypatch.setenv(object_server.SESSION_LOGIN_TOKEN_ENV, "login-token")
+
+    status, _, payload = request(
+        "/identity/session",
+        method="POST",
+        body=json.dumps({"user_id": "missing"}).encode(),
+        headers=[("authorization", "Token login-token")],
+    )
+
+    assert status == 404
+    assert payload == {"status": "error", "error": "User not found: missing"}
 
 
 def test_identity_endpoint_ignores_untrusted_identity_headers(monkeypatch):
@@ -875,6 +1005,8 @@ def test_admin_status_reports_inventory_capabilities_and_package_posture(tmp_pat
         "enabled": False,
         "env": "DBBASIC_ENABLE_PACKAGE_INSTALLS",
     }
+    assert payload["capabilities"]["identity"]["session_login_enabled"] is False
+    assert payload["capabilities"]["identity"]["session_login_token_configured"] is False
     assert payload["capabilities"]["limits"]["max_request_bytes"] == 2048
     assert payload["capabilities"]["limits"]["max_concurrent_requests"] == 3
     assert payload["capabilities"]["limits"]["max_concurrent_executions"] == 2

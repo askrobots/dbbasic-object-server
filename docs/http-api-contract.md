@@ -187,6 +187,12 @@ Response:
       "requested": false,
       "blocked": true,
       "env": "DBBASIC_ENABLE_PERMISSION_ENFORCEMENT"
+    },
+    "identity": {
+      "trusted_headers_enabled": false,
+      "require_known_identity_users": true,
+      "session_login_enabled": false,
+      "session_login_token_configured": false
     }
   },
   "packages": [
@@ -630,6 +636,33 @@ If `user_id` already exists in `data/identity/users.tsv`, omitted `account_id`,
 This lets Scroll or a login gateway mint a session without duplicating policy
 metadata in every request. If `DBBASIC_REQUIRE_KNOWN_IDENTITY_USERS=true`, the
 server rejects sessions for unknown users.
+
+For a non-admin login gateway or local trusted client, the current-session route
+can mint a session for an existing active user when
+`DBBASIC_ENABLE_SESSION_LOGIN=true`:
+
+```http
+POST /identity/session
+Authorization: Token <session-login-token>
+Content-Type: application/json
+```
+
+```json
+{
+  "user_id": "7",
+  "label": "scroll desktop",
+  "ttl_seconds": 86400
+}
+```
+
+This route always requires the user to exist in `data/identity/users.tsv`.
+It also requires `DBBASIC_SESSION_LOGIN_TOKEN`; this token is separate from the
+admin token so a login gateway can mint sessions without broad admin access.
+It accepts only `user_id`, `label`, and `ttl_seconds`; caller-supplied
+`account_id`, `roles`, or `subscriptions` are rejected. The session subject is
+loaded from the registered user and account so a login request cannot grant
+itself stronger permissions. This is a session-mint primitive, not password
+authentication yet.
 
 List sessions:
 

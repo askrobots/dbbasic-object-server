@@ -96,6 +96,7 @@ RESPONSE_FIELDS: dict[str, frozenset[str]] = {
     "identity_user_list": frozenset({"status", "users", "count"}),
     "identity_user": frozenset({"status", "user"}),
     "identity_session_list": frozenset({"status", "sessions", "count"}),
+    "identity_session_create": frozenset({"status", "session", "token"}),
     "identity_session": frozenset({"status", "session"}),
     "identity_current_session": frozenset({"status", "session"}),
     "create_object": frozenset({"status", "object_id", "message"}),
