@@ -82,14 +82,17 @@ This repository currently contains:
 - `object_execution.py` - structured object execution results and error capture
 - `object_correlation.py` - UUIDv4 request/action correlation IDs for logs,
   source versions, audits, and error responses
+- `object_ids.py` - UUIDv4 helpers for server-created resource IDs
 - `object_collections.py` - read-only collection summaries derived from objects, records, and permission policy
 - `object_records.py` - TSV-backed collection records for generated tables and forms
 - `object_source.py` - source read, update, version, and rollback operations
 - `object_state.py` - TSV-backed object state reads and runtime writes
 - `object_files.py` - read-only object-owned file listing and download helpers
+- `object_identity.py` - file-backed accounts, users, and sessions for permission subjects
 - `object_logs.py` - TSV-backed object log reads, appends, rotation, compression, retention, and runtime logger helper
 - `object_metadata.py` - conservative object metadata summaries
 - `object_schemas.py` - schema metadata for generated UI, validation rules, field permissions, and relations
+- `object_schema_versions.py` - schema version history and rollback helpers
 - `object_events.py` - daemon-compatible event publishing and subscription state helpers
   for record mutations, triggers, listeners, and webhooks
 - `object_packages.py` - package manifest discovery, dry-runs, and conservative install writes
@@ -105,7 +108,8 @@ This repository currently contains:
 - `deployment_checks.py` - single-VM filesystem ownership and permission checks
 
 It does not yet contain the full private prototype, cluster runtime, dashboard,
-sample applications, full package updater/rollback flow, or production installer.
+sample applications, production installer, public signup flow, or production
+isolation for untrusted user code.
 
 ## Object Source Directories
 
@@ -136,10 +140,11 @@ object, execute object `GET`, `POST`, `PUT`, and `DELETE` methods, and update
 source when the explicit source-write gate is enabled. It can also list source
 versions, read a specific version, read object state, read object logs, read
 object-owned files, read object metadata, list derived collections, read and
-write collection records, read and write schema metadata, and roll back source
-through the same write gate. Object execution can return JSON data, HTML/text/binary responses
-through `content_type` and `body`, or a low-level `(status, headers, body)`
-tuple.
+write collection records, read and write schema metadata, manage file-backed
+accounts/users/sessions, inspect packages, run package dry-runs, install gated
+packages with restore points, and roll back source through the same write gate.
+Object execution can return JSON data, HTML/text/binary responses through
+`content_type` and `body`, or a low-level `(status, headers, body)` tuple.
 
 This server is useful for local development and controlled staging. It is not
 the final auth boundary yet. Object listing and introspection reads require the
@@ -161,8 +166,20 @@ Current endpoints:
 - `GET /health?metrics=true`
 - `GET /permissions/policy`
 - `PUT /permissions/policy`
+- `GET /permissions/status`
 - `POST /permissions/check`
 - `GET /permissions/audit`
+- `GET /identity`
+- `GET /identity/accounts`
+- `POST /identity/accounts`
+- `GET /identity/accounts/{account_id}`
+- `GET /identity/users`
+- `POST /identity/users`
+- `GET /identity/users/{user_id}`
+- `GET /identity/sessions`
+- `POST /identity/sessions`
+- `GET /identity/sessions/{session_id}`
+- `DELETE /identity/sessions/{session_id}`
 - `GET /collections`
 - `GET /collections/{collection}`
 - `GET /collections/{collection}/records`
@@ -188,6 +205,7 @@ Current endpoints:
 - `GET /packages/{package_id}`
 - `GET /packages/{package_id}?dry_run=true`
 - `POST /packages/{package_id}/install`
+- `POST /packages/{package_id}/restore`
 - `GET /packages/{package_id}/changes`
 - `GET /objects?format=json`
 - `GET /objects/{object_id}`
@@ -196,6 +214,8 @@ Current endpoints:
 - `DELETE /objects/{object_id}`
 - `GET /objects/{object_id}?state=true`
 - `GET /objects/{object_id}?logs=true&limit=100`
+- `GET /objects/{object_id}?files=true`
+- `GET /objects/{object_id}?file=name`
 - `GET /objects/{object_id}?metadata=true`
 - `GET /objects/{object_id}?source=true&format=json`
 - `GET /objects/{object_id}?versions=true&limit=10`
@@ -287,8 +307,9 @@ Admin schema writes also keep a changelog under
 the JSON that was written, and roll back by creating a new version from an older
 one.
 
-Production user/session auth still needs to replace the temporary admin-token
-gate before general use.
+File-backed users and sessions exist, but production browser login, external
+auth gateway integration, and default-on permission enforcement still need to be
+finished before general public use.
 
 ## Current Extraction Slice
 
@@ -349,6 +370,7 @@ These pieces come first so the ASGI server, daemon, Scroll, tests, and migration
 tools all agree on the same object rules.
 
 See `docs/README.md` for the documentation map,
+`docs/status.md` for the current readiness checklist,
 `docs/runtime-contract.md` for the daemon-facing runtime contract,
 `docs/http-api-contract.md` for the HTTP API shape that existing clients expect,
 `docs/object-authoring.md` for the current object authoring shape and
@@ -364,27 +386,30 @@ Read `SECURITY.md` and `CONTRIBUTING.md` before copying code or documentation fr
 
 ## Status
 
-Early public assembly.
+Public staging runtime.
 
-The object server has been useful internally, but this repository is
-intentionally starting small so the public codebase can be reviewed and cleaned
-as it grows.
+The object server has moved past the first extraction slice. It now has enough
+public code to build controlled object-backed apps on one VM: ASGI serving,
+object execution, source/state/log/file/version storage, rollback, TSV-backed
+collections, schemas, validation, change logs, events, package dry-runs and
+gated installs, backups, identity records, permission policy/audit/enforcement
+hooks, traffic limits, health metrics, GitHub Actions, and deployment checks.
 
-The public repository now has a runnable ASGI server, direct Python object
-execution, source/state/log/version storage, metadata, a daemon slice, the first
-permissions evaluator, tests, GitHub Actions, and a conservative single-VM
-staging path. It is ready for local experimentation and controlled staging, not
-general public code execution.
+It is suitable for local development, dogfooding, controlled staging, and
+careful internal apps where the operator controls the code and users. It is not
+yet safe as an open public runtime where strangers can sign up and run arbitrary
+code.
 
 Near-term work:
 
-- move the hardened core runtime and sandbox into this repository
-- connect real sessions, accounts, and auth gateways to permission enforcement
-- add Scroll-compatible permission audit and introspection endpoints
-- add CPU, memory, wall-clock, and rate limits around execution
-- wire scheduled backup retention and Scroll backup controls to `object_backup.py`
-- keep the HTTP contract compatible with Scroll and existing tools
-- add deployment scripts after the manual single-VM path stays boring
+- make permission enforcement safer to enable by default
+- connect file-backed sessions to a real login/auth gateway flow
+- add CPU and memory isolation for untrusted object code
+- expose scheduler/queue/job status through the HTTP contract
+- add file upload/delete with quotas, content limits, permissions, and audit
+- wire Scroll to the public identity, permission, package, event, backup, and
+  dashboard APIs
+- add a repeatable single-VM installer after the manual path stays boring
 
 ## Public Repository Safety
 

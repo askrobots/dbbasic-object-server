@@ -10,6 +10,7 @@ hold the deeper contracts, design rules, and implementation notes.
 flowchart TD
     A["README"] --> B["Runtime contract"]
     A --> C["HTTP API contract"]
+    A --> R["Status"]
     A --> M["Object authoring"]
     A --> D["ASGI and realtime direction"]
     A --> E["REST and object messages"]
@@ -34,6 +35,8 @@ flowchart TD
   and event contracts.
 - `http-api-contract.md` - existing `/objects` HTTP API shape used by current
   clients and tools.
+- `status.md` - current readiness checklist, useful deployment shape, known
+  non-goals, and next production-hardening work.
 - `object-authoring.md` - current object source layout, method shape, runtime
   helpers, state/log usage, response return forms, and the object-first
   storage/schema loop.
