@@ -16,7 +16,8 @@ public users.
 - Event publishing, event retention, subscriptions, and callback delivery state
 - Package manifest discovery, dry-runs, gated installs, install changelogs,
   restore points, and restore API
-- File-backed accounts, users, sessions, and permission subjects
+- File-backed accounts, users, self-service session inspection/revocation, and
+  permission subjects
 - Permission policy storage, check API, audit mode, readiness status, row
   filters, field redaction, opt-in enforcement, and readiness-gated rollout
 - Request size limits, request concurrency limits, execution concurrency limits,
@@ -48,7 +49,8 @@ public users.
 
 ## Next Work
 
-1. Connect sessions to a real login or trusted auth gateway flow.
+1. Connect sessions to a real browser login or trusted auth gateway that mints
+   sessions.
 2. Make permission enforcement default-on after the login/auth gateway is wired.
 3. Expose scheduler, queue, job, and daemon status through HTTP.
 4. Add file upload/delete with quotas, content checks, permissions, and audit.

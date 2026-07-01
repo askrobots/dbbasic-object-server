@@ -347,6 +347,10 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
             await _handle_identity_session(send, method, session_id, headers)
             return
 
+        if path == http_api_contract.IDENTITY_CURRENT_SESSION_PATH:
+            await _handle_identity_current_session(send, method, headers)
+            return
+
         if path == http_api_contract.IDENTITY_PATH:
             await _handle_identity(send, method, headers)
             return
@@ -802,6 +806,37 @@ async def _handle_identity_session(
         return
 
     await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+
+
+async def _handle_identity_current_session(
+    send,
+    method: str,
+    headers: dict[str, str],
+) -> None:
+    if method not in {"GET", "DELETE"}:
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    session = _current_identity_session(headers)
+    if session is None:
+        await _send_json(
+            send,
+            {"status": "error", "error": "Active session token required"},
+            status=401,
+        )
+        return
+
+    if method == "GET":
+        await _send_json(send, {"status": "ok", "session": session.public_payload()})
+        return
+
+    try:
+        revoked = object_identity.revoke_session(session.session_id, base_dir=_data_dir())
+    except (object_identity.InvalidSessionPayloadError, object_identity.SessionNotFoundError) as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+
+    await _send_json(send, {"status": "ok", "session": revoked})
 
 
 async def _send_rate_limit_if_needed(
@@ -4329,6 +4364,21 @@ def _permission_identity(
     )
     method = "trusted_headers" if _trusted_identity_headers_present(headers) else "anonymous"
     return subject, method
+
+
+def _current_identity_session(headers: dict[str, str]) -> object_identity.IdentitySession | None:
+    token = _authorization_token(headers)
+    if not token:
+        return None
+
+    admin_token = os.environ.get(ADMIN_TOKEN_ENV, "")
+    if admin_token and hmac.compare_digest(token, admin_token):
+        return None
+
+    try:
+        return object_identity.resolve_session_token(token, base_dir=_data_dir())
+    except (OSError, ValueError):
+        return None
 
 
 def _trusted_identity_headers_present(headers: dict[str, str]) -> bool:

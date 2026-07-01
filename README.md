@@ -180,6 +180,8 @@ Current endpoints:
 - `POST /identity/sessions`
 - `GET /identity/sessions/{session_id}`
 - `DELETE /identity/sessions/{session_id}`
+- `GET /identity/session`
+- `DELETE /identity/session`
 - `GET /collections`
 - `GET /collections/{collection}`
 - `GET /collections/{collection}/records`
@@ -308,9 +310,10 @@ Admin schema writes also keep a changelog under
 the JSON that was written, and roll back by creating a new version from an older
 one.
 
-File-backed users and sessions exist, but production browser login, external
-auth gateway integration, and default-on permission enforcement still need to be
-finished before general public use.
+File-backed users and sessions exist. Session-token clients can inspect and
+revoke their own session without the admin token, but production browser login,
+external auth gateway integration, and default-on permission enforcement still
+need to be finished before general public use.
 
 ## Current Extraction Slice
 
@@ -403,7 +406,8 @@ code.
 
 Near-term work:
 
-- connect file-backed sessions to a real login/auth gateway flow
+- connect file-backed sessions to a real browser login or trusted auth gateway
+  that mints sessions
 - make permission enforcement default-on after the login/auth gateway is wired
 - add CPU and memory isolation for untrusted object code
 - expose scheduler/queue/job status through the HTTP contract

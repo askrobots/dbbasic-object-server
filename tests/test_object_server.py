@@ -519,6 +519,115 @@ def test_identity_session_list_and_revoke(tmp_path, monkeypatch):
     assert identity["subject"]["authenticated"] is False
 
 
+def test_identity_current_session_returns_active_session_without_admin_token(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    enable_admin_token(monkeypatch)
+    _, _, created = request(
+        "/identity/sessions",
+        method="POST",
+        body=json.dumps(
+            {
+                "user_id": "u_7",
+                "account_id": "acme",
+                "roles": ["sales"],
+                "subscriptions": ["pro"],
+                "label": "scroll",
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    status, _, payload = request(
+        "/identity/session",
+        headers=[("authorization", f"Bearer {created['token']}")],
+    )
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["session"]["session_id"] == created["session"]["session_id"]
+    assert payload["session"]["user_id"] == "u_7"
+    assert payload["session"]["account_id"] == "acme"
+    assert payload["session"]["roles"] == ["sales"]
+    assert payload["session"]["subscriptions"] == ["pro"]
+    assert payload["session"]["label"] == "scroll"
+    assert payload["session"]["active"] is True
+    assert "token" not in payload["session"]
+    assert "token_hash" not in payload["session"]
+
+
+def test_identity_current_session_rejects_missing_invalid_and_admin_tokens(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    enable_admin_token(monkeypatch)
+
+    missing_status, _, missing_payload = request("/identity/session")
+    invalid_status, _, invalid_payload = request(
+        "/identity/session",
+        headers=[("authorization", "Token not-a-session-token")],
+    )
+    admin_status, _, admin_payload = request("/identity/session", headers=auth_headers())
+
+    assert missing_status == 401
+    assert invalid_status == 401
+    assert admin_status == 401
+    assert missing_payload == {"status": "error", "error": "Active session token required"}
+    assert invalid_payload == {"status": "error", "error": "Active session token required"}
+    assert admin_payload == {"status": "error", "error": "Active session token required"}
+
+
+def test_identity_current_session_can_revoke_itself(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    enable_admin_token(monkeypatch)
+    _, _, created = request(
+        "/identity/sessions",
+        method="POST",
+        body=json.dumps({"user_id": "u_7", "roles": ["sales"]}).encode(),
+        headers=auth_headers(),
+    )
+    token_headers = [("authorization", f"Token {created['token']}")]
+
+    status, _, payload = request("/identity/session", method="DELETE", headers=token_headers)
+
+    assert status == 200
+    assert payload["session"]["session_id"] == created["session"]["session_id"]
+    assert payload["session"]["active"] is False
+    assert payload["session"]["revoked_at"] is not None
+
+    identity_status, _, identity = request("/identity", headers=token_headers)
+    session_status, _, session_payload = request("/identity/session", headers=token_headers)
+
+    assert identity_status == 200
+    assert identity["auth"]["method"] == "anonymous"
+    assert identity["subject"]["authenticated"] is False
+    assert session_status == 401
+    assert session_payload == {"status": "error", "error": "Active session token required"}
+
+
+def test_identity_current_session_rejects_non_get_delete_methods(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    enable_admin_token(monkeypatch)
+    _, _, created = request(
+        "/identity/sessions",
+        method="POST",
+        body=json.dumps({"user_id": "u_7"}).encode(),
+        headers=auth_headers(),
+    )
+
+    status, _, payload = request(
+        "/identity/session",
+        method="POST",
+        headers=[("authorization", f"Token {created['token']}")],
+    )
+
+    assert status == 405
+    assert payload == {"status": "error", "error": "Method not allowed"}
+
+
 def test_identity_endpoint_ignores_untrusted_identity_headers(monkeypatch):
     monkeypatch.delenv("DBBASIC_PERMISSION_TRUST_HEADERS", raising=False)
     headers = [

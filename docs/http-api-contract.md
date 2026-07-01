@@ -203,6 +203,8 @@ Response:
   },
   "permissions": {
     "enforcement_enabled": true,
+    "enforcement_requested": true,
+    "enforcement_blocked": false,
     "audit_enabled": true
   }
 }
@@ -354,6 +356,24 @@ Revoke a session:
 DELETE /identity/sessions/{session_id}
 Authorization: Token <admin-token>
 ```
+
+Inspect the current session with a session token:
+
+```http
+GET /identity/session
+Authorization: Token <session-token>
+```
+
+Revoke the current session with the same token:
+
+```http
+DELETE /identity/session
+Authorization: Token <session-token>
+```
+
+The current-session route does not accept the admin token as a user session.
+It is for Scroll, app clients, and login gateways that need a stable non-admin
+session lifecycle.
 
 Session tokens do not grant admin access. They only supply the active subject
 used by permission checks. Admin routes still require `DBBASIC_ADMIN_TOKEN`.

@@ -34,6 +34,7 @@ def test_contract_keeps_objects_paths_as_public_surface():
     assert http_api_contract.IDENTITY_USER_PATH == "/identity/users/{user_id}"
     assert http_api_contract.IDENTITY_SESSIONS_PATH == "/identity/sessions"
     assert http_api_contract.IDENTITY_SESSION_PATH == "/identity/sessions/{session_id}"
+    assert http_api_contract.IDENTITY_CURRENT_SESSION_PATH == "/identity/session"
     assert http_api_contract.PERMISSIONS_POLICY_PATH == "/permissions/policy"
     assert http_api_contract.PERMISSIONS_STATUS_PATH == "/permissions/status"
     assert http_api_contract.PERMISSIONS_CHECK_PATH == "/permissions/check"
@@ -191,6 +192,10 @@ def test_contract_keeps_existing_introspection_query_flags():
         ),
         (
             "identity_session",
+            {"status": "ok", "session": {"session_id": "sess_123"}},
+        ),
+        (
+            "identity_current_session",
             {"status": "ok", "session": {"session_id": "sess_123"}},
         ),
         (

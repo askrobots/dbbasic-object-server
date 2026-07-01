@@ -298,6 +298,17 @@ directly from its local identity store. This is the first built-in replacement
 for each app hand-rolling the same "current user, current account, current
 roles, current subscription" lookup.
 
+Clients can inspect or revoke their own active session without the admin token:
+
+```http
+GET /identity/session
+DELETE /identity/session
+Authorization: Token <session-token>
+```
+
+Those routes require an active session token and do not treat the admin token as
+a user session.
+
 The active subject can be inspected through:
 
 ```http

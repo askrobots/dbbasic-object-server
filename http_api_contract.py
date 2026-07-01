@@ -34,6 +34,7 @@ IDENTITY_USERS_PATH = "/identity/users"
 IDENTITY_USER_PATH = "/identity/users/{user_id}"
 IDENTITY_SESSIONS_PATH = "/identity/sessions"
 IDENTITY_SESSION_PATH = "/identity/sessions/{session_id}"
+IDENTITY_CURRENT_SESSION_PATH = "/identity/session"
 PERMISSIONS_POLICY_PATH = "/permissions/policy"
 PERMISSIONS_STATUS_PATH = "/permissions/status"
 PERMISSIONS_CHECK_PATH = "/permissions/check"
@@ -78,6 +79,7 @@ RESPONSE_FIELDS: dict[str, frozenset[str]] = {
     "identity_user": frozenset({"status", "user"}),
     "identity_session_list": frozenset({"status", "sessions", "count"}),
     "identity_session": frozenset({"status", "session"}),
+    "identity_current_session": frozenset({"status", "session"}),
     "create_object": frozenset({"status", "object_id", "message"}),
     "error": frozenset({"status", "error"}),
     "source": frozenset({"status", "object_id", "source"}),
