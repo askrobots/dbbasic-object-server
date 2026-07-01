@@ -271,4 +271,4 @@ def GET(request):
   </script>
 </body>
 </html>"""
-    return html, "text/html; charset=utf-8"
+    return {"content_type": "text/html; charset=utf-8", "body": html}
