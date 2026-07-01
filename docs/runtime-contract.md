@@ -388,13 +388,13 @@ Values are stored and returned as strings. Record writes preserve existing
 columns and append new columns from submitted fields. Record IDs are unique and
 cannot be changed by update.
 
-New DBBASIC-facing record IDs should be UUIDv4 strings. Imported application
-data can keep legacy IDs in compatibility columns, but new URLs, generated UI,
-change logs, and object references should not depend on sequential database
-integers. This came from the Django/PostgreSQL migration path: existing tables
-may arrive with integer primary keys and JSONB-style flexible data, while new
-DBBASIC resources need stable, non-enumerable IDs that can move between object
-servers and packages.
+New DBBASIC-facing record IDs are UUIDv4 strings by default when the server
+creates them. Imported application data can keep legacy IDs in compatibility
+columns, but new URLs, generated UI, change logs, and object references should
+not depend on sequential database integers. This came from the
+Django/PostgreSQL migration path: existing tables may arrive with integer
+primary keys and JSONB-style flexible data, while new DBBASIC resources need
+stable, non-enumerable IDs that can move between object servers and packages.
 
 If a manual schema exists for the collection, create/update validates known
 fields before writing the TSV:
@@ -462,6 +462,9 @@ Entries are JSON Lines with:
 - `changed_fields`
 - `before`
 - `after`
+
+New `change_id` values are UUIDv4. Old timestamp-shaped change IDs remain
+readable so existing package and record history can be migrated in place.
 
 This is the durable record history that Scroll can show in admin and rollback
 screens. It is intentionally separate from event delivery. Scheduler, queue, and

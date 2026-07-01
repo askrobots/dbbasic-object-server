@@ -12,8 +12,8 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
-from uuid import uuid4
 
+import object_ids
 import object_packages
 from object_versions import DEFAULT_DATA_DIR
 
@@ -255,9 +255,7 @@ def _default_message(action: str) -> str:
 
 
 def _change_id(timestamp: str, package_id: str, action: str) -> str:
-    compact = timestamp.replace("+00:00", "Z")
-    compact = compact.replace("-", "").replace(":", "").replace(".", "")
-    return f"{compact}-{package_id}-{action}-{uuid4().hex[:8]}"
+    return object_ids.new_uuid4()
 
 
 def _utc_timestamp() -> str:

@@ -15,8 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
-from uuid import uuid4
 
+import object_ids
 import object_state
 from object_versions import DEFAULT_DATA_DIR
 
@@ -74,7 +74,7 @@ def publish_event(
     clean_keep_seconds = _clean_keep_seconds(keep_seconds)
     timestamp = int(time.time())
     event = {
-        "id": f"evt_{uuid4().hex[:16]}",
+        "id": object_ids.new_uuid4(),
         "event_type": clean_event_type,
         "payload": _json_safe_value({} if payload is None else payload),
         "source": _clean_text(source, default="api"),
@@ -234,7 +234,7 @@ def subscribe_event(
 ) -> dict[str, Any]:
     """Create or replace one daemon-compatible event subscription."""
     clean_event_type = _clean_event_type(event_type)
-    clean_subscriber_id = _clean_subscriber_id(subscriber_id or f"sub_{uuid4().hex[:16]}")
+    clean_subscriber_id = _clean_subscriber_id(subscriber_id or object_ids.new_uuid4())
     clean_callback_url = _clean_callback_url(callback_url)
     timestamp = int(time.time())
     subscription = {

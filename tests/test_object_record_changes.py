@@ -1,4 +1,5 @@
 import json
+from uuid import UUID
 
 import pytest
 
@@ -34,6 +35,8 @@ def test_append_record_change_writes_jsonl_and_lists_newest_first(tmp_path):
     rows = [json.loads(line) for line in path.read_text().splitlines()]
 
     assert rows == [first, second]
+    assert UUID(first["change_id"]).version == 4
+    assert UUID(second["change_id"]).version == 4
     assert first["changed_fields"] == ["id", "name"]
     assert second["changed_fields"] == ["name"]
     assert second["message"] == "Updated record"

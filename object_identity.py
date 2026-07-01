@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+import object_ids
 import object_permissions
 from object_versions import DEFAULT_DATA_DIR
 
@@ -58,7 +59,7 @@ SESSION_FIELDS = (
     "revoked_at",
 )
 
-_SESSION_ID_RE = re.compile(r"^sess_[A-Za-z0-9_-]{12,96}$")
+_LEGACY_SESSION_ID_RE = re.compile(r"^sess_[A-Za-z0-9_-]{12,96}$")
 _IDENTITY_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,127}$")
 _FILE_LOCKS: dict[Path, threading.Lock] = {}
 _FILE_LOCKS_LOCK = threading.Lock()
@@ -442,7 +443,9 @@ def hash_token(token: str) -> str:
 
 def validate_session_id(session_id: str) -> bool:
     """Return True when a session id is route-safe."""
-    return isinstance(session_id, str) and bool(_SESSION_ID_RE.fullmatch(session_id))
+    if not isinstance(session_id, str):
+        return False
+    return object_ids.is_uuid4(session_id) or bool(_LEGACY_SESSION_ID_RE.fullmatch(session_id))
 
 
 def _find_session(
@@ -693,7 +696,7 @@ def _session_to_row(session: IdentitySession) -> dict[str, str]:
 
 
 def _new_session_id() -> str:
-    return "sess_" + secrets.token_urlsafe(18).replace("-", "_")
+    return object_ids.new_uuid4()
 
 
 def _identity_path(filename: str, *, base_dir: Path | str = DEFAULT_DATA_DIR) -> Path:
@@ -712,7 +715,7 @@ def _identity_path(filename: str, *, base_dir: Path | str = DEFAULT_DATA_DIR) ->
 
 def _identity_id(value: Any, field: str, *, prefix: str | None = None) -> str:
     if value is None and prefix is not None:
-        value = f"{prefix}_{secrets.token_urlsafe(12).replace('-', '_')}"
+        value = object_ids.new_uuid4()
     text = _required_text(value, field)
     if not _IDENTITY_ID_RE.fullmatch(text):
         raise InvalidIdentityPayloadError(f"{field} contains unsafe identifier")

@@ -12,9 +12,9 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 import object_collections
+import object_ids
 import object_records
 from object_versions import DEFAULT_DATA_DIR
 
@@ -201,8 +201,7 @@ def _default_message(action: str) -> str:
 
 
 def _change_id(timestamp: str, collection: str, record_id: str, action: str) -> str:
-    compact = timestamp.replace("-", "").replace(":", "").replace(".", "").replace("+00:00", "Z")
-    return f"{compact}-{collection}-{record_id}-{action}-{uuid4().hex[:8]}"
+    return object_ids.new_uuid4()
 
 
 def _utc_timestamp() -> str:

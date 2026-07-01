@@ -1,4 +1,5 @@
 import json
+from uuid import UUID
 
 import pytest
 
@@ -31,6 +32,8 @@ def test_append_package_change_writes_jsonl_and_lists_newest_first(tmp_path):
     assert rows == [first, second]
     assert first["message"] == "Dry run package install"
     assert first["details"] == {"safe_to_install": True, "objects": {"create": 1}}
+    assert UUID(first["change_id"]).version == 4
+    assert UUID(second["change_id"]).version == 4
     assert "+" not in first["change_id"]
     assert ":" not in first["change_id"]
     assert "." not in first["change_id"]

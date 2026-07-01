@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 
@@ -85,6 +86,28 @@ def test_create_collection_record_appends_row_and_new_fields(tmp_path):
         {"id": "c1", "name": "Ada", "email": ""},
         {"id": "c2", "name": "Grace", "email": "grace@example.com"},
     ]
+
+
+def test_create_collection_record_generates_uuid_id_when_missing(tmp_path):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+
+    record = object_records.create_collection_record(
+        "contacts",
+        {"name": "Grace"},
+        base_dir=data_dir,
+        roots=[],
+    )
+
+    parsed = UUID(record["id"])
+    assert parsed.version == 4
+    assert record["name"] == "Grace"
+    assert object_records.get_collection_record(
+        "contacts",
+        record["id"],
+        base_dir=data_dir,
+        roots=[],
+    ) == record
 
 
 def test_create_collection_record_can_start_schema_backed_collection(tmp_path):

@@ -1213,10 +1213,16 @@ def test_collection_record_create_rejects_duplicate_and_invalid_payload(tmp_path
         body=json.dumps({"id": "c1", "name": "Again"}).encode("utf-8"),
         headers=auth_headers(),
     )
+    generated_status, _, generated_payload = request(
+        "/collections/contacts/records",
+        method="POST",
+        body=json.dumps({"name": "Server ID"}).encode("utf-8"),
+        headers=auth_headers(),
+    )
     invalid_status, _, invalid_payload = request(
         "/collections/contacts/records",
         method="POST",
-        body=json.dumps({"name": "No id"}).encode("utf-8"),
+        body=json.dumps({"name": {"nested": "bad"}}).encode("utf-8"),
         headers=auth_headers(),
     )
 
@@ -1225,8 +1231,13 @@ def test_collection_record_create_rejects_duplicate_and_invalid_payload(tmp_path
         "status": "error",
         "error": "Record already exists: contacts/c1",
     }
+    assert generated_status == 201
+    assert generated_payload["record"]["name"] == "Server ID"
     assert invalid_status == 400
-    assert invalid_payload == {"status": "error", "error": "Record payload must include an id"}
+    assert invalid_payload == {
+        "status": "error",
+        "error": "Record field value must be scalar or null: name",
+    }
 
 
 def test_collection_record_update_and_delete_require_admin_token_by_default(tmp_path, monkeypatch):

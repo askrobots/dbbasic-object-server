@@ -75,9 +75,11 @@ compatibility column, while the DBBASIC route-facing `id` should be UUIDv4 for
 new records. This keeps URLs non-enumerable, makes exports easier to merge, and
 avoids coupling object packages to one database sequence.
 
-The current identity registry still accepts existing string IDs so old clients,
-Scroll prototypes, and migration tools do not break while the public runtime is
-being extracted.
+The current identity registry generates UUIDv4 account IDs, user IDs, and
+session IDs when the server creates them. It still accepts existing string
+account/user IDs and legacy `sess_...` session rows so old clients, Scroll
+prototypes, and migration tools do not break while the public runtime is being
+extracted.
 
 ## Health
 
@@ -318,7 +320,7 @@ Response:
 {
   "status": "ok",
   "session": {
-    "session_id": "sess_...",
+    "session_id": "9d4fe8bd-6859-43ef-8f83-f7063c54f7bc",
     "user_id": "7",
     "account_id": "acme",
     "roles": ["sales"],
@@ -788,10 +790,10 @@ data/collections/{collection}/records.tsv
 The TSV file must have a header row and an `id` column. Values are returned as
 strings.
 
-For new DBBASIC-created records, `id` should be a UUIDv4 string. During
-migrations, imported rows may preserve legacy integer or slug IDs for
-compatibility, but new public routes and generated UI should not assume
-sequential IDs.
+For new DBBASIC-created records, the server generates a UUIDv4 `id` when the
+request omits one. During migrations, imported rows may preserve legacy integer
+or slug IDs for compatibility, but new public routes and generated UI should
+not assume sequential IDs.
 
 Create one record:
 
@@ -803,7 +805,6 @@ Content-Type: application/json
 
 ```json
 {
-  "id": "c2",
   "first_name": "Grace",
   "last_name": "Hopper"
 }
@@ -816,14 +817,15 @@ Response:
   "status": "ok",
   "collection": "contacts",
   "record": {
-    "id": "c2",
+    "id": "8c2d4de7-89fe-45f7-9cf9-f0f42610e7be",
     "first_name": "Grace",
     "last_name": "Hopper"
   }
 }
 ```
 
-Successful creates return `201`. Duplicate record IDs return `409`.
+Successful creates return `201`. Explicit record IDs are still accepted for
+imports and compatibility. Duplicate record IDs return `409`.
 
 Update one record:
 
@@ -914,7 +916,7 @@ Response:
   "record_id": "c1",
   "changes": [
     {
-      "change_id": "20260629T120000Z-contacts-c1-update-a1b2c3d4",
+      "change_id": "0f8b5e96-d8b5-4a0d-8b7d-c3c2e2092d24",
       "timestamp": "2026-06-29T12:00:00+00:00",
       "collection": "contacts",
       "record_id": "c1",
@@ -974,10 +976,10 @@ Response:
   "status": "ok",
   "events": [
     {
-      "id": "evt_0123456789abcdef",
+      "id": "789f0c18-7845-4620-a2b0-8bbad752f91b",
       "event_type": "collection.record.created",
       "payload": {
-        "change_id": "chg_0123456789abcdef",
+        "change_id": "0f8b5e96-d8b5-4a0d-8b7d-c3c2e2092d24",
         "collection": "contacts",
         "record_id": "c1",
         "action": "create",
@@ -1238,7 +1240,7 @@ Response:
     "warnings": []
   },
   "change": {
-    "change_id": "20260630T120000Z-hello-world-dry_run-0f1e2d3c",
+    "change_id": "0a34c2e6-3144-4900-8f99-fd7c7ec77c61",
     "timestamp": "2026-06-30T12:00:00+00:00",
     "package_id": "hello-world",
     "package_version": "0.1.0",
@@ -1338,11 +1340,11 @@ Response:
   },
   "changes": {
     "requested": {
-      "change_id": "20260630T120100Z-hello-world-install_requested-1a2b3c4d",
+      "change_id": "c0c3f4a6-8b10-47cb-8309-b381354f6cc0",
       "action": "install_requested"
     },
     "installed": {
-      "change_id": "20260630T120101Z-hello-world-installed-5e6f7a8b",
+      "change_id": "c77681de-5b1e-4a5e-adc9-16701ca230f5",
       "action": "installed"
     }
   },
@@ -1364,7 +1366,7 @@ POST /packages/{package_id}/restore
 Authorization: Token <token>
 Content-Type: application/json
 
-{"change_id": "20260630T120101Z-hello-world-installed-5e6f7a8b", "confirm": "restore-runtime"}
+{"change_id": "c77681de-5b1e-4a5e-adc9-16701ca230f5", "confirm": "restore-runtime"}
 ```
 
 Package restore requires:
@@ -1405,16 +1407,16 @@ Response:
     "warnings": []
   },
   "from_change": {
-    "change_id": "20260630T120101Z-hello-world-installed-5e6f7a8b",
+    "change_id": "c77681de-5b1e-4a5e-adc9-16701ca230f5",
     "action": "installed"
   },
   "changes": {
     "requested": {
-      "change_id": "20260630T120200Z-hello-world-restore_requested-11223344",
+      "change_id": "9fd9b09c-22bf-41c2-b6ee-3a96ca195fef",
       "action": "restore_requested"
     },
     "rolled_back": {
-      "change_id": "20260630T120201Z-hello-world-rolled_back-55667788",
+      "change_id": "9a63dcde-ec78-426b-8787-f1e8ec401190",
       "action": "rolled_back"
     }
   }
@@ -1436,7 +1438,7 @@ Response:
   "package_id": "hello-world",
   "changes": [
     {
-      "change_id": "20260630T120000Z-hello-world-dry_run-0f1e2d3c",
+      "change_id": "0a34c2e6-3144-4900-8f99-fd7c7ec77c61",
       "timestamp": "2026-06-30T12:00:00+00:00",
       "package_id": "hello-world",
       "package_version": "0.1.0",

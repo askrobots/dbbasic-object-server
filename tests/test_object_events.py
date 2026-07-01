@@ -1,4 +1,5 @@
 import json
+from uuid import UUID
 
 import pytest
 
@@ -34,6 +35,8 @@ def test_publish_event_writes_daemon_compatible_state_and_lists_newest_first(
 
     assert len(rows) == 2
     assert all(row.startswith("event_") for row in rows)
+    assert UUID(first["id"]).version == 4
+    assert UUID(second["id"]).version == 4
     assert json.loads(rows[0].split("\t")[1]) == first
     assert json.loads(rows[1].split("\t")[1]) == second
 
@@ -107,6 +110,17 @@ def test_subscribe_list_and_delete_subscription(tmp_path, monkeypatch):
 
     assert deleted == subscription
     assert object_events.list_subscriptions(base_dir=data_dir)["subscriptions"] == []
+
+
+def test_subscribe_event_generates_uuid_id_when_missing(tmp_path):
+    subscription = object_events.subscribe_event(
+        "collection.record.updated",
+        callback_url="https://example.com/hooks/dbbasic",
+        base_dir=tmp_path / "data",
+    )
+
+    parsed = UUID(subscription["id"])
+    assert parsed.version == 4
 
 
 def test_record_subscription_delivery_tracks_success_and_failure(tmp_path, monkeypatch):

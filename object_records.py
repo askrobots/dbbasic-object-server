@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import object_collections
+import object_ids
 import object_schemas
 from object_versions import DEFAULT_DATA_DIR
 
@@ -415,8 +416,11 @@ def _validate_header(collection: str, fields: list[str] | None) -> None:
 def _normalize_record_payload(payload: dict[str, Any], *, require_id: bool) -> dict[str, str]:
     if not isinstance(payload, dict):
         raise InvalidRecordPayloadError("Record payload must be an object")
-    if require_id and "id" not in payload:
-        raise InvalidRecordPayloadError("Record payload must include an id")
+    generate_id = require_id and (
+        "id" not in payload
+        or payload.get("id") is None
+        or payload.get("id") == ""
+    )
 
     clean: dict[str, str] = {}
     for key, value in payload.items():
@@ -434,6 +438,11 @@ def _normalize_record_payload(payload: dict[str, Any], *, require_id: bool) -> d
             raise InvalidRecordPayloadError(
                 f"Record field value must be scalar or null: {key}"
             )
+
+    if generate_id:
+        clean["id"] = object_ids.new_uuid4()
+    elif require_id and "id" not in clean:
+        raise InvalidRecordPayloadError("Record payload must include an id")
 
     return clean
 

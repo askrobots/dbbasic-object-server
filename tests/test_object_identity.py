@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from uuid import UUID
 
 import object_identity
 
@@ -20,6 +21,14 @@ def test_create_account_stores_public_payload(tmp_path):
 
     assert object_identity.get_account("acme", base_dir=tmp_path) == account
     assert object_identity.list_accounts(base_dir=tmp_path) == [account]
+
+
+def test_create_account_generates_uuid_id_when_missing(tmp_path):
+    account = object_identity.create_account({"name": "Acme Corp"}, base_dir=tmp_path)
+
+    parsed = UUID(account["account_id"])
+    assert parsed.version == 4
+    assert object_identity.get_account(account["account_id"], base_dir=tmp_path) == account
 
 
 def test_create_user_stores_roles_and_requires_known_account(tmp_path):
@@ -56,6 +65,14 @@ def test_create_user_stores_roles_and_requires_known_account(tmp_path):
         assert str(exc) == "Account not found: missing"
     else:
         raise AssertionError("unknown account should fail")
+
+
+def test_create_user_generates_uuid_id_when_missing(tmp_path):
+    user = object_identity.create_user({"display_name": "Alice"}, base_dir=tmp_path)
+
+    parsed = UUID(user["user_id"])
+    assert parsed.version == 4
+    assert object_identity.get_user(user["user_id"], base_dir=tmp_path) == user
 
 
 def test_create_identity_records_reject_duplicates(tmp_path):
@@ -161,6 +178,8 @@ def test_create_session_stores_hash_and_resolves_subject(tmp_path):
 
     token = result["token"]
     session = result["session"]
+    parsed = UUID(session["session_id"])
+    assert parsed.version == 4
     assert token
     assert session["user_id"] == "7"
     assert session["roles"] == ["sales", "manager"]
