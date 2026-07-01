@@ -24,6 +24,7 @@ import http_api_contract
 import object_backup
 import object_collections
 import object_correlation
+import object_daemon_status
 import object_events
 import object_execution
 import object_field_permissions
@@ -381,6 +382,10 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
 
         if path == http_api_contract.ADMIN_STATUS_PATH:
             await _handle_admin_status(send, method, headers)
+            return
+
+        if path == http_api_contract.DAEMON_STATUS_PATH:
+            await _handle_daemon_status(send, method, headers)
             return
 
         if path == http_api_contract.PACKAGES_PATH:
@@ -959,6 +964,42 @@ async def _handle_admin_status(
 
     status_code = 503 if payload["status"] == "degraded" else 200
     await _send_json(send, payload, status=status_code)
+
+
+async def _handle_daemon_status(
+    send,
+    method: str,
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Daemon status requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    try:
+        payload = object_daemon_status.daemon_status(
+            base_dir=_data_dir(),
+            rate_limit_dir=_rate_limit_dir(),
+            event_keep_count=_event_keep_count(),
+            event_keep_seconds=_event_keep_seconds(),
+        )
+    except OSError as exc:
+        await _send_json(
+            send,
+            {"status": "error", "error": f"Could not build daemon status: {exc}"},
+            status=500,
+        )
+        return
+
+    await _send_json(send, payload)
 
 
 def _admin_status_payload() -> dict[str, Any]:

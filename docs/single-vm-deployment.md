@@ -585,6 +585,10 @@ dbbasic.example.com {
         reverse_proxy 127.0.0.1:8001
     }
 
+    handle /daemon/status {
+        reverse_proxy 127.0.0.1:8001
+    }
+
     handle /dashboard {
         rewrite * /objects/system_dashboard
         reverse_proxy 127.0.0.1:8001
@@ -635,12 +639,13 @@ Then test:
 curl https://dbbasic.example.com/
 curl https://dbbasic.example.com/health
 curl -H "Authorization: Token $DBBASIC_ADMIN_TOKEN" https://dbbasic.example.com/admin/status
+curl -H "Authorization: Token $DBBASIC_ADMIN_TOKEN" https://dbbasic.example.com/daemon/status
 curl https://dbbasic.example.com/objects/site_home
 curl https://dbbasic.example.com/admin/write-probe
 curl https://dbbasic.example.com/objects
 ```
 
-The first five should return responses from the object server. The root and
+The first six should return responses from the object server. The root and
 `site_home` responses may be JSON or HTML depending on the object. The full
 `/objects` route should stay blocked by Caddy in this early staging mode.
 

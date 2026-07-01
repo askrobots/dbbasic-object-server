@@ -179,6 +179,7 @@ Current endpoints:
 - `GET /health?capacity=true`
 - `GET /health?metrics=true`
 - `GET /admin/status`
+- `GET /daemon/status`
 - `GET /permissions/policy`
 - `PUT /permissions/policy`
 - `GET /permissions/status`
@@ -349,6 +350,8 @@ rules the rest of the server will use:
 - `object_events.py` publishes events and subscriptions into `data/state/events/state.tsv`
   and collection record mutations emit metadata-only `collection.record.*` events; event
   retention keeps the delivery queue bounded while change history stays durable
+- `object_daemon_status.py` reads scheduler, queue, event, subscription, and
+  cleanup posture for Scroll without running daemon work
 - `object_packages.py` reads `packages/{package_id}/dbbasic-package.json` and builds
   dry-run/install plans for Scroll/package manager workflows
 - `object_package_changes.py` records package dry-runs, installs, failures, and future rollbacks
@@ -370,6 +373,9 @@ rules the rest of the server will use:
 - admin status combines detailed health, object/collection/schema/package
   inventory, package install posture, capability flags, and permission readiness
   for Scroll and staging dashboards
+- daemon status reports scheduler tasks, queue messages, event delivery state,
+  retention settings, and rate-limit cleanup posture without adding a separate
+  Flower-style service
 - request bodies over `DBBASIC_MAX_REQUEST_BYTES` return `413 Payload Too Large`
 - traffic over `DBBASIC_RATE_LIMIT_REQUESTS` per `DBBASIC_RATE_LIMIT_WINDOW_SECONDS`
   returns `429 Too Many Requests`
@@ -433,7 +439,8 @@ Near-term work:
   that mints sessions
 - make permission enforcement default-on after the login/auth gateway is wired
 - add CPU and memory isolation for untrusted object code
-- expose scheduler/queue/job status through the HTTP contract
+- add scheduler/queue/event control routes after the read-only daemon status
+  surface is stable
 - add file upload/delete with quotas, content limits, permissions, and audit
 - wire Scroll to the public identity, permission, package, event, backup, and
   dashboard APIs

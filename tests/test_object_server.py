@@ -11,6 +11,7 @@ import object_packages
 import object_permission_audit
 import object_permission_store
 import object_server
+import object_state
 import object_versions
 
 TEST_ADMIN_TOKEN = "unit-test-only-admin-token"
@@ -884,6 +885,58 @@ def test_admin_status_reports_inventory_capabilities_and_package_posture(tmp_pat
     assert payload["packages"][0]["install"]["install_enabled"] is False
     assert payload["packages"][0]["changes"]["total"] == 1
     assert payload["packages"][0]["changes"]["latest"]["action"] == "dry_run"
+
+
+def test_daemon_status_requires_admin_token(monkeypatch):
+    monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)
+
+    status, _, payload = request("/daemon/status", headers=auth_headers())
+
+    assert status == 403
+    assert payload == {
+        "status": "error",
+        "error": "Daemon status requires DBBASIC_ADMIN_TOKEN.",
+    }
+
+
+def test_daemon_status_reports_scheduler_queue_and_event_state(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "triggers" / "scheduler.py", "def POST(request):\n    return {'ok': True}\n")
+    write_source(root / "triggers" / "queue.py", "def POST(request):\n    return {'ok': True}\n")
+    write_source(root / "triggers" / "events.py", "def POST(request):\n    return {'ok': True}\n")
+
+    scheduler = object_state.ObjectStateManager("scheduler", base_dir=data_dir)
+    scheduler.set("task_due", json.dumps({"id": "due", "status": "active", "next_run": 1}))
+    queue = object_state.ObjectStateManager("queue", base_dir=data_dir)
+    queue.set("msg_ready", json.dumps({"id": "ready", "status": "pending", "visible_after": 1}))
+    events = object_state.ObjectStateManager("events", base_dir=data_dir)
+    events.set(
+        "event_1_evt",
+        json.dumps(
+            {
+                "id": "evt",
+                "event_type": "collection.record.created",
+                "payload": {"hidden": True},
+                "timestamp": 1,
+            }
+        ),
+    )
+
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/daemon/status", headers=auth_headers())
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert set(payload) == {"status", "timestamp", "daemon", "scheduler", "queue", "events", "cleanup"}
+    assert payload["daemon"]["triggers"]["scheduler"]["source_present"] is True
+    assert payload["scheduler"]["tasks"]["active"] == 1
+    assert payload["queue"]["messages"]["pending_visible"] == 1
+    assert payload["events"]["events"]["latest"]["id"] == "evt"
+    assert "payload" not in payload["events"]["events"]["latest"]
 
 
 def test_request_concurrency_limit_returns_503_when_full(monkeypatch):

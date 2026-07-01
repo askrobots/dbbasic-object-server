@@ -27,6 +27,8 @@ public users.
   rate limits, wall-clock timeout path, and health/capacity metrics
 - Token-gated admin status with detailed health, inventory, capability flags,
   package posture, and permission readiness for Scroll/operator dashboards
+- Token-gated daemon status with read-only scheduler, queue, event delivery,
+  retention, and cleanup posture for Scroll/operator dashboards
 - Runtime backups, restore helpers, deployment checks, GitHub Actions tests, and
   a working public staging deployment shape
 
@@ -48,7 +50,7 @@ public users.
 - Browser login/session UX
 - CPU and memory isolation for untrusted object code
 - File upload/delete from untrusted users
-- Fully managed scheduler/queue/admin dashboard API
+- Fully managed scheduler/queue/admin control API
 - One-command installer
 - Cluster correctness claims
 
@@ -57,7 +59,8 @@ public users.
 1. Connect sessions to a real browser login or trusted auth gateway that mints
    sessions.
 2. Make permission enforcement default-on after the login/auth gateway is wired.
-3. Expose scheduler, queue, job, and daemon status through HTTP.
+3. Add scheduler, queue, and event control routes after the read-only daemon
+   status surface is stable.
 4. Add file upload/delete with quotas, content checks, permissions, and audit.
 5. Add CPU/memory isolation and a better worker boundary for untrusted code.
 6. Wire Scroll to the public identity, permissions, package, event, backup, and

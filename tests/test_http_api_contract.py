@@ -175,6 +175,18 @@ def test_contract_keeps_existing_introspection_query_flags():
             },
         ),
         (
+            "daemon_status",
+            {
+                "status": "ok",
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "daemon": {"mode": "polling"},
+                "scheduler": {"tasks": {"active": 0}},
+                "queue": {"messages": {"pending_visible": 0}},
+                "events": {"events": {"total": 0}},
+                "cleanup": {"event_retention": {}},
+            },
+        ),
+        (
             "identity",
             {
                 "status": "ok",

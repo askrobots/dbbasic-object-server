@@ -681,6 +681,20 @@ by any subscription `last_event_id` so the daemon does not lose its delivery
 cursor. If a subscription has a failed delivery attempt, pruning also protects
 the failed event id so retry state remains visible to Scroll and the daemon.
 
+Daemon posture is exposed through an admin-token-gated read-only endpoint:
+
+```http
+GET /daemon/status
+Authorization: Token <token>
+```
+
+The response summarizes trigger source presence, scheduler task counts, due
+tasks, queue message counts, visible and delayed pending messages, event counts,
+subscription delivery status, pending deliveries, event retention settings, and
+rate-limit cleanup pressure. It does not execute daemon work and does not expose
+event payloads. This gives Scroll a Flower-style operator view without adding a
+separate queue dashboard service to the single-VM deployment.
+
 ## Packages
 
 Packages are the DBBASIC way to ship reusable app pieces without turning every

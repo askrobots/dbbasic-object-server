@@ -225,6 +225,102 @@ If the server is degraded, the route may return `503` with the same response
 shape and `"status": "degraded"`. This route is admin-token gated because it
 contains configuration, package, and capacity details.
 
+## Daemon Status
+
+Daemon status is the read-only operator snapshot for the scheduler, queue,
+event delivery, and cleanup primitives:
+
+```http
+GET /daemon/status
+Authorization: Token <token>
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "timestamp": "2026-01-01T00:00:00+00:00",
+  "daemon": {
+    "mode": "polling",
+    "croniter_available": true,
+    "object_roots": {
+      "count": 1
+    },
+    "triggers": {
+      "scheduler": {
+        "object_id": "scheduler",
+        "source_present": true
+      },
+      "queue": {
+        "object_id": "queue",
+        "source_present": true
+      },
+      "events": {
+        "object_id": "events",
+        "source_present": true
+      }
+    }
+  },
+  "scheduler": {
+    "object_id": "scheduler",
+    "source_present": true,
+    "tasks": {
+      "total": 2,
+      "active": 1,
+      "due": 1,
+      "future": 0,
+      "invalid": 0,
+      "next_run": 1767225600,
+      "next_run_iso": "2026-01-01T00:00:00+00:00"
+    }
+  },
+  "queue": {
+    "object_id": "queue",
+    "source_present": true,
+    "messages": {
+      "total": 3,
+      "pending_visible": 1,
+      "pending_delayed": 1,
+      "expired_pending": 0,
+      "invalid": 0
+    }
+  },
+  "events": {
+    "object_id": "events",
+    "source_present": true,
+    "events": {
+      "total": 10,
+      "latest": {
+        "id": "evt_123",
+        "event_type": "collection.record.created",
+        "timestamp": 1767225600
+      }
+    },
+    "subscriptions": {
+      "total": 2,
+      "by_delivery_status": {
+        "ok": 1,
+        "failed": 1
+      },
+      "pending_deliveries": 1
+    }
+  },
+  "cleanup": {
+    "event_retention": {
+      "keep_count": 1000,
+      "keep_seconds": 604800
+    },
+    "rate_limit_files": 0
+  }
+}
+```
+
+This endpoint does not execute daemon work or expose event payloads. It reads
+the same TSV state that the daemon uses so Scroll can show due scheduler tasks,
+visible/delayed queue messages, failed subscription delivery, event retention,
+and cleanup pressure without requiring a separate queue dashboard service.
+
 ## Rate Limits
 
 When `DBBASIC_RATE_LIMIT_REQUESTS` is set above zero, the server rate-limits
