@@ -1,0 +1,29 @@
+{
+  "id": "admin-write-probe",
+  "name": "Admin Write Probe",
+  "version": "0.1.0",
+  "description": "Narrow staging package for proving object state and admin-gated collection writes.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "objects": [
+    {
+      "id": "system_write_probe",
+      "path": "objects/system/write_probe.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "dbbasic_probe",
+      "path": "schemas/dbbasic_probe.json"
+    }
+  ],
+  "permissions": [],
+  "seed": [
+    {
+      "collection": "dbbasic_probe",
+      "path": "seed/dbbasic_probe.tsv"
+    }
+  ],
+  "migrations": []
+}

@@ -1,0 +1,33 @@
+{
+  "name": "dbbasic_probe",
+  "title": "DBBASIC Probe",
+  "version": 1,
+  "description": "Small staging collection used to verify admin-gated record writes.",
+  "fields": [
+    {
+      "name": "id",
+      "type": "text",
+      "required": true,
+      "label": "ID"
+    },
+    {
+      "name": "note",
+      "type": "text",
+      "label": "Note"
+    },
+    {
+      "name": "status",
+      "type": "text",
+      "label": "Status"
+    },
+    {
+      "name": "updated_at",
+      "type": "datetime",
+      "label": "Updated At"
+    }
+  ],
+  "ui": {
+    "table": ["id", "status", "note", "updated_at"],
+    "purpose": "staging_write_probe"
+  }
+}

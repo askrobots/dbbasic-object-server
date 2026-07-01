@@ -5,6 +5,7 @@ import pytest
 
 import object_execution
 import object_packages
+import object_records
 import object_state
 import python_object_runtime
 
@@ -170,6 +171,91 @@ def test_repository_system_dashboard_package_installs_and_executes(tmp_path):
     assert "DBBASIC Object Dashboard" in result.result["body"]
     assert "packages/system-dashboard" in result.result["body"]
     assert object_state.get_object_state("system_dashboard", base_dir=data_dir)["served"] == 1
+
+
+def test_repository_admin_write_probe_package_installs_and_writes_records(tmp_path):
+    packages_root = Path("packages")
+    data_dir = tmp_path / "data"
+    object_root = tmp_path / "objects"
+
+    package = object_packages.get_package("admin-write-probe", root=packages_root)
+    plan = object_packages.dry_run_package(
+        "admin-write-probe",
+        root=packages_root,
+        base_dir=data_dir,
+        object_roots=[object_root],
+    )
+
+    assert package["objects"] == [
+        {"id": "system_write_probe", "path": "objects/system/write_probe.py"}
+    ]
+    assert package["schemas"] == [
+        {"collection": "dbbasic_probe", "path": "schemas/dbbasic_probe.json"}
+    ]
+    assert package["seed"] == [
+        {"collection": "dbbasic_probe", "path": "seed/dbbasic_probe.tsv"}
+    ]
+    assert plan["safe_to_install"] is True
+    assert plan["objects"][0]["action"] == "create"
+    assert plan["schemas"][0]["action"] == "create"
+    assert plan["seed"][0]["action"] == "create"
+
+    install = object_packages.install_package(
+        "admin-write-probe",
+        root=packages_root,
+        base_dir=data_dir,
+        object_roots=[object_root],
+    )
+
+    assert install["objects"][0]["destination"] == "system/write_probe.py"
+    assert install["schemas"][0]["destination"] == "schemas/dbbasic_probe.json"
+    assert install["seed"][0]["destination"] == "collections/dbbasic_probe/records.tsv"
+    assert (object_root / "system" / "write_probe.py").is_file()
+
+    runtime = python_object_runtime.PythonObjectRuntime(base_dir=data_dir)
+    result = object_execution.execute_object(
+        runtime,
+        object_execution.ObjectExecutionRequest("system_write_probe"),
+        roots=[object_root],
+    )
+
+    assert result.ok is True
+    assert result.result["content_type"] == "text/html; charset=utf-8"
+    assert "DBBASIC Write Probe" in result.result["body"]
+    assert "packages/admin-write-probe" in result.result["body"]
+    assert object_state.get_object_state("system_write_probe", base_dir=data_dir)["served"] == 1
+
+    record = object_records.create_collection_record(
+        "dbbasic_probe",
+        {
+            "id": "probe_test",
+            "note": "created by package test",
+            "status": "created",
+            "updated_at": "2026-07-01T00:00:00+00:00",
+        },
+        base_dir=data_dir,
+    )
+    assert record["status"] == "created"
+
+    updated = object_records.update_collection_record(
+        "dbbasic_probe",
+        "probe_test",
+        {
+            "note": "updated by package test",
+            "status": "updated",
+        },
+        base_dir=data_dir,
+    )
+    assert updated["note"] == "updated by package test"
+    assert updated["status"] == "updated"
+
+    deleted = object_records.delete_collection_record(
+        "dbbasic_probe",
+        "probe_test",
+        base_dir=data_dir,
+    )
+    assert deleted["id"] == "probe_test"
+    assert object_records.read_collection_records("dbbasic_probe", base_dir=data_dir) == []
 
 
 def test_install_package_creates_objects_schemas_and_seed(tmp_path):

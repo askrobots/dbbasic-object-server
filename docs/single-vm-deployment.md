@@ -586,6 +586,15 @@ dbbasic.example.com {
         reverse_proxy 127.0.0.1:8001
     }
 
+    handle /admin/write-probe {
+        rewrite * /objects/system_write_probe
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    handle /collections/dbbasic_probe/records* {
+        reverse_proxy 127.0.0.1:8001
+    }
+
     handle /identity/session {
         reverse_proxy 127.0.0.1:8001
     }
@@ -614,12 +623,20 @@ Then test:
 curl https://dbbasic.example.com/
 curl https://dbbasic.example.com/health
 curl https://dbbasic.example.com/objects/site_home
+curl https://dbbasic.example.com/admin/write-probe
 curl https://dbbasic.example.com/objects
 ```
 
-The first three should return responses from the object server. The root and
+The first four should return responses from the object server. The root and
 `site_home` responses may be JSON or HTML depending on the object. The full
 `/objects` route should stay blocked by Caddy in this early staging mode.
+
+The `admin-write-probe` package may also expose the narrow
+`/collections/dbbasic_probe/records*` route. That route is still protected by
+the server-side admin-token gate. It exists to prove collection create/update/
+delete behavior through the public reverse proxy without exposing every
+collection route. Do not expose broad `/collections*`, `/objects*`, or source
+write routes on a public staging server.
 
 ## Public Code Execution Controls
 

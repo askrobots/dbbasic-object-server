@@ -108,6 +108,8 @@ This repository currently contains:
 - `deployment_checks.py` - single-VM filesystem ownership and permission checks
 - `packages/system-dashboard/` - small installable dashboard object for public
   staging
+- `packages/admin-write-probe/` - narrow staging package for proving object
+  state writes and admin-gated collection record writes
 
 It does not yet contain the full private prototype, cluster runtime, full Scroll
 admin dashboard, sample applications, production installer, public signup flow,
@@ -120,8 +122,9 @@ New DBBASIC object source should live under `objects/`.
 Set `DBBASIC_OBJECTS_DIR` to point at a custom object source directory during migration or deployment.
 
 Installable DBBASIC packages should live under `packages/{package_id}/`. The
-current repository includes `hello-world` and `system-dashboard` as small package
-fixtures that can be installed on a controlled VM.
+current repository includes `hello-world`, `system-dashboard`, and
+`admin-write-probe` as small package fixtures that can be installed on a
+controlled VM.
 Each package currently uses `dbbasic-package.json` plus package-owned `objects/`,
 `schemas/`, `permissions/`, `seed/`, and `migrations/` paths. The public server
 can list packages, return dry-run install plans, and run conservative installs
@@ -340,6 +343,9 @@ rules the rest of the server will use:
   dry-run/install plans for Scroll/package manager workflows
 - `object_package_changes.py` records package dry-runs, installs, failures, and future rollbacks
   facts as append-only JSONL under `data/package_changes/`
+- `packages/admin-write-probe` installs a tiny `dbbasic_probe` schema/record
+  file plus a public status object, so a staging server can prove object state
+  writes and admin-token-gated collection CRUD without exposing broad routes
 - `object_files.py` lists and reads object-owned files under `data/files/`
 - `object_logs.py` reads and appends TSV-backed object logs, rotates/compresses old logs, and provides `_logger`
 - `object_metadata.py` summarizes source, state, logs, files, and versions
