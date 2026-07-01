@@ -224,6 +224,7 @@ Current endpoints:
 - `GET /events`
 - `POST /events`
 - `DELETE /events`
+- `GET /events/deliveries`
 - `GET /events/subscriptions`
 - `POST /events/subscriptions`
 - `DELETE /events/subscriptions`

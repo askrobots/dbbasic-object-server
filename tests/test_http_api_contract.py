@@ -21,6 +21,7 @@ def test_contract_keeps_objects_paths_as_public_surface():
     assert http_api_contract.SCHEMAS_PATH == "/schemas"
     assert http_api_contract.SCHEMA_PATH == "/schemas/{collection}"
     assert http_api_contract.EVENTS_PATH == "/events"
+    assert http_api_contract.EVENT_DELIVERIES_PATH == "/events/deliveries"
     assert http_api_contract.EVENT_SUBSCRIPTIONS_PATH == "/events/subscriptions"
     assert http_api_contract.PACKAGES_PATH == "/packages"
     assert http_api_contract.PACKAGE_PATH == "/packages/{package_id}"
@@ -113,6 +114,10 @@ def test_contract_keeps_existing_introspection_query_flags():
         (
             "event_retention",
             {"status": "ok", "retention": {"deleted": 0, "kept": 0}},
+        ),
+        (
+            "event_delivery_list",
+            {"status": "ok", "deliveries": [], "count": 0, "total": 0},
         ),
         (
             "event_subscription_list",
@@ -382,6 +387,7 @@ def test_http_contract_doc_mentions_required_compatibility_surface():
         "GET /events",
         "POST /events",
         "DELETE /events",
+        "GET /events/deliveries",
         "GET /events/subscriptions",
         "POST /events/subscriptions",
         "DELETE /events/subscriptions",

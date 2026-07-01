@@ -597,6 +597,10 @@ dbbasic.example.com {
         reverse_proxy 127.0.0.1:8001
     }
 
+    handle /events/deliveries* {
+        reverse_proxy 127.0.0.1:8001
+    }
+
     handle /dashboard {
         rewrite * /objects/system_dashboard
         reverse_proxy 127.0.0.1:8001

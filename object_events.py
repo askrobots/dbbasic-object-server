@@ -27,6 +27,7 @@ DEFAULT_EVENT_KEEP_COUNT = 1000
 DEFAULT_EVENT_KEEP_SECONDS = 7 * 24 * 60 * 60
 MAX_EVENT_KEEP_COUNT = 1_000_000
 VALID_CALLBACK_SCHEMES = {"http", "https"}
+VALID_DELIVERY_STATUSES = {"idle", "ok", "failed"}
 
 _EVENT_TYPE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 _SUBSCRIBER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
@@ -295,6 +296,88 @@ def list_subscriptions(
     return payload
 
 
+def list_event_deliveries(
+    *,
+    event_type: str | None = None,
+    delivery_status: str | None = None,
+    pending: bool | None = None,
+    include_callback_url: bool = False,
+    include_events: bool = False,
+    event_limit: int = 10,
+    base_dir: Path | str = DEFAULT_DATA_DIR,
+    limit: int = DEFAULT_EVENT_LIMIT,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Return per-subscription delivery state for operator dashboards."""
+    if event_type is not None:
+        event_type = _clean_event_type(event_type)
+    if delivery_status is not None:
+        delivery_status = _clean_delivery_status(delivery_status)
+    _validate_page(limit=limit, offset=offset)
+    clean_event_limit = _clean_event_limit(event_limit)
+
+    state = _state_manager(base_dir).get_all()
+    events = _event_rows(state)
+    subscriptions = _subscription_rows(state)
+    deliveries = []
+
+    for subscription in subscriptions:
+        if event_type is not None and subscription.get("event_type") != event_type:
+            continue
+
+        delivery = _delivery_with_defaults(subscription.get("delivery"))
+        if delivery_status is not None and delivery.get("status") != delivery_status:
+            continue
+
+        matching_events = _matching_events_after_cursor(subscription, events)
+        is_pending = bool(matching_events)
+        if pending is not None and is_pending != pending:
+            continue
+
+        row: dict[str, Any] = {
+            "id": subscription.get("id"),
+            "subscriber_id": subscription.get("id"),
+            "event_type": subscription.get("event_type"),
+            "created_at": subscription.get("created_at"),
+            "created_at_iso": subscription.get("created_at_iso"),
+            "created_by": subscription.get("created_by"),
+            "last_event_id": subscription.get("last_event_id"),
+            "callback_url_present": bool(subscription.get("callback_url")),
+            "pending": is_pending,
+            "pending_count": len(matching_events),
+            "next_pending_event": _event_summary(matching_events[0]) if matching_events else None,
+            "latest_pending_event": _event_summary(matching_events[-1]) if matching_events else None,
+            "delivery": delivery,
+        }
+        if include_callback_url:
+            row["callback_url"] = subscription.get("callback_url", "")
+        if include_events:
+            row["pending_events"] = [
+                _event_summary(event) for event in matching_events[:clean_event_limit]
+            ]
+            row["pending_event_limit"] = clean_event_limit
+        deliveries.append(row)
+
+    deliveries.sort(key=_delivery_sort_key, reverse=True)
+    total = len(deliveries)
+    window = deliveries[offset:offset + limit]
+    payload: dict[str, Any] = {
+        "deliveries": window,
+        "count": len(window),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + len(window) < total,
+    }
+    if event_type is not None:
+        payload["event_type"] = event_type
+    if delivery_status is not None:
+        payload["delivery_status"] = delivery_status
+    if pending is not None:
+        payload["pending"] = pending
+    return payload
+
+
 def delete_subscription(
     event_type: str,
     subscriber_id: str,
@@ -375,6 +458,78 @@ def _subscription_with_defaults(subscription: Mapping[str, Any]) -> dict[str, An
     return updated
 
 
+def _event_rows(state: Mapping[str, Any]) -> list[dict[str, Any]]:
+    events = []
+    for key, value in state.items():
+        if not str(key).startswith("event_"):
+            continue
+        event = _load_json_object(value)
+        if event is not None:
+            events.append(event)
+    return events
+
+
+def _subscription_rows(state: Mapping[str, Any]) -> list[dict[str, Any]]:
+    subscriptions = []
+    for key, value in state.items():
+        if not str(key).startswith("sub_"):
+            continue
+        subscription = _load_json_object(value)
+        if subscription is not None:
+            subscriptions.append(_subscription_with_defaults(subscription))
+    return subscriptions
+
+
+def _matching_events_after_cursor(
+    subscription: Mapping[str, Any],
+    events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    event_type = subscription.get("event_type")
+    matching = [event for event in events if event.get("event_type") == event_type]
+    matching.sort(
+        key=lambda item: (_coerce_int(item.get("timestamp")), str(item.get("id", "")))
+    )
+    if not matching:
+        return []
+
+    last_event_id = subscription.get("last_event_id")
+    if not last_event_id:
+        return matching
+
+    for index, event in enumerate(matching):
+        if event.get("id") == last_event_id:
+            return matching[index + 1:]
+    return matching
+
+
+def _event_summary(event: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "id": event.get("id"),
+        "event_type": event.get("event_type"),
+        "source": event.get("source"),
+        "actor": event.get("actor"),
+        "timestamp": _coerce_int(event.get("timestamp")),
+        "created_at": event.get("created_at"),
+    }
+
+
+def _delivery_sort_key(row: Mapping[str, Any]) -> tuple[int, int, int, int, str]:
+    delivery = row.get("delivery")
+    status = "unknown"
+    last_attempt = 0
+    if isinstance(delivery, Mapping):
+        status = str(delivery.get("status") or "unknown")
+        last_attempt = _coerce_int(delivery.get("last_attempt_at"))
+    status_rank = {"failed": 3, "idle": 2, "ok": 1}.get(status, 0)
+    return (
+        status_rank,
+        _coerce_int(row.get("pending_count")),
+        last_attempt,
+        _coerce_int(row.get("created_at")),
+        str(row.get("id") or ""),
+    )
+
+
 def _delivery_defaults() -> dict[str, Any]:
     return {
         "status": "idle",
@@ -431,6 +586,14 @@ def _clean_callback_url(callback_url: str) -> str:
     return clean
 
 
+def _clean_delivery_status(delivery_status: str) -> str:
+    clean = str(delivery_status or "").strip().lower()
+    if clean not in VALID_DELIVERY_STATUSES:
+        allowed = ", ".join(sorted(VALID_DELIVERY_STATUSES))
+        raise ValueError(f"delivery_status must be one of: {allowed}")
+    return clean
+
+
 def _validate_page(*, limit: int, offset: int) -> None:
     if limit < 1:
         raise ValueError("limit must be at least 1")
@@ -468,6 +631,20 @@ def _clean_keep_seconds(value: int | None) -> int | None:
     if seconds < 0:
         raise ValueError("keep_seconds must be at least 0")
     return seconds or None
+
+
+def _clean_event_limit(value: int) -> int:
+    if isinstance(value, bool):
+        raise ValueError("event_limit must be an integer")
+    try:
+        limit = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("event_limit must be an integer") from exc
+    if limit < 0:
+        raise ValueError("event_limit must be at least 0")
+    if limit > MAX_EVENT_LIMIT:
+        raise ValueError(f"event_limit must be at most {MAX_EVENT_LIMIT}")
+    return limit
 
 
 def _subscription_last_event_ids(state: dict[str, Any]) -> set[str]:

@@ -1425,6 +1425,71 @@ sets `status=ok` and advances `last_event_id`; failed delivery sets
 `status=failed`, records the last error/status, and leaves `last_event_id`
 unchanged so the event can be retried.
 
+Delivery status is exposed separately so Scroll and operator dashboards can
+show pending, delivered, and failed work without loading event payloads or
+callback secrets:
+
+```http
+GET /events/deliveries?event_type=collection.record.created&pending=true
+GET /events/deliveries?delivery_status=failed
+Authorization: Token <token>
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "deliveries": [
+    {
+      "id": "scroll",
+      "subscriber_id": "scroll",
+      "event_type": "collection.record.created",
+      "callback_url_present": true,
+      "pending": true,
+      "pending_count": 2,
+      "last_event_id": null,
+      "next_pending_event": {
+        "id": "789f0c18-7845-4620-a2b0-8bbad752f91b",
+        "event_type": "collection.record.created",
+        "source": "record_changes",
+        "actor": "admin",
+        "timestamp": 1782734400,
+        "created_at": "2026-06-29T12:00:00Z"
+      },
+      "latest_pending_event": {
+        "id": "98b9fd7c-9e38-48a6-9134-153473c0172a",
+        "event_type": "collection.record.created",
+        "source": "record_changes",
+        "actor": "admin",
+        "timestamp": 1782734460,
+        "created_at": "2026-06-29T12:01:00Z"
+      },
+      "delivery": {
+        "status": "failed",
+        "attempts": 1,
+        "successes": 0,
+        "failures": 1,
+        "last_attempted_event_id": "789f0c18-7845-4620-a2b0-8bbad752f91b",
+        "last_attempt_at": 1782734401,
+        "last_attempt_at_iso": "2026-06-29T12:00:01Z",
+        "last_status_code": 500,
+        "last_error": "callback failed"
+      }
+    }
+  ],
+  "count": 1,
+  "total": 1,
+  "limit": 100,
+  "offset": 0,
+  "has_more": false
+}
+```
+
+`callback_url` is redacted by default. Trusted detail views may request
+`include_callback_url=true`. Event payloads are also excluded by default; use
+`include_events=true&event_limit=10` only for trusted operator/detail views.
+
 ## Packages
 
 Packages are DBBASIC bundles: objects, schemas, permissions, seed data, and

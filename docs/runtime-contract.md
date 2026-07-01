@@ -648,6 +648,7 @@ The current HTTP event API is admin-gated:
 GET /events
 POST /events
 DELETE /events?keep_count=1000&keep_seconds=604800
+GET /events/deliveries
 GET /events/subscriptions
 POST /events/subscriptions
 DELETE /events/subscriptions?event_type=invoice.created&subscriber_id=scroll

@@ -377,6 +377,10 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
             await _handle_events(send, method, query, body, headers)
             return
 
+        if path == http_api_contract.EVENT_DELIVERIES_PATH:
+            await _handle_event_deliveries(send, method, query, headers)
+            return
+
         if path == http_api_contract.EVENT_SUBSCRIPTIONS_PATH:
             await _handle_event_subscriptions(send, method, query, body, headers)
             return
@@ -1810,6 +1814,51 @@ async def _handle_event_subscriptions(
         return
 
     await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+
+
+async def _handle_event_deliveries(
+    send,
+    method: str,
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    gate_error = _admin_token_gate_error(headers, f"Events API requires {ADMIN_TOKEN_ENV}.")
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    try:
+        limit = _query_int(query, "limit", default=100, minimum=1, maximum=1000)
+        offset = _query_int(query, "offset", default=0, minimum=0)
+        event_limit = _query_int(query, "event_limit", default=10, minimum=0, maximum=1000)
+        deliveries = object_events.list_event_deliveries(
+            event_type=_optional_query_text(query, "event_type"),
+            delivery_status=_optional_query_text(query, "delivery_status"),
+            pending=_optional_query_bool(query, "pending"),
+            include_callback_url=_optional_query_bool(query, "include_callback_url") is True,
+            include_events=_optional_query_bool(query, "include_events") is True,
+            event_limit=event_limit,
+            base_dir=_data_dir(),
+            limit=limit,
+            offset=offset,
+        )
+    except (object_events.InvalidEventTypeError, ValueError) as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except OSError as exc:
+        await _send_json(
+            send,
+            {"status": "error", "error": f"Could not read event deliveries: {exc}"},
+            status=500,
+        )
+        return
+
+    await _send_json(send, {"status": "ok", **deliveries})
 
 
 async def _handle_packages(

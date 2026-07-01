@@ -5,6 +5,7 @@ from pathlib import Path
 
 import object_correlation
 import object_execution
+import object_events
 import object_ids
 import object_logs
 import object_package_changes
@@ -5138,6 +5139,81 @@ def test_event_subscription_api_creates_lists_and_deletes(tmp_path, monkeypatch)
 
     assert status == 200
     assert payload["subscriptions"] == []
+
+
+def test_event_delivery_api_lists_pending_failed_subscriptions(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    event = object_events.publish_event(
+        "collection.record.updated",
+        payload={"secret": "hidden"},
+        base_dir=data_dir,
+    )
+    subscription = object_events.subscribe_event(
+        "collection.record.updated",
+        subscriber_id="scroll",
+        callback_url="https://example.com/hooks/dbbasic",
+        base_dir=data_dir,
+    )
+    subscription = object_events.record_subscription_delivery(
+        subscription,
+        event,
+        success=False,
+        status_code=502,
+        error="bad gateway",
+        now=100,
+    )
+    manager = object_state.ObjectStateManager(object_events.EVENTS_OBJECT_ID, base_dir=data_dir)
+    manager.set("sub_collection.record.updated_scroll", json.dumps(subscription))
+
+    status, _, payload = request(
+        "/events/deliveries",
+        query_string="event_type=collection.record.updated&delivery_status=failed&pending=true",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["count"] == 1
+    delivery = payload["deliveries"][0]
+    assert delivery["subscriber_id"] == "scroll"
+    assert delivery["pending"] is True
+    assert delivery["pending_count"] == 1
+    assert delivery["delivery"]["status"] == "failed"
+    assert delivery["delivery"]["last_error"] == "bad gateway"
+    assert delivery["callback_url_present"] is True
+    assert "callback_url" not in delivery
+    assert "payload" not in delivery["next_pending_event"]
+
+
+def test_event_delivery_api_can_include_callback_and_pending_event_summaries(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    event = object_events.publish_event("invoice.created", payload={"id": "i1"}, base_dir=data_dir)
+    object_events.subscribe_event(
+        "invoice.created",
+        subscriber_id="billing",
+        callback_url="https://example.com/hooks/billing",
+        base_dir=data_dir,
+    )
+
+    status, _, payload = request(
+        "/events/deliveries",
+        query_string="include_callback_url=true&include_events=true&event_limit=1",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    delivery = payload["deliveries"][0]
+    assert delivery["callback_url"] == "https://example.com/hooks/billing"
+    assert delivery["pending_events"] == [delivery["next_pending_event"]]
+    assert delivery["pending_events"][0]["id"] == event["id"]
+    assert "payload" not in delivery["pending_events"][0]
 
 
 def test_events_api_rejects_bad_payloads(tmp_path, monkeypatch):

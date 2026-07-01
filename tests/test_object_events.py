@@ -166,6 +166,98 @@ def test_record_subscription_delivery_tracks_success_and_failure(tmp_path, monke
     assert succeeded["delivery"]["last_error"] is None
 
 
+def test_list_event_deliveries_summarizes_pending_and_failed_without_payloads(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    timestamps = iter(range(100, 120))
+    monkeypatch.setattr(object_events.time, "time", lambda: next(timestamps))
+    first_event = object_events.publish_event(
+        "collection.record.updated",
+        payload={"secret": "do-not-list"},
+        base_dir=data_dir,
+    )
+    second_event = object_events.publish_event(
+        "collection.record.updated",
+        payload={"secret": "also-hidden"},
+        base_dir=data_dir,
+    )
+    subscription = object_events.subscribe_event(
+        "collection.record.updated",
+        subscriber_id="scroll",
+        callback_url="https://example.com/hooks/dbbasic",
+        base_dir=data_dir,
+    )
+    subscription = object_events.record_subscription_delivery(
+        subscription,
+        first_event,
+        success=False,
+        status_code=500,
+        error="callback down",
+        now=100,
+    )
+    manager = object_state.ObjectStateManager(object_events.EVENTS_OBJECT_ID, base_dir=data_dir)
+    manager.set("sub_collection.record.updated_scroll", json.dumps(subscription))
+
+    payload = object_events.list_event_deliveries(
+        event_type="collection.record.updated",
+        delivery_status="failed",
+        pending=True,
+        base_dir=data_dir,
+    )
+
+    assert payload["count"] == 1
+    delivery = payload["deliveries"][0]
+    assert delivery["subscriber_id"] == "scroll"
+    assert delivery["callback_url_present"] is True
+    assert "callback_url" not in delivery
+    assert delivery["pending"] is True
+    assert delivery["pending_count"] == 2
+    assert delivery["next_pending_event"]["id"] == first_event["id"]
+    assert delivery["latest_pending_event"]["id"] == second_event["id"]
+    assert "payload" not in delivery["next_pending_event"]
+    assert delivery["delivery"]["status"] == "failed"
+    assert delivery["delivery"]["last_error"] == "callback down"
+
+
+def test_list_event_deliveries_can_include_callback_and_limited_event_summaries(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    timestamps = iter(range(100, 120))
+    monkeypatch.setattr(object_events.time, "time", lambda: next(timestamps))
+    first_event = object_events.publish_event("invoice.created", payload={"id": "i1"}, base_dir=data_dir)
+    object_events.publish_event("invoice.created", payload={"id": "i2"}, base_dir=data_dir)
+    subscription = object_events.subscribe_event(
+        "invoice.created",
+        subscriber_id="billing",
+        callback_url="https://example.com/hooks/billing",
+        base_dir=data_dir,
+    )
+    subscription = object_events.record_subscription_delivery(
+        subscription,
+        first_event,
+        success=True,
+        status_code=204,
+        now=100,
+    )
+    manager = object_state.ObjectStateManager(object_events.EVENTS_OBJECT_ID, base_dir=data_dir)
+    manager.set("sub_invoice.created_billing", json.dumps(subscription))
+
+    payload = object_events.list_event_deliveries(
+        event_type="invoice.created",
+        pending=True,
+        include_callback_url=True,
+        include_events=True,
+        event_limit=1,
+        base_dir=data_dir,
+    )
+
+    assert payload["count"] == 1
+    delivery = payload["deliveries"][0]
+    assert delivery["callback_url"] == "https://example.com/hooks/billing"
+    assert delivery["pending_count"] == 1
+    assert len(delivery["pending_events"]) == 1
+    assert "payload" not in delivery["pending_events"][0]
+    assert delivery["pending_events"][0]["id"] != first_event["id"]
+
+
 def test_prune_events_removes_old_overflow_and_corrupt_rows_but_keeps_cursor(
     tmp_path,
     monkeypatch,

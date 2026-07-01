@@ -21,6 +21,7 @@ COLLECTION_RECORD_CHANGES_PATH = "/collections/{collection}/records/{record_id}/
 SCHEMAS_PATH = "/schemas"
 SCHEMA_PATH = "/schemas/{collection}"
 EVENTS_PATH = "/events"
+EVENT_DELIVERIES_PATH = "/events/deliveries"
 EVENT_SUBSCRIPTIONS_PATH = "/events/subscriptions"
 PACKAGES_PATH = "/packages"
 PACKAGE_PATH = "/packages/{package_id}"
@@ -66,6 +67,7 @@ RESPONSE_FIELDS: dict[str, frozenset[str]] = {
     "event_list": frozenset({"status", "events", "count", "total"}),
     "event": frozenset({"status", "event"}),
     "event_retention": frozenset({"status", "retention"}),
+    "event_delivery_list": frozenset({"status", "deliveries", "count", "total"}),
     "event_subscription_list": frozenset(
         {"status", "subscriptions", "count", "total"}
     ),
