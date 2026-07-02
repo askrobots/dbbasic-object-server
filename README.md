@@ -193,6 +193,7 @@ Current endpoints:
 - `GET /admin/objects/{object_id}`
 - `GET /admin/objects/{object_id}?metadata=true`
 - `GET /admin/objects/{object_id}?source=true&format=json`
+- `PUT /admin/objects/{object_id}?source=true`
 - `GET /admin/objects/{object_id}?state=true`
 - `GET /admin/objects/{object_id}?logs=true&limit=100`
 - `GET /admin/objects/{object_id}?source_changes=true&limit=100`

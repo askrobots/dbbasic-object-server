@@ -431,7 +431,7 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
         admin_objects_prefix = f"{http_api_contract.ADMIN_OBJECTS_PATH}/"
         if path.startswith(admin_objects_prefix):
             object_id = path.removeprefix(admin_objects_prefix)
-            await _handle_admin_object(send, method, object_id, query, headers)
+            await _handle_admin_object(send, method, object_id, query, body, headers)
             return
 
         if path == http_api_contract.ADMIN_COLLECTIONS_PATH:
@@ -1209,8 +1209,13 @@ async def _handle_admin_object(
     method: str,
     object_id: str,
     query: dict[str, str],
+    body: bytes,
     headers: dict[str, str],
 ) -> None:
+    if method == "PUT" and query.get("source") == "true":
+        await _handle_object_source_put(send, object_id, body, headers)
+        return
+
     if method != "GET":
         await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
         return

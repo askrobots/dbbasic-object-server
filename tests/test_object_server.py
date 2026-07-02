@@ -5490,6 +5490,95 @@ def test_source_update_versions_source_and_immediately_runs_new_code(tmp_path, m
     assert payload == {"count": 2}
 
 
+def test_admin_object_source_update_alias_requires_authorization_header(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    source_path = write_source(
+        root / "basics" / "counter.py",
+        "def GET(request):\n    return {'count': 1}\n",
+    )
+    data_dir = tmp_path / "data"
+    enable_source_writes(monkeypatch, root, data_dir)
+
+    status, _, payload = request(
+        "/admin/objects/basics_counter",
+        method="PUT",
+        query_string="source=true",
+        body=json.dumps(
+            {"code": "def GET(request):\n    return {'count': 2}\n"}
+        ).encode(),
+    )
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
+    assert source_path.read_text() == "def GET(request):\n    return {'count': 1}\n"
+
+
+def test_admin_object_source_update_alias_versions_source(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    source_path = write_source(
+        root / "basics" / "counter.py",
+        "def GET(request):\n    return {'count': 1}\n",
+    )
+    data_dir = tmp_path / "data"
+    enable_source_writes(monkeypatch, root, data_dir)
+    new_code = "def GET(request):\n    return {'count': 2}\n"
+
+    status, _, payload = request(
+        "/admin/objects/basics_counter",
+        method="PUT",
+        query_string="source=true",
+        body=json.dumps(
+            {
+                "code": new_code,
+                "author": "scroll",
+                "message": "Update from Scroll",
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["object_id"] == "basics_counter"
+    assert payload["version_id"] == 1
+    assert source_path.read_text() == new_code
+
+    manager = object_versions.VersionManager(data_dir)
+    saved = manager.get_version("basics_counter", 1)
+    assert saved is not None
+    assert saved["content"] == new_code
+    assert saved["author"] == "scroll"
+    assert saved["message"] == "Update from Scroll"
+
+    source_changes = object_source_changes.list_source_changes(
+        "basics_counter",
+        base_dir=data_dir,
+    )
+    assert source_changes["changes"][0]["actor"] == "scroll"
+    assert source_changes["changes"][0]["action"] == "source_update"
+
+
+def test_admin_object_put_without_source_query_does_not_execute_object(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    source_path = write_source(
+        root / "basics" / "counter.py",
+        "def PUT(request):\n    return {'executed': True}\n",
+    )
+    enable_source_writes(monkeypatch, root, data_dir)
+
+    status, _, payload = request(
+        "/admin/objects/basics_counter",
+        method="PUT",
+        body=json.dumps({"value": 1}).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 405
+    assert payload == {"status": "error", "error": "Method not allowed"}
+    assert source_path.read_text() == "def PUT(request):\n    return {'executed': True}\n"
+
+
 def test_versions_endpoint_lists_history_newest_first_without_content(tmp_path, monkeypatch):
     root = tmp_path / "objects"
     write_source(root / "basics" / "counter.py", "def GET(request):\n    return {'count': 0}\n")

@@ -1022,6 +1022,7 @@ object without requiring the reverse proxy to expose the broader runtime
 GET /admin/objects/{object_id}
 GET /admin/objects/{object_id}?metadata=true
 GET /admin/objects/{object_id}?source=true&format=json
+PUT /admin/objects/{object_id}?source=true
 GET /admin/objects/{object_id}?state=true
 GET /admin/objects/{object_id}?logs=true&format=json&limit=100
 GET /admin/objects/{object_id}?versions=true&limit=10
@@ -1034,9 +1035,11 @@ Authorization: Token <token>
 ```
 
 If no inspection query is supplied, the server returns metadata. The admin
-inspection surface never executes the object. Unsupported query flags return a
-400 response so a client cannot accidentally turn an operator view into an
-execution endpoint.
+inspection surface never executes the object. `PUT ...?source=true` is the
+admin/operator alias for source edits and uses the same
+`DBBASIC_ENABLE_SOURCE_WRITES` plus admin gate as the runtime source update
+route. Unsupported query flags return a 400 response so a client cannot
+accidentally turn an operator view into an execution endpoint.
 
 ## Admin Changes
 
