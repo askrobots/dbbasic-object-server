@@ -41,6 +41,27 @@ def POST(request):
 `GET` receives query parameters. `POST`, `PUT`, and `DELETE` receive the parsed
 request body plus query parameters where the HTTP contract allows it.
 
+## Request Identity
+
+Every request payload includes a server-controlled `_identity` key describing
+the resolved caller, so objects can render per-user pages and make per-user
+decisions without hand-rolling auth:
+
+```python
+def GET(request):
+    identity = request["_identity"]
+    if identity["user_id"] is None:
+        return {"status": 401, "error": "Sign in first"}
+    return {"hello": identity["user_id"], "roles": identity["roles"]}
+```
+
+`_identity` contains `user_id`, `account_id`, `roles`, `subscriptions`, and
+`auth_method` (`admin_token`, `session_token`, `session_cookie`,
+`trusted_headers`, or `anonymous`). The server overwrites any client-supplied
+`_identity` value before the object runs, so it cannot be spoofed through the
+request body or query string. Anonymous requests still receive the key with
+`user_id` set to `None`.
+
 ## Runtime Helpers
 
 Loaded object modules receive a small set of runtime helpers. The current public

@@ -23,6 +23,13 @@ import object_state
 import object_versions
 
 TEST_ADMIN_TOKEN = "unit-test-only-admin-token"
+ANONYMOUS_IDENTITY = {
+    "user_id": None,
+    "account_id": None,
+    "roles": [],
+    "subscriptions": [],
+    "auth_method": "anonymous",
+}
 
 
 def write_source(path, content):
@@ -1312,6 +1319,48 @@ def test_login_page_redirects_active_session(tmp_path, monkeypatch):
 
     assert status == 303
     assert headers[b"location"] == b"/"
+
+
+def test_objects_receive_request_identity(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(
+        root / "whoami" / "echo.py",
+        "def GET(request):\n    return {'identity': request['_identity']}\n"
+        "def POST(request):\n    return {'identity': request['_identity']}\n",
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path / "data"))
+    monkeypatch.setenv(object_server.TRUSTED_IN_PROCESS_OBJECTS_ENV, "whoami_echo")
+    monkeypatch.setenv(object_server.PASSWORD_LOGIN_ENV, "true")
+    _create_password_user(monkeypatch)
+    token = _password_login_token()
+
+    anonymous_status, _, anonymous_payload = request("/objects/whoami_echo")
+    cookie_status, _, cookie_payload = request(
+        "/objects/whoami_echo",
+        headers=[("cookie", f"dbbasic_session={token}")],
+    )
+    admin_status, _, admin_payload = request("/objects/whoami_echo", headers=auth_headers())
+    spoof_status, _, spoof_payload = request(
+        "/objects/whoami_echo",
+        method="POST",
+        body=json.dumps({"_identity": {"user_id": "fake-admin", "roles": ["admin"]}}).encode(),
+    )
+
+    assert anonymous_status == 200
+    assert anonymous_payload["identity"]["user_id"] is None
+    assert anonymous_payload["identity"]["auth_method"] == "anonymous"
+    assert cookie_status == 200
+    assert cookie_payload["identity"]["user_id"] == "u_7"
+    assert cookie_payload["identity"]["auth_method"] == "session_cookie"
+    assert admin_status == 200
+    assert admin_payload["identity"]["user_id"] == "admin"
+    assert admin_payload["identity"]["roles"] == ["admin"]
+    assert admin_payload["identity"]["auth_method"] == "admin_token"
+    assert spoof_status == 200
+    assert spoof_payload["identity"]["user_id"] is None
+    assert spoof_payload["identity"]["roles"] == []
+    assert spoof_payload["identity"]["auth_method"] == "anonymous"
 
 
 def test_identity_endpoint_ignores_untrusted_identity_headers(monkeypatch):
@@ -6874,7 +6923,7 @@ def test_post_object_execution_runs_post_method_with_json_body_and_query_merge(
     )
 
     assert status == 200
-    assert payload == {"request": {"name": "body", "count": 2, "mode": "test"}}
+    assert payload == {"request": {"name": "body", "count": 2, "mode": "test", "_identity": ANONYMOUS_IDENTITY}}
 
 
 def test_post_object_execution_passes_raw_body_for_non_json(tmp_path, monkeypatch):
@@ -6910,7 +6959,7 @@ def test_request_body_limit_allows_body_at_configured_limit(tmp_path, monkeypatc
     status, _, payload = request("/objects/basics_echo", method="POST", body=body)
 
     assert status == 200
-    assert payload == {"request": {"name": "body"}}
+    assert payload == {"request": {"name": "body", "_identity": ANONYMOUS_IDENTITY}}
 
 
 def test_request_body_limit_rejects_oversized_json_body(tmp_path, monkeypatch):
@@ -7014,7 +7063,7 @@ def test_put_object_execution_runs_put_method_with_json_body(tmp_path, monkeypat
     )
 
     assert status == 200
-    assert payload == {"request": {"name": "Alice"}}
+    assert payload == {"request": {"name": "Alice", "_identity": ANONYMOUS_IDENTITY}}
 
 
 def test_put_object_execution_uses_query_params_when_body_is_empty(tmp_path, monkeypatch):
@@ -7032,7 +7081,7 @@ def test_put_object_execution_uses_query_params_when_body_is_empty(tmp_path, mon
     )
 
     assert status == 200
-    assert payload == {"request": {"name": "Alice"}}
+    assert payload == {"request": {"name": "Alice", "_identity": ANONYMOUS_IDENTITY}}
 
 
 def test_put_object_execution_rejects_invalid_json(tmp_path, monkeypatch):
@@ -7264,7 +7313,7 @@ def test_object_execution_passes_query_params_as_payload(tmp_path, monkeypatch):
     status, _, payload = request("/objects/basics_echo", query_string="name=dan&mode=test")
 
     assert status == 200
-    assert payload == {"query": {"name": "dan", "mode": "test"}}
+    assert payload == {"query": {"name": "dan", "mode": "test", "_identity": ANONYMOUS_IDENTITY}}
 
 
 def test_object_execution_returns_404_for_missing_object(tmp_path, monkeypatch):

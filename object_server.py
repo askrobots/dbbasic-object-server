@@ -4860,7 +4860,7 @@ async def _execute_object_method(
     execution_request = object_execution.ObjectExecutionRequest(
         object_id=object_id,
         method=method,
-        payload=payload,
+        payload=_payload_with_identity(payload, headers),
         correlation_id=object_correlation.current_correlation_id(),
     )
     timeout_seconds = _object_timeout_seconds()
@@ -4882,6 +4882,22 @@ async def _execute_object_method(
         return
 
     await _send_execution_error(send, result)
+
+
+def _payload_with_identity(
+    payload: dict[str, Any],
+    headers: dict[str, str],
+) -> dict[str, Any]:
+    subject, auth_method = _permission_identity(headers)
+    request_payload = dict(payload)
+    request_payload["_identity"] = {
+        "user_id": subject.user_id,
+        "account_id": subject.account_id,
+        "roles": list(subject.roles),
+        "subscriptions": list(subject.subscriptions),
+        "auth_method": auth_method,
+    }
+    return request_payload
 
 
 def _list_objects_payload() -> dict[str, Any]:
