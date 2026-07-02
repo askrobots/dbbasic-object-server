@@ -216,6 +216,9 @@ Current endpoints:
 - `GET /admin/collections/{collection}/records/{record_id}`
 - `GET /admin/collections/{collection}/changes`
 - `GET /admin/collections/{collection}/records/{record_id}/changes`
+- `POST /admin/collections/{collection}/records`
+- `PUT /admin/collections/{collection}/records/{record_id}`
+- `DELETE /admin/collections/{collection}/records/{record_id}`
 - `GET /admin/schemas`
 - `GET /admin/schemas/{collection}`
 - `GET /admin/schemas/{collection}?versions=true&limit=10`

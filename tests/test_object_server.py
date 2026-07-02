@@ -1719,10 +1719,10 @@ def test_admin_collection_alias_exposes_read_only_collection_surfaces(tmp_path, 
         "/admin/collections/contacts/records/c2",
         headers=auth_headers(),
     )
-    create_status, _, create_payload = request(
-        "/admin/collections/contacts/records",
-        method="POST",
-        body=json.dumps({"record": {"id": "c3", "name": "Katherine"}}).encode(),
+    collection_put_status, _, collection_put_payload = request(
+        "/admin/collections/contacts",
+        method="PUT",
+        body=json.dumps({"name": "contacts"}).encode(),
         headers=auth_headers(),
     )
 
@@ -1735,8 +1735,82 @@ def test_admin_collection_alias_exposes_read_only_collection_surfaces(tmp_path, 
     assert records["records"] == [{"id": "c1", "name": "Ada"}]
     assert record_status == 200
     assert record["record"] == {"id": "c2", "name": "Grace"}
-    assert create_status == 405
-    assert create_payload == {"status": "error", "error": "Method not allowed"}
+    assert collection_put_status == 405
+    assert collection_put_payload == {"status": "error", "error": "Method not allowed"}
+
+
+def test_admin_collection_record_write_aliases_create_update_delete(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\nc2\tGrace\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    create_status, _, create_payload = request(
+        "/admin/collections/contacts/records",
+        method="POST",
+        body=json.dumps({"id": "c3", "name": "Katherine"}).encode(),
+        headers=auth_headers(),
+    )
+    update_status, _, update_payload = request(
+        "/admin/collections/contacts/records/c1",
+        method="PUT",
+        body=json.dumps({"name": "Ada Lovelace"}).encode(),
+        headers=auth_headers(),
+    )
+    delete_status, _, delete_payload = request(
+        "/admin/collections/contacts/records/c2",
+        method="DELETE",
+        headers=auth_headers(),
+    )
+    list_status, _, list_payload = request(
+        "/admin/collections/contacts/records",
+        headers=auth_headers(),
+    )
+
+    assert create_status == 201
+    assert create_payload["status"] == "ok"
+    assert create_payload["record"] == {"id": "c3", "name": "Katherine"}
+    assert update_status == 200
+    assert update_payload["record"]["name"] == "Ada Lovelace"
+    assert delete_status == 200
+    assert delete_payload["deleted"] is True
+    assert list_status == 200
+    assert [item["id"] for item in list_payload["records"]] == ["c1", "c3"]
+
+
+def test_admin_collection_record_write_aliases_require_admin_token(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    create_status, _, create_payload = request(
+        "/admin/collections/contacts/records",
+        method="POST",
+        body=json.dumps({"id": "c2", "name": "Grace"}).encode(),
+    )
+    update_status, _, update_payload = request(
+        "/admin/collections/contacts/records/c1",
+        method="PUT",
+        body=json.dumps({"name": "Ada Lovelace"}).encode(),
+    )
+    delete_status, _, delete_payload = request(
+        "/admin/collections/contacts/records/c1",
+        method="DELETE",
+    )
+    list_status, _, list_payload = request(
+        "/admin/collections/contacts/records",
+        headers=auth_headers(),
+    )
+
+    assert create_status == 401
+    assert create_payload == {"status": "error", "error": "Unauthorized"}
+    assert update_status == 401
+    assert update_payload == {"status": "error", "error": "Unauthorized"}
+    assert delete_status == 401
+    assert delete_payload == {"status": "error", "error": "Unauthorized"}
+    assert list_status == 200
+    assert list_payload["records"] == [{"id": "c1", "name": "Ada"}]
 
 
 def test_admin_collection_alias_requires_admin_token(tmp_path, monkeypatch):

@@ -1242,9 +1242,32 @@ Authorization: Token <token>
 ```
 
 The responses match the underlying read-only `GET /collections*` and
-`GET /schemas*` responses. These admin aliases are GET-only and admin-token
-gated. They do not create records, update records, delete records, replace
-schemas, roll back schemas, install packages, or execute objects.
+`GET /schemas*` responses.
+
+## Admin Collection Record Writes
+
+Operator screens can create, update, and delete collection records through
+narrow admin aliases without exposing the broad write-capable
+`/collections/*` routes through the reverse proxy:
+
+```http
+POST /admin/collections/{collection}/records
+PUT /admin/collections/{collection}/records/{record_id}
+DELETE /admin/collections/{collection}/records/{record_id}
+Authorization: Token <token>
+```
+
+These aliases route to the same handlers as `POST /collections/{collection}/records`,
+`PUT /collections/{collection}/records/{record_id}`, and
+`DELETE /collections/{collection}/records/{record_id}`, so request bodies,
+responses, schema validation, field permissions, record change history, and
+permission enforcement behave identically. Writes require the admin token (or
+enforced permission policy when enforcement is enabled).
+
+Other write methods on `/admin/collections*` paths — including collection
+create or delete — remain unsupported and return `405`. The admin schema
+aliases remain GET-only and do not replace schemas, roll back schemas, install
+packages, or execute objects.
 
 ## Admin Identity Inspection
 

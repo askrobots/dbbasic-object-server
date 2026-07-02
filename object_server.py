@@ -447,7 +447,7 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
         admin_collections_prefix = f"{http_api_contract.ADMIN_COLLECTIONS_PATH}/"
         if path.startswith(admin_collections_prefix):
             collection_tail = path.removeprefix(admin_collections_prefix)
-            await _handle_admin_collection(send, method, collection_tail, query, headers)
+            await _handle_admin_collection(send, method, collection_tail, query, body, headers)
             return
 
         if path == http_api_contract.ADMIN_SCHEMAS_PATH:
@@ -1591,8 +1591,23 @@ async def _handle_admin_collection(
     method: str,
     collection_tail: str,
     query: dict[str, str],
+    body: bytes,
     headers: dict[str, str],
 ) -> None:
+    parts = collection_tail.split("/")
+
+    if method == "POST" and len(parts) == 2 and parts[1] == "records":
+        await _handle_collection_record_create(send, parts[0], body, headers)
+        return
+
+    if method == "PUT" and len(parts) == 3 and parts[1] == "records":
+        await _handle_collection_record_update(send, parts[0], parts[2], body, headers)
+        return
+
+    if method == "DELETE" and len(parts) == 3 and parts[1] == "records":
+        await _handle_collection_record_delete(send, parts[0], parts[2], headers)
+        return
+
     if method != "GET":
         await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
         return
@@ -1606,7 +1621,6 @@ async def _handle_admin_collection(
         await _send_json(send, {"status": "error", "error": message}, status=status)
         return
 
-    parts = collection_tail.split("/")
     if len(parts) == 2 and parts[1] == "changes":
         await _handle_collection_changes(send, method, parts[0], query, headers)
         return
