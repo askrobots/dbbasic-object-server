@@ -7124,6 +7124,52 @@ def test_post_object_execution_runs_post_method_with_json_body_and_query_merge(
     assert payload == {"request": {"name": "body", "count": 2, "mode": "test", "_identity": ANONYMOUS_IDENTITY}}
 
 
+def test_post_object_execution_parses_form_encoded_bodies(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(
+        root / "basics" / "form.py",
+        "def POST(request):\n    return {'request': request}\n",
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+
+    status, _, payload = request(
+        "/objects/basics_form",
+        method="POST",
+        query_string="mode=test",
+        body=urllib.parse.urlencode({"note": "hello world", "tags": "a,b"}).encode(),
+        headers=[("content-type", "application/x-www-form-urlencoded; charset=utf-8")],
+    )
+
+    assert status == 200
+    assert payload == {
+        "request": {
+            "note": "hello world",
+            "tags": "a,b",
+            "mode": "test",
+            "_identity": ANONYMOUS_IDENTITY,
+        }
+    }
+
+
+def test_put_object_execution_parses_form_encoded_bodies(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(
+        root / "basics" / "form.py",
+        "def PUT(request):\n    return {'request': request}\n",
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+
+    status, _, payload = request(
+        "/objects/basics_form",
+        method="PUT",
+        body=urllib.parse.urlencode({"name": "Alice"}).encode(),
+        headers=[("content-type", "application/x-www-form-urlencoded")],
+    )
+
+    assert status == 200
+    assert payload == {"request": {"name": "Alice", "_identity": ANONYMOUS_IDENTITY}}
+
+
 def test_post_object_execution_passes_raw_body_for_non_json(tmp_path, monkeypatch):
     root = tmp_path / "objects"
     write_source(

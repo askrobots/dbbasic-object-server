@@ -4619,7 +4619,7 @@ async def _handle_object_post(
         return
 
     try:
-        payload = _parse_post_payload(body, query)
+        payload = _parse_post_payload(body, query, headers)
     except ValueError as exc:
         await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
         return
@@ -4655,7 +4655,12 @@ async def _handle_object_body_method(
         return
 
     try:
-        payload = _parse_json_body(body) if body.strip() else dict(query)
+        if body.strip() and _is_form_content_type(headers):
+            payload: dict[str, Any] = _form_fields_payload(body)
+        elif body.strip():
+            payload = _parse_json_body(body)
+        else:
+            payload = dict(query)
     except ValueError as exc:
         await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
         return
@@ -6476,9 +6481,19 @@ def _record_payload_from_body(body: bytes, *, require_id: bool = False) -> dict[
     return object_records.normalize_record_payload(payload, require_id=require_id)
 
 
-def _parse_post_payload(body: bytes, query: dict[str, str]) -> dict[str, Any]:
+def _parse_post_payload(
+    body: bytes,
+    query: dict[str, str],
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
     if not body.strip():
         return dict(query)
+
+    if headers is not None and _is_form_content_type(headers):
+        payload: dict[str, Any] = _form_fields_payload(body)
+        for key, value in query.items():
+            payload.setdefault(key, value)
+        return payload
 
     try:
         payload = json.loads(body.decode("utf-8"))
@@ -6492,6 +6507,19 @@ def _parse_post_payload(body: bytes, query: dict[str, str]) -> dict[str, Any]:
         payload.setdefault(key, value)
 
     return payload
+
+
+def _is_form_content_type(headers: dict[str, str]) -> bool:
+    content_type = headers.get("content-type", "").split(";")[0].strip().lower()
+    return content_type == "application/x-www-form-urlencoded"
+
+
+def _form_fields_payload(body: bytes) -> dict[str, str]:
+    try:
+        pairs = urllib.parse.parse_qsl(body.decode("utf-8"), keep_blank_values=True)
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ValueError("Form body must be valid UTF-8 form encoding") from exc
+    return {name: value for name, value in pairs}
 
 
 def _admin_execute_method(payload: dict[str, Any]) -> str:
