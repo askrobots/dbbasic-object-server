@@ -24,6 +24,12 @@ ADMIN_COLLECTION_RECORD_CHANGES_PATH = (
 )
 ADMIN_SCHEMAS_PATH = "/admin/schemas"
 ADMIN_SCHEMA_PATH = "/admin/schemas/{collection}"
+ADMIN_IDENTITY_ACCOUNTS_PATH = "/admin/identity/accounts"
+ADMIN_IDENTITY_ACCOUNT_PATH = "/admin/identity/accounts/{account_id}"
+ADMIN_IDENTITY_USERS_PATH = "/admin/identity/users"
+ADMIN_IDENTITY_USER_PATH = "/admin/identity/users/{user_id}"
+ADMIN_IDENTITY_SESSIONS_PATH = "/admin/identity/sessions"
+ADMIN_IDENTITY_SESSION_PATH = "/admin/identity/sessions/{session_id}"
 COLLECTIONS_PATH = "/collections"
 COLLECTION_PATH = "/collections/{collection}"
 COLLECTION_RECORDS_PATH = "/collections/{collection}/records"

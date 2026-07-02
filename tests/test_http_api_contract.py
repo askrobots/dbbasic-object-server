@@ -31,6 +31,18 @@ def test_contract_keeps_objects_paths_as_public_surface():
     )
     assert http_api_contract.ADMIN_SCHEMAS_PATH == "/admin/schemas"
     assert http_api_contract.ADMIN_SCHEMA_PATH == "/admin/schemas/{collection}"
+    assert http_api_contract.ADMIN_IDENTITY_ACCOUNTS_PATH == "/admin/identity/accounts"
+    assert (
+        http_api_contract.ADMIN_IDENTITY_ACCOUNT_PATH
+        == "/admin/identity/accounts/{account_id}"
+    )
+    assert http_api_contract.ADMIN_IDENTITY_USERS_PATH == "/admin/identity/users"
+    assert http_api_contract.ADMIN_IDENTITY_USER_PATH == "/admin/identity/users/{user_id}"
+    assert http_api_contract.ADMIN_IDENTITY_SESSIONS_PATH == "/admin/identity/sessions"
+    assert (
+        http_api_contract.ADMIN_IDENTITY_SESSION_PATH
+        == "/admin/identity/sessions/{session_id}"
+    )
     assert http_api_contract.COLLECTIONS_PATH == "/collections"
     assert http_api_contract.COLLECTION_PATH == "/collections/{collection}"
     assert http_api_contract.COLLECTION_RECORDS_PATH == "/collections/{collection}/records"
@@ -457,6 +469,12 @@ def test_http_contract_doc_mentions_required_compatibility_surface():
         "GET /admin/schemas/{collection}",
         "GET /admin/schemas/{collection}?versions=true&limit=10",
         "GET /admin/schemas/{collection}?version=1",
+        "GET /admin/identity/accounts",
+        "GET /admin/identity/accounts/{account_id}",
+        "GET /admin/identity/users",
+        "GET /admin/identity/users/{user_id}",
+        "GET /admin/identity/sessions",
+        "GET /admin/identity/sessions/{session_id}",
         "POST /objects",
         "GET /objects/{object_id}",
         "PUT /objects/{object_id}?source=true",

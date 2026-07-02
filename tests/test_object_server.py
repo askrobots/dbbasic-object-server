@@ -1615,6 +1615,93 @@ def test_admin_schema_alias_rejects_unsupported_queries(tmp_path, monkeypatch):
     assert "Unsupported admin schema inspection query" in payload["error"]
 
 
+def test_admin_identity_alias_exposes_read_only_identity_surfaces(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+    request(
+        "/identity/accounts",
+        method="POST",
+        body=json.dumps({"account_id": "acme", "name": "Acme Corp"}).encode(),
+        headers=auth_headers(),
+    )
+    request(
+        "/identity/users",
+        method="POST",
+        body=json.dumps(
+            {
+                "user_id": "u_7",
+                "account_id": "acme",
+                "email": "ada@example.com",
+                "roles": ["admin"],
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+    created_status, _, created = request(
+        "/identity/sessions",
+        method="POST",
+        body=json.dumps({"user_id": "u_7", "label": "scroll"}).encode(),
+        headers=auth_headers(),
+    )
+
+    accounts_status, _, accounts = request("/admin/identity/accounts", headers=auth_headers())
+    account_status, _, account = request(
+        "/admin/identity/accounts/acme",
+        headers=auth_headers(),
+    )
+    users_status, _, users = request(
+        "/admin/identity/users",
+        query_string="account_id=acme",
+        headers=auth_headers(),
+    )
+    user_status, _, user = request("/admin/identity/users/u_7", headers=auth_headers())
+    sessions_status, _, sessions = request("/admin/identity/sessions", headers=auth_headers())
+    session_status, _, session = request(
+        f"/admin/identity/sessions/{created['session']['session_id']}",
+        headers=auth_headers(),
+    )
+    create_status, _, create_payload = request(
+        "/admin/identity/users",
+        method="POST",
+        body=json.dumps({"user_id": "u_8"}).encode(),
+        headers=auth_headers(),
+    )
+    delete_status, _, delete_payload = request(
+        f"/admin/identity/sessions/{created['session']['session_id']}",
+        method="DELETE",
+        headers=auth_headers(),
+    )
+
+    assert created_status == 201
+    assert accounts_status == 200
+    assert accounts["accounts"][0]["account_id"] == "acme"
+    assert account_status == 200
+    assert account["account"]["name"] == "Acme Corp"
+    assert users_status == 200
+    assert users["users"][0]["user_id"] == "u_7"
+    assert user_status == 200
+    assert user["user"]["email"] == "ada@example.com"
+    assert sessions_status == 200
+    assert sessions["sessions"][0]["label"] == "scroll"
+    assert session_status == 200
+    assert session["session"]["user_id"] == "u_7"
+    assert create_status == 405
+    assert create_payload == {"status": "error", "error": "Method not allowed"}
+    assert delete_status == 405
+    assert delete_payload == {"status": "error", "error": "Method not allowed"}
+
+
+def test_admin_identity_alias_requires_admin_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/admin/identity/users")
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
+
+
 def test_collection_list_requires_admin_token_configuration(tmp_path, monkeypatch):
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(tmp_path / "objects"))
     monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)

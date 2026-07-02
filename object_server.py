@@ -431,6 +431,36 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
             await _handle_admin_schema(send, method, schema, query, headers)
             return
 
+        if path == http_api_contract.ADMIN_IDENTITY_ACCOUNTS_PATH:
+            await _handle_admin_identity_accounts(send, method, headers)
+            return
+
+        admin_identity_accounts_prefix = f"{http_api_contract.ADMIN_IDENTITY_ACCOUNTS_PATH}/"
+        if path.startswith(admin_identity_accounts_prefix):
+            account_id = path.removeprefix(admin_identity_accounts_prefix)
+            await _handle_admin_identity_account(send, method, account_id, headers)
+            return
+
+        if path == http_api_contract.ADMIN_IDENTITY_USERS_PATH:
+            await _handle_admin_identity_users(send, method, query, headers)
+            return
+
+        admin_identity_users_prefix = f"{http_api_contract.ADMIN_IDENTITY_USERS_PATH}/"
+        if path.startswith(admin_identity_users_prefix):
+            user_id = path.removeprefix(admin_identity_users_prefix)
+            await _handle_admin_identity_user(send, method, user_id, headers)
+            return
+
+        if path == http_api_contract.ADMIN_IDENTITY_SESSIONS_PATH:
+            await _handle_admin_identity_sessions(send, method, headers)
+            return
+
+        admin_identity_sessions_prefix = f"{http_api_contract.ADMIN_IDENTITY_SESSIONS_PATH}/"
+        if path.startswith(admin_identity_sessions_prefix):
+            session_id = path.removeprefix(admin_identity_sessions_prefix)
+            await _handle_admin_identity_session(send, method, session_id, headers)
+            return
+
         if path == http_api_contract.DAEMON_STATUS_PATH:
             await _handle_daemon_status(send, method, headers)
             return
@@ -1295,6 +1325,82 @@ async def _handle_admin_schema(
         return
 
     await _handle_schema(send, method, schema, query, b"", headers)
+
+
+async def _handle_admin_identity_accounts(
+    send,
+    method: str,
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    await _handle_identity_accounts(send, method, b"", headers)
+
+
+async def _handle_admin_identity_account(
+    send,
+    method: str,
+    account_id: str,
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    await _handle_identity_account(send, method, account_id, headers)
+
+
+async def _handle_admin_identity_users(
+    send,
+    method: str,
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    await _handle_identity_users(send, method, query, b"", headers)
+
+
+async def _handle_admin_identity_user(
+    send,
+    method: str,
+    user_id: str,
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    await _handle_identity_user(send, method, user_id, headers)
+
+
+async def _handle_admin_identity_sessions(
+    send,
+    method: str,
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    await _handle_identity_sessions(send, method, b"", headers)
+
+
+async def _handle_admin_identity_session(
+    send,
+    method: str,
+    session_id: str,
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    await _handle_identity_session(send, method, session_id, headers)
 
 
 async def _handle_daemon_status(

@@ -1043,6 +1043,29 @@ The responses match the underlying read-only `GET /collections*` and
 gated. They do not create records, update records, delete records, replace
 schemas, roll back schemas, install packages, or execute objects.
 
+## Admin Identity Inspection
+
+`/identity/accounts`, `/identity/users`, and `/identity/sessions` remain the
+identity management API surfaces. Scroll and operator dashboards should use the
+admin inspection aliases for read-only account, user, and session views. This
+lets public staging expose identity posture without exposing identity creation,
+arbitrary session minting, or session revocation.
+
+```http
+GET /admin/identity/accounts
+GET /admin/identity/accounts/{account_id}
+GET /admin/identity/users
+GET /admin/identity/users?account_id=acme
+GET /admin/identity/users/{user_id}
+GET /admin/identity/sessions
+GET /admin/identity/sessions/{session_id}
+Authorization: Token <token>
+```
+
+The responses match the underlying read-only `GET /identity/accounts*`,
+`GET /identity/users*`, and `GET /identity/sessions*` responses. These admin
+aliases are GET-only and admin-token gated.
+
 ## Collections
 
 ```http

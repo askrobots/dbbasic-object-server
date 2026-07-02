@@ -199,6 +199,12 @@ Current endpoints:
 - `GET /admin/schemas/{collection}`
 - `GET /admin/schemas/{collection}?versions=true&limit=10`
 - `GET /admin/schemas/{collection}?version=1`
+- `GET /admin/identity/accounts`
+- `GET /admin/identity/accounts/{account_id}`
+- `GET /admin/identity/users`
+- `GET /admin/identity/users/{user_id}`
+- `GET /admin/identity/sessions`
+- `GET /admin/identity/sessions/{session_id}`
 - `GET /daemon/status`
 - `GET /daemon/scheduler/tasks`
 - `POST /daemon/scheduler/tasks`
@@ -371,6 +377,9 @@ revoke their own session without the admin token. A guarded
 when `DBBASIC_ENABLE_SESSION_LOGIN=true` and the caller presents
 `DBBASIC_SESSION_LOGIN_TOKEN`; it refuses caller-supplied role, account, and
 subscription overrides so the session subject comes from the registry.
+Scroll and operator dashboards should use the GET-only `/admin/identity/*`
+aliases to inspect accounts, users, and sessions on public staging without
+exposing identity creation, arbitrary session minting, or session revocation.
 Production browser login, external auth gateway integration, and default-on
 permission enforcement still need to be finished before general public use.
 

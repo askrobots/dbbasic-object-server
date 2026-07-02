@@ -600,6 +600,10 @@ dbbasic.example.com {
         reverse_proxy 127.0.0.1:8001
     }
 
+    handle /admin/identity* {
+        reverse_proxy 127.0.0.1:8001
+    }
+
     handle /permissions/status* {
         reverse_proxy 127.0.0.1:8001
     }
@@ -680,6 +684,7 @@ curl https://dbbasic.example.com/health
 curl -H "Authorization: Token $DBBASIC_ADMIN_TOKEN" https://dbbasic.example.com/admin/status
 curl -H "Authorization: Token $DBBASIC_ADMIN_TOKEN" https://dbbasic.example.com/admin/collections
 curl -H "Authorization: Token $DBBASIC_ADMIN_TOKEN" https://dbbasic.example.com/admin/schemas
+curl -H "Authorization: Token $DBBASIC_ADMIN_TOKEN" https://dbbasic.example.com/admin/identity/users
 curl -H "Authorization: Token $DBBASIC_ADMIN_TOKEN" https://dbbasic.example.com/daemon/status
 curl https://dbbasic.example.com/objects/site_home
 curl https://dbbasic.example.com/admin/write-probe
@@ -698,7 +703,8 @@ delete behavior, record changelog reads, and schema reads through the public
 reverse proxy without exposing every collection or schema route. Do not expose
 broad `/collections*`, `/schemas*`, `/objects*`, or source write routes on a
 public staging server. Use `/admin/collections*` and `/admin/schemas*` for
-operator inspection instead.
+operator inspection instead. Use `/admin/identity*` for read-only account, user,
+and session inspection instead of exposing broad identity management routes.
 
 ## Public Code Execution Controls
 
