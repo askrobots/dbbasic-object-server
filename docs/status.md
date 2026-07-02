@@ -38,6 +38,9 @@ public users.
 - Token-gated admin collection and schema inspection for Scroll/operator
   collection, record, changelog, schema, and schema-version views without
   exposing broad write-capable `/collections*` or `/schemas*` routes
+- Token-gated admin record create/update/delete and schema replace/rollback
+  aliases so Scroll/operator screens can run the data loop (define schema,
+  write records, validate, audit, emit events) through the narrow admin surface
 - Token-gated daemon status with read-only scheduler, queue, event delivery,
   retention, and cleanup posture for Scroll/operator dashboards
 - Token-gated scheduler and queue control APIs for trusted operator screens,
