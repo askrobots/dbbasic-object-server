@@ -457,7 +457,7 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
         admin_schemas_prefix = f"{http_api_contract.ADMIN_SCHEMAS_PATH}/"
         if path.startswith(admin_schemas_prefix):
             schema = path.removeprefix(admin_schemas_prefix)
-            await _handle_admin_schema(send, method, schema, query, headers)
+            await _handle_admin_schema(send, method, schema, query, body, headers)
             return
 
         if path == http_api_contract.ADMIN_IDENTITY_ACCOUNTS_PATH:
@@ -1684,8 +1684,17 @@ async def _handle_admin_schema(
     method: str,
     schema: str,
     query: dict[str, str],
+    body: bytes,
     headers: dict[str, str],
 ) -> None:
+    if method == "PUT":
+        await _handle_schema_put(send, schema, body, headers)
+        return
+
+    if method == "POST":
+        await _handle_schema_post(send, schema, body, headers)
+        return
+
     if method != "GET":
         await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
         return

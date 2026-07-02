@@ -223,6 +223,8 @@ Current endpoints:
 - `GET /admin/schemas/{collection}`
 - `GET /admin/schemas/{collection}?versions=true&limit=10`
 - `GET /admin/schemas/{collection}?version=1`
+- `PUT /admin/schemas/{collection}`
+- `POST /admin/schemas/{collection}`
 - `GET /admin/identity/accounts`
 - `GET /admin/identity/accounts/{account_id}`
 - `GET /admin/identity/users`

@@ -1265,9 +1265,30 @@ permission enforcement behave identically. Writes require the admin token (or
 enforced permission policy when enforcement is enabled).
 
 Other write methods on `/admin/collections*` paths — including collection
-create or delete — remain unsupported and return `405`. The admin schema
-aliases remain GET-only and do not replace schemas, roll back schemas, install
-packages, or execute objects.
+create or delete — remain unsupported and return `405`.
+
+## Admin Schema Writes
+
+Operator screens can replace and roll back collection schemas through narrow
+admin aliases without exposing the broad write-capable `/schemas/*` routes
+through the reverse proxy:
+
+```http
+PUT /admin/schemas/{collection}
+POST /admin/schemas/{collection}
+Authorization: Token <token>
+```
+
+These aliases route to the same handlers as `PUT /schemas/{collection}` and
+`POST /schemas/{collection}`, so request bodies, responses, schema
+normalization, and schema version history behave identically. `PUT` replaces
+the schema and records a new schema version. `POST` supports action-style
+operations; the only supported action is `{"action": "rollback",
+"version_id": <id>}`. Both writes require the admin token.
+
+Other write methods on `/admin/schemas*` paths — including schema delete —
+remain unsupported and return `405`. The admin aliases still do not install
+packages or expose broad `/objects` execution routes.
 
 ## Admin Identity Inspection
 

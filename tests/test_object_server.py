@@ -1856,10 +1856,9 @@ def test_admin_schema_alias_exposes_read_only_schema_surfaces(tmp_path, monkeypa
         query_string="version=1",
         headers=auth_headers(),
     )
-    put_status, _, put_payload = request(
+    delete_status, _, delete_payload = request(
         "/admin/schemas/invoices",
-        method="PUT",
-        body=json.dumps({"schema": {"fields": [{"name": "total"}]}}).encode(),
+        method="DELETE",
         headers=auth_headers(),
     )
 
@@ -1875,8 +1874,83 @@ def test_admin_schema_alias_exposes_read_only_schema_surfaces(tmp_path, monkeypa
     assert version["version"]["schema"]["fields"] == [
         {"name": "invoice_date", "type": "date", "required": False}
     ]
-    assert put_status == 405
-    assert put_payload == {"status": "error", "error": "Method not allowed"}
+    assert delete_status == 405
+    assert delete_payload == {"status": "error", "error": "Method not allowed"}
+
+
+def test_admin_schema_write_aliases_update_and_rollback(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    put_status, _, put_payload = request(
+        "/admin/schemas/invoices",
+        method="PUT",
+        body=json.dumps(
+            {
+                "schema": {"fields": [{"name": "invoice_date", "type": "date"}]},
+                "author": "admin",
+                "message": "first schema",
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+    update_status, _, update_payload = request(
+        "/admin/schemas/invoices",
+        method="PUT",
+        body=json.dumps(
+            {
+                "schema": {"fields": [{"name": "total", "type": "number"}]},
+                "author": "admin",
+                "message": "replace fields",
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+    rollback_status, _, rollback_payload = request(
+        "/admin/schemas/invoices",
+        method="POST",
+        body=json.dumps({"action": "rollback", "version_id": 1}).encode(),
+        headers=auth_headers(),
+    )
+    detail_status, _, detail = request(
+        "/admin/schemas/invoices",
+        query_string="format=json",
+        headers=auth_headers(),
+    )
+
+    assert put_status == 200
+    assert put_payload["version_id"] == 1
+    assert update_status == 200
+    assert update_payload["version_id"] == 2
+    assert rollback_status == 200
+    assert rollback_payload["status"] == "ok"
+    assert detail_status == 200
+    assert detail["schema"]["fields"] == [
+        {"name": "invoice_date", "type": "date", "required": False}
+    ]
+
+
+def test_admin_schema_write_aliases_require_admin_token(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    put_status, _, put_payload = request(
+        "/admin/schemas/invoices",
+        method="PUT",
+        body=json.dumps({"schema": {"fields": [{"name": "total"}]}}).encode(),
+    )
+    rollback_status, _, rollback_payload = request(
+        "/admin/schemas/invoices",
+        method="POST",
+        body=json.dumps({"action": "rollback", "version_id": 1}).encode(),
+    )
+
+    assert put_status == 401
+    assert put_payload == {"status": "error", "error": "Unauthorized"}
+    assert rollback_status == 401
+    assert rollback_payload == {"status": "error", "error": "Unauthorized"}
 
 
 def test_admin_schema_alias_rejects_unsupported_queries(tmp_path, monkeypatch):
