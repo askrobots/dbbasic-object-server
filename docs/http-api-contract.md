@@ -30,10 +30,12 @@ source updates, rollback, and destructive deletes. Basic object execution may be
 public or authenticated depending on server policy and the object being called.
 
 The current public ASGI slice enforces that sensitive read surface with the
-temporary admin token from `DBBASIC_ADMIN_TOKEN`. Source update and rollback
-also require `DBBASIC_ENABLE_SOURCE_WRITES=true`. The real role, object, and row
-permission system still needs to replace this temporary admin-only boundary
-before general use.
+temporary admin token from `DBBASIC_ADMIN_TOKEN` by default. A deployment can
+opt in to `DBBASIC_ENABLE_SESSION_ADMIN_GATES=true` so active DBBASIC sessions
+with an admin role can pass the same gate. Source update and rollback also
+require `DBBASIC_ENABLE_SOURCE_WRITES=true`. The real role, object, and row
+permission system still needs to replace this temporary admin boundary before
+general use.
 
 ## Correlation IDs
 
@@ -696,8 +698,12 @@ The current-session route does not accept the admin token as a user session.
 It is for Scroll, app clients, and login gateways that need a stable non-admin
 session lifecycle.
 
-Session tokens do not grant admin access. They only supply the active subject
-used by permission checks. Admin routes still require `DBBASIC_ADMIN_TOKEN`.
+Session tokens normally only supply the active subject used by permission
+checks. Admin-token gates remain admin-token-only by default. When a deployment
+sets `DBBASIC_ENABLE_SESSION_ADMIN_GATES=true`, active sessions whose subject
+has one of the policy admin roles can pass the same admin gate. The explicit
+source-write gate is still separate and must also be enabled for source update
+or rollback routes.
 
 ## Permissions Policy
 

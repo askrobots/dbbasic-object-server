@@ -793,7 +793,10 @@ This deployment shape is for staging and dogfooding.
 Known limits:
 
 - the current direct Python loader is not a production sandbox
-- source writes still use a temporary admin token gate
+- source writes still use an explicit admin gate and are disabled until
+  `DBBASIC_ENABLE_SOURCE_WRITES=true`
+- admin-token gates can optionally accept active admin-role DBBASIC sessions
+  with `DBBASIC_ENABLE_SESSION_ADMIN_GATES=true`
 - route permission enforcement is available, but off until a deployment enables it
 - real user/session auth still needs to replace trusted staging headers
 - WebSocket/SSE runtime behavior is still design-stage

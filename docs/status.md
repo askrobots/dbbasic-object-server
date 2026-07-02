@@ -60,6 +60,8 @@ public users.
 - Public source writes
 - Default-on permissions for every route after login/auth gateway integration
 - Browser login/session UX on top of guarded existing-user session minting
+- Session admin gates are implemented, but opt-in with
+  `DBBASIC_ENABLE_SESSION_ADMIN_GATES=true`
 - CPU and memory isolation for untrusted object code
 - File upload/delete from untrusted users
 - Fully managed event delivery/admin control API

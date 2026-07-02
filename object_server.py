@@ -70,6 +70,7 @@ PERMISSION_TRUST_HEADERS_ENV = "DBBASIC_PERMISSION_TRUST_HEADERS"
 REQUIRE_KNOWN_IDENTITY_USERS_ENV = "DBBASIC_REQUIRE_KNOWN_IDENTITY_USERS"
 SESSION_LOGIN_ENV = "DBBASIC_ENABLE_SESSION_LOGIN"
 SESSION_LOGIN_TOKEN_ENV = "DBBASIC_SESSION_LOGIN_TOKEN"
+SESSION_ADMIN_GATES_ENV = "DBBASIC_ENABLE_SESSION_ADMIN_GATES"
 RECORD_EVENTS_ENV = "DBBASIC_ENABLE_RECORD_EVENTS"
 EVENT_KEEP_COUNT_ENV = "DBBASIC_EVENT_KEEP_COUNT"
 EVENT_KEEP_SECONDS_ENV = "DBBASIC_EVENT_KEEP_SECONDS"
@@ -5722,14 +5723,37 @@ def _admin_token_gate_error(
     missing_token_message: str,
 ) -> tuple[int, str] | None:
     admin_token = os.environ.get(ADMIN_TOKEN_ENV, "")
-    if not admin_token:
+    session_admin_gates = _env_enabled(SESSION_ADMIN_GATES_ENV)
+    if not admin_token and not session_admin_gates:
         return (403, missing_token_message)
 
     request_token = _authorization_token(headers)
-    if request_token is None or not hmac.compare_digest(request_token, admin_token):
+    if request_token is None:
         return (401, "Unauthorized")
 
-    return None
+    if admin_token and hmac.compare_digest(request_token, admin_token):
+        return None
+
+    if session_admin_gates and _admin_session_authorized(request_token):
+        return None
+
+    return (401, "Unauthorized")
+
+
+def _admin_session_authorized(token: str) -> bool:
+    try:
+        session = object_identity.resolve_session_token(token, base_dir=_data_dir())
+    except (OSError, ValueError):
+        return False
+    if session is None:
+        return False
+
+    try:
+        policy = object_permission_store.load_policy(_data_dir())
+    except ValueError:
+        policy = object_permissions.PermissionPolicy()
+
+    return object_permissions.subject_has_admin_role(session.subject(), policy)
 
 
 def _session_login_gate_error(headers: dict[str, str]) -> tuple[int, str] | None:

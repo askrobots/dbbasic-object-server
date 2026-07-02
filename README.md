@@ -163,11 +163,13 @@ Object execution can return JSON data, HTML/text/binary responses through
 
 This server is useful for local development and controlled staging. It is not
 the final auth boundary yet. Object listing and introspection reads require the
-temporary admin token. Source updates and rollback require the same token plus
-the explicit source-write gate. Route-level permission enforcement exists, but
-it is disabled unless the deployment explicitly enables it. If you put it behind
-a public hostname, expose only explicit public object routes through a reverse
-proxy and keep source writes disabled.
+temporary admin token unless `DBBASIC_ENABLE_SESSION_ADMIN_GATES=true` allows
+active DBBASIC sessions with an admin role to pass the same gate. Source updates
+and rollback require that admin gate plus the explicit source-write gate.
+Route-level permission enforcement exists, but it is disabled unless the
+deployment explicitly enables it. If you put it behind a public hostname, expose
+only explicit public object routes through a reverse proxy and keep source
+writes disabled.
 
 ```bash
 python -m pip install -e '.[server,test]'
@@ -383,6 +385,10 @@ revoke their own session without the admin token. A guarded
 when `DBBASIC_ENABLE_SESSION_LOGIN=true` and the caller presents
 `DBBASIC_SESSION_LOGIN_TOKEN`; it refuses caller-supplied role, account, and
 subscription overrides so the session subject comes from the registry.
+Admin-token gates remain admin-token-only by default. A deployment can set
+`DBBASIC_ENABLE_SESSION_ADMIN_GATES=true` to also accept active sessions whose
+subject has one of the policy admin roles, which gives Scroll a path away from
+storing the raw deployment token.
 Scroll and operator dashboards should use the GET-only `/admin/identity/*`
 aliases to inspect accounts, users, and sessions on public staging without
 exposing identity creation, arbitrary session minting, or session revocation.

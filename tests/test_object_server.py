@@ -143,6 +143,10 @@ def auth_headers():
     return [("authorization", f"Token {TEST_ADMIN_TOKEN}")]
 
 
+def session_headers(token):
+    return [("authorization", f"Bearer {token}")]
+
+
 def enable_admin_token(monkeypatch):
     monkeypatch.setenv("DBBASIC_ADMIN_TOKEN", TEST_ADMIN_TOKEN)
 
@@ -164,6 +168,17 @@ def claim_limit_slot(limiter, limit):
     token = limiter.try_acquire(limit)
     assert token is not None
     return token
+
+
+def create_identity_session(payload):
+    status, _, created = request(
+        "/identity/sessions",
+        method="POST",
+        body=json.dumps(payload).encode(),
+        headers=auth_headers(),
+    )
+    assert status == 201
+    return created["token"], created["session"]
 
 
 def update_source(object_id, code, *, author="test-api", message="Update source"):
@@ -930,6 +945,65 @@ def test_admin_status_requires_admin_token(monkeypatch):
         "status": "error",
         "error": "Admin status requires DBBASIC_ADMIN_TOKEN.",
     }
+
+
+def test_admin_status_rejects_admin_session_when_session_admin_gates_disabled(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    enable_admin_token(monkeypatch)
+    token, _ = create_identity_session({"user_id": "admin-user", "roles": ["admin"]})
+
+    status, _, payload = request("/admin/status", headers=session_headers(token))
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
+
+
+def test_admin_status_accepts_admin_session_when_session_admin_gates_enabled(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.SESSION_ADMIN_GATES_ENV, "true")
+    enable_admin_token(monkeypatch)
+    token, _ = create_identity_session({"user_id": "admin-user", "roles": ["admin"]})
+
+    status, _, payload = request("/admin/status", headers=session_headers(token))
+
+    assert status == 200
+    assert payload["status"] == "ok"
+
+
+def test_admin_status_rejects_non_admin_session_when_session_admin_gates_enabled(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.SESSION_ADMIN_GATES_ENV, "true")
+    enable_admin_token(monkeypatch)
+    token, _ = create_identity_session({"user_id": "sales-user", "roles": ["sales"]})
+
+    status, _, payload = request("/admin/status", headers=session_headers(token))
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
+
+
+def test_admin_status_rejects_revoked_admin_session_when_session_admin_gates_enabled(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.SESSION_ADMIN_GATES_ENV, "true")
+    enable_admin_token(monkeypatch)
+    token, session = create_identity_session({"user_id": "admin-user", "roles": ["admin"]})
+    status, _, _ = request(
+        f"/identity/sessions/{session['session_id']}",
+        method="DELETE",
+        headers=auth_headers(),
+    )
+    assert status == 200
+
+    status, _, payload = request("/admin/status", headers=session_headers(token))
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
 
 
 def test_admin_status_reports_inventory_capabilities_and_package_posture(tmp_path, monkeypatch):
@@ -4783,6 +4857,56 @@ def test_source_update_requires_authorization_header(tmp_path, monkeypatch):
         method="PUT",
         query_string="source=true",
         body=json.dumps({"code": "def GET(request):\n    return {'count': 1}\n"}).encode(),
+    )
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
+    assert source_path.read_text() == "def GET(request):\n    return {}\n"
+
+
+def test_source_update_accepts_admin_session_when_session_admin_gates_enabled(
+    tmp_path,
+    monkeypatch,
+):
+    root = tmp_path / "objects"
+    source_path = write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")
+    data_dir = tmp_path / "data"
+    enable_source_writes(monkeypatch, root, data_dir)
+    monkeypatch.setenv(object_server.SESSION_ADMIN_GATES_ENV, "true")
+    token, _ = create_identity_session({"user_id": "admin-user", "roles": ["admin"]})
+    new_code = "def GET(request):\n    return {'count': 1}\n"
+
+    status, _, payload = request(
+        "/objects/basics_counter",
+        method="PUT",
+        query_string="source=true",
+        body=json.dumps({"code": new_code}).encode(),
+        headers=session_headers(token),
+    )
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["object_id"] == "basics_counter"
+    assert source_path.read_text() == new_code
+
+
+def test_source_update_rejects_non_admin_session_when_session_admin_gates_enabled(
+    tmp_path,
+    monkeypatch,
+):
+    root = tmp_path / "objects"
+    source_path = write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")
+    data_dir = tmp_path / "data"
+    enable_source_writes(monkeypatch, root, data_dir)
+    monkeypatch.setenv(object_server.SESSION_ADMIN_GATES_ENV, "true")
+    token, _ = create_identity_session({"user_id": "sales-user", "roles": ["sales"]})
+
+    status, _, payload = request(
+        "/objects/basics_counter",
+        method="PUT",
+        query_string="source=true",
+        body=json.dumps({"code": "def GET(request):\n    return {'count': 1}\n"}).encode(),
+        headers=session_headers(token),
     )
 
     assert status == 401

@@ -334,6 +334,12 @@ GET /identity
 Authorization: Token <token>
 ```
 
+Admin-token-gated operator routes still require `DBBASIC_ADMIN_TOKEN` by
+default. A deployment can opt in to `DBBASIC_ENABLE_SESSION_ADMIN_GATES=true`;
+when enabled, an active DBBASIC session whose subject has one of the policy
+admin roles can pass the same gate. This is intended for Scroll/operator clients
+that should stop carrying the raw deployment token after login exists.
+
 That endpoint returns the normalized `user_id`, `account_id`, roles,
 subscriptions, auth method, and permission-mode flags the server will use for
 route checks.
