@@ -587,6 +587,14 @@ dbbasic.example.com {
         reverse_proxy 127.0.0.1:8001
     }
 
+    handle /permissions/status* {
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    handle /permissions/policy* {
+        reverse_proxy 127.0.0.1:8001
+    }
+
     handle /daemon/status {
         reverse_proxy 127.0.0.1:8001
     }
