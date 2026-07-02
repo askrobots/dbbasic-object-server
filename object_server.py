@@ -45,6 +45,7 @@ import object_records
 import object_schema_versions
 import object_schemas
 import object_source
+import object_source_changes
 import object_state
 import object_versions
 from object_namespace import get_object_roots, iter_object_sources, parse_user_object_id
@@ -82,7 +83,16 @@ DEFAULT_RATE_LIMIT_REQUESTS = 0
 DEFAULT_RATE_LIMIT_WINDOW_SECONDS = 60
 DEFAULT_OBJECT_TIMEOUT_SECONDS = 0.0
 TRUE_VALUES = {"1", "true", "yes", "on"}
-SENSITIVE_GET_FLAGS = {"source", "state", "logs", "metadata", "versions", "files", "file"}
+SENSITIVE_GET_FLAGS = {
+    "source",
+    "source_changes",
+    "state",
+    "logs",
+    "metadata",
+    "versions",
+    "files",
+    "file",
+}
 RECORD_EVENT_TYPES = {
     "create": "collection.record.created",
     "update": "collection.record.updated",
@@ -2560,6 +2570,18 @@ async def _handle_object_get(
         await _handle_object_logs_get(send, object_id, query)
         return
 
+    if query.get("source_changes") == "true":
+        if await _send_permission_denied_if_needed(
+            send,
+            headers,
+            object_permissions.SOURCE,
+            object_id=object_id,
+            method="GET",
+        ):
+            return
+        await _handle_object_source_changes_get(send, object_id, query)
+        return
+
     if query.get("files") == "true":
         if await _send_permission_denied_if_needed(
             send,
@@ -2708,6 +2730,46 @@ async def _handle_object_logs_get(
             "count": len(logs),
         },
     )
+
+
+async def _handle_object_source_changes_get(
+    send,
+    object_id: str,
+    query: dict[str, str],
+) -> None:
+    try:
+        _ensure_object_source_exists(object_id)
+        limit = _query_int(
+            query,
+            "limit",
+            default=100,
+            minimum=1,
+            maximum=object_source_changes.MAX_CHANGE_LIMIT,
+        )
+        offset = _query_int(
+            query,
+            "offset",
+            default=0,
+            minimum=0,
+            maximum=object_source_changes.MAX_CHANGE_LIMIT,
+        )
+        payload = object_source_changes.list_source_changes(
+            object_id,
+            base_dir=_data_dir(),
+            limit=limit,
+            offset=offset,
+        )
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except InvalidObjectIdError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_source.ObjectSourceNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+
+    await _send_json(send, {"status": "ok", **payload})
 
 
 async def _handle_object_files_get(send, object_id: str) -> None:
@@ -2993,6 +3055,9 @@ async def _handle_object_rollback_post(
         action="source_rollback",
         version_id=new_version_id,
         from_version_id=version_id,
+        actor=author,
+        message=message,
+        correlation_id=correlation_id,
     )
 
 
@@ -3070,7 +3135,14 @@ async def _handle_object_source_put(
             "correlation_id": object_correlation.current_correlation_id(),
         },
     )
-    _append_source_change_log(object_id, action="source_update", version_id=version_id)
+    _append_source_change_log(
+        object_id,
+        action="source_update",
+        version_id=version_id,
+        actor=author,
+        message=message,
+        correlation_id=correlation_id,
+    )
 
 
 async def _execute_object_method(
@@ -4256,6 +4328,9 @@ def _append_source_change_log(
     action: str,
     version_id: int,
     from_version_id: int | None = None,
+    actor: str = "api",
+    message: str = "",
+    correlation_id: str | None = None,
 ) -> None:
     fields: dict[str, Any] = {
         "action": action,
@@ -4265,16 +4340,26 @@ def _append_source_change_log(
         fields["from_version_id"] = from_version_id
 
     try:
+        object_source_changes.append_source_change(
+            object_id=object_id,
+            action=action,
+            version_id=version_id,
+            from_version_id=from_version_id,
+            actor=actor,
+            message=message,
+            correlation_id=correlation_id,
+            base_dir=_data_dir(),
+        )
         object_logs.append_object_log(
             object_id,
             "INFO",
             f"{action} version {version_id}",
             base_dir=_data_dir(),
-            correlation_id=object_correlation.current_correlation_id(),
+            correlation_id=correlation_id or object_correlation.current_correlation_id(),
             **fields,
         )
     except Exception:
-        # Source-change logs are operator feedback; source writes already succeeded.
+        # Source-change entries are operator feedback; source writes already succeeded.
         pass
 
 

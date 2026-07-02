@@ -86,6 +86,7 @@ This repository currently contains:
 - `object_collections.py` - read-only collection summaries derived from objects, records, and permission policy
 - `object_records.py` - TSV-backed collection records for generated tables and forms
 - `object_source.py` - source read, update, version, and rollback operations
+- `object_source_changes.py` - append-only source edit/rollback changelog helpers
 - `object_state.py` - TSV-backed object state reads and runtime writes
 - `object_files.py` - read-only object-owned file listing and download helpers
 - `object_identity.py` - file-backed accounts, users, and sessions for permission subjects
@@ -246,6 +247,7 @@ Current endpoints:
 - `GET /objects/{object_id}?file=name`
 - `GET /objects/{object_id}?metadata=true`
 - `GET /objects/{object_id}?source=true&format=json`
+- `GET /objects/{object_id}?source_changes=true&limit=100`
 - `GET /objects/{object_id}?versions=true&limit=10`
 - `GET /objects/{object_id}?version=1`
 - `PUT /objects/{object_id}?source=true`
@@ -335,7 +337,7 @@ identity.
 
 Every HTTP response includes `X-DBBASIC-Correlation-ID`. Clients can send a
 UUIDv4 value in that header, or the server will create one. Source versions,
-source-change logs, object logs, permission audit entries, and execution error
+source-change entries, object logs, permission audit entries, and execution error
 responses carry the same ID when available, so Scroll and AI tools can connect
 one action to the exact code, data, logs, and errors it produced.
 
@@ -364,6 +366,8 @@ rules the rest of the server will use:
 - `object_execution.py` returns success or error results from object method runs
 - `object_correlation.py` keeps request/action correlation IDs as UUIDv4 values
 - `object_source.py` reads, updates, versions, and rolls back source files
+- `object_source_changes.py` records source edits and rollbacks as append-only
+  JSONL under `data/source_changes/`
 - `object_state.py` reads and writes runtime-owned TSV-backed object state
 - `object_records.py` reads and writes TSV-backed collection records under `data/collections/`
 - `object_record_changes.py` keeps append-only collection record change history

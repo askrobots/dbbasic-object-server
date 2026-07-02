@@ -76,6 +76,7 @@ The default runtime storage is file-backed:
 - object state under `data/state/`
 - object logs under `data/logs/`
 - object versions under `data/versions/`
+- object source changes under `data/source_changes/`
 - object-owned files under `data/files/`
 - collection records under `data/collections/`
 - collection record changes under `data/record_changes/`
@@ -93,8 +94,9 @@ contract.
 
 Runtime backups should use `object_backup.py`. The portable archive contains
 object source plus `data/state/`, `data/logs/`, `data/versions/`,
-`data/schema_versions/`, `data/record_changes/`, `data/package_changes/`,
-`data/files/`, `data/schemas/`, and `data/collections/`. It deliberately leaves
+`data/source_changes/`, `data/schema_versions/`, `data/record_changes/`,
+`data/package_changes/`, `data/files/`, `data/schemas/`, and
+`data/collections/`. It deliberately leaves
 deployment secrets, service files, virtualenvs, git history, lock files, temp
 files, and ephemeral rate-limit files outside the archive.
 
@@ -195,6 +197,30 @@ The future runtime should keep the prototype behavior:
 Public server/runtime code should use `object_source.py` for the source file
 read, update, and rollback steps so source writes and version storage do not
 drift into separate implementations.
+
+## Object Source Changes
+
+Public code should use `object_source_changes.py` for source edit and rollback
+activity storage. This is separate from `data/versions/`: versions store
+recoverable source snapshots, while source changes store the operator timeline
+that Scroll can show as admin activity.
+
+Source changes are append-only JSON Lines:
+
+```text
+data/source_changes/{object_id}/changes.jsonl
+```
+
+The helper exposes:
+
+```python
+append_source_change(object_id, action, version_id, from_version_id=None, actor="api", message="", correlation_id=None, details=None, base_dir="data")
+list_source_changes(object_id, base_dir="data", limit=100, offset=0)
+```
+
+Entries include `change_id`, `timestamp`, `object_id`, `action`,
+`version_id`, `from_version_id`, `actor`, `message`, `correlation_id`, and
+`details`. History is returned newest first and does not include source content.
 
 ## State Manager Interface
 
@@ -445,7 +471,7 @@ list_record_changes(collection, record_id=None, base_dir="data", limit=100, offs
 
 Request/action correlation IDs are UUIDv4 values. The ASGI app accepts
 `X-DBBASIC-Correlation-ID`, normalizes it only when it is a valid UUIDv4, and
-otherwise creates a new one. Source versions, source-change logs, object-owned
+otherwise creates a new one. Source versions, source-change entries, object-owned
 logs, execution errors, and permission audits should carry the current
 correlation ID so Scroll and AI tooling can trace one action across code, data,
 logs, and rollback history.

@@ -53,7 +53,7 @@ Missing, empty, or invalid values are replaced with a server-generated UUIDv4.
 The response header always contains the accepted value. Source update responses,
 rollback responses, and execution error bodies also include `correlation_id`.
 
-The same ID is written into source version metadata, source-change object logs,
+The same ID is written into source version metadata, source-change entries,
 object-owned runtime logs, execution error logs, and permission audit entries
 when those records are created inside the request. Scroll and AI tools can use
 that ID to connect one user action to the source version, logs, permission
@@ -2502,6 +2502,45 @@ Log storage may rotate and gzip old logs on disk. The HTTP response shape does
 not change; clients still receive JSON log entries. Transport compression for
 large log responses should be handled through normal HTTP compression, such as a
 reverse proxy honoring `Accept-Encoding`, rather than changing this JSON shape.
+
+## Source Changes
+
+```http
+GET /objects/{object_id}?source_changes=true&limit=100&offset=0
+Authorization: Token <token>
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "object_id": "basics_counter",
+  "changes": [
+    {
+      "change_id": "123e4567-e89b-42d3-a456-426614174000",
+      "timestamp": "2026-01-01T00:00:00",
+      "object_id": "basics_counter",
+      "action": "source_update",
+      "version_id": 2,
+      "from_version_id": null,
+      "actor": "api",
+      "message": "Updated via client",
+      "correlation_id": "123e4567-e89b-42d3-a456-426614174001",
+      "details": {}
+    }
+  ],
+  "count": 1,
+  "total": 1,
+  "limit": 100,
+  "offset": 0,
+  "has_more": false
+}
+```
+
+History is newest first and does not include source content. Use the versions
+endpoint to inspect or restore source snapshots. Source changes are the operator
+activity timeline for source edits and rollbacks.
 
 ## Versions
 

@@ -94,6 +94,7 @@ py-modules = [
     "object_schemas",
     "object_server",
     "object_source",
+    "object_source_changes",
     "object_state",
     "object_versions",
     "python_object_runtime",

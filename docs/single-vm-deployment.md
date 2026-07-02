@@ -710,6 +710,7 @@ The portable runtime backup set is:
 /var/lib/dbbasic-object-server/data/state
 /var/lib/dbbasic-object-server/data/logs
 /var/lib/dbbasic-object-server/data/versions
+/var/lib/dbbasic-object-server/data/source_changes
 /var/lib/dbbasic-object-server/data/schema_versions
 /var/lib/dbbasic-object-server/data/record_changes
 /var/lib/dbbasic-object-server/data/package_changes

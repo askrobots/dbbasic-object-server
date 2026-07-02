@@ -29,6 +29,7 @@ RUNTIME_DATA_DIRS = (
     "state",
     "logs",
     "versions",
+    "source_changes",
     "schema_versions",
     "record_changes",
     "package_changes",

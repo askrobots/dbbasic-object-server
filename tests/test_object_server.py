@@ -13,6 +13,7 @@ import object_packages
 import object_permission_audit
 import object_permission_store
 import object_server
+import object_source_changes
 import object_state
 import object_versions
 
@@ -4395,6 +4396,18 @@ def test_source_update_versions_source_and_immediately_runs_new_code(tmp_path, m
     assert logs[0]["version_id"] == "1"
     assert logs[0]["correlation_id"] == correlation_id
 
+    source_changes = object_source_changes.list_source_changes(
+        "basics_counter",
+        base_dir=data_dir,
+    )
+    assert source_changes["count"] == 1
+    assert source_changes["changes"][0]["action"] == "source_update"
+    assert source_changes["changes"][0]["actor"] == "test-api"
+    assert source_changes["changes"][0]["message"] == "Update counter"
+    assert source_changes["changes"][0]["version_id"] == 1
+    assert source_changes["changes"][0]["from_version_id"] is None
+    assert source_changes["changes"][0]["correlation_id"] == correlation_id
+
     status, _, payload = request("/objects/basics_counter")
 
     assert status == 200
@@ -4457,6 +4470,79 @@ def test_versions_endpoint_rejects_bad_limit(tmp_path, monkeypatch):
 
     assert status == 400
     assert payload == {"status": "error", "error": "Query parameter 'limit' must be at least 1"}
+
+
+def test_source_changes_endpoint_lists_history_newest_first(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {'count': 0}\n")
+    data_dir = tmp_path / "data"
+    enable_source_writes(monkeypatch, root, data_dir)
+    first_correlation_id = "123e4567-e89b-42d3-a456-426614174000"
+    second_correlation_id = "123e4567-e89b-42d3-a456-426614174001"
+
+    status, _, _ = request(
+        "/objects/basics_counter",
+        method="PUT",
+        query_string="source=true",
+        body=json.dumps(
+            {
+                "code": "def GET(request):\n    return {'count': 1}\n",
+                "author": "first-author",
+                "message": "first edit",
+            }
+        ).encode(),
+        headers=[*auth_headers(), ("x-dbbasic-correlation-id", first_correlation_id)],
+    )
+    assert status == 200
+    status, _, _ = request(
+        "/objects/basics_counter",
+        method="PUT",
+        query_string="source=true",
+        body=json.dumps(
+            {
+                "code": "def GET(request):\n    return {'count': 2}\n",
+                "author": "second-author",
+                "message": "second edit",
+            }
+        ).encode(),
+        headers=[*auth_headers(), ("x-dbbasic-correlation-id", second_correlation_id)],
+    )
+    assert status == 200
+
+    status, _, payload = request(
+        "/objects/basics_counter",
+        query_string="source_changes=true&limit=1",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["object_id"] == "basics_counter"
+    assert payload["count"] == 1
+    assert payload["total"] == 2
+    assert payload["has_more"] is True
+    assert payload["changes"][0]["action"] == "source_update"
+    assert payload["changes"][0]["actor"] == "second-author"
+    assert payload["changes"][0]["message"] == "second edit"
+    assert payload["changes"][0]["version_id"] == 2
+    assert payload["changes"][0]["correlation_id"] == second_correlation_id
+
+
+def test_source_changes_endpoint_requires_authorization_header(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {'count': 0}\n")
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/objects/basics_counter",
+        query_string="source_changes=true",
+    )
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
 
 
 def test_specific_version_endpoint_returns_content(tmp_path, monkeypatch):
@@ -4604,6 +4690,17 @@ def test_rollback_versions_source_and_immediately_runs_old_code(tmp_path, monkey
     assert rollback_logs[-1]["correlation_id"] == correlation_id
     assert rollback_logs[-1]["version_id"] == "3"
     assert rollback_logs[-1]["from_version_id"] == "1"
+
+    source_changes = object_source_changes.list_source_changes(
+        "basics_counter",
+        base_dir=data_dir,
+    )
+    assert source_changes["changes"][0]["action"] == "source_rollback"
+    assert source_changes["changes"][0]["actor"] == "test-api"
+    assert source_changes["changes"][0]["message"] == "Rollback to first"
+    assert source_changes["changes"][0]["version_id"] == 3
+    assert source_changes["changes"][0]["from_version_id"] == 1
+    assert source_changes["changes"][0]["correlation_id"] == correlation_id
 
 
 def test_rollback_returns_404_for_missing_version(tmp_path, monkeypatch):

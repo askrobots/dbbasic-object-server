@@ -8,7 +8,8 @@ public users.
 
 - Single-VM ASGI server behind a reverse proxy
 - Python object execution for operator-controlled objects
-- Source reads, gated source writes, source versions, and rollback
+- Source reads, gated source writes, source versions, rollback, and source
+  change history
 - Object state, logs, log rotation/compression, files readback, and metadata
 - TSV-backed collection records with UUIDv4 IDs by default
 - Schema metadata, validation, field permissions, schema history, and rollback

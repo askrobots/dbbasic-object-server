@@ -53,6 +53,7 @@ METADATA_QUERY = {"metadata": "true"}
 FILES_QUERY = {"files": "true"}
 FILE_QUERY = {"file": "name"}
 LOGS_QUERY = {"logs": "true", "format": "json", "limit": "100"}
+SOURCE_CHANGES_QUERY = {"source_changes": "true", "limit": "100"}
 VERSIONS_QUERY = {"versions": "true", "limit": "10"}
 
 RESPONSE_FIELDS: dict[str, frozenset[str]] = {
@@ -107,6 +108,7 @@ RESPONSE_FIELDS: dict[str, frozenset[str]] = {
     "metadata": frozenset({"status", "object_id", "metadata"}),
     "files": frozenset({"status", "object_id", "files", "count"}),
     "logs": frozenset({"status", "object_id", "logs", "count"}),
+    "source_changes": frozenset({"status", "object_id", "changes", "count", "total"}),
     "versions": frozenset({"status", "object_id", "versions", "count"}),
     "version": frozenset({"status", "object_id", "version"}),
     "rollback": frozenset({"status", "message", "version_id", "object_id"}),

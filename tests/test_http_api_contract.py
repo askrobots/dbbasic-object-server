@@ -59,6 +59,10 @@ def test_contract_keeps_existing_introspection_query_flags():
         "format": "json",
         "limit": "100",
     }
+    assert http_api_contract.SOURCE_CHANGES_QUERY == {
+        "source_changes": "true",
+        "limit": "100",
+    }
     assert http_api_contract.VERSIONS_QUERY == {"versions": "true", "limit": "10"}
 
 
@@ -293,6 +297,16 @@ def test_contract_keeps_existing_introspection_query_flags():
         (
             "logs",
             {"status": "ok", "object_id": "basics_counter", "logs": [], "count": 0},
+        ),
+        (
+            "source_changes",
+            {
+                "status": "ok",
+                "object_id": "basics_counter",
+                "changes": [],
+                "count": 0,
+                "total": 0,
+            },
         ),
         (
             "versions",
