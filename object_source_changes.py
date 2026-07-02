@@ -21,7 +21,7 @@ SOURCE_CHANGES_DIR = "source_changes"
 CHANGES_FILE = "changes.jsonl"
 DEFAULT_CHANGE_LIMIT = 100
 MAX_CHANGE_LIMIT = 1000
-VALID_ACTIONS = {"source_update", "source_rollback"}
+VALID_ACTIONS = {"source_create", "source_update", "source_rollback"}
 
 _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
@@ -194,6 +194,7 @@ def _clean_text(value: str, *, default: str) -> str:
 
 def _default_message(action: str) -> str:
     return {
+        "source_create": "Created object source",
         "source_update": "Updated object source",
         "source_rollback": "Rolled back object source",
     }[action]

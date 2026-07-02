@@ -194,7 +194,9 @@ Response:
       "trusted_headers_enabled": false,
       "require_known_identity_users": true,
       "session_login_enabled": false,
-      "session_login_token_configured": false
+      "session_login_token_configured": false,
+      "session_admin_gates_enabled": false,
+      "session_admin_gates_env": "DBBASIC_ENABLE_SESSION_ADMIN_GATES"
     }
   },
   "packages": [
@@ -2299,8 +2301,10 @@ Request:
 
 ```json
 {
-  "name": "deals",
+  "object_id": "site_home",
   "code": "def GET(request):\n    return {\"status\": \"ok\"}\n",
+  "author": "admin",
+  "message": "Create home object",
   "description": "Optional client-provided description"
 }
 ```
@@ -2310,13 +2314,33 @@ Response:
 ```json
 {
   "status": "ok",
-  "object_id": "u_42_deals",
-  "message": "Object created: u_42_deals"
+  "object_id": "site_home",
+  "message": "Object created: site_home",
+  "version_id": 1,
+  "correlation_id": "123e4567-e89b-42d3-a456-426614174001"
 }
 ```
 
-The `description` field may be stored, ignored, or used for metadata, but it
-should not make object creation fail.
+Creation is intentionally gated. It requires `DBBASIC_ENABLE_SOURCE_WRITES=true`
+and the same admin gate used by source updates. A configured
+`DBBASIC_ADMIN_TOKEN` always works; an active DBBASIC session with an admin role
+can also pass the gate only when `DBBASIC_ENABLE_SESSION_ADMIN_GATES=true`.
+
+Clients can choose one of these creation shapes:
+
+- `object_id` creates that exact object ID, such as `site_home`.
+- `name` plus `owner_user_id` creates `u_<owner_user_id>_<name>`, such as
+  `u_42_deals`.
+- `name` with an admin session whose `user_id` is numeric also creates
+  `u_<session_user_id>_<name>`.
+- `name` without a user owner creates a system object using `name` as the object
+  ID.
+
+The first source write creates version `1`, appends a `source_create` change
+entry, and the object can be executed immediately through
+`GET/POST/PUT/DELETE /objects/{object_id}`. Existing object IDs return `409`.
+The `description` field is stored in source-change details for tools like
+Scroll.
 
 ## Execute Object
 

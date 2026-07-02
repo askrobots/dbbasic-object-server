@@ -270,6 +270,7 @@ Current endpoints:
 - `POST /packages/{package_id}/restore`
 - `GET /packages/{package_id}/changes`
 - `GET /objects?format=json`
+- `POST /objects`
 - `GET /objects/{object_id}`
 - `POST /objects/{object_id}`
 - `PUT /objects/{object_id}`

@@ -19,6 +19,63 @@ def test_get_object_source_reads_existing_object(tmp_path):
     assert source == "def GET(request):\n    return {'count': 1}\n"
 
 
+def test_create_object_source_writes_file_and_saves_first_version(tmp_path):
+    root = tmp_path / "objects"
+    manager = object_versions.VersionManager(tmp_path / "data")
+    code = "def GET(request):\n    return {'created': True}\n"
+
+    version_id = object_source.create_object_source(
+        "site_home",
+        code,
+        author="alice",
+        message="Create home",
+        roots=[root],
+        version_manager=manager,
+        correlation_id="123e4567-e89b-42d3-a456-426614174001",
+    )
+
+    assert version_id == 1
+    assert (root / "site" / "home.py").read_text() == code
+    saved = manager.get_version("site_home", version_id=1)
+    assert saved is not None
+    assert saved["content"] == code
+    assert saved["author"] == "alice"
+    assert saved["message"] == "Create home"
+    assert saved["correlation_id"] == "123e4567-e89b-42d3-a456-426614174001"
+
+
+def test_create_object_source_places_user_objects_in_user_tree(tmp_path):
+    root = tmp_path / "objects"
+
+    object_source.create_object_source(
+        "u_42_deals",
+        "def GET(request):\n    return {}\n",
+        author="alice",
+        message="Create deals",
+        roots=[root],
+        version_manager=object_versions.VersionManager(tmp_path / "data"),
+    )
+
+    assert (root / "users" / "42" / "deals.py").exists()
+
+
+def test_create_object_source_rejects_existing_object(tmp_path):
+    root = tmp_path / "objects"
+    write_source(root / "basics" / "counter.py", "old\n")
+
+    with pytest.raises(object_source.ObjectSourceExistsError):
+        object_source.create_object_source(
+            "basics_counter",
+            "new\n",
+            author="alice",
+            message="Create duplicate",
+            roots=[root],
+            version_manager=object_versions.VersionManager(tmp_path / "data"),
+        )
+
+    assert (root / "basics" / "counter.py").read_text() == "old\n"
+
+
 def test_update_object_source_writes_file_and_saves_version(tmp_path):
     root = tmp_path / "objects"
     source_path = write_source(root / "users" / "42" / "deals.py", "old code\n")

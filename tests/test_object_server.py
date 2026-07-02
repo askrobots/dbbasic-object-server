@@ -1082,6 +1082,10 @@ def test_admin_status_reports_inventory_capabilities_and_package_posture(tmp_pat
     }
     assert payload["capabilities"]["identity"]["session_login_enabled"] is False
     assert payload["capabilities"]["identity"]["session_login_token_configured"] is False
+    assert payload["capabilities"]["identity"]["session_admin_gates_enabled"] is False
+    assert payload["capabilities"]["identity"]["session_admin_gates_env"] == (
+        object_server.SESSION_ADMIN_GATES_ENV
+    )
     assert payload["capabilities"]["limits"]["max_request_bytes"] == 2048
     assert payload["capabilities"]["limits"]["max_concurrent_requests"] == 3
     assert payload["capabilities"]["limits"]["max_concurrent_executions"] == 2
@@ -4864,6 +4868,186 @@ def test_source_update_requires_authorization_header(tmp_path, monkeypatch):
     assert source_path.read_text() == "def GET(request):\n    return {}\n"
 
 
+def test_object_create_is_disabled_by_default(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.delenv("DBBASIC_ENABLE_SOURCE_WRITES", raising=False)
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/objects",
+        method="POST",
+        body=json.dumps(
+            {
+                "object_id": "site_home",
+                "code": "def GET(request):\n    return {'created': True}\n",
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 403
+    assert payload["status"] == "error"
+    assert payload["error"].startswith("Source writes are disabled")
+    assert not (root / "site" / "home.py").exists()
+
+
+def test_object_create_creates_source_version_and_runs_new_code(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    enable_source_writes(monkeypatch, root, data_dir)
+    code = "def GET(request):\n    return {'created': True}\n"
+    correlation_id = "123e4567-e89b-42d3-a456-426614174001"
+
+    status, _, payload = request(
+        "/objects",
+        method="POST",
+        body=json.dumps(
+            {
+                "object_id": "site_home",
+                "code": code,
+                "author": "test-api",
+                "message": "Create home",
+                "description": "Home page object",
+            }
+        ).encode(),
+        headers=[*auth_headers(), ("x-dbbasic-correlation-id", correlation_id)],
+    )
+
+    assert status == 201
+    assert payload == {
+        "status": "ok",
+        "message": "Object created: site_home",
+        "object_id": "site_home",
+        "version_id": 1,
+        "correlation_id": correlation_id,
+    }
+    assert (root / "site" / "home.py").read_text() == code
+
+    manager = object_versions.VersionManager(data_dir)
+    saved = manager.get_version("site_home", 1)
+    assert saved is not None
+    assert saved["content"] == code
+    assert saved["author"] == "test-api"
+    assert saved["message"] == "Create home"
+    assert saved["correlation_id"] == correlation_id
+
+    source_changes = object_source_changes.list_source_changes("site_home", base_dir=data_dir)
+    assert source_changes["count"] == 1
+    assert source_changes["changes"][0]["action"] == "source_create"
+    assert source_changes["changes"][0]["actor"] == "test-api"
+    assert source_changes["changes"][0]["message"] == "Create home"
+    assert source_changes["changes"][0]["version_id"] == 1
+    assert source_changes["changes"][0]["correlation_id"] == correlation_id
+    assert source_changes["changes"][0]["details"] == {"description": "Home page object"}
+
+    status, _, payload = request("/objects/site_home")
+
+    assert status == 200
+    assert payload == {"created": True}
+
+
+def test_object_create_accepts_legacy_name_owner_shape(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    enable_source_writes(monkeypatch, root, data_dir)
+    code = "def GET(request):\n    return {'owner': '42'}\n"
+
+    status, _, payload = request(
+        "/objects",
+        method="POST",
+        body=json.dumps(
+            {
+                "name": "deals",
+                "owner_user_id": "42",
+                "code": code,
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 201
+    assert payload["object_id"] == "u_42_deals"
+    assert (root / "users" / "42" / "deals.py").read_text() == code
+
+    status, _, payload = request("/objects/u_42_deals")
+
+    assert status == 200
+    assert payload == {"owner": "42"}
+
+
+def test_object_create_uses_admin_session_user_scope_when_enabled(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    enable_source_writes(monkeypatch, root, data_dir)
+    monkeypatch.setenv(object_server.SESSION_ADMIN_GATES_ENV, "true")
+    token, _ = create_identity_session({"user_id": "42", "roles": ["admin"]})
+    code = "def GET(request):\n    return {'session_user': '42'}\n"
+
+    status, _, payload = request(
+        "/objects",
+        method="POST",
+        body=json.dumps({"name": "deals", "code": code}).encode(),
+        headers=session_headers(token),
+    )
+
+    assert status == 201
+    assert payload["object_id"] == "u_42_deals"
+    assert (root / "users" / "42" / "deals.py").read_text() == code
+
+
+def test_object_create_rejects_non_admin_session_when_session_admin_gates_enabled(
+    tmp_path,
+    monkeypatch,
+):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    enable_source_writes(monkeypatch, root, data_dir)
+    monkeypatch.setenv(object_server.SESSION_ADMIN_GATES_ENV, "true")
+    token, _ = create_identity_session({"user_id": "42", "roles": ["sales"]})
+
+    status, _, payload = request(
+        "/objects",
+        method="POST",
+        body=json.dumps(
+            {
+                "name": "deals",
+                "code": "def GET(request):\n    return {}\n",
+            }
+        ).encode(),
+        headers=session_headers(token),
+    )
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
+    assert not (root / "users" / "42" / "deals.py").exists()
+
+
+def test_object_create_rejects_existing_object(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    source_path = write_source(root / "site" / "home.py", "def GET(request):\n    return {}\n")
+    enable_source_writes(monkeypatch, root, data_dir)
+
+    status, _, payload = request(
+        "/objects",
+        method="POST",
+        body=json.dumps(
+            {
+                "object_id": "site_home",
+                "code": "def GET(request):\n    return {'created': True}\n",
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 409
+    assert payload == {"status": "error", "error": "Object source already exists: site_home"}
+    assert source_path.read_text() == "def GET(request):\n    return {}\n"
+
+
 def test_source_update_accepts_admin_session_when_session_admin_gates_enabled(
     tmp_path,
     monkeypatch,
@@ -6675,8 +6859,8 @@ def test_object_execution_returns_405_when_get_is_missing(tmp_path, monkeypatch)
     assert payload["error"].startswith("Execution failed: Method GET not supported")
 
 
-def test_collection_non_get_methods_are_rejected():
-    status, _, payload = request("/objects", method="POST", body=b"{}")
+def test_object_collection_unsupported_methods_are_rejected():
+    status, _, payload = request("/objects", method="PUT", body=b"{}")
 
     assert status == 405
     assert payload == {"status": "error", "error": "Method not allowed"}

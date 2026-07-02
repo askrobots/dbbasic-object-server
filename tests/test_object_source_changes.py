@@ -77,6 +77,25 @@ def test_source_changes_support_limit_and_offset(tmp_path):
     assert [entry["version_id"] for entry in payload["changes"]] == [3, 2]
 
 
+def test_source_changes_accept_source_create_action(tmp_path):
+    entry = object_source_changes.append_source_change(
+        object_id="site_home",
+        action="source_create",
+        version_id=1,
+        actor="alice",
+        message="Create home",
+        details={"description": "Home page"},
+        base_dir=tmp_path,
+    )
+
+    payload = object_source_changes.list_source_changes("site_home", base_dir=tmp_path)
+
+    assert entry["action"] == "source_create"
+    assert payload["changes"][0]["action"] == "source_create"
+    assert payload["changes"][0]["message"] == "Create home"
+    assert payload["changes"][0]["details"] == {"description": "Home page"}
+
+
 def test_source_changes_reject_invalid_inputs(tmp_path):
     with pytest.raises(InvalidObjectIdError):
         object_source_changes.append_source_change(

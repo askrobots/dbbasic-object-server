@@ -10,7 +10,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable
 
-from object_namespace import resolve_object_id, validate_object_id
+from object_namespace import (
+    get_object_roots,
+    object_id_from_path,
+    parse_user_object_id,
+    resolve_object_id,
+    validate_object_id,
+)
 from object_versions import InvalidObjectIdError, VersionManager, VersionNotFoundError
 
 
@@ -22,10 +28,39 @@ class ObjectSourceNotFoundError(ObjectSourceError):
     """Raised when an object ID does not resolve to a source file."""
 
 
+class ObjectSourceExistsError(ObjectSourceError):
+    """Raised when an object source already exists."""
+
+
 def get_object_source(object_id: str, roots: Iterable[Path] | None = None) -> str:
     """Read source text for an existing object."""
     source_path = _resolve_existing_source(object_id, roots)
     return source_path.read_text()
+
+
+def create_object_source(
+    object_id: str,
+    code: str,
+    author: str,
+    message: str,
+    roots: Iterable[Path] | None = None,
+    version_manager: VersionManager | None = None,
+    correlation_id: str | None = None,
+) -> int:
+    """Create a new source file, save its first version, and return its version ID."""
+    source_path = _resolve_new_source_path(object_id, roots)
+    manager = version_manager or VersionManager()
+
+    version_id = manager.save_version(
+        object_id=object_id,
+        content=code,
+        author=author,
+        message=message,
+        correlation_id=correlation_id,
+    )
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_source(source_path, code)
+    return version_id
 
 
 def update_object_source(
@@ -87,6 +122,38 @@ def _resolve_existing_source(object_id: str, roots: Iterable[Path] | None) -> Pa
     source_path = resolve_object_id(object_id, roots=roots)
     if source_path is None:
         raise ObjectSourceNotFoundError(f"Object source not found: {object_id}")
+    return source_path
+
+
+def _resolve_new_source_path(object_id: str, roots: Iterable[Path] | None) -> Path:
+    if not validate_object_id(object_id):
+        raise InvalidObjectIdError(f"Invalid object ID: {object_id}")
+
+    search_roots = list(roots) if roots is not None else get_object_roots()
+    if not search_roots:
+        raise InvalidObjectIdError("No object source root configured")
+
+    if resolve_object_id(object_id, roots=search_roots) is not None:
+        raise ObjectSourceExistsError(f"Object source already exists: {object_id}")
+
+    root = search_roots[0]
+    parsed_user = parse_user_object_id(object_id)
+    if parsed_user:
+        user_id, name = parsed_user
+        source_path = root / "users" / str(user_id) / f"{name}.py"
+    elif "_" in object_id:
+        category, name = object_id.split("_", 1)
+        source_path = root / category / f"{name}.py"
+    else:
+        source_path = root / f"{object_id}.py"
+
+    try:
+        derived_object_id = object_id_from_path(source_path, root)
+    except ValueError as exc:
+        raise InvalidObjectIdError(f"Invalid object ID: {object_id}")
+    if derived_object_id != object_id:
+        raise InvalidObjectIdError(f"Invalid object ID: {object_id}")
+
     return source_path
 
 

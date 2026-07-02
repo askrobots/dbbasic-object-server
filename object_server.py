@@ -48,7 +48,7 @@ import object_source
 import object_source_changes
 import object_state
 import object_versions
-from object_namespace import get_object_roots, iter_object_sources, parse_user_object_id
+from object_namespace import get_object_roots, iter_object_sources, parse_user_object_id, validate_object_id
 from object_versions import InvalidObjectIdError
 from python_object_runtime import MethodNotSupportedError, PythonObjectRuntime
 
@@ -525,6 +525,10 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
                     return
 
                 await _send_json(send, _list_objects_payload())
+                return
+
+            if method == "POST":
+                await _handle_objects_post(send, body, headers)
                 return
 
             await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
@@ -1888,6 +1892,8 @@ def _admin_capabilities_payload() -> dict[str, Any]:
             "require_known_identity_users": _env_enabled(REQUIRE_KNOWN_IDENTITY_USERS_ENV),
             "session_login_enabled": _env_enabled(SESSION_LOGIN_ENV),
             "session_login_token_configured": bool(os.environ.get(SESSION_LOGIN_TOKEN_ENV, "")),
+            "session_admin_gates_enabled": _env_enabled(SESSION_ADMIN_GATES_ENV),
+            "session_admin_gates_env": SESSION_ADMIN_GATES_ENV,
         },
         "limits": {
             "max_request_bytes": _max_request_bytes(),
@@ -3516,7 +3522,7 @@ async def _handle_object_rollback_post(
 
     try:
         version_id = _payload_int(payload, "version_id", minimum=1)
-        author = _payload_text(payload, "author", "api")
+        author = _payload_text(payload, "author", _source_actor_from_headers(headers))
         message = _payload_text(payload, "message", f"Rollback to version {version_id}")
         correlation_id = object_correlation.current_correlation_id()
         new_version_id = object_source.rollback_object_source(
@@ -3606,7 +3612,7 @@ async def _handle_object_source_put(
         )
         return
 
-    author = _payload_text(payload, "author", "api")
+    author = _payload_text(payload, "author", _source_actor_from_headers(headers))
     message = _payload_text(payload, "message", "Updated via API")
     correlation_id = object_correlation.current_correlation_id()
 
@@ -3708,6 +3714,81 @@ def _list_objects_payload() -> dict[str, Any]:
         "objects": objects,
         "count": len(objects),
     }
+
+
+async def _handle_objects_post(send, body: bytes, headers: dict[str, str]) -> None:
+    gate_error = _source_write_gate_error(headers)
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    try:
+        payload = _parse_json_body(body)
+        object_id = _created_object_id(payload, headers)
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    if await _send_permission_denied_if_needed(
+        send,
+        headers,
+        object_permissions.SOURCE,
+        object_id=object_id,
+        method="POST",
+    ):
+        return
+
+    code = payload.get("code")
+    if not isinstance(code, str):
+        await _send_json(
+            send,
+            {"status": "error", "error": "Request JSON field 'code' must be a string"},
+            status=400,
+        )
+        return
+
+    author = _payload_text(payload, "author", _source_actor_from_headers(headers))
+    message = _payload_text(payload, "message", "Created via API")
+    correlation_id = object_correlation.current_correlation_id()
+
+    try:
+        version_id = object_source.create_object_source(
+            object_id=object_id,
+            code=code,
+            author=author,
+            message=message,
+            version_manager=_version_manager(),
+            correlation_id=correlation_id,
+        )
+    except InvalidObjectIdError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_source.ObjectSourceExistsError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=409)
+        return
+
+    _append_source_change_log(
+        object_id,
+        action="source_create",
+        version_id=version_id,
+        actor=author,
+        message=message,
+        correlation_id=correlation_id,
+        details={"description": _payload_text(payload, "description", "")},
+    )
+
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "message": f"Object created: {object_id}",
+            "object_id": object_id,
+            "version_id": version_id,
+            "correlation_id": object_correlation.current_correlation_id(),
+        },
+        status=201,
+    )
 
 
 async def _handle_collections(
@@ -4832,6 +4913,7 @@ def _append_source_change_log(
     actor: str = "api",
     message: str = "",
     correlation_id: str | None = None,
+    details: Mapping[str, Any] | None = None,
 ) -> None:
     fields: dict[str, Any] = {
         "action": action,
@@ -4849,6 +4931,7 @@ def _append_source_change_log(
             actor=actor,
             message=message,
             correlation_id=correlation_id,
+            details=details,
             base_dir=_data_dir(),
         )
         object_logs.append_object_log(
@@ -5110,6 +5193,58 @@ def _required_payload_text(payload: dict[str, Any], key: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"Request JSON field '{key}' must be a non-empty string")
     return value
+
+
+def _created_object_id(payload: dict[str, Any], headers: dict[str, str]) -> str:
+    object_id = _optional_payload_text(payload, "object_id")
+    if object_id is not None:
+        if not validate_object_id(object_id):
+            raise ValueError(f"Invalid object ID: {object_id}")
+        return object_id
+
+    name = _required_payload_text(payload, "name")
+    owner_user_id = _created_object_owner_user_id(payload, headers)
+    if owner_user_id is not None:
+        object_id = f"u_{owner_user_id}_{name}"
+        if parse_user_object_id(object_id) is None:
+            raise ValueError(
+                "Request JSON field 'name' must start with a letter and contain only "
+                "letters, numbers, and underscores for user-scoped objects"
+            )
+        return object_id
+
+    if not validate_object_id(name):
+        raise ValueError(f"Invalid object ID: {name}")
+    return name
+
+
+def _created_object_owner_user_id(
+    payload: dict[str, Any],
+    headers: dict[str, str],
+) -> str | None:
+    if "owner_user_id" in payload:
+        value = payload["owner_user_id"]
+        if isinstance(value, int):
+            owner_user_id = str(value)
+        elif isinstance(value, str):
+            owner_user_id = value.strip()
+        else:
+            raise ValueError("Request JSON field 'owner_user_id' must be a positive integer")
+        if not owner_user_id.isdigit() or int(owner_user_id) <= 0:
+            raise ValueError("Request JSON field 'owner_user_id' must be a positive integer")
+        return owner_user_id
+
+    session = _current_identity_session(headers)
+    if session is not None and session.user_id.isdigit():
+        return session.user_id
+    return None
+
+
+def _source_actor_from_headers(headers: dict[str, str]) -> str:
+    session = _current_identity_session(headers)
+    if session is not None:
+        return session.user_id
+    return "api"
 
 
 def _optional_payload_text(payload: dict[str, Any], key: str) -> str | None:
