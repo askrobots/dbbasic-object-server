@@ -180,6 +180,12 @@ Response:
       "enabled": false,
       "env": "DBBASIC_ENABLE_SOURCE_WRITES"
     },
+    "file_writes": {
+      "enabled": false,
+      "env": "DBBASIC_ENABLE_FILE_WRITES",
+      "max_bytes": 1048576,
+      "max_bytes_env": "DBBASIC_MAX_OBJECT_FILE_BYTES"
+    },
     "package_installs": {
       "enabled": false,
       "env": "DBBASIC_ENABLE_PACKAGE_INSTALLS"
@@ -1073,9 +1079,63 @@ Supported query parameters:
 - `offset` defaults to `0`.
 - `file` downloads one object-owned file and requires an object id.
 
-This surface is GET-only and admin-token gated. It is intentionally read-only:
-upload and delete routes should wait for size limits, content policy, quotas,
-audit trails, and server-enforced permissions.
+Read routes are admin-token gated. Write routes are additionally disabled unless
+`DBBASIC_ENABLE_FILE_WRITES=true` is set. Public staging should leave file writes
+off until permissions, quota, and review policy are intentionally enabled.
+
+Create one object-owned file:
+
+```http
+POST /admin/files/{object_id}
+Authorization: Token <token>
+Content-Type: application/json
+```
+
+```json
+{
+  "name": "reports/monthly.txt",
+  "content_base64": "aGVsbG8="
+}
+```
+
+Overwrite an existing object-owned file:
+
+```http
+PUT /admin/files/{object_id}
+Authorization: Token <token>
+Content-Type: application/json
+```
+
+Delete one object-owned file:
+
+```http
+DELETE /admin/files/{object_id}?file=reports/monthly.txt
+Authorization: Token <token>
+```
+
+Successful write responses return the file metadata, operation, and correlation
+id:
+
+```json
+{
+  "status": "ok",
+  "message": "File created: reports/monthly.txt",
+  "object_id": "site_home",
+  "operation": "created",
+  "file": {
+    "object_id": "site_home",
+    "name": "reports/monthly.txt",
+    "size": 5,
+    "modified": 1760000000.0
+  },
+  "correlation_id": "07fb51ef-1a0d-43dd-a82f-2ec756b7cd90"
+}
+```
+
+`POST` rejects existing files with `409`. `PUT` overwrites. Empty names,
+absolute paths, null bytes, and `..` traversal are rejected with `400`. File
+content is capped by `DBBASIC_MAX_OBJECT_FILE_BYTES` and the request body is
+still capped by `DBBASIC_MAX_REQUEST_BYTES`.
 
 ## Admin Collection And Schema Inspection
 
@@ -2609,10 +2669,9 @@ Filenames are validated before filesystem access. Empty names, absolute paths,
 null bytes, and `..` traversal are rejected with `400`. Missing files return
 `404`.
 
-This public slice is read-only. Upload and delete routes should wait for
-explicit size limits, content policy, audit trails, and permission enforcement.
-Scroll and operator dashboards should use `/admin/files*` for read-only file
-inventory and download workflows on public staging.
+This public object route stays read-only for files. Scroll and operator
+dashboards should use `/admin/files*` for file inventory, downloads, and the
+separately gated admin write workflow.
 
 ## Logs
 

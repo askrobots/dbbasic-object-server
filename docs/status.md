@@ -32,8 +32,9 @@ public users.
 - Token-gated admin object inspection for Scroll/operator source, state, logs,
   versions, metadata, files, and source-change views without exposing broad
   `/objects` execution routes through the reverse proxy
-- Token-gated admin file inventory and download routes for Scroll/operator
-  read-only file views without exposing upload/delete yet
+- Token-gated admin file inventory, download, and gated write routes for
+  Scroll/operator file views; upload/delete remain deployment-disabled unless
+  `DBBASIC_ENABLE_FILE_WRITES=true`
 - Token-gated admin collection and schema inspection for Scroll/operator
   collection, record, changelog, schema, and schema-version views without
   exposing broad write-capable `/collections*` or `/schemas*` routes

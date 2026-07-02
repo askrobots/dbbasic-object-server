@@ -341,12 +341,15 @@ Object-owned files live under:
 data/files/{object_id}/
 ```
 
-The public helper module is `object_files.py`. It currently exposes read-only
-operations:
+The public helper module is `object_files.py`. It exposes read helpers plus
+write helpers that the HTTP layer must gate behind admin auth, permissions,
+size limits, and deployment flags:
 
 ```python
 list_object_files(object_id, base_dir="data")
 read_object_file(object_id, filename, base_dir="data")
+write_object_file(object_id, filename, content, base_dir="data", overwrite=False)
+delete_object_file(object_id, filename, base_dir="data")
 ```
 
 `list_object_files` returns dictionaries with:

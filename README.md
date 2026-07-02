@@ -88,7 +88,7 @@ This repository currently contains:
 - `object_source.py` - source read, update, version, and rollback operations
 - `object_source_changes.py` - append-only source edit/rollback changelog helpers
 - `object_state.py` - TSV-backed object state reads and runtime writes
-- `object_files.py` - read-only object-owned file listing and download helpers
+- `object_files.py` - object-owned file listing, download, and gated write helpers
 - `object_identity.py` - file-backed accounts, users, and sessions for permission subjects
 - `object_logs.py` - TSV-backed object log reads, appends, rotation, compression, retention, and runtime logger helper
 - `object_metadata.py` - conservative object metadata summaries
@@ -197,6 +197,9 @@ Current endpoints:
 - `GET /admin/files?object_id=site_home`
 - `GET /admin/files/{object_id}`
 - `GET /admin/files/{object_id}?file=name`
+- `POST /admin/files/{object_id}`
+- `PUT /admin/files/{object_id}`
+- `DELETE /admin/files/{object_id}?file=name`
 - `GET /admin/collections`
 - `GET /admin/collections/{collection}`
 - `GET /admin/collections/{collection}/records`
@@ -424,7 +427,7 @@ rules the rest of the server will use:
 - `packages/admin-write-probe` installs a tiny `dbbasic_probe` schema/record
   file plus a public status object, so a staging server can prove object state
   writes and admin-token-gated collection CRUD without exposing broad routes
-- `object_files.py` lists and reads object-owned files under `data/files/`
+- `object_files.py` lists, reads, and gated-writes object-owned files under `data/files/`
 - `object_logs.py` reads and appends TSV-backed object logs, rotates/compresses old logs, and provides `_logger`
 - `object_metadata.py` summarizes source, state, logs, files, and versions
 - `object_permission_audit.py` records and reads route permission decisions
@@ -462,6 +465,8 @@ rules the rest of the server will use:
   legacy rows can keep compatibility IDs during migration
 - source updates through HTTP require `DBBASIC_ENABLE_SOURCE_WRITES=true` and an
   admin token
+- object file writes through HTTP require `DBBASIC_ENABLE_FILE_WRITES=true`, an
+  admin token, and pass `DBBASIC_MAX_OBJECT_FILE_BYTES`
 - object listing and introspection reads require an admin token
 - HTTP version history makes the loop visible: update source, inspect versions,
   rollback, and run the object again

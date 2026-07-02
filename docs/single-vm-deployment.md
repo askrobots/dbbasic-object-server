@@ -163,10 +163,12 @@ DBBASIC_DATA_DIR=/var/lib/dbbasic-object-server/data
 DBBASIC_BACKUPS_DIR=/var/lib/dbbasic-object-server/data/backups
 DBBASIC_PACKAGES_DIR=/opt/dbbasic-object-server/packages
 DBBASIC_ENABLE_SOURCE_WRITES=false
+DBBASIC_ENABLE_FILE_WRITES=false
 DBBASIC_ENABLE_PACKAGE_INSTALLS=false
 DBBASIC_ENABLE_PACKAGE_RESTORE=false
 DBBASIC_ADMIN_TOKEN=replace-with-a-generated-token
 DBBASIC_MAX_REQUEST_BYTES=1048576
+DBBASIC_MAX_OBJECT_FILE_BYTES=1048576
 DBBASIC_MAX_CONCURRENT_REQUESTS=64
 DBBASIC_MAX_CONCURRENT_EXECUTIONS=8
 DBBASIC_OBJECT_TIMEOUT_SECONDS=5
@@ -205,6 +207,14 @@ writes:
 
 ```text
 DBBASIC_ENABLE_SOURCE_WRITES=true
+```
+
+Leave file writes disabled on public staging until quotas, permissions, and
+content policy are ready for the use case. A controlled operator VM can enable
+them separately:
+
+```text
+DBBASIC_ENABLE_FILE_WRITES=true
 ```
 
 Permission audit and enforcement should also stay closed on first boot. Turn on

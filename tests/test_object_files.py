@@ -81,3 +81,92 @@ def test_read_object_file_blocks_symlink_outside_object_directory(tmp_path):
 def test_read_object_file_raises_for_missing_file(tmp_path):
     with pytest.raises(object_files.ObjectFileNotFoundError):
         object_files.read_object_file("site_home", "missing.txt", base_dir=tmp_path / "data")
+
+
+def test_write_object_file_creates_nested_file_and_metadata(tmp_path):
+    data_dir = tmp_path / "data"
+
+    metadata = object_files.write_object_file(
+        "site_home",
+        "assets/report.txt",
+        b"hello",
+        base_dir=data_dir,
+    )
+
+    assert metadata["name"] == "assets/report.txt"
+    assert metadata["size"] == 5
+    assert (data_dir / "files" / "site_home" / "assets" / "report.txt").read_bytes() == b"hello"
+
+
+def test_write_object_file_rejects_duplicate_without_overwrite(tmp_path):
+    data_dir = tmp_path / "data"
+    write_file(data_dir / "files" / "site_home" / "assets" / "report.txt", b"old")
+
+    with pytest.raises(object_files.ObjectFileExistsError):
+        object_files.write_object_file(
+            "site_home",
+            "assets/report.txt",
+            b"new",
+            base_dir=data_dir,
+        )
+
+    assert (data_dir / "files" / "site_home" / "assets" / "report.txt").read_bytes() == b"old"
+
+
+def test_write_object_file_overwrites_when_requested(tmp_path):
+    data_dir = tmp_path / "data"
+    write_file(data_dir / "files" / "site_home" / "assets" / "report.txt", b"old")
+
+    metadata = object_files.write_object_file(
+        "site_home",
+        "assets/report.txt",
+        b"new",
+        base_dir=data_dir,
+        overwrite=True,
+    )
+
+    assert metadata["name"] == "assets/report.txt"
+    assert metadata["size"] == 3
+    assert (data_dir / "files" / "site_home" / "assets" / "report.txt").read_bytes() == b"new"
+
+
+def test_write_object_file_enforces_max_bytes(tmp_path):
+    with pytest.raises(object_files.ObjectFileTooLargeError):
+        object_files.write_object_file(
+            "site_home",
+            "report.txt",
+            b"hello",
+            base_dir=tmp_path / "data",
+            max_bytes=4,
+        )
+
+
+def test_write_object_file_rejects_unsafe_filename(tmp_path):
+    with pytest.raises(object_files.InvalidObjectFilenameError):
+        object_files.write_object_file(
+            "site_home",
+            "../secret.txt",
+            b"secret",
+            base_dir=tmp_path / "data",
+        )
+
+
+def test_delete_object_file_removes_file_and_prunes_empty_dirs(tmp_path):
+    data_dir = tmp_path / "data"
+    file_path = write_file(data_dir / "files" / "site_home" / "assets" / "report.txt", b"old")
+
+    metadata = object_files.delete_object_file(
+        "site_home",
+        "assets/report.txt",
+        base_dir=data_dir,
+    )
+
+    assert metadata["name"] == "assets/report.txt"
+    assert metadata["size"] == 3
+    assert not file_path.exists()
+    assert not file_path.parent.exists()
+
+
+def test_delete_object_file_raises_for_missing_file(tmp_path):
+    with pytest.raises(object_files.ObjectFileNotFoundError):
+        object_files.delete_object_file("site_home", "missing.txt", base_dir=tmp_path / "data")

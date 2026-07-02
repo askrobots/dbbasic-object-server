@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import tarfile
 from pathlib import Path
@@ -136,6 +137,13 @@ def enable_source_writes(monkeypatch, root, data_dir):
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
     monkeypatch.setenv("DBBASIC_ENABLE_SOURCE_WRITES", "true")
+    monkeypatch.setenv("DBBASIC_ADMIN_TOKEN", TEST_ADMIN_TOKEN)
+
+
+def enable_file_writes(monkeypatch, root, data_dir):
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("DBBASIC_ENABLE_FILE_WRITES", "true")
     monkeypatch.setenv("DBBASIC_ADMIN_TOKEN", TEST_ADMIN_TOKEN)
 
 
@@ -1055,6 +1063,7 @@ def test_admin_status_reports_inventory_capabilities_and_package_posture(tmp_pat
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
     monkeypatch.setenv("DBBASIC_PACKAGES_DIR", str(packages_root))
     monkeypatch.setenv(object_server.MAX_REQUEST_BYTES_ENV, "2048")
+    monkeypatch.setenv(object_server.MAX_OBJECT_FILE_BYTES_ENV, "1024")
     monkeypatch.setenv(object_server.MAX_CONCURRENT_REQUESTS_ENV, "3")
     monkeypatch.setenv(object_server.MAX_CONCURRENT_EXECUTIONS_ENV, "2")
     enable_admin_token(monkeypatch)
@@ -1076,6 +1085,12 @@ def test_admin_status_reports_inventory_capabilities_and_package_posture(tmp_pat
         "enabled": False,
         "env": "DBBASIC_ENABLE_SOURCE_WRITES",
     }
+    assert payload["capabilities"]["file_writes"] == {
+        "enabled": False,
+        "env": "DBBASIC_ENABLE_FILE_WRITES",
+        "max_bytes": 1024,
+        "max_bytes_env": "DBBASIC_MAX_OBJECT_FILE_BYTES",
+    }
     assert payload["capabilities"]["package_installs"] == {
         "enabled": False,
         "env": "DBBASIC_ENABLE_PACKAGE_INSTALLS",
@@ -1087,6 +1102,7 @@ def test_admin_status_reports_inventory_capabilities_and_package_posture(tmp_pat
         object_server.SESSION_ADMIN_GATES_ENV
     )
     assert payload["capabilities"]["limits"]["max_request_bytes"] == 2048
+    assert payload["capabilities"]["limits"]["max_object_file_bytes"] == 1024
     assert payload["capabilities"]["limits"]["max_concurrent_requests"] == 3
     assert payload["capabilities"]["limits"]["max_concurrent_executions"] == 2
     assert payload["permissions"]["enforcement_enabled"] is False
@@ -4728,6 +4744,185 @@ def test_admin_file_download_rejects_path_traversal(tmp_path, monkeypatch):
     assert status == 400
     assert payload["status"] == "error"
     assert payload["error"].startswith("Invalid filename:")
+
+
+def test_admin_file_upload_is_disabled_by_default(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/admin/files/site_home",
+        method="POST",
+        body=json.dumps(
+            {
+                "name": "assets/report.txt",
+                "content_base64": base64.b64encode(b"hello").decode("ascii"),
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 403
+    assert payload["status"] == "error"
+    assert "File writes are disabled" in payload["error"]
+    assert not (data_dir / "files" / "site_home" / "assets" / "report.txt").exists()
+
+
+def test_admin_file_upload_creates_file_and_log(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {}\n")
+    enable_file_writes(monkeypatch, root, data_dir)
+
+    status, _, payload = request(
+        "/admin/files/site_home",
+        method="POST",
+        body=json.dumps(
+            {
+                "name": "assets/report.txt",
+                "content_base64": base64.b64encode(b"hello").decode("ascii"),
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 201
+    assert payload["status"] == "ok"
+    assert payload["operation"] == "created"
+    assert payload["file"]["object_id"] == "site_home"
+    assert payload["file"]["name"] == "assets/report.txt"
+    assert payload["file"]["size"] == 5
+    assert (data_dir / "files" / "site_home" / "assets" / "report.txt").read_bytes() == b"hello"
+    logs = object_logs.get_object_logs("site_home", base_dir=data_dir)
+    assert logs[-1]["message"] == "File created: assets/report.txt"
+    assert logs[-1]["file_operation"] == "created"
+
+
+def test_admin_file_upload_rejects_duplicate_without_overwrite(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {}\n")
+    file_path = data_dir / "files" / "site_home" / "assets" / "report.txt"
+    file_path.parent.mkdir(parents=True)
+    file_path.write_text("old")
+    enable_file_writes(monkeypatch, root, data_dir)
+
+    status, _, payload = request(
+        "/admin/files/site_home",
+        method="POST",
+        body=json.dumps(
+            {
+                "name": "assets/report.txt",
+                "content_base64": base64.b64encode(b"new").decode("ascii"),
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 409
+    assert payload["status"] == "error"
+    assert "File already exists" in payload["error"]
+    assert file_path.read_text() == "old"
+
+
+def test_admin_file_update_overwrites_file(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {}\n")
+    file_path = data_dir / "files" / "site_home" / "assets" / "report.txt"
+    file_path.parent.mkdir(parents=True)
+    file_path.write_text("old")
+    enable_file_writes(monkeypatch, root, data_dir)
+
+    status, _, payload = request(
+        "/admin/files/site_home",
+        method="PUT",
+        body=json.dumps(
+            {
+                "name": "assets/report.txt",
+                "content_base64": base64.b64encode(b"new").decode("ascii"),
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["operation"] == "updated"
+    assert file_path.read_bytes() == b"new"
+
+
+def test_admin_file_delete_removes_file(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {}\n")
+    file_path = data_dir / "files" / "site_home" / "assets" / "report.txt"
+    file_path.parent.mkdir(parents=True)
+    file_path.write_text("old")
+    enable_file_writes(monkeypatch, root, data_dir)
+
+    status, _, payload = request(
+        "/admin/files/site_home",
+        method="DELETE",
+        query_string="file=assets/report.txt",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["operation"] == "deleted"
+    assert payload["file"]["name"] == "assets/report.txt"
+    assert not file_path.exists()
+    assert not file_path.parent.exists()
+
+
+def test_admin_file_upload_enforces_file_size_limit(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {}\n")
+    enable_file_writes(monkeypatch, root, data_dir)
+    monkeypatch.setenv(object_server.MAX_OBJECT_FILE_BYTES_ENV, "4")
+
+    status, _, payload = request(
+        "/admin/files/site_home",
+        method="POST",
+        body=json.dumps(
+            {
+                "name": "assets/report.txt",
+                "content_base64": base64.b64encode(b"hello").decode("ascii"),
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 413
+    assert payload["status"] == "error"
+    assert "exceeds max size" in payload["error"]
+
+
+def test_admin_file_upload_requires_existing_object(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    enable_file_writes(monkeypatch, root, data_dir)
+
+    status, _, payload = request(
+        "/admin/files/site_home",
+        method="POST",
+        body=json.dumps(
+            {
+                "name": "assets/report.txt",
+                "content_base64": base64.b64encode(b"hello").decode("ascii"),
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 404
+    assert payload["status"] == "error"
 
 
 def test_get_metadata_summarizes_object_storage(tmp_path, monkeypatch):

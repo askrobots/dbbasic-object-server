@@ -6,6 +6,8 @@ while the production auth and mutation paths are extracted.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import hmac
 import json
@@ -53,9 +55,11 @@ from object_versions import InvalidObjectIdError
 from python_object_runtime import MethodNotSupportedError, PythonObjectRuntime
 
 SOURCE_WRITES_ENV = "DBBASIC_ENABLE_SOURCE_WRITES"
+FILE_WRITES_ENV = "DBBASIC_ENABLE_FILE_WRITES"
 ADMIN_TOKEN_ENV = "DBBASIC_ADMIN_TOKEN"
 DATA_DIR_ENV = "DBBASIC_DATA_DIR"
 MAX_REQUEST_BYTES_ENV = "DBBASIC_MAX_REQUEST_BYTES"
+MAX_OBJECT_FILE_BYTES_ENV = "DBBASIC_MAX_OBJECT_FILE_BYTES"
 MAX_CONCURRENT_REQUESTS_ENV = "DBBASIC_MAX_CONCURRENT_REQUESTS"
 MAX_CONCURRENT_EXECUTIONS_ENV = "DBBASIC_MAX_CONCURRENT_EXECUTIONS"
 RATE_LIMIT_REQUESTS_ENV = "DBBASIC_RATE_LIMIT_REQUESTS"
@@ -78,6 +82,7 @@ PACKAGES_DIR_ENV = "DBBASIC_PACKAGES_DIR"
 PACKAGE_INSTALLS_ENABLED_ENV = "DBBASIC_ENABLE_PACKAGE_INSTALLS"
 PACKAGE_RESTORE_ENABLED_ENV = "DBBASIC_ENABLE_PACKAGE_RESTORE"
 DEFAULT_MAX_REQUEST_BYTES = 1_048_576
+DEFAULT_MAX_OBJECT_FILE_BYTES = DEFAULT_MAX_REQUEST_BYTES
 DEFAULT_MAX_CONCURRENT_REQUESTS = 64
 DEFAULT_MAX_CONCURRENT_EXECUTIONS = 8
 DEFAULT_RATE_LIMIT_REQUESTS = 0
@@ -409,7 +414,7 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
         admin_files_prefix = f"{http_api_contract.ADMIN_FILES_PATH}/"
         if path.startswith(admin_files_prefix):
             object_id = path.removeprefix(admin_files_prefix)
-            await _handle_admin_object_files(send, method, object_id, query, headers)
+            await _handle_admin_object_files(send, method, object_id, query, body, headers)
             return
 
         if path == http_api_contract.ADMIN_OBJECTS_PATH:
@@ -1041,7 +1046,9 @@ def _health_payload(*, include_metrics: bool) -> dict[str, Any]:
         },
         "config": {
             "source_writes_enabled": _env_enabled(SOURCE_WRITES_ENV),
+            "file_writes_enabled": _env_enabled(FILE_WRITES_ENV),
             "max_request_bytes": _max_request_bytes(),
+            "max_object_file_bytes": _max_object_file_bytes(),
             "max_concurrent_requests": _max_concurrent_requests(),
             "max_concurrent_executions": _max_concurrent_executions(),
             "rate_limit_requests": _rate_limit_requests(),
@@ -1286,10 +1293,23 @@ async def _handle_admin_object_files(
     method: str,
     object_id: str,
     query: dict[str, str],
+    body: bytes,
     headers: dict[str, str],
 ) -> None:
-    if method != "GET":
+    if method not in {"GET", "POST", "PUT", "DELETE"}:
         await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    if "@" in object_id:
+        await _send_json(
+            send,
+            {"status": "error", "error": "Station routing is not available in admin inspection"},
+            status=400,
+        )
+        return
+
+    if method in {"POST", "PUT", "DELETE"}:
+        await _handle_admin_object_file_write(send, method, object_id, query, body, headers)
         return
 
     gate_error = _admin_token_gate_error(
@@ -1301,19 +1321,101 @@ async def _handle_admin_object_files(
         await _send_json(send, {"status": "error", "error": message}, status=status)
         return
 
-    if "@" in object_id:
-        await _send_json(
-            send,
-            {"status": "error", "error": "Station routing is not available in admin inspection"},
-            status=400,
-        )
-        return
-
     if "file" in query:
         await _handle_object_file_get(send, object_id, query)
         return
 
     await _handle_object_files_get(send, object_id)
+
+
+async def _handle_admin_object_file_write(
+    send,
+    method: str,
+    object_id: str,
+    query: dict[str, str],
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    gate_error = _file_write_gate_error(headers)
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    if await _send_permission_denied_if_needed(
+        send,
+        headers,
+        object_permissions.FILES,
+        object_id=object_id,
+        method=method,
+    ):
+        return
+
+    try:
+        _ensure_object_source_exists(object_id)
+        if method in {"POST", "PUT"}:
+            filename, content = _file_write_payload(body)
+            metadata = object_files.write_object_file(
+                object_id,
+                filename,
+                content,
+                base_dir=_data_dir(),
+                overwrite=method == "PUT",
+                max_bytes=_max_object_file_bytes(),
+            )
+            operation = "created" if method == "POST" else "updated"
+            status_code = 201 if method == "POST" else 200
+        else:
+            filename = _file_delete_filename(query, body)
+            metadata = object_files.delete_object_file(
+                object_id,
+                filename,
+                base_dir=_data_dir(),
+            )
+            operation = "deleted"
+            status_code = 200
+    except object_files.ObjectFileTooLargeError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=413)
+        return
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except InvalidObjectIdError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_files.InvalidObjectFilenameError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_source.ObjectSourceNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+    except object_files.ObjectFileExistsError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=409)
+        return
+    except object_files.ObjectFileNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+    except OSError as exc:
+        await _send_json(
+            send,
+            {"status": "error", "error": f"Could not write object file: {exc}"},
+            status=500,
+        )
+        return
+
+    _append_file_log(object_id, operation=operation, metadata=metadata, method=method)
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "message": f"File {operation}: {metadata['name']}",
+            "object_id": object_id,
+            "operation": operation,
+            "file": {"object_id": object_id, **metadata},
+            "correlation_id": object_correlation.current_correlation_id(),
+        },
+        status=status_code,
+    )
 
 
 async def _handle_admin_collections(
@@ -1863,6 +1965,12 @@ def _admin_capabilities_payload() -> dict[str, Any]:
             "enabled": _env_enabled(SOURCE_WRITES_ENV),
             "env": SOURCE_WRITES_ENV,
         },
+        "file_writes": {
+            "enabled": _env_enabled(FILE_WRITES_ENV),
+            "env": FILE_WRITES_ENV,
+            "max_bytes": _max_object_file_bytes(),
+            "max_bytes_env": MAX_OBJECT_FILE_BYTES_ENV,
+        },
         "package_installs": {
             "enabled": _env_enabled(PACKAGE_INSTALLS_ENABLED_ENV),
             "env": PACKAGE_INSTALLS_ENABLED_ENV,
@@ -1897,6 +2005,7 @@ def _admin_capabilities_payload() -> dict[str, Any]:
         },
         "limits": {
             "max_request_bytes": _max_request_bytes(),
+            "max_object_file_bytes": _max_object_file_bytes(),
             "max_concurrent_requests": _max_concurrent_requests(),
             "max_concurrent_executions": _max_concurrent_executions(),
             "rate_limit_requests": _rate_limit_requests(),
@@ -4904,6 +5013,30 @@ def _append_execution_log(result: object_execution.ObjectExecutionResult) -> Non
         pass
 
 
+def _append_file_log(
+    object_id: str,
+    *,
+    operation: str,
+    metadata: Mapping[str, Any],
+    method: str,
+) -> None:
+    try:
+        object_logs.append_object_log(
+            object_id,
+            "INFO",
+            f"File {operation}: {metadata['name']}",
+            base_dir=_data_dir(),
+            method=method,
+            status="success",
+            file_name=metadata.get("name"),
+            file_size=metadata.get("size"),
+            file_operation=operation,
+        )
+    except Exception:
+        # File logs are operator feedback; file writes should not fail because logging failed.
+        pass
+
+
 def _append_source_change_log(
     object_id: str,
     *,
@@ -5247,6 +5380,45 @@ def _source_actor_from_headers(headers: dict[str, str]) -> str:
     return "api"
 
 
+def _file_write_payload(body: bytes) -> tuple[str, bytes]:
+    payload = _parse_json_body(body)
+    filename = _optional_payload_text(payload, "name")
+    if filename is None:
+        filename = _optional_payload_text(payload, "filename")
+    if filename is None:
+        raise ValueError("Request JSON field 'name' is required")
+
+    content_base64 = payload.get("content_base64")
+    if not isinstance(content_base64, str):
+        raise ValueError("Request JSON field 'content_base64' must be a base64 string")
+
+    try:
+        content = base64.b64decode(content_base64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("Request JSON field 'content_base64' must be valid base64") from exc
+
+    max_bytes = _max_object_file_bytes()
+    if len(content) > max_bytes:
+        raise object_files.ObjectFileTooLargeError(
+            f"Object file exceeds max size: {len(content)} bytes > {max_bytes} bytes"
+        )
+    return filename, content
+
+
+def _file_delete_filename(query: dict[str, str], body: bytes) -> str:
+    filename = _optional_query_text(query, "file")
+    if filename is not None:
+        return filename
+
+    payload = _parse_json_body(body)
+    filename = _optional_payload_text(payload, "name")
+    if filename is None:
+        filename = _optional_payload_text(payload, "filename")
+    if filename is None:
+        raise ValueError("Query parameter 'file' or JSON field 'name' is required")
+    return filename
+
+
 def _optional_payload_text(payload: dict[str, Any], key: str) -> str | None:
     if key not in payload or payload[key] is None:
         return None
@@ -5389,6 +5561,16 @@ def _source_write_gate_error(headers: dict[str, str]) -> tuple[int, str] | None:
         )
 
     return _admin_token_gate_error(headers, f"Source writes require {ADMIN_TOKEN_ENV}.")
+
+
+def _file_write_gate_error(headers: dict[str, str]) -> tuple[int, str] | None:
+    if not _env_enabled(FILE_WRITES_ENV):
+        return (
+            403,
+            f"File writes are disabled. Set {FILE_WRITES_ENV}=true and {ADMIN_TOKEN_ENV}.",
+        )
+
+    return _admin_token_gate_error(headers, f"File writes require {ADMIN_TOKEN_ENV}.")
 
 
 def _permissions_gate_error(headers: dict[str, str]) -> tuple[int, str] | None:
@@ -5959,6 +6141,13 @@ def _max_request_bytes() -> int:
     max_bytes = _env_int(MAX_REQUEST_BYTES_ENV, DEFAULT_MAX_REQUEST_BYTES)
     if max_bytes < 0:
         return DEFAULT_MAX_REQUEST_BYTES
+    return max_bytes
+
+
+def _max_object_file_bytes() -> int:
+    max_bytes = _env_int(MAX_OBJECT_FILE_BYTES_ENV, DEFAULT_MAX_OBJECT_FILE_BYTES)
+    if max_bytes < 0:
+        return DEFAULT_MAX_OBJECT_FILE_BYTES
     return max_bytes
 
 
