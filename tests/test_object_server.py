@@ -1363,6 +1363,150 @@ def test_objects_receive_request_identity(tmp_path, monkeypatch):
     assert spoof_payload["identity"]["auth_method"] == "anonymous"
 
 
+def test_admin_role_session_matches_admin_token_across_gated_surfaces(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(
+        root / "probe" / "tool.py",
+        "def GET(request):\n    return {'ok': True}\n"
+        "def POST(request):\n    return {'ok': True}\n",
+    )
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+    schema_file = data_dir / "schemas" / "contacts.json"
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text(json.dumps({"fields": [{"name": "id"}, {"name": "name"}]}))
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(data_dir))
+    monkeypatch.setenv(object_server.TRUSTED_IN_PROCESS_OBJECTS_ENV, "probe_tool")
+    monkeypatch.setenv(object_server.SESSION_ADMIN_GATES_ENV, "true")
+    monkeypatch.setenv("DBBASIC_ENABLE_SOURCE_WRITES", "true")
+    monkeypatch.setenv("DBBASIC_ENABLE_FILE_WRITES", "true")
+    enable_admin_token(monkeypatch)
+    request(
+        "/identity/users",
+        method="POST",
+        body=json.dumps({"user_id": "dan", "email": "dan@example.com", "roles": ["admin"]}).encode(),
+        headers=auth_headers(),
+    )
+    session_token, _ = create_identity_session({"user_id": "dan", "label": "parity"})
+
+    identities = {
+        "admin_token": auth_headers(),
+        "admin_session": [("authorization", f"Bearer {session_token}")],
+    }
+
+    endpoints = [
+        ("GET", "/admin/status", "", None),
+        ("GET", "/admin/changes", "limit=10", None),
+        ("GET", "/admin/objects", "", None),
+        ("GET", "/admin/objects/probe_tool", "source=true&format=json", None),
+        ("GET", "/admin/objects/probe_tool", "state=true", None),
+        ("GET", "/admin/objects/probe_tool", "logs=true&limit=10", None),
+        ("GET", "/admin/objects/probe_tool", "metadata=true", None),
+        ("GET", "/admin/objects/probe_tool", "versions=true&limit=10", None),
+        ("GET", "/admin/objects/probe_tool", "changes=true&limit=10", None),
+        ("GET", "/admin/objects/probe_tool", "files=true", None),
+        ("GET", "/admin/files", "", None),
+        ("GET", "/admin/files/probe_tool", "", None),
+        ("GET", "/admin/collections", "", None),
+        ("GET", "/admin/collections/contacts", "", None),
+        ("GET", "/admin/collections/contacts/records", "", None),
+        ("GET", "/admin/collections/contacts/records/c1", "", None),
+        ("GET", "/admin/collections/contacts/changes", "", None),
+        ("GET", "/admin/schemas", "", None),
+        ("GET", "/admin/schemas/contacts", "format=json", None),
+        ("GET", "/admin/identity/accounts", "", None),
+        ("GET", "/admin/identity/users", "", None),
+        ("GET", "/admin/identity/sessions", "", None),
+        ("GET", "/daemon/status", "", None),
+        ("GET", "/daemon/scheduler/tasks", "", None),
+        ("GET", "/daemon/queue/messages", "", None),
+        ("GET", "/events", "", None),
+        ("GET", "/events/deliveries", "", None),
+        ("GET", "/events/subscriptions", "", None),
+        ("GET", "/packages", "", None),
+        ("GET", "/permissions/policy", "", None),
+        ("GET", "/permissions/status", "", None),
+        ("GET", "/permissions/audit", "", None),
+        ("GET", "/identity/accounts", "", None),
+        ("GET", "/identity/users", "", None),
+        ("GET", "/identity/sessions", "", None),
+        (
+            "POST",
+            "/admin/objects",
+            "",
+            lambda label: {"object_id": f"made_{label}", "code": "def GET(request):\n    return {}\n"},
+        ),
+        (
+            "PUT",
+            "/admin/objects/probe_tool",
+            "source=true",
+            lambda label: {"code": f"def GET(request):\n    return {{'v': '{label}'}}\n"},
+        ),
+        ("POST", "/admin/objects/probe_tool/execute", "", lambda label: {"method": "GET", "payload": {}}),
+        (
+            "POST",
+            "/admin/collections/contacts/records",
+            "",
+            lambda label: {"id": f"rec_{label}", "name": label},
+        ),
+        (
+            "PUT",
+            "/admin/collections/contacts/records/c1",
+            "",
+            lambda label: {"name": f"Ada {label}"},
+        ),
+        (
+            "PUT",
+            "/admin/schemas/contacts",
+            "",
+            lambda label: {
+                "schema": {"fields": [{"name": "id"}, {"name": "name"}]},
+                "author": label,
+                "message": f"parity {label}",
+            },
+        ),
+        (
+            "POST",
+            "/admin/identity/users/dan/password",
+            "",
+            lambda label: {"password": f"parity password {label}"},
+        ),
+        (
+            "POST",
+            "/permissions/check",
+            "",
+            lambda label: {
+                "subject": {"user_id": "7", "roles": ["sales"]},
+                "action": "read",
+                "collection": "contacts",
+            },
+        ),
+    ]
+
+    mismatches = []
+    for method, path, query_string, body_factory in endpoints:
+        statuses = {}
+        for label, headers in identities.items():
+            body = b""
+            if body_factory is not None:
+                body = json.dumps(body_factory(label)).encode()
+            status, _, payload = request(
+                path,
+                method=method,
+                query_string=query_string,
+                body=body,
+                headers=headers,
+            )
+            statuses[label] = status
+        if statuses["admin_token"] != statuses["admin_session"]:
+            mismatches.append((method, path, query_string, statuses))
+        elif statuses["admin_token"] >= 400:
+            mismatches.append((method, path, query_string, {"both_failed": statuses}))
+
+    assert not mismatches, f"Session/token parity failures: {mismatches}"
+
+
 def test_identity_endpoint_ignores_untrusted_identity_headers(monkeypatch):
     monkeypatch.delenv("DBBASIC_PERMISSION_TRUST_HEADERS", raising=False)
     headers = [
