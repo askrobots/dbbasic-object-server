@@ -54,6 +54,9 @@ flowchart TD
 - `permissions-model.md` - server-side access modes, role/object/action rules,
   ownership, sharing, row/field filters, subscriptions, temporary paid access,
   route enforcement, and audit readback.
+- `package-authoring.md` - the practical guide for building an installable
+  package: manifest, layout, install semantics, dry-run workflow, and rules
+  for generated packages.
 - `runtime-contract.md#packages` and `http-api-contract.md#packages` - package
   manifest layout, package discovery, dry-runs, and package change history.
 

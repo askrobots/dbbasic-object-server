@@ -604,8 +604,7 @@ sudo cp -a /etc/caddy/Caddyfile /etc/caddy/Caddyfile.before-dbbasic
 For the earliest public staging endpoint, expose only the hello object, system
 dashboard object, admin status and admin inspection routes, health check, and
 current-session self-service route until auth, permissions, and source
-visibility are ready. Keep the broader identity admin routes and `/objects`
-listing blocked:
+visibility are ready. Keep the broad `/objects` listing blocked:
 
 ```caddyfile
 dbbasic.example.com {
@@ -615,6 +614,14 @@ dbbasic.example.com {
     }
 
     handle /health {
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    handle /login {
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    handle /logout {
         reverse_proxy 127.0.0.1:8001
     }
 
@@ -666,7 +673,15 @@ dbbasic.example.com {
         reverse_proxy 127.0.0.1:8001
     }
 
-    handle /events/deliveries* {
+    handle /events* {
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    handle /packages* {
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    handle /permissions/audit* {
         reverse_proxy 127.0.0.1:8001
     }
 
@@ -696,8 +711,9 @@ dbbasic.example.com {
         reverse_proxy 127.0.0.1:8001
     }
 
-    # This exposes GET/DELETE current-session checks. POST session login remains
-    # disabled unless DBBASIC_ENABLE_SESSION_LOGIN=true and
+    # This exposes GET/DELETE current-session checks. POST password login works
+    # when DBBASIC_ENABLE_PASSWORD_LOGIN=true; the gateway session-mint POST
+    # remains disabled unless DBBASIC_ENABLE_SESSION_LOGIN=true and
     # DBBASIC_SESSION_LOGIN_TOKEN are set.
 
     handle /objects/site_home* {

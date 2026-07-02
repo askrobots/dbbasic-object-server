@@ -183,6 +183,49 @@ responses.
 Plain strings also return `text/html; charset=utf-8`. Plain bytes return
 `application/octet-stream`.
 
+## HTML Form Object
+
+Forms are how design changes ship without a deploy: the page, the handler, and
+the state live in one object. `GET` renders the form; `POST` receives the
+submitted fields (form posts from a signed-in browser carry the session cookie,
+so `request["_identity"]` identifies the user in both methods):
+
+```python
+def GET(request):
+    identity = request["_identity"]
+    if identity["user_id"] is None:
+        return (303, [("Location", "/login?next=/objects/notes_quick")], b"")
+
+    saved = _state_manager.get(f"note:{identity['user_id']}", "")
+    html = f"""<!doctype html>
+<html lang="en">
+<body>
+  <h1>Quick note for {identity['user_id']}</h1>
+  <form method="post">
+    <textarea name="note">{saved}</textarea>
+    <button type="submit">Save</button>
+  </form>
+</body>
+</html>"""
+    return {"content_type": "text/html; charset=utf-8", "body": html}
+
+
+def POST(request):
+    identity = request["_identity"]
+    if identity["user_id"] is None:
+        return {"status": 401, "error": "Sign in first"}
+
+    _state_manager.set(f"note:{identity['user_id']}", str(request.get("note", "")))
+    _logger.info("note saved", user_id=identity["user_id"])
+    return (303, [("Location", "/objects/notes_quick")], b"")
+```
+
+Cookie-authenticated form posts are origin-checked by the server (same-site
+only), so objects do not need their own CSRF plumbing for basic forms. Records
+and schemas are the step up from object state when the data needs listing,
+validation, and change history — see the collections sections of
+`http-api-contract.md`.
+
 ## Low-Level Response
 
 When an object needs exact status and headers, return a tuple:

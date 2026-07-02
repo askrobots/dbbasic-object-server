@@ -1410,7 +1410,10 @@ Authorization: Token <token>
 
 The responses match the underlying read-only `GET /identity/accounts*`,
 `GET /identity/users*`, and `GET /identity/sessions*` responses. These admin
-aliases are GET-only and admin-token gated.
+aliases are admin-token gated and read-only, with one write exception: the
+password set/reset aliases (`POST/DELETE /admin/identity/users/{user_id}/password`,
+documented under User Passwords). They still do not create accounts or users,
+mint sessions, or revoke sessions.
 
 ## Collections
 

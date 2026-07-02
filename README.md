@@ -91,6 +91,8 @@ This repository currently contains:
 - `object_files.py` - object-owned file listing, download, and gated write helpers
 - `object_file_changes.py` - append-only file upload/update/delete changelog helpers
 - `object_identity.py` - file-backed accounts, users, and sessions for permission subjects
+- `object_credentials.py` - scrypt password hashes stored separately from user records
+- `object_identity_cli.py` - Django-style shell management for accounts, users, and passwords
 - `object_logs.py` - TSV-backed object log reads, appends, rotation, compression, retention, and runtime logger helper
 - `object_metadata.py` - conservative object metadata summaries
 - `object_schemas.py` - schema metadata for generated UI, validation rules, field permissions, and relations
@@ -104,10 +106,17 @@ This repository currently contains:
 - `object_permission_store.py` - JSON-backed permission policy persistence
 - `object_permissions.py` - server-side access modes, role/object/action checks,
   ownership, sharing, subscriptions, temporary grants, and row/field filters
+- `object_permission_status.py` - enforcement readiness gates, coverage reporting, and rollout warnings
+- `object_rate_limit.py` - file-backed request rate limiting
+- `object_record_changes.py` - append-only collection record changelog helpers
 - `object_versions.py` - source version metadata, content snapshots, and rollback
 - `object_backup.py` - runtime backup, restore-point, verification, and safe restore helpers
 - `object_daemon.py` - background worker for scheduler, queue, events, and cleanup
+- `object_daemon_control.py` - scheduler task and queue message write helpers for operator screens
+- `object_daemon_status.py` - read-only daemon, scheduler, queue, and delivery posture
+- `http_api_contract.py` - compatibility constants for paths and response shapes
 - `deployment_checks.py` - single-VM filesystem ownership and permission checks
+- `packages/hello-world/` - minimal example package with one object
 - `packages/system-dashboard/` - small installable dashboard object for public
   staging
 - `packages/admin-write-probe/` - narrow staging package for proving object
