@@ -9,6 +9,8 @@ def test_contract_keeps_objects_paths_as_public_surface():
     assert http_api_contract.OBJECTS_PATH == "/objects"
     assert http_api_contract.OBJECT_PATH == "/objects/{object_id}"
     assert http_api_contract.OBJECT_STATION_PATH == "/objects/{object_id}@{station_id}"
+    assert http_api_contract.ADMIN_OBJECTS_PATH == "/admin/objects"
+    assert http_api_contract.ADMIN_OBJECT_PATH == "/admin/objects/{object_id}"
     assert http_api_contract.COLLECTIONS_PATH == "/collections"
     assert http_api_contract.COLLECTION_PATH == "/collections/{collection}"
     assert http_api_contract.COLLECTION_RECORDS_PATH == "/collections/{collection}/records"
@@ -423,6 +425,8 @@ def test_http_contract_doc_mentions_required_compatibility_surface():
         "GET /packages/{package_id}?dry_run=true",
         "POST /packages/{package_id}/install",
         "GET /packages/{package_id}/changes",
+        "GET /admin/objects",
+        "GET /admin/objects/{object_id}",
         "POST /objects",
         "GET /objects/{object_id}",
         "PUT /objects/{object_id}?source=true",

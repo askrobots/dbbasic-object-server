@@ -180,6 +180,15 @@ Current endpoints:
 - `GET /health?capacity=true`
 - `GET /health?metrics=true`
 - `GET /admin/status`
+- `GET /admin/objects`
+- `GET /admin/objects/{object_id}`
+- `GET /admin/objects/{object_id}?metadata=true`
+- `GET /admin/objects/{object_id}?source=true&format=json`
+- `GET /admin/objects/{object_id}?state=true`
+- `GET /admin/objects/{object_id}?logs=true&limit=100`
+- `GET /admin/objects/{object_id}?source_changes=true&limit=100`
+- `GET /admin/objects/{object_id}?versions=true&limit=10`
+- `GET /admin/objects/{object_id}?version=1`
 - `GET /daemon/status`
 - `GET /daemon/scheduler/tasks`
 - `POST /daemon/scheduler/tasks`

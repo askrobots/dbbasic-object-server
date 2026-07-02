@@ -29,6 +29,9 @@ public users.
   rate limits, wall-clock timeout path, and health/capacity metrics
 - Token-gated admin status with detailed health, inventory, capability flags,
   package posture, and permission readiness for Scroll/operator dashboards
+- Token-gated admin object inspection for Scroll/operator source, state, logs,
+  versions, metadata, and source-change views without exposing broad `/objects`
+  execution routes through the reverse proxy
 - Token-gated daemon status with read-only scheduler, queue, event delivery,
   retention, and cleanup posture for Scroll/operator dashboards
 - Token-gated scheduler and queue control APIs for trusted operator screens,

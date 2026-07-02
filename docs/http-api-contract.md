@@ -985,6 +985,37 @@ Response:
 Clients should accept either a top-level list or an object with an `objects`
 field. New server code should prefer the object form above.
 
+## Admin Object Inspection
+
+`/objects` remains the runtime surface: object execution and public object
+routes live there. Scroll and operator dashboards should use the admin
+inspection surface so staging can expose read-only object metadata without
+opening broad object execution routes at the reverse proxy.
+
+```http
+GET /admin/objects
+Authorization: Token <token>
+```
+
+The response matches `GET /objects?format=json`.
+
+```http
+GET /admin/objects/{object_id}
+GET /admin/objects/{object_id}?metadata=true
+GET /admin/objects/{object_id}?source=true&format=json
+GET /admin/objects/{object_id}?state=true
+GET /admin/objects/{object_id}?logs=true&format=json&limit=100
+GET /admin/objects/{object_id}?versions=true&limit=10
+GET /admin/objects/{object_id}?version=1
+GET /admin/objects/{object_id}?source_changes=true&limit=100
+Authorization: Token <token>
+```
+
+If no inspection query is supplied, the server returns metadata. The admin
+inspection surface never executes the object. Unsupported query flags return a
+400 response so a client cannot accidentally turn an operator view into an
+execution endpoint.
+
 ## Collections
 
 ```http

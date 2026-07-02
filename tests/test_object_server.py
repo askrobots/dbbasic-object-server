@@ -1370,6 +1370,126 @@ def test_object_list_requires_authorization_header(tmp_path, monkeypatch):
     assert payload == {"status": "error", "error": "Unauthorized"}
 
 
+def test_admin_objects_alias_lists_objects_with_admin_token(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    enable_admin_token(monkeypatch)
+
+    missing_status, _, missing_payload = request("/admin/objects", query_string="format=json")
+    status, _, payload = request(
+        "/admin/objects",
+        query_string="format=json",
+        headers=auth_headers(),
+    )
+
+    assert missing_status == 401
+    assert missing_payload == {"status": "error", "error": "Unauthorized"}
+    assert status == 200
+    assert payload == {
+        "status": "ok",
+        "objects": [
+            {
+                "object_id": "basics_counter",
+                "path": "basics/counter.py",
+                "owner": "system",
+            }
+        ],
+        "count": 1,
+    }
+
+
+def test_admin_object_alias_exposes_read_only_inspection_surfaces(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(
+        root / "basics" / "counter.py",
+        "def GET(request):\n"
+        "    _state_manager.set('executed', True)\n"
+        "    return {'status': 'executed'}\n",
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+    object_logs.append_object_log(
+        "basics_counter",
+        "INFO",
+        "operator inspected",
+        base_dir=data_dir,
+    )
+    object_versions.VersionManager(data_dir).save_version(
+        "basics_counter",
+        "def GET(request):\n    return {}\n",
+        author="test",
+        message="first",
+    )
+    object_source_changes.append_source_change(
+        object_id="basics_counter",
+        action="source_update",
+        version_id=1,
+        actor="test",
+        message="first",
+        base_dir=data_dir,
+    )
+
+    metadata_status, _, metadata = request(
+        "/admin/objects/basics_counter",
+        headers=auth_headers(),
+    )
+    source_status, _, source = request(
+        "/admin/objects/basics_counter",
+        query_string="source=true&format=json",
+        headers=auth_headers(),
+    )
+    logs_status, _, logs = request(
+        "/admin/objects/basics_counter",
+        query_string="logs=true&limit=10",
+        headers=auth_headers(),
+    )
+    versions_status, _, versions = request(
+        "/admin/objects/basics_counter",
+        query_string="versions=true&limit=10",
+        headers=auth_headers(),
+    )
+    changes_status, _, changes = request(
+        "/admin/objects/basics_counter",
+        query_string="source_changes=true&limit=10",
+        headers=auth_headers(),
+    )
+
+    assert metadata_status == 200
+    assert metadata["status"] == "ok"
+    assert metadata["object_id"] == "basics_counter"
+    assert metadata["metadata"]["source_path"] == "basics/counter.py"
+    assert object_state.get_object_state("basics_counter", base_dir=data_dir) == {}
+
+    assert source_status == 200
+    assert source["source"].startswith("def GET(request):")
+    assert logs_status == 200
+    assert logs["logs"][0]["message"] == "operator inspected"
+    assert versions_status == 200
+    assert versions["versions"][0]["message"] == "first"
+    assert changes_status == 200
+    assert changes["changes"][0]["action"] == "source_update"
+
+
+def test_admin_object_alias_rejects_unsupported_queries(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/admin/objects/basics_counter",
+        query_string="execute=true",
+        headers=auth_headers(),
+    )
+
+    assert status == 400
+    assert payload["status"] == "error"
+    assert "Unsupported admin object inspection query" in payload["error"]
+
+
 def test_collection_list_requires_admin_token_configuration(tmp_path, monkeypatch):
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(tmp_path / "objects"))
     monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)

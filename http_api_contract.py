@@ -12,6 +12,8 @@ from typing import Any
 OBJECTS_PATH = "/objects"
 OBJECT_PATH = "/objects/{object_id}"
 OBJECT_STATION_PATH = "/objects/{object_id}@{station_id}"
+ADMIN_OBJECTS_PATH = "/admin/objects"
+ADMIN_OBJECT_PATH = "/admin/objects/{object_id}"
 COLLECTIONS_PATH = "/collections"
 COLLECTION_PATH = "/collections/{collection}"
 COLLECTION_RECORDS_PATH = "/collections/{collection}/records"

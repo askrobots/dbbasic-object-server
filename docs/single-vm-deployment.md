@@ -568,9 +568,10 @@ sudo cp -a /etc/caddy/Caddyfile /etc/caddy/Caddyfile.before-dbbasic
 ```
 
 For the earliest public staging endpoint, expose only the hello object, system
-dashboard object, admin status route, health check, and current-session
-self-service route until auth, permissions, and source visibility are ready.
-Keep the broader identity admin routes and `/objects` listing blocked:
+dashboard object, admin status and admin object-inspection routes, health check,
+and current-session self-service route until auth, permissions, and source
+visibility are ready. Keep the broader identity admin routes and `/objects`
+listing blocked:
 
 ```caddyfile
 dbbasic.example.com {
@@ -584,6 +585,10 @@ dbbasic.example.com {
     }
 
     handle /admin/status {
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    handle /admin/objects* {
         reverse_proxy 127.0.0.1:8001
     }
 

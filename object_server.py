@@ -401,6 +401,16 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
             await _handle_admin_status(send, method, headers)
             return
 
+        if path == http_api_contract.ADMIN_OBJECTS_PATH:
+            await _handle_admin_objects(send, method, headers)
+            return
+
+        admin_objects_prefix = f"{http_api_contract.ADMIN_OBJECTS_PATH}/"
+        if path.startswith(admin_objects_prefix):
+            object_id = path.removeprefix(admin_objects_prefix)
+            await _handle_admin_object(send, method, object_id, query, headers)
+            return
+
         if path == http_api_contract.DAEMON_STATUS_PATH:
             await _handle_daemon_status(send, method, headers)
             return
@@ -1029,6 +1039,102 @@ async def _handle_admin_status(
 
     status_code = 503 if payload["status"] == "degraded" else 200
     await _send_json(send, payload, status=status_code)
+
+
+async def _handle_admin_objects(
+    send,
+    method: str,
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Admin object listing requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    await _send_json(send, _list_objects_payload())
+
+
+async def _handle_admin_object(
+    send,
+    method: str,
+    object_id: str,
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Admin object inspection requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    if "@" in object_id:
+        await _send_json(
+            send,
+            {"status": "error", "error": "Station routing is not available in admin inspection"},
+            status=400,
+        )
+        return
+
+    if query.get("source") == "true":
+        await _handle_object_source_get(send, object_id)
+        return
+
+    if query.get("state") == "true":
+        await _handle_object_state_get(send, object_id)
+        return
+
+    if query.get("logs") == "true":
+        await _handle_object_logs_get(send, object_id, query)
+        return
+
+    if query.get("versions") == "true":
+        await _handle_object_versions_get(send, object_id, query)
+        return
+
+    if "version" in query:
+        await _handle_object_version_get(send, object_id, query)
+        return
+
+    if query.get("source_changes") == "true":
+        await _handle_object_source_changes_get(send, object_id, query)
+        return
+
+    if query.get("metadata") == "true" or query.get("format") == "json" or not query:
+        await _handle_object_metadata_get(send, object_id)
+        return
+
+    await _send_json(
+        send,
+        {
+            "status": "error",
+            "error": "Unsupported admin object inspection query",
+            "allowed_queries": [
+                "metadata=true",
+                "source=true",
+                "state=true",
+                "logs=true",
+                "versions=true",
+                "version=<id>",
+                "source_changes=true",
+            ],
+        },
+        status=400,
+    )
 
 
 async def _handle_daemon_status(
@@ -2627,23 +2733,7 @@ async def _handle_object_get(
             method="GET",
         ):
             return
-        try:
-            source = object_source.get_object_source(object_id)
-        except InvalidObjectIdError as exc:
-            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
-            return
-        except object_source.ObjectSourceNotFoundError as exc:
-            await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
-            return
-
-        await _send_json(
-            send,
-            {
-                "status": "ok",
-                "object_id": object_id,
-                "source": source,
-            },
-        )
+        await _handle_object_source_get(send, object_id)
         return
 
     await _execute_object_method(
@@ -2653,6 +2743,26 @@ async def _handle_object_get(
         query,
         headers,
         permission_action=object_permissions.EXECUTE,
+    )
+
+
+async def _handle_object_source_get(send, object_id: str) -> None:
+    try:
+        source = object_source.get_object_source(object_id)
+    except InvalidObjectIdError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_source.ObjectSourceNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "object_id": object_id,
+            "source": source,
+        },
     )
 
 
