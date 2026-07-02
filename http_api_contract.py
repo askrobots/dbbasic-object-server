@@ -47,6 +47,8 @@ PACKAGE_INSTALL_PATH = "/packages/{package_id}/install"
 PACKAGE_RESTORE_PATH = "/packages/{package_id}/restore"
 PACKAGE_CHANGES_PATH = "/packages/{package_id}/changes"
 ADMIN_STATUS_PATH = "/admin/status"
+ADMIN_FILES_PATH = "/admin/files"
+ADMIN_OBJECT_FILES_PATH = "/admin/files/{object_id}"
 DAEMON_STATUS_PATH = "/daemon/status"
 DAEMON_SCHEDULER_TASKS_PATH = "/daemon/scheduler/tasks"
 DAEMON_SCHEDULER_TASK_PATH = "/daemon/scheduler/tasks/{task_id}"
@@ -125,6 +127,7 @@ RESPONSE_FIELDS: dict[str, frozenset[str]] = {
     "state": frozenset({"status", "object_id", "state"}),
     "metadata": frozenset({"status", "object_id", "metadata"}),
     "files": frozenset({"status", "object_id", "files", "count"}),
+    "file_list": frozenset({"status", "files", "count", "total"}),
     "logs": frozenset({"status", "object_id", "logs", "count"}),
     "source_changes": frozenset({"status", "object_id", "changes", "count", "total"}),
     "versions": frozenset({"status", "object_id", "versions", "count"}),

@@ -4497,6 +4497,161 @@ def test_get_file_rejects_path_traversal(tmp_path, monkeypatch):
     assert payload["error"].startswith("Invalid filename:")
 
 
+def test_admin_files_lists_object_owned_files(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {}\n")
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")
+    home_file = data_dir / "files" / "site_home" / "assets" / "report.txt"
+    home_file.parent.mkdir(parents=True)
+    home_file.write_text("hello")
+    counter_file = data_dir / "files" / "basics_counter" / "image.png"
+    counter_file.parent.mkdir(parents=True)
+    counter_file.write_bytes(b"\x89PNG")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/admin/files",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["count"] == 2
+    assert payload["total"] == 2
+    files = {(item["object_id"], item["name"], item["size"]) for item in payload["files"]}
+    assert files == {
+        ("site_home", "assets/report.txt", 5),
+        ("basics_counter", "image.png", 4),
+    }
+
+
+def test_admin_files_requires_admin_token(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/admin/files")
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
+
+
+def test_admin_files_filters_by_object_and_paginates(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {}\n")
+    files_dir = data_dir / "files" / "site_home"
+    files_dir.mkdir(parents=True)
+    (files_dir / "a.txt").write_text("a")
+    (files_dir / "b.txt").write_text("bb")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/admin/files",
+        query_string="object_id=site_home&limit=1&offset=1",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["count"] == 1
+    assert payload["total"] == 2
+    assert payload["files"][0]["object_id"] == "site_home"
+
+
+def test_admin_object_files_alias_lists_object_owned_files(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {}\n")
+    file_path = data_dir / "files" / "site_home" / "assets" / "report.txt"
+    file_path.parent.mkdir(parents=True)
+    file_path.write_text("hello")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/admin/files/site_home",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["object_id"] == "site_home"
+    assert payload["count"] == 1
+    assert payload["files"][0]["name"] == "assets/report.txt"
+
+
+def test_admin_object_inspection_can_list_files(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {}\n")
+    file_path = data_dir / "files" / "site_home" / "assets" / "report.txt"
+    file_path.parent.mkdir(parents=True)
+    file_path.write_text("hello")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/admin/objects/site_home",
+        query_string="files=true",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["object_id"] == "site_home"
+    assert payload["files"][0]["name"] == "assets/report.txt"
+
+
+def test_admin_file_downloads_object_owned_file(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {}\n")
+    file_path = data_dir / "files" / "site_home" / "image.png"
+    file_path.parent.mkdir(parents=True)
+    file_path.write_bytes(b"\x89PNG")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, headers, body = raw_request(
+        "/admin/files/site_home",
+        query_string="file=image.png",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert headers[b"content-type"] == b"image/png"
+    assert headers[b"content-disposition"] == b'inline; filename="image.png"'
+    assert body == b"\x89PNG"
+
+
+def test_admin_file_download_rejects_path_traversal(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/admin/files/site_home",
+        query_string="file=../secret.txt",
+        headers=auth_headers(),
+    )
+
+    assert status == 400
+    assert payload["status"] == "error"
+    assert payload["error"].startswith("Invalid filename:")
+
+
 def test_get_metadata_summarizes_object_storage(tmp_path, monkeypatch):
     root = tmp_path / "objects"
     data_dir = tmp_path / "data"

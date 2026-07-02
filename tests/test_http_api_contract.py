@@ -11,6 +11,8 @@ def test_contract_keeps_objects_paths_as_public_surface():
     assert http_api_contract.OBJECT_STATION_PATH == "/objects/{object_id}@{station_id}"
     assert http_api_contract.ADMIN_OBJECTS_PATH == "/admin/objects"
     assert http_api_contract.ADMIN_OBJECT_PATH == "/admin/objects/{object_id}"
+    assert http_api_contract.ADMIN_FILES_PATH == "/admin/files"
+    assert http_api_contract.ADMIN_OBJECT_FILES_PATH == "/admin/files/{object_id}"
     assert http_api_contract.ADMIN_COLLECTIONS_PATH == "/admin/collections"
     assert http_api_contract.ADMIN_COLLECTION_PATH == "/admin/collections/{collection}"
     assert (
@@ -209,6 +211,10 @@ def test_contract_keeps_existing_introspection_query_flags():
                 "count": 0,
                 "total": 0,
             },
+        ),
+        (
+            "file_list",
+            {"status": "ok", "files": [], "count": 0, "total": 0},
         ),
         (
             "admin_status",
@@ -459,6 +465,8 @@ def test_http_contract_doc_mentions_required_compatibility_surface():
         "GET /packages/{package_id}/changes",
         "GET /admin/objects",
         "GET /admin/objects/{object_id}",
+        "GET /admin/files",
+        "GET /admin/files/{object_id}",
         "GET /admin/collections",
         "GET /admin/collections/{collection}",
         "GET /admin/collections/{collection}/records",

@@ -30,8 +30,10 @@ public users.
 - Token-gated admin status with detailed health, inventory, capability flags,
   package posture, and permission readiness for Scroll/operator dashboards
 - Token-gated admin object inspection for Scroll/operator source, state, logs,
-  versions, metadata, and source-change views without exposing broad `/objects`
-  execution routes through the reverse proxy
+  versions, metadata, files, and source-change views without exposing broad
+  `/objects` execution routes through the reverse proxy
+- Token-gated admin file inventory and download routes for Scroll/operator
+  read-only file views without exposing upload/delete yet
 - Token-gated admin collection and schema inspection for Scroll/operator
   collection, record, changelog, schema, and schema-version views without
   exposing broad write-capable `/collections*` or `/schemas*` routes

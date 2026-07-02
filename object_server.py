@@ -401,6 +401,16 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
             await _handle_admin_status(send, method, headers)
             return
 
+        if path == http_api_contract.ADMIN_FILES_PATH:
+            await _handle_admin_files(send, method, query, headers)
+            return
+
+        admin_files_prefix = f"{http_api_contract.ADMIN_FILES_PATH}/"
+        if path.startswith(admin_files_prefix):
+            object_id = path.removeprefix(admin_files_prefix)
+            await _handle_admin_object_files(send, method, object_id, query, headers)
+            return
+
         if path == http_api_contract.ADMIN_OBJECTS_PATH:
             await _handle_admin_objects(send, method, headers)
             return
@@ -1164,6 +1174,14 @@ async def _handle_admin_object(
         await _handle_object_source_changes_get(send, object_id, query)
         return
 
+    if query.get("files") == "true":
+        await _handle_object_files_get(send, object_id)
+        return
+
+    if "file" in query:
+        await _handle_object_file_get(send, object_id, query)
+        return
+
     if query.get("metadata") == "true" or query.get("format") == "json" or not query:
         await _handle_object_metadata_get(send, object_id)
         return
@@ -1181,10 +1199,116 @@ async def _handle_admin_object(
                 "versions=true",
                 "version=<id>",
                 "source_changes=true",
+                "files=true",
+                "file=<name>",
             ],
         },
         status=400,
     )
+
+
+async def _handle_admin_files(
+    send,
+    method: str,
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Admin file inspection requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    object_id = _optional_query_text(query, "object_id")
+    if "file" in query:
+        if object_id is None:
+            await _send_json(
+                send,
+                {"status": "error", "error": "Query parameter 'object_id' is required"},
+                status=400,
+            )
+            return
+        await _handle_object_file_get(send, object_id, query)
+        return
+
+    try:
+        limit = _query_int(query, "limit", default=100, minimum=1, maximum=1000)
+        offset = _query_int(query, "offset", default=0, minimum=0)
+        if object_id is not None:
+            _ensure_object_source_exists(object_id)
+        files = object_files.list_all_object_files(
+            base_dir=_data_dir(),
+            object_id=object_id,
+        )
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except InvalidObjectIdError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_source.ObjectSourceNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+    except OSError as exc:
+        await _send_json(
+            send,
+            {"status": "error", "error": f"Could not read object files: {exc}"},
+            status=500,
+        )
+        return
+
+    page = files[offset : offset + limit]
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "files": page,
+            "count": len(page),
+            "total": len(files),
+        },
+    )
+
+
+async def _handle_admin_object_files(
+    send,
+    method: str,
+    object_id: str,
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Admin file inspection requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    if "@" in object_id:
+        await _send_json(
+            send,
+            {"status": "error", "error": "Station routing is not available in admin inspection"},
+            status=400,
+        )
+        return
+
+    if "file" in query:
+        await _handle_object_file_get(send, object_id, query)
+        return
+
+    await _handle_object_files_get(send, object_id)
 
 
 async def _handle_admin_collections(

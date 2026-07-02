@@ -1008,6 +1008,8 @@ GET /admin/objects/{object_id}?logs=true&format=json&limit=100
 GET /admin/objects/{object_id}?versions=true&limit=10
 GET /admin/objects/{object_id}?version=1
 GET /admin/objects/{object_id}?source_changes=true&limit=100
+GET /admin/objects/{object_id}?files=true
+GET /admin/objects/{object_id}?file=report.txt
 Authorization: Token <token>
 ```
 
@@ -1015,6 +1017,57 @@ If no inspection query is supplied, the server returns metadata. The admin
 inspection surface never executes the object. Unsupported query flags return a
 400 response so a client cannot accidentally turn an operator view into an
 execution endpoint.
+
+## Admin File Inspection
+
+Object-owned files live under the local runtime data directory:
+
+```text
+data/files/{object_id}/
+```
+
+The compatibility object route can still list or download one object's files,
+but Scroll and operator dashboards should prefer the admin file inspection
+surface so staging can expose read-only file posture without exposing broad
+object execution routes.
+
+```http
+GET /admin/files
+GET /admin/files?object_id=site_home
+GET /admin/files?object_id=site_home&file=report.txt
+GET /admin/files/{object_id}
+GET /admin/files/{object_id}?file=report.txt
+Authorization: Token <token>
+```
+
+`GET /admin/files` returns a paginated cross-object inventory:
+
+```json
+{
+  "status": "ok",
+  "files": [
+    {
+      "object_id": "site_home",
+      "name": "report.txt",
+      "size": 1200,
+      "modified": 1760000000.0
+    }
+  ],
+  "count": 1,
+  "total": 1
+}
+```
+
+Supported query parameters:
+
+- `object_id` narrows the inventory to one object.
+- `limit` defaults to `100` and is capped at `1000`.
+- `offset` defaults to `0`.
+- `file` downloads one object-owned file and requires an object id.
+
+This surface is GET-only and admin-token gated. It is intentionally read-only:
+upload and delete routes should wait for size limits, content policy, quotas,
+audit trails, and server-enforced permissions.
 
 ## Admin Collection And Schema Inspection
 
@@ -2528,6 +2581,8 @@ null bytes, and `..` traversal are rejected with `400`. Missing files return
 
 This public slice is read-only. Upload and delete routes should wait for
 explicit size limits, content policy, audit trails, and permission enforcement.
+Scroll and operator dashboards should use `/admin/files*` for read-only file
+inventory and download workflows on public staging.
 
 ## Logs
 

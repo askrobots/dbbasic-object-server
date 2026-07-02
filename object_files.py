@@ -74,6 +74,37 @@ def list_object_files(
     return files
 
 
+def list_all_object_files(
+    base_dir: Path | str = DEFAULT_DATA_DIR,
+    *,
+    object_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """List object-owned files across the local file store."""
+    if object_id is not None:
+        return [
+            {"object_id": object_id, **metadata}
+            for metadata in list_object_files(object_id, base_dir=base_dir)
+        ]
+
+    files_root = Path(base_dir) / "files"
+    if not files_root.exists():
+        return []
+    if not files_root.is_dir():
+        raise OSError(f"Object files root is not a directory: {files_root}")
+
+    files = []
+    for object_dir in sorted(files_root.iterdir()):
+        if not object_dir.is_dir() or not validate_object_id(object_dir.name):
+            continue
+        files.extend(
+            {"object_id": object_dir.name, **metadata}
+            for metadata in list_object_files(object_dir.name, base_dir=base_dir)
+        )
+
+    files.sort(key=lambda item: (-float(item["modified"]), item["object_id"], item["name"]))
+    return files
+
+
 def read_object_file(
     object_id: str,
     filename: str,

@@ -189,6 +189,12 @@ Current endpoints:
 - `GET /admin/objects/{object_id}?source_changes=true&limit=100`
 - `GET /admin/objects/{object_id}?versions=true&limit=10`
 - `GET /admin/objects/{object_id}?version=1`
+- `GET /admin/objects/{object_id}?files=true`
+- `GET /admin/objects/{object_id}?file=name`
+- `GET /admin/files`
+- `GET /admin/files?object_id=site_home`
+- `GET /admin/files/{object_id}`
+- `GET /admin/files/{object_id}?file=name`
 - `GET /admin/collections`
 - `GET /admin/collections/{collection}`
 - `GET /admin/collections/{collection}/records`

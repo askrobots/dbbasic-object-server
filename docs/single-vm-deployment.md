@@ -592,6 +592,10 @@ dbbasic.example.com {
         reverse_proxy 127.0.0.1:8001
     }
 
+    handle /admin/files* {
+        reverse_proxy 127.0.0.1:8001
+    }
+
     handle /admin/collections* {
         reverse_proxy 127.0.0.1:8001
     }
