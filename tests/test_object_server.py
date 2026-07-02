@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import tarfile
+import urllib.parse
 from pathlib import Path
 
 import object_correlation
@@ -1148,6 +1149,169 @@ def test_authorization_header_wins_over_session_cookie(tmp_path, monkeypatch):
     assert status == 200
     assert payload["subject"]["user_id"] is None
     assert payload["auth"]["method"] == "anonymous"
+
+
+def _login_form_request(form: dict[str, str], extra_headers=None):
+    body = urllib.parse.urlencode(form).encode()
+    headers = [("content-type", "application/x-www-form-urlencoded")]
+    headers.extend(extra_headers or [])
+    return raw_request("/login", method="POST", body=body, headers=headers)
+
+
+def test_login_page_disabled_by_default(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.delenv(object_server.PASSWORD_LOGIN_ENV, raising=False)
+
+    status, headers, body = raw_request("/login")
+
+    assert status == 403
+    assert b"text/html" in headers[b"content-type"]
+    assert b"Password login is disabled" in body
+
+
+def test_login_page_renders_form_when_enabled(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.PASSWORD_LOGIN_ENV, "true")
+
+    status, headers, body = raw_request("/login")
+    error_status, _, error_body = raw_request("/login", query_string="error=1")
+
+    assert status == 200
+    assert b"text/html" in headers[b"content-type"]
+    assert b'<form method="post" action="/login">' in body
+    assert b'name="password"' in body
+    assert b"Invalid email or password." not in body
+    assert error_status == 200
+    assert b"Invalid email or password." in error_body
+
+
+def test_login_form_success_sets_cookie_and_redirects(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.PASSWORD_LOGIN_ENV, "true")
+    _create_password_user(monkeypatch)
+
+    status, headers, _ = _login_form_request(
+        {"email": "alice@example.com", "password": "correct horse battery", "next": "/dashboard"}
+    )
+
+    assert status == 303
+    assert headers[b"location"] == b"/dashboard"
+    cookie = headers[b"set-cookie"].decode()
+    assert cookie.startswith("dbbasic_session=")
+    assert "HttpOnly" in cookie
+    assert "SameSite=Lax" in cookie
+    assert "Secure" in cookie
+    assert "Path=/" in cookie
+
+    token = cookie.split(";")[0].split("=", 1)[1]
+    session_status, _, session_payload = request(
+        "/identity/session",
+        headers=[("cookie", f"dbbasic_session={token}")],
+    )
+    assert session_status == 200
+    assert session_payload["session"]["user_id"] == "u_7"
+    assert session_payload["session"]["label"] == "browser login"
+
+
+def test_login_form_failure_redirects_with_error(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.PASSWORD_LOGIN_ENV, "true")
+    monkeypatch.setattr(object_server, "PASSWORD_LOGIN_FAILURE_DELAY_SECONDS", 0)
+    _create_password_user(monkeypatch)
+
+    status, headers, _ = _login_form_request(
+        {"email": "alice@example.com", "password": "wrong password", "next": "/dashboard"}
+    )
+
+    assert status == 303
+    assert headers[b"location"] == b"/login?error=1&next=/dashboard"
+    assert b"set-cookie" not in headers
+
+
+def test_login_next_path_is_sanitized(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.PASSWORD_LOGIN_ENV, "true")
+    _create_password_user(monkeypatch)
+
+    status, headers, _ = _login_form_request(
+        {
+            "email": "alice@example.com",
+            "password": "correct horse battery",
+            "next": "//evil.example.com/phish",
+        }
+    )
+
+    assert status == 303
+    assert headers[b"location"] == b"/"
+
+
+def test_login_cookie_secure_can_be_disabled_for_local_dev(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.PASSWORD_LOGIN_ENV, "true")
+    monkeypatch.setenv(object_server.COOKIE_SECURE_ENV, "false")
+    _create_password_user(monkeypatch)
+
+    status, headers, _ = _login_form_request(
+        {"email": "alice@example.com", "password": "correct horse battery"}
+    )
+
+    assert status == 303
+    assert "Secure" not in headers[b"set-cookie"].decode()
+
+
+def test_login_rejects_json_body(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.PASSWORD_LOGIN_ENV, "true")
+
+    status, _, payload = request(
+        "/login",
+        method="POST",
+        body=json.dumps({"email": "a@example.com", "password": "x" * 10}).encode(),
+        headers=[("content-type", "application/json")],
+    )
+
+    assert status == 400
+    assert "JSON clients should use POST /identity/session" in payload["error"]
+
+
+def test_logout_revokes_session_and_clears_cookie(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.PASSWORD_LOGIN_ENV, "true")
+    _create_password_user(monkeypatch)
+    token = _password_login_token()
+
+    status, headers, _ = raw_request(
+        "/logout",
+        method="POST",
+        headers=[("cookie", f"dbbasic_session={token}")],
+    )
+    session_status, _, session_payload = request(
+        "/identity/session",
+        headers=[("cookie", f"dbbasic_session={token}")],
+    )
+
+    assert status == 303
+    assert headers[b"location"] == b"/login"
+    cookie = headers[b"set-cookie"].decode()
+    assert cookie.startswith("dbbasic_session=;")
+    assert "Max-Age=0" in cookie
+    assert session_status == 401
+    assert session_payload == {"status": "error", "error": "Active session token required"}
+
+
+def test_login_page_redirects_active_session(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.PASSWORD_LOGIN_ENV, "true")
+    _create_password_user(monkeypatch)
+    token = _password_login_token()
+
+    status, headers, _ = raw_request(
+        "/login",
+        headers=[("cookie", f"dbbasic_session={token}")],
+    )
+
+    assert status == 303
+    assert headers[b"location"] == b"/"
 
 
 def test_identity_endpoint_ignores_untrusted_identity_headers(monkeypatch):

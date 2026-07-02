@@ -781,6 +781,30 @@ the request `Host`, the request is rejected with
 attributes set at login, this is the server's CSRF posture for cookie
 sessions. Header-authenticated requests are not origin-checked.
 
+### Browser Login Pages
+
+When `DBBASIC_ENABLE_PASSWORD_LOGIN=true`, the server serves a built-in
+browser login flow:
+
+```http
+GET /login
+GET /login?next=/dashboard
+POST /login            (application/x-www-form-urlencoded: email, password, next)
+POST /logout
+```
+
+`GET /login` renders a minimal HTML sign-in form; an active session redirects
+away instead of re-rendering. `POST /login` verifies the password, mints a
+session, sets the `dbbasic_session` cookie (`HttpOnly`, `SameSite=Lax`,
+`Path=/`, `Secure` unless `DBBASIC_COOKIE_SECURE=false` for plain-HTTP local
+development), and redirects with `303` to the sanitized `next` path
+(same-origin absolute paths only; anything else falls back to `/`). Failures
+redirect back to `/login?error=1` after the same fixed delay as JSON password
+login, without revealing whether the email exists. JSON bodies are rejected;
+API clients should use `POST /identity/session`. `POST /logout` revokes the
+cookie session, clears the cookie, and redirects to `/login`. The login and
+logout routes never accept or mint admin tokens.
+
 Session tokens normally only supply the active subject used by permission
 checks. Admin-token gates remain admin-token-only by default. When a deployment
 sets `DBBASIC_ENABLE_SESSION_ADMIN_GATES=true`, active sessions whose subject

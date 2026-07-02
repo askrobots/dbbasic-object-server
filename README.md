@@ -263,6 +263,9 @@ Current endpoints:
 - `GET /identity/session`
 - `POST /identity/session`
 - `DELETE /identity/session`
+- `GET /login`
+- `POST /login`
+- `POST /logout`
 - `GET /collections`
 - `GET /collections/{collection}`
 - `GET /collections/{collection}/records`

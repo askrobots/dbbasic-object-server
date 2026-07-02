@@ -11,6 +11,7 @@ import base64
 import binascii
 import hashlib
 import hmac
+import html
 import json
 import mimetypes
 import os
@@ -357,6 +358,14 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
             body = await _read_body(receive, headers=headers)
         except RequestBodyTooLargeError as exc:
             await _send_request_too_large(send, exc)
+            return
+
+        if path == http_api_contract.LOGIN_PATH:
+            await _handle_login(send, method, query, body, headers)
+            return
+
+        if path == http_api_contract.LOGOUT_PATH:
+            await _handle_logout(send, method, headers)
             return
 
         if path == http_api_contract.IDENTITY_ACCOUNTS_PATH:
@@ -1188,6 +1197,225 @@ def _identity_password_login_payload(payload: Mapping[str, Any]) -> dict[str, An
         "label": label or "password login",
         "ttl_seconds": payload.get("ttl_seconds"),
     }
+
+
+async def _handle_login(
+    send,
+    method: str,
+    query: dict[str, str],
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    if method == "GET":
+        if not _env_enabled(PASSWORD_LOGIN_ENV):
+            await _send_login_page(send, error="Password login is disabled on this server.", status=403)
+            return
+        if _current_identity_session(headers) is not None:
+            await _send_redirect(send, _safe_next_path(query.get("next")))
+            return
+        error = "Invalid email or password." if query.get("error") else None
+        await _send_login_page(send, error=error, next_path=_safe_next_path(query.get("next")))
+        return
+
+    if method != "POST":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    if not _env_enabled(PASSWORD_LOGIN_ENV):
+        await _send_json(
+            send,
+            {
+                "status": "error",
+                "error": f"Password login is disabled. Set {PASSWORD_LOGIN_ENV}=true.",
+            },
+            status=403,
+        )
+        return
+
+    form = _parse_form_body(body, headers)
+    if form is None:
+        await _send_json(
+            send,
+            {
+                "status": "error",
+                "error": "Login form must be application/x-www-form-urlencoded; JSON clients should use POST /identity/session.",
+            },
+            status=400,
+        )
+        return
+
+    next_path = _safe_next_path(form.get("next"))
+    email = (form.get("email") or "").strip()
+    password = form.get("password") or ""
+    failure_location = f"{http_api_contract.LOGIN_PATH}?error=1"
+    if next_path != "/":
+        failure_location += f"&next={urllib.parse.quote(next_path)}"
+
+    if not email or not password:
+        await _send_redirect(send, failure_location)
+        return
+
+    login = {"user_id": None, "email": email, "password": password}
+    user = _password_login_user(login)
+    lookup_user_id = user["user_id"] if user is not None else "__unknown_password_login__"
+    verified = object_credentials.verify_password(lookup_user_id, password, base_dir=_data_dir())
+
+    if user is None or not verified:
+        await asyncio.sleep(PASSWORD_LOGIN_FAILURE_DELAY_SECONDS)
+        await _send_redirect(send, failure_location)
+        return
+
+    try:
+        result = object_identity.create_session(
+            {"user_id": user["user_id"], "label": "browser login"},
+            base_dir=_data_dir(),
+            require_known_user=True,
+        )
+    except ValueError:
+        await asyncio.sleep(PASSWORD_LOGIN_FAILURE_DELAY_SECONDS)
+        await _send_redirect(send, failure_location)
+        return
+
+    await _send_redirect(
+        send,
+        next_path,
+        extra_headers=[
+            _session_cookie_header(
+                result["token"],
+                max_age=object_identity.DEFAULT_SESSION_TTL_SECONDS,
+            )
+        ],
+    )
+
+
+async def _handle_logout(send, method: str, headers: dict[str, str]) -> None:
+    if method != "POST":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    session = _current_identity_session(headers)
+    if session is not None:
+        try:
+            object_identity.revoke_session(session.session_id, base_dir=_data_dir())
+        except (OSError, ValueError, LookupError):
+            pass
+
+    await _send_redirect(
+        send,
+        http_api_contract.LOGIN_PATH,
+        extra_headers=[_session_cookie_header("", max_age=0)],
+    )
+
+
+def _parse_form_body(body: bytes, headers: dict[str, str]) -> dict[str, str] | None:
+    content_type = headers.get("content-type", "").split(";")[0].strip().lower()
+    if content_type and content_type != "application/x-www-form-urlencoded":
+        return None
+    try:
+        pairs = urllib.parse.parse_qsl(body.decode("utf-8"), keep_blank_values=True)
+    except (UnicodeDecodeError, ValueError):
+        return None
+    return {name: value for name, value in pairs}
+
+
+def _safe_next_path(value: str | None) -> str:
+    candidate = (value or "").strip()
+    if (
+        not candidate.startswith("/")
+        or candidate.startswith("//")
+        or "\\" in candidate
+        or any(ord(char) < 32 for char in candidate)
+    ):
+        return "/"
+    return candidate
+
+
+def _session_cookie_header(token: str, *, max_age: int) -> tuple[str, str]:
+    attributes = [
+        f"{SESSION_COOKIE_NAME}={token}",
+        "Path=/",
+        "HttpOnly",
+        "SameSite=Lax",
+        f"Max-Age={max_age}",
+    ]
+    if _cookie_secure_enabled():
+        attributes.append("Secure")
+    return ("set-cookie", "; ".join(attributes))
+
+
+def _cookie_secure_enabled() -> bool:
+    value = os.environ.get(COOKIE_SECURE_ENV, "").strip().lower()
+    if not value:
+        return True
+    return value in TRUE_VALUES
+
+
+async def _send_redirect(
+    send,
+    location: str,
+    *,
+    extra_headers: list[tuple[str, str]] | None = None,
+) -> None:
+    headers = [
+        ("location", location),
+        ("content-type", "text/html; charset=utf-8"),
+    ]
+    if extra_headers:
+        headers.extend(extra_headers)
+    body = f'<a href="{html.escape(location, quote=True)}">Continue</a>'.encode("utf-8")
+    await _send_response(send, status=303, headers=headers, body=body)
+
+
+async def _send_login_page(
+    send,
+    *,
+    error: str | None = None,
+    next_path: str = "/",
+    status: int = 200,
+) -> None:
+    error_block = (
+        f'<p class="error">{html.escape(error)}</p>' if error else ""
+    )
+    page = f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in</title>
+<style>
+body {{ font-family: system-ui, sans-serif; background: #f5f5f4; margin: 0;
+       display: flex; min-height: 100vh; align-items: center; justify-content: center; }}
+form {{ background: #fff; border: 1px solid #d6d3d1; border-radius: 8px;
+        padding: 2rem; width: 20rem; }}
+h1 {{ font-size: 1.1rem; margin: 0 0 1rem; }}
+label {{ display: block; font-size: 0.85rem; margin: 0.75rem 0 0.25rem; }}
+input {{ width: 100%; box-sizing: border-box; padding: 0.5rem;
+         border: 1px solid #d6d3d1; border-radius: 4px; }}
+button {{ margin-top: 1.25rem; width: 100%; padding: 0.6rem; border: 0;
+          border-radius: 4px; background: #1c1917; color: #fff; cursor: pointer; }}
+.error {{ background: #fef2f2; border: 1px solid #fecaca; color: #991b1b;
+          border-radius: 4px; padding: 0.5rem; font-size: 0.85rem; }}
+</style>
+</head>
+<body>
+<form method="post" action="{html.escape(http_api_contract.LOGIN_PATH, quote=True)}">
+<h1>Sign in</h1>
+{error_block}
+<label for="email">Email</label>
+<input id="email" name="email" type="email" autocomplete="username" required autofocus>
+<label for="password">Password</label>
+<input id="password" name="password" type="password" autocomplete="current-password" required>
+<input type="hidden" name="next" value="{html.escape(next_path, quote=True)}">
+<button type="submit">Sign in</button>
+</form>
+</body>
+</html>"""
+    await _send_response(
+        send,
+        status=status,
+        headers=[("content-type", "text/html; charset=utf-8")],
+        body=page.encode("utf-8"),
+    )
 
 
 def _password_login_user(login: Mapping[str, Any]) -> dict[str, Any] | None:
