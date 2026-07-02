@@ -568,8 +568,8 @@ sudo cp -a /etc/caddy/Caddyfile /etc/caddy/Caddyfile.before-dbbasic
 ```
 
 For the earliest public staging endpoint, expose only the hello object, system
-dashboard object, admin status and admin object-inspection routes, health check,
-and current-session self-service route until auth, permissions, and source
+dashboard object, admin status and admin inspection routes, health check, and
+current-session self-service route until auth, permissions, and source
 visibility are ready. Keep the broader identity admin routes and `/objects`
 listing blocked:
 
@@ -589,6 +589,14 @@ dbbasic.example.com {
     }
 
     handle /admin/objects* {
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    handle /admin/collections* {
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    handle /admin/schemas* {
         reverse_proxy 127.0.0.1:8001
     }
 
@@ -670,6 +678,8 @@ Then test:
 curl https://dbbasic.example.com/
 curl https://dbbasic.example.com/health
 curl -H "Authorization: Token $DBBASIC_ADMIN_TOKEN" https://dbbasic.example.com/admin/status
+curl -H "Authorization: Token $DBBASIC_ADMIN_TOKEN" https://dbbasic.example.com/admin/collections
+curl -H "Authorization: Token $DBBASIC_ADMIN_TOKEN" https://dbbasic.example.com/admin/schemas
 curl -H "Authorization: Token $DBBASIC_ADMIN_TOKEN" https://dbbasic.example.com/daemon/status
 curl https://dbbasic.example.com/objects/site_home
 curl https://dbbasic.example.com/admin/write-probe
@@ -687,7 +697,8 @@ server-side admin-token gate. They exist to prove collection create/update/
 delete behavior, record changelog reads, and schema reads through the public
 reverse proxy without exposing every collection or schema route. Do not expose
 broad `/collections*`, `/schemas*`, `/objects*`, or source write routes on a
-public staging server.
+public staging server. Use `/admin/collections*` and `/admin/schemas*` for
+operator inspection instead.
 
 ## Public Code Execution Controls
 

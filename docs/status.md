@@ -32,6 +32,9 @@ public users.
 - Token-gated admin object inspection for Scroll/operator source, state, logs,
   versions, metadata, and source-change views without exposing broad `/objects`
   execution routes through the reverse proxy
+- Token-gated admin collection and schema inspection for Scroll/operator
+  collection, record, changelog, schema, and schema-version views without
+  exposing broad write-capable `/collections*` or `/schemas*` routes
 - Token-gated daemon status with read-only scheduler, queue, event delivery,
   retention, and cleanup posture for Scroll/operator dashboards
 - Token-gated scheduler and queue control APIs for trusted operator screens,

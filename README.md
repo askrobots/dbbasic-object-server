@@ -189,6 +189,16 @@ Current endpoints:
 - `GET /admin/objects/{object_id}?source_changes=true&limit=100`
 - `GET /admin/objects/{object_id}?versions=true&limit=10`
 - `GET /admin/objects/{object_id}?version=1`
+- `GET /admin/collections`
+- `GET /admin/collections/{collection}`
+- `GET /admin/collections/{collection}/records`
+- `GET /admin/collections/{collection}/records/{record_id}`
+- `GET /admin/collections/{collection}/changes`
+- `GET /admin/collections/{collection}/records/{record_id}/changes`
+- `GET /admin/schemas`
+- `GET /admin/schemas/{collection}`
+- `GET /admin/schemas/{collection}?versions=true&limit=10`
+- `GET /admin/schemas/{collection}?version=1`
 - `GET /daemon/status`
 - `GET /daemon/scheduler/tasks`
 - `POST /daemon/scheduler/tasks`

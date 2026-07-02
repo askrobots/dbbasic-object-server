@@ -411,6 +411,26 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
             await _handle_admin_object(send, method, object_id, query, headers)
             return
 
+        if path == http_api_contract.ADMIN_COLLECTIONS_PATH:
+            await _handle_admin_collections(send, method, headers)
+            return
+
+        admin_collections_prefix = f"{http_api_contract.ADMIN_COLLECTIONS_PATH}/"
+        if path.startswith(admin_collections_prefix):
+            collection_tail = path.removeprefix(admin_collections_prefix)
+            await _handle_admin_collection(send, method, collection_tail, query, headers)
+            return
+
+        if path == http_api_contract.ADMIN_SCHEMAS_PATH:
+            await _handle_admin_schemas(send, method, headers)
+            return
+
+        admin_schemas_prefix = f"{http_api_contract.ADMIN_SCHEMAS_PATH}/"
+        if path.startswith(admin_schemas_prefix):
+            schema = path.removeprefix(admin_schemas_prefix)
+            await _handle_admin_schema(send, method, schema, query, headers)
+            return
+
         if path == http_api_contract.DAEMON_STATUS_PATH:
             await _handle_daemon_status(send, method, headers)
             return
@@ -1135,6 +1155,146 @@ async def _handle_admin_object(
         },
         status=400,
     )
+
+
+async def _handle_admin_collections(
+    send,
+    method: str,
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Admin collection listing requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    await _handle_collections(send, method, headers)
+
+
+async def _handle_admin_collection(
+    send,
+    method: str,
+    collection_tail: str,
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Admin collection inspection requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    parts = collection_tail.split("/")
+    if len(parts) == 2 and parts[1] == "changes":
+        await _handle_collection_changes(send, method, parts[0], query, headers)
+        return
+
+    if len(parts) == 2 and parts[1] == "records":
+        await _handle_collection_records_get(send, parts[0], query, headers)
+        return
+
+    if len(parts) == 4 and parts[1] == "records" and parts[3] == "changes":
+        await _handle_collection_record_changes(send, method, parts[0], parts[2], query, headers)
+        return
+
+    if len(parts) == 3 and parts[1] == "records":
+        await _handle_collection_record_get(send, parts[0], parts[2], headers)
+        return
+
+    if len(parts) == 1:
+        await _handle_collection_get(send, method, collection_tail, headers)
+        return
+
+    await _send_json(
+        send,
+        {
+            "status": "error",
+            "error": "Unsupported admin collection inspection path",
+            "allowed_paths": [
+                "/admin/collections/{collection}",
+                "/admin/collections/{collection}/records",
+                "/admin/collections/{collection}/records/{record_id}",
+                "/admin/collections/{collection}/changes",
+                "/admin/collections/{collection}/records/{record_id}/changes",
+            ],
+        },
+        status=400,
+    )
+
+
+async def _handle_admin_schemas(
+    send,
+    method: str,
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Admin schema listing requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    await _handle_schemas(send, method, headers)
+
+
+async def _handle_admin_schema(
+    send,
+    method: str,
+    schema: str,
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Admin schema inspection requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    supported_schema_keys = {"format", "limit", "version", "versions"}
+    only_format = set(query).issubset({"format"})
+    supported = set(query).issubset(supported_schema_keys) and (
+        not query or only_format or query.get("versions") == "true" or "version" in query
+    )
+    if not supported:
+        await _send_json(
+            send,
+            {
+                "status": "error",
+                "error": "Unsupported admin schema inspection query",
+                "allowed_queries": ["versions=true", "version=<id>"],
+            },
+            status=400,
+        )
+        return
+
+    await _handle_schema(send, method, schema, query, b"", headers)
 
 
 async def _handle_daemon_status(

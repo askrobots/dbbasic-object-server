@@ -1490,6 +1490,131 @@ def test_admin_object_alias_rejects_unsupported_queries(tmp_path, monkeypatch):
     assert "Unsupported admin object inspection query" in payload["error"]
 
 
+def test_admin_collection_alias_exposes_read_only_collection_surfaces(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "contacts" / "directory.py", "def GET(request):\n    return {}\n")
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\nc2\tGrace\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    list_status, _, listed = request("/admin/collections", headers=auth_headers())
+    detail_status, _, detail = request("/admin/collections/contacts", headers=auth_headers())
+    records_status, _, records = request(
+        "/admin/collections/contacts/records",
+        query_string="limit=1",
+        headers=auth_headers(),
+    )
+    record_status, _, record = request(
+        "/admin/collections/contacts/records/c2",
+        headers=auth_headers(),
+    )
+    create_status, _, create_payload = request(
+        "/admin/collections/contacts/records",
+        method="POST",
+        body=json.dumps({"record": {"id": "c3", "name": "Katherine"}}).encode(),
+        headers=auth_headers(),
+    )
+
+    assert list_status == 200
+    assert listed["status"] == "ok"
+    assert [item["name"] for item in listed["collections"]] == ["contacts"]
+    assert detail_status == 200
+    assert detail["collection"]["name"] == "contacts"
+    assert records_status == 200
+    assert records["records"] == [{"id": "c1", "name": "Ada"}]
+    assert record_status == 200
+    assert record["record"] == {"id": "c2", "name": "Grace"}
+    assert create_status == 405
+    assert create_payload == {"status": "error", "error": "Method not allowed"}
+
+
+def test_admin_collection_alias_requires_admin_token(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(tmp_path / "objects"))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/admin/collections")
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
+
+
+def test_admin_schema_alias_exposes_read_only_schema_surfaces(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+    request(
+        "/schemas/invoices",
+        method="PUT",
+        body=json.dumps(
+            {
+                "schema": {"fields": [{"name": "invoice_date", "type": "date"}]},
+                "author": "admin",
+                "message": "first schema",
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    list_status, _, listed = request("/admin/schemas", headers=auth_headers())
+    detail_status, _, detail = request(
+        "/admin/schemas/invoices",
+        query_string="format=json",
+        headers=auth_headers(),
+    )
+    versions_status, _, versions = request(
+        "/admin/schemas/invoices",
+        query_string="versions=true&limit=10",
+        headers=auth_headers(),
+    )
+    version_status, _, version = request(
+        "/admin/schemas/invoices",
+        query_string="version=1",
+        headers=auth_headers(),
+    )
+    put_status, _, put_payload = request(
+        "/admin/schemas/invoices",
+        method="PUT",
+        body=json.dumps({"schema": {"fields": [{"name": "total"}]}}).encode(),
+        headers=auth_headers(),
+    )
+
+    assert list_status == 200
+    assert listed["schemas"][0]["name"] == "invoices"
+    assert detail_status == 200
+    assert detail["schema"]["fields"] == [
+        {"name": "invoice_date", "type": "date", "required": False}
+    ]
+    assert versions_status == 200
+    assert [item["version_id"] for item in versions["versions"]] == [1]
+    assert version_status == 200
+    assert version["version"]["schema"]["fields"] == [
+        {"name": "invoice_date", "type": "date", "required": False}
+    ]
+    assert put_status == 405
+    assert put_payload == {"status": "error", "error": "Method not allowed"}
+
+
+def test_admin_schema_alias_rejects_unsupported_queries(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    schema_file = data_dir / "schemas" / "invoices.json"
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text(json.dumps({"fields": []}))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/admin/schemas/invoices",
+        query_string="rollback=true",
+        headers=auth_headers(),
+    )
+
+    assert status == 400
+    assert payload["status"] == "error"
+    assert "Unsupported admin schema inspection query" in payload["error"]
+
+
 def test_collection_list_requires_admin_token_configuration(tmp_path, monkeypatch):
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(tmp_path / "objects"))
     monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)

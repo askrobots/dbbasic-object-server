@@ -1016,6 +1016,33 @@ inspection surface never executes the object. Unsupported query flags return a
 400 response so a client cannot accidentally turn an operator view into an
 execution endpoint.
 
+## Admin Collection And Schema Inspection
+
+`/collections` and `/schemas` remain the data and schema API surfaces. Scroll
+and operator dashboards should use the admin inspection aliases for read-only
+collection, record, changelog, schema, and schema-version views. This lets a
+public staging reverse proxy expose inspection routes without exposing the broad
+write-capable collection and schema routes.
+
+```http
+GET /admin/collections
+GET /admin/collections/{collection}
+GET /admin/collections/{collection}/records
+GET /admin/collections/{collection}/records/{record_id}
+GET /admin/collections/{collection}/changes
+GET /admin/collections/{collection}/records/{record_id}/changes
+GET /admin/schemas
+GET /admin/schemas/{collection}
+GET /admin/schemas/{collection}?versions=true&limit=10
+GET /admin/schemas/{collection}?version=1
+Authorization: Token <token>
+```
+
+The responses match the underlying read-only `GET /collections*` and
+`GET /schemas*` responses. These admin aliases are GET-only and admin-token
+gated. They do not create records, update records, delete records, replace
+schemas, roll back schemas, install packages, or execute objects.
+
 ## Collections
 
 ```http
