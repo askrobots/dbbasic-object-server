@@ -2382,6 +2382,60 @@ def test_record_update_delete_do_not_leak_existence_before_auth(tmp_path, monkey
     assert authed_status == 404
 
 
+def test_record_update_delete_do_not_leak_existence_under_enforcement(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+    save_permission_policy(
+        data_dir,
+        {
+            "access_mode": "role_based",
+            "rules": [
+                {
+                    "effect": "allow",
+                    "principal": "role:sales",
+                    "actions": ["update", "delete"],
+                    "collection": "contacts",
+                }
+            ],
+        },
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+    monkeypatch.setenv(object_server.PERMISSION_TRUST_HEADERS_ENV, "true")
+    enable_admin_token(monkeypatch)
+    sales_headers = [("x-dbbasic-user-id", "7"), ("x-dbbasic-roles", "sales")]
+
+    anon_update_status, _, anon_update_payload = request(
+        "/collections/contacts/records/missing-record",
+        method="PUT",
+        body=json.dumps({"name": "Nobody"}).encode(),
+    )
+    anon_delete_status, _, anon_delete_payload = request(
+        "/collections/contacts/records/missing-record",
+        method="DELETE",
+    )
+    allowed_missing_status, _, _ = request(
+        "/collections/contacts/records/missing-record",
+        method="DELETE",
+        headers=sales_headers,
+    )
+    allowed_real_status, _, allowed_real_payload = request(
+        "/collections/contacts/records/c1",
+        method="PUT",
+        body=json.dumps({"name": "Ada Lovelace"}).encode(),
+        headers=sales_headers,
+    )
+
+    assert anon_update_status == 403
+    assert anon_update_payload["code"] == "forbidden"
+    assert "not found" not in anon_update_payload["error"].lower()
+    assert anon_delete_status == 403
+    assert anon_delete_payload["code"] == "forbidden"
+    assert allowed_missing_status == 404
+    assert allowed_real_status == 200
+    assert allowed_real_payload["record"]["name"] == "Ada Lovelace"
+
+
 def test_admin_collection_record_write_aliases_require_admin_token(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")

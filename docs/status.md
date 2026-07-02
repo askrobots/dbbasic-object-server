@@ -1,8 +1,9 @@
 # Status
 
-DBBASIC Object Server is ready for controlled staging and internal app
-dogfooding. It is not ready to expose arbitrary code execution to untrusted
-public users.
+DBBASIC Object Server is ready for controlled staging, internal app
+dogfooding, and invited-user apps behind browser login with permission
+enforcement on. It is not ready to expose arbitrary code execution to
+untrusted public users.
 
 ## Usable Now
 
@@ -30,6 +31,11 @@ public users.
 - Permission policy storage, check API, audit mode, readiness status, row
   filters, field redaction, opt-in enforcement, and rollout gates for recovery,
   identity, and policy safety
+- A documented starter policy (`object_permission_store.starter_policy_payload`)
+  and a completed audit-then-enforce rollout on public staging: enforcement is
+  ON at object.dbbasic.com with public grants for the public pages and probe
+  reads, registered-user grants for object execution and probe writes, and
+  admin-role bypass
 - Request size limits, request concurrency limits, execution concurrency limits,
   rate limits, wall-clock timeout path, and health/capacity metrics
 - Token-gated admin status with detailed health, inventory, capability flags,
@@ -67,7 +73,10 @@ public users.
 
 - Open signup where strangers can run arbitrary Python code
 - Public source writes
-- Default-on permissions for every route after starter policy and rollout
+- Enforcement-on as the shipped default (it is opt-in per deployment; staging
+  has it on)
+- Policy checks for the admin-token-only surfaces (identity, permissions,
+  schemas, daemon, events, packages stay admin-gated by design)
 - Self-service signup, password reset flows, and login attempt lockout
 - Session admin gates are implemented, but opt-in with
   `DBBASIC_ENABLE_SESSION_ADMIN_GATES=true`
@@ -79,10 +88,11 @@ public users.
 
 ## Next Work
 
-1. Ship a starter permission policy with real allow grants, then run audit
-   mode against live traffic.
-2. Make permission enforcement default-on after the starter policy holds up
-   under audit.
+1. Retire the `dbbasic_probe` Caddy exceptions now that Scroll writes through
+   admin aliases, or open runtime object routes more broadly under
+   enforcement.
+2. Enable session admin gates on staging so Scroll can operate on an
+   admin-role session instead of the raw deployment token.
 3. Add event delivery controls after scheduler and queue controls stabilize.
 4. Add file upload/delete with quotas, content checks, permissions, and audit.
 5. Add CPU/memory isolation and a better worker boundary for untrusted code.

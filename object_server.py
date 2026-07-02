@@ -5437,15 +5437,13 @@ async def _handle_collection_record_update(
     body: bytes,
     headers: dict[str, str],
 ) -> None:
-    if not _permission_checks_enabled():
-        gate_error = _admin_token_gate_error(
-            headers,
-            f"Collection record writes require {ADMIN_TOKEN_ENV}.",
-        )
-        if gate_error is not None:
-            status, message = gate_error
-            await _send_json(send, {"status": "error", "error": message}, status=status)
-            return
+    if await _record_write_denied_before_lookup(
+        send,
+        headers,
+        object_permissions.UPDATE,
+        collection=collection,
+    ):
+        return
 
     try:
         changes = _record_payload_from_body(body)
@@ -5581,15 +5579,13 @@ async def _handle_collection_record_delete(
     record_id: str,
     headers: dict[str, str],
 ) -> None:
-    if not _permission_checks_enabled():
-        gate_error = _admin_token_gate_error(
-            headers,
-            f"Collection record writes require {ADMIN_TOKEN_ENV}.",
-        )
-        if gate_error is not None:
-            status, message = gate_error
-            await _send_json(send, {"status": "error", "error": message}, status=status)
-            return
+    if await _record_write_denied_before_lookup(
+        send,
+        headers,
+        object_permissions.DELETE,
+        collection=collection,
+    ):
+        return
 
     try:
         existing = object_records.get_collection_record(
@@ -5674,6 +5670,58 @@ async def _handle_collection_record_delete(
             "deleted": True,
         },
     )
+
+
+async def _record_write_denied_before_lookup(
+    send,
+    headers: dict[str, str],
+    action: str,
+    *,
+    collection: str,
+) -> bool:
+    """Deny unauthorized record writes before any record existence lookup.
+
+    Without this, a 404 for a missing record would leak record-id existence to
+    callers who are not allowed to write at all. Subjects allowed at the
+    collection level (including row-filtered allows) proceed to the normal
+    record-aware authorization.
+    """
+    if not _permission_enforcement_enabled():
+        gate_error = _admin_token_gate_error(
+            headers,
+            f"Collection record writes require {ADMIN_TOKEN_ENV}.",
+        )
+        if gate_error is not None:
+            status, message = gate_error
+            await _send_json(send, {"status": "error", "error": message}, status=status)
+            return True
+        return False
+
+    subject = _permission_subject(headers)
+    try:
+        policy = object_permission_store.load_policy(_data_dir())
+        decision = object_permissions.check_permission(
+            subject,
+            action,
+            policy=policy,
+            collection=collection,
+        )
+    except ValueError:
+        return False
+
+    if decision.allowed:
+        return False
+
+    await _send_json(
+        send,
+        {
+            "status": "error",
+            "error": decision.reason,
+            "code": decision.code,
+        },
+        status=decision.http_status,
+    )
+    return True
 
 
 async def _authorize_collection_write(
