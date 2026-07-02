@@ -4972,6 +4972,16 @@ async def _handle_collection_record_update(
     body: bytes,
     headers: dict[str, str],
 ) -> None:
+    if not _permission_checks_enabled():
+        gate_error = _admin_token_gate_error(
+            headers,
+            f"Collection record writes require {ADMIN_TOKEN_ENV}.",
+        )
+        if gate_error is not None:
+            status, message = gate_error
+            await _send_json(send, {"status": "error", "error": message}, status=status)
+            return
+
     try:
         changes = _record_payload_from_body(body)
         existing = object_records.get_collection_record(
@@ -5106,6 +5116,16 @@ async def _handle_collection_record_delete(
     record_id: str,
     headers: dict[str, str],
 ) -> None:
+    if not _permission_checks_enabled():
+        gate_error = _admin_token_gate_error(
+            headers,
+            f"Collection record writes require {ADMIN_TOKEN_ENV}.",
+        )
+        if gate_error is not None:
+            status, message = gate_error
+            await _send_json(send, {"status": "error", "error": message}, status=status)
+            return
+
     try:
         existing = object_records.get_collection_record(
             collection,

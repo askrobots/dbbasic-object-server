@@ -1778,6 +1778,34 @@ def test_admin_collection_record_write_aliases_create_update_delete(tmp_path, mo
     assert [item["id"] for item in list_payload["records"]] == ["c1", "c3"]
 
 
+def test_record_update_delete_do_not_leak_existence_before_auth(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    update_status, _, update_payload = request(
+        "/admin/collections/contacts/records/missing-record",
+        method="PUT",
+        body=json.dumps({"name": "Nobody"}).encode(),
+    )
+    delete_status, _, delete_payload = request(
+        "/admin/collections/contacts/records/missing-record",
+        method="DELETE",
+    )
+    authed_status, _, authed_payload = request(
+        "/admin/collections/contacts/records/missing-record",
+        method="DELETE",
+        headers=auth_headers(),
+    )
+
+    assert update_status == 401
+    assert update_payload == {"status": "error", "error": "Unauthorized"}
+    assert delete_status == 401
+    assert delete_payload == {"status": "error", "error": "Unauthorized"}
+    assert authed_status == 404
+
+
 def test_admin_collection_record_write_aliases_require_admin_token(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
