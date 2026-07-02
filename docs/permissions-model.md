@@ -86,6 +86,24 @@ If the file does not exist, the server uses a conservative default:
 }
 ```
 
+That default has no allow grants, so enforcement readiness will block until a
+real policy is written. `object_permission_store.starter_policy_payload()`
+returns the documented starter policy for a fresh deployment: anonymous
+visitors can execute the public pages (`site_home`, `system_dashboard`,
+`system_write_probe`) and read the `dbbasic_probe` demo records; signed-in
+users can read and execute objects and write probe records; admin-role
+subjects bypass rules. Install it with the policy endpoint:
+
+```bash
+python3 -c "import json, object_permission_store as s; print(json.dumps({'policy': s.starter_policy_payload()}))" \
+  | curl -s -X PUT https://your-host/permissions/policy \
+      -H "Authorization: Token <admin-token>" \
+      -H "Content-Type: application/json" --data-binary @-
+```
+
+Then edit grants per app instead of widening the starter rules in place. Run
+audit mode before enforcement to see what live traffic would be denied.
+
 The policy endpoints are still admin-gated while broader login, account
 management, and permission editing mature:
 

@@ -68,5 +68,62 @@ def replace_policy(
     return policy
 
 
+def starter_policy_payload() -> dict[str, Any]:
+    """Return the documented starter policy for a fresh deployment.
+
+    Role-based, with the smallest grants that keep a public staging site
+    working once enforcement is on: anonymous visitors can run the public
+    pages and read the probe demo records; signed-in users can run objects
+    and write probe records. Admin-role subjects bypass rules entirely.
+    Deployments should edit this per app rather than widen it in place.
+    """
+    return {
+        "access_mode": "role_based",
+        "rules": [
+            {
+                "effect": "allow",
+                "principal": "public",
+                "actions": ["execute"],
+                "object_id": "site_home",
+                "reason": "public home page",
+            },
+            {
+                "effect": "allow",
+                "principal": "public",
+                "actions": ["execute"],
+                "object_id": "system_dashboard",
+                "reason": "public staging dashboard",
+            },
+            {
+                "effect": "allow",
+                "principal": "public",
+                "actions": ["execute"],
+                "object_id": "system_write_probe",
+                "reason": "public write probe page",
+            },
+            {
+                "effect": "allow",
+                "principal": "public",
+                "actions": ["read"],
+                "collection": "dbbasic_probe",
+                "reason": "probe records are public demo data",
+            },
+            {
+                "effect": "allow",
+                "principal": "registered",
+                "actions": ["read", "execute"],
+                "reason": "signed-in users can read and run objects",
+            },
+            {
+                "effect": "allow",
+                "principal": "registered",
+                "actions": ["create", "update", "delete"],
+                "collection": "dbbasic_probe",
+                "reason": "signed-in users can write probe records",
+            },
+        ],
+    }
+
+
 def _json_dump(payload: dict[str, Any]) -> str:
     return json.dumps(payload, indent=2, sort_keys=True) + "\n"
