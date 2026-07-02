@@ -912,6 +912,139 @@ def test_identity_current_session_login_requires_known_active_user(tmp_path, mon
     assert payload == {"status": "error", "error": "User not found: missing"}
 
 
+def _create_password_user(monkeypatch, *, user_id="u_7", email="alice@example.com", password="correct horse battery"):
+    enable_admin_token(monkeypatch)
+    request(
+        "/identity/users",
+        method="POST",
+        body=json.dumps({"user_id": user_id, "email": email}).encode(),
+        headers=auth_headers(),
+    )
+    request(
+        f"/identity/users/{user_id}/password",
+        method="POST",
+        body=json.dumps({"password": password}).encode(),
+        headers=auth_headers(),
+    )
+
+
+def test_password_login_is_disabled_by_default(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.delenv(object_server.PASSWORD_LOGIN_ENV, raising=False)
+
+    status, _, payload = request(
+        "/identity/session",
+        method="POST",
+        body=json.dumps({"email": "alice@example.com", "password": "whatever12"}).encode(),
+    )
+
+    assert status == 403
+    assert payload == {
+        "status": "error",
+        "error": "Password login is disabled. Set DBBASIC_ENABLE_PASSWORD_LOGIN=true.",
+    }
+
+
+def test_password_login_mints_session_by_email_and_user_id(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.PASSWORD_LOGIN_ENV, "true")
+    _create_password_user(monkeypatch)
+
+    email_status, _, email_login = request(
+        "/identity/session",
+        method="POST",
+        body=json.dumps(
+            {"email": "Alice@Example.com", "password": "correct horse battery", "label": "browser"}
+        ).encode(),
+    )
+    user_id_status, _, user_id_login = request(
+        "/identity/session",
+        method="POST",
+        body=json.dumps({"user_id": "u_7", "password": "correct horse battery"}).encode(),
+    )
+
+    assert email_status == 201
+    assert email_login["status"] == "ok"
+    assert email_login["token"]
+    assert email_login["session"]["user_id"] == "u_7"
+    assert email_login["session"]["label"] == "browser"
+    assert user_id_status == 201
+    assert user_id_login["session"]["label"] == "password login"
+
+    session_status, _, session_payload = request(
+        "/identity/session",
+        headers=[("authorization", f"Bearer {email_login['token']}")],
+    )
+
+    assert session_status == 200
+    assert session_payload["session"]["user_id"] == "u_7"
+
+
+def test_password_login_rejects_bad_credentials_uniformly(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.PASSWORD_LOGIN_ENV, "true")
+    monkeypatch.setattr(object_server, "PASSWORD_LOGIN_FAILURE_DELAY_SECONDS", 0)
+    _create_password_user(monkeypatch)
+
+    wrong_status, _, wrong_payload = request(
+        "/identity/session",
+        method="POST",
+        body=json.dumps({"email": "alice@example.com", "password": "wrong password"}).encode(),
+    )
+    unknown_status, _, unknown_payload = request(
+        "/identity/session",
+        method="POST",
+        body=json.dumps({"email": "nobody@example.com", "password": "wrong password"}).encode(),
+    )
+    unknown_user_status, _, unknown_user_payload = request(
+        "/identity/session",
+        method="POST",
+        body=json.dumps({"user_id": "u_missing", "password": "wrong password"}).encode(),
+    )
+
+    assert wrong_status == unknown_status == unknown_user_status == 401
+    assert wrong_payload == unknown_payload == unknown_user_payload == {
+        "status": "error",
+        "error": "Invalid credentials",
+    }
+
+
+def test_password_login_rejects_overrides_and_bad_payloads(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.PASSWORD_LOGIN_ENV, "true")
+    _create_password_user(monkeypatch)
+
+    roles_status, _, roles_payload = request(
+        "/identity/session",
+        method="POST",
+        body=json.dumps(
+            {"email": "alice@example.com", "password": "correct horse battery", "roles": ["admin"]}
+        ).encode(),
+    )
+    both_status, _, both_payload = request(
+        "/identity/session",
+        method="POST",
+        body=json.dumps(
+            {"user_id": "u_7", "email": "alice@example.com", "password": "correct horse battery"}
+        ).encode(),
+    )
+    neither_status, _, neither_payload = request(
+        "/identity/session",
+        method="POST",
+        body=json.dumps({"password": "correct horse battery"}).encode(),
+    )
+
+    assert roles_status == 400
+    assert roles_payload == {
+        "status": "error",
+        "error": "Unsupported password login fields: roles",
+    }
+    assert both_status == 400
+    assert both_payload["error"] == "Provide exactly one of user_id or email"
+    assert neither_status == 400
+    assert neither_payload["error"] == "Provide exactly one of user_id or email"
+
+
 def test_identity_endpoint_ignores_untrusted_identity_headers(monkeypatch):
     monkeypatch.delenv("DBBASIC_PERMISSION_TRUST_HEADERS", raising=False)
     headers = [
@@ -4022,7 +4155,8 @@ def test_permissions_status_reports_default_policy_blocker(tmp_path, monkeypatch
         "blockers": [
             "Role-based policy has no allow grants; non-admin traffic will be denied.",
             "No non-admin identity path is available; enable trusted headers, "
-            "guarded session login, or create an active session before enforcement.",
+            "guarded session login, password login, or create an active session "
+            "before enforcement.",
         ],
     }
     assert "Permission enforcement is off." in payload["warnings"]
@@ -4046,7 +4180,8 @@ def test_permissions_status_reports_blocked_enforcement_request(tmp_path, monkey
         "blockers": [
             "Role-based policy has no allow grants; non-admin traffic will be denied.",
             "No non-admin identity path is available; enable trusted headers, "
-            "guarded session login, or create an active session before enforcement.",
+            "guarded session login, password login, or create an active session "
+            "before enforcement.",
         ],
     }
     assert (

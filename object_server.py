@@ -6,6 +6,7 @@ while the production auth and mutation paths are extracted.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import hashlib
@@ -77,6 +78,8 @@ REQUIRE_KNOWN_IDENTITY_USERS_ENV = "DBBASIC_REQUIRE_KNOWN_IDENTITY_USERS"
 SESSION_LOGIN_ENV = "DBBASIC_ENABLE_SESSION_LOGIN"
 SESSION_LOGIN_TOKEN_ENV = "DBBASIC_SESSION_LOGIN_TOKEN"
 SESSION_ADMIN_GATES_ENV = "DBBASIC_ENABLE_SESSION_ADMIN_GATES"
+PASSWORD_LOGIN_ENV = "DBBASIC_ENABLE_PASSWORD_LOGIN"
+PASSWORD_LOGIN_FAILURE_DELAY_SECONDS = 0.5
 RECORD_EVENTS_ENV = "DBBASIC_ENABLE_RECORD_EVENTS"
 EVENT_KEEP_COUNT_ENV = "DBBASIC_EVENT_KEEP_COUNT"
 EVENT_KEEP_SECONDS_ENV = "DBBASIC_EVENT_KEEP_SECONDS"
@@ -1036,6 +1039,14 @@ async def _handle_identity_current_session(
         return
 
     if method == "POST":
+        try:
+            peeked_payload = _parse_json_body(body)
+        except ValueError:
+            peeked_payload = None
+        if isinstance(peeked_payload, dict) and "password" in peeked_payload:
+            await _handle_identity_password_login(send, peeked_payload)
+            return
+
         gate_error = _session_login_gate_error(headers)
         if gate_error is not None:
             status, message = gate_error
@@ -1082,6 +1093,115 @@ async def _handle_identity_current_session(
         return
 
     await _send_json(send, {"status": "ok", "session": revoked})
+
+
+async def _handle_identity_password_login(
+    send,
+    payload: dict[str, Any],
+) -> None:
+    if not _env_enabled(PASSWORD_LOGIN_ENV):
+        await _send_json(
+            send,
+            {
+                "status": "error",
+                "error": f"Password login is disabled. Set {PASSWORD_LOGIN_ENV}=true.",
+            },
+            status=403,
+        )
+        return
+
+    try:
+        login = _identity_password_login_payload(payload)
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    user = _password_login_user(login)
+    lookup_user_id = user["user_id"] if user is not None else "__unknown_password_login__"
+    verified = object_credentials.verify_password(
+        lookup_user_id,
+        login["password"],
+        base_dir=_data_dir(),
+    )
+
+    if user is None or not verified:
+        await asyncio.sleep(PASSWORD_LOGIN_FAILURE_DELAY_SECONDS)
+        await _send_json(send, {"status": "error", "error": "Invalid credentials"}, status=401)
+        return
+
+    try:
+        result = object_identity.create_session(
+            {
+                "user_id": user["user_id"],
+                "label": login["label"],
+                "ttl_seconds": login["ttl_seconds"],
+            },
+            base_dir=_data_dir(),
+            require_known_user=True,
+        )
+    except ValueError:
+        await asyncio.sleep(PASSWORD_LOGIN_FAILURE_DELAY_SECONDS)
+        await _send_json(send, {"status": "error", "error": "Invalid credentials"}, status=401)
+        return
+
+    await _send_json(send, {"status": "ok", **result}, status=201)
+
+
+def _identity_password_login_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    allowed_keys = {"user_id", "email", "password", "label", "ttl_seconds"}
+    unexpected = sorted(set(payload) - allowed_keys)
+    if unexpected:
+        raise ValueError(f"Unsupported password login fields: {', '.join(unexpected)}")
+
+    password = payload.get("password")
+    if not isinstance(password, str) or not password:
+        raise ValueError("password must be a non-empty string")
+
+    user_id = payload.get("user_id")
+    email = payload.get("email")
+    if (user_id is None) == (email is None):
+        raise ValueError("Provide exactly one of user_id or email")
+
+    label = payload.get("label")
+    if label is not None and not isinstance(label, str):
+        raise ValueError("label must be a string")
+
+    return {
+        "user_id": user_id,
+        "email": email,
+        "password": password,
+        "label": label or "password login",
+        "ttl_seconds": payload.get("ttl_seconds"),
+    }
+
+
+def _password_login_user(login: Mapping[str, Any]) -> dict[str, Any] | None:
+    if login["user_id"] is not None:
+        if not isinstance(login["user_id"], str):
+            return None
+        try:
+            user = object_identity.get_user(login["user_id"], base_dir=_data_dir())
+        except (ValueError, LookupError):
+            return None
+        return user if user.get("status") == "active" else None
+
+    email = login["email"]
+    if not isinstance(email, str) or not email.strip():
+        return None
+    normalized_email = email.strip().casefold()
+    try:
+        users = object_identity.list_users(base_dir=_data_dir())
+    except ValueError:
+        return None
+    matches = [
+        user
+        for user in users
+        if (user.get("email") or "").casefold() == normalized_email
+        and user.get("status") == "active"
+    ]
+    if len(matches) != 1:
+        return None
+    return matches[0]
 
 
 async def _send_rate_limit_if_needed(
@@ -2255,6 +2375,8 @@ def _admin_capabilities_payload() -> dict[str, Any]:
             "session_login_token_configured": bool(os.environ.get(SESSION_LOGIN_TOKEN_ENV, "")),
             "session_admin_gates_enabled": _env_enabled(SESSION_ADMIN_GATES_ENV),
             "session_admin_gates_env": SESSION_ADMIN_GATES_ENV,
+            "password_login_enabled": _env_enabled(PASSWORD_LOGIN_ENV),
+            "password_login_env": PASSWORD_LOGIN_ENV,
         },
         "limits": {
             "max_request_bytes": _max_request_bytes(),
@@ -2369,6 +2491,7 @@ def _permission_readiness_inputs() -> dict[str, Any]:
         "require_known_identity_users": _env_enabled(REQUIRE_KNOWN_IDENTITY_USERS_ENV),
         "session_login_enabled": _env_enabled(SESSION_LOGIN_ENV),
         "session_login_token_configured": bool(os.environ.get(SESSION_LOGIN_TOKEN_ENV, "")),
+        "password_login_enabled": _env_enabled(PASSWORD_LOGIN_ENV),
     }
 
 

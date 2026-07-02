@@ -156,7 +156,8 @@ def readiness_status(
         ):
             blockers.append(
                 "No non-admin identity path is available; enable trusted headers, "
-                "guarded session login, or create an active session before enforcement."
+                "guarded session login, password login, or create an active session "
+                "before enforcement."
             )
 
     return {
@@ -198,6 +199,7 @@ def status_warnings(
         identity["valid"]
         and identity["sessions"]["active"] == 0
         and not _session_login_available(identity=identity, permissions=permissions)
+        and not _password_login_available(identity=identity, permissions=permissions)
     ):
         warnings.append(
             "Trusted headers are off and no active DBBASIC sessions exist; non-admin requests will be anonymous."
@@ -222,6 +224,8 @@ def _has_non_admin_identity_path(
         return True
     if _session_login_available(identity=identity, permissions=permissions):
         return True
+    if _password_login_available(identity=identity, permissions=permissions):
+        return True
     return bool(identity["sessions"]["active"])
 
 
@@ -233,6 +237,17 @@ def _session_login_available(
     return bool(
         permissions.get("session_login_enabled")
         and permissions.get("session_login_token_configured")
+        and identity["users"]["active"] > 0
+    )
+
+
+def _password_login_available(
+    *,
+    identity: Mapping[str, Any],
+    permissions: Mapping[str, Any],
+) -> bool:
+    return bool(
+        permissions.get("password_login_enabled")
         and identity["users"]["active"] > 0
     )
 

@@ -703,7 +703,36 @@ It accepts only `user_id`, `label`, and `ttl_seconds`; caller-supplied
 `account_id`, `roles`, or `subscriptions` are rejected. The session subject is
 loaded from the registered user and account so a login request cannot grant
 itself stronger permissions. This is a session-mint primitive, not password
-authentication yet.
+authentication.
+
+### Password Login
+
+For direct password authentication, the same route accepts a credential login
+when `DBBASIC_ENABLE_PASSWORD_LOGIN=true`. No `Authorization` header is
+required; the password is the credential:
+
+```http
+POST /identity/session
+Content-Type: application/json
+```
+
+```json
+{"email": "alice@example.com", "password": "correct horse battery"}
+```
+
+The body must contain exactly one of `email` or `user_id`, plus `password`, and
+may include `label` and `ttl_seconds`. Role, account, and subscription
+overrides are rejected. The password is verified against the scrypt hash in
+`data/identity/credentials.tsv` set through the password routes above. Email
+matching is case-insensitive and must resolve to exactly one active user.
+
+Success returns `201` with the same session-plus-one-time-token shape as other
+session mints. Any failure — unknown user, wrong password, disabled user or
+account — returns a uniform `401 Invalid credentials` after a short fixed
+delay, so callers cannot probe which accounts exist. The global rate limiter
+also applies. Password login availability (enabled flag plus at least one
+active user) counts as a non-admin identity path for permission enforcement
+readiness.
 
 List sessions:
 
