@@ -189,6 +189,7 @@ Current endpoints:
 - `GET /admin/status`
 - `GET /admin/changes`
 - `GET /admin/objects`
+- `POST /admin/objects`
 - `GET /admin/objects/{object_id}`
 - `GET /admin/objects/{object_id}?metadata=true`
 - `GET /admin/objects/{object_id}?source=true&format=json`

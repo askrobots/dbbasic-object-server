@@ -5152,6 +5152,84 @@ def test_object_create_creates_source_version_and_runs_new_code(tmp_path, monkey
     assert payload == {"created": True}
 
 
+def test_admin_object_create_alias_requires_authorization_header(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    enable_source_writes(monkeypatch, root, data_dir)
+
+    status, _, payload = request(
+        "/admin/objects",
+        method="POST",
+        body=json.dumps(
+            {
+                "object_id": "site_home",
+                "code": "def GET(request):\n    return {'created': True}\n",
+            }
+        ).encode(),
+    )
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
+    assert not (root / "site" / "home.py").exists()
+
+
+def test_admin_object_create_alias_respects_source_write_flag(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.delenv("DBBASIC_ENABLE_SOURCE_WRITES", raising=False)
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/admin/objects",
+        method="POST",
+        body=json.dumps(
+            {
+                "object_id": "site_home",
+                "code": "def GET(request):\n    return {'created': True}\n",
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 403
+    assert payload["status"] == "error"
+    assert payload["error"].startswith("Source writes are disabled")
+    assert not (root / "site" / "home.py").exists()
+
+
+def test_admin_object_create_alias_creates_source_version(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    enable_source_writes(monkeypatch, root, data_dir)
+    code = "def GET(request):\n    return {'created_from': 'admin'}\n"
+
+    status, _, payload = request(
+        "/admin/objects",
+        method="POST",
+        body=json.dumps(
+            {
+                "object_id": "site_home",
+                "code": code,
+                "author": "scroll",
+                "message": "Create from Scroll",
+            }
+        ).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 201
+    assert payload["status"] == "ok"
+    assert payload["object_id"] == "site_home"
+    assert payload["version_id"] == 1
+    assert (root / "site" / "home.py").read_text() == code
+
+    source_changes = object_source_changes.list_source_changes("site_home", base_dir=data_dir)
+    assert source_changes["changes"][0]["actor"] == "scroll"
+    assert source_changes["changes"][0]["message"] == "Create from Scroll"
+
+
 def test_object_create_accepts_legacy_name_owner_shape(tmp_path, monkeypatch):
     root = tmp_path / "objects"
     data_dir = tmp_path / "data"

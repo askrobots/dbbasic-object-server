@@ -425,7 +425,7 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
             return
 
         if path == http_api_contract.ADMIN_OBJECTS_PATH:
-            await _handle_admin_objects(send, method, headers)
+            await _handle_admin_objects(send, method, body, headers)
             return
 
         admin_objects_prefix = f"{http_api_contract.ADMIN_OBJECTS_PATH}/"
@@ -1181,8 +1181,13 @@ async def _handle_admin_changes(
 async def _handle_admin_objects(
     send,
     method: str,
+    body: bytes,
     headers: dict[str, str],
 ) -> None:
+    if method == "POST":
+        await _handle_objects_post(send, body, headers)
+        return
+
     if method != "GET":
         await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
         return

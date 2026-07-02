@@ -1008,10 +1008,15 @@ opening broad object execution routes at the reverse proxy.
 
 ```http
 GET /admin/objects
+POST /admin/objects
 Authorization: Token <token>
 ```
 
-The response matches `GET /objects?format=json`.
+`GET` returns the same response shape as `GET /objects?format=json`.
+`POST` is the admin/operator alias for `POST /objects`; it creates a new
+object without requiring the reverse proxy to expose the broader runtime
+`/objects` collection route. Creation still requires
+`DBBASIC_ENABLE_SOURCE_WRITES=true` and the admin gate.
 
 ```http
 GET /admin/objects/{object_id}
