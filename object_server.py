@@ -80,6 +80,8 @@ SESSION_LOGIN_TOKEN_ENV = "DBBASIC_SESSION_LOGIN_TOKEN"
 SESSION_ADMIN_GATES_ENV = "DBBASIC_ENABLE_SESSION_ADMIN_GATES"
 PASSWORD_LOGIN_ENV = "DBBASIC_ENABLE_PASSWORD_LOGIN"
 PASSWORD_LOGIN_FAILURE_DELAY_SECONDS = 0.5
+SESSION_COOKIE_NAME = "dbbasic_session"
+COOKIE_SECURE_ENV = "DBBASIC_COOKIE_SECURE"
 RECORD_EVENTS_ENV = "DBBASIC_ENABLE_RECORD_EVENTS"
 EVENT_KEEP_COUNT_ENV = "DBBASIC_EVENT_KEEP_COUNT"
 EVENT_KEEP_SECONDS_ENV = "DBBASIC_EVENT_KEEP_SECONDS"
@@ -329,6 +331,19 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
         return
 
     if await _send_rate_limit_if_needed(scope, headers, send):
+        return
+
+    if (
+        method not in {"GET", "HEAD", "OPTIONS"}
+        and _authorization_token(headers) is None
+        and _session_cookie_token(headers) is not None
+        and not _cookie_request_origin_allowed(headers)
+    ):
+        await _send_json(
+            send,
+            {"status": "error", "error": "Cross-origin cookie request rejected"},
+            status=403,
+        )
         return
 
     request_limit = _max_concurrent_requests()
@@ -6744,13 +6759,15 @@ def _permission_identity(
     if token and admin_token and hmac.compare_digest(token, admin_token):
         return object_permissions.PermissionSubject(user_id="admin", roles=("admin",)), "admin_token"
 
-    if token:
+    cookie_token = None if token else _session_cookie_token(headers)
+    session_token = token or cookie_token
+    if session_token:
         try:
-            session = object_identity.resolve_session_token(token, base_dir=_data_dir())
+            session = object_identity.resolve_session_token(session_token, base_dir=_data_dir())
         except (OSError, ValueError):
             session = None
         if session is not None:
-            return session.subject(), "session_token"
+            return session.subject(), "session_cookie" if cookie_token else "session_token"
 
     if not _env_enabled(PERMISSION_TRUST_HEADERS_ENV):
         return object_permissions.PermissionSubject.anonymous(), "anonymous"
@@ -6768,7 +6785,7 @@ def _permission_identity(
 
 
 def _current_identity_session(headers: dict[str, str]) -> object_identity.IdentitySession | None:
-    token = _authorization_token(headers)
+    token = _authorization_token(headers) or _session_cookie_token(headers)
     if not token:
         return None
 
@@ -6780,6 +6797,27 @@ def _current_identity_session(headers: dict[str, str]) -> object_identity.Identi
         return object_identity.resolve_session_token(token, base_dir=_data_dir())
     except (OSError, ValueError):
         return None
+
+
+def _session_cookie_token(headers: dict[str, str]) -> str | None:
+    cookie_header = headers.get("cookie", "")
+    if not cookie_header:
+        return None
+    for part in cookie_header.split(";"):
+        name, _, value = part.strip().partition("=")
+        if name == SESSION_COOKIE_NAME and value:
+            return value
+    return None
+
+
+def _cookie_request_origin_allowed(headers: dict[str, str]) -> bool:
+    source = headers.get("origin", "").strip() or headers.get("referer", "").strip()
+    if not source:
+        return True
+    host = headers.get("host", "").strip().lower()
+    if not host:
+        return False
+    return (urllib.parse.urlsplit(source).netloc or "").lower() == host
 
 
 def _trusted_identity_headers_present(headers: dict[str, str]) -> bool:

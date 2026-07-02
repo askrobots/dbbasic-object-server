@@ -766,6 +766,21 @@ The current-session route does not accept the admin token as a user session.
 It is for Scroll, app clients, and login gateways that need a stable non-admin
 session lifecycle.
 
+### Session Cookies
+
+Browser clients can present the session token in a `dbbasic_session` cookie
+instead of an `Authorization` header. Cookie tokens resolve to the same
+session subject for permission checks, `/identity`, and the current-session
+routes. An `Authorization` header always takes precedence over the cookie,
+and the admin token is never accepted from a cookie.
+
+Cookie-authenticated non-GET requests are checked against the request origin:
+when an `Origin` (or `Referer`) header is present and its host does not match
+the request `Host`, the request is rejected with
+`403 Cross-origin cookie request rejected`. Together with `SameSite` cookie
+attributes set at login, this is the server's CSRF posture for cookie
+sessions. Header-authenticated requests are not origin-checked.
+
 Session tokens normally only supply the active subject used by permission
 checks. Admin-token gates remain admin-token-only by default. When a deployment
 sets `DBBASIC_ENABLE_SESSION_ADMIN_GATES=true`, active sessions whose subject

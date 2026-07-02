@@ -1045,6 +1045,111 @@ def test_password_login_rejects_overrides_and_bad_payloads(tmp_path, monkeypatch
     assert neither_payload["error"] == "Provide exactly one of user_id or email"
 
 
+def _password_login_token(*, email="alice@example.com", password="correct horse battery"):
+    status, _, payload = request(
+        "/identity/session",
+        method="POST",
+        body=json.dumps({"email": email, "password": password}).encode(),
+    )
+    assert status == 201
+    return payload["token"]
+
+
+def test_session_cookie_resolves_current_session_and_subject(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.PASSWORD_LOGIN_ENV, "true")
+    _create_password_user(monkeypatch)
+    token = _password_login_token()
+
+    session_status, _, session_payload = request(
+        "/identity/session",
+        headers=[("cookie", f"dbbasic_session={token}")],
+    )
+    identity_status, _, identity_payload = request(
+        "/identity",
+        headers=[("cookie", f"other=1; dbbasic_session={token}")],
+    )
+
+    assert session_status == 200
+    assert session_payload["session"]["user_id"] == "u_7"
+    assert identity_status == 200
+    assert identity_payload["subject"]["user_id"] == "u_7"
+    assert identity_payload["auth"]["method"] == "session_cookie"
+
+
+def test_cookie_authenticated_writes_reject_cross_origin(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.PASSWORD_LOGIN_ENV, "true")
+    _create_password_user(monkeypatch)
+    token = _password_login_token()
+
+    cross_status, _, cross_payload = request(
+        "/identity/session",
+        method="DELETE",
+        headers=[
+            ("cookie", f"dbbasic_session={token}"),
+            ("origin", "https://evil.example.com"),
+            ("host", "object.dbbasic.com"),
+        ],
+    )
+    same_status, _, same_payload = request(
+        "/identity/session",
+        method="DELETE",
+        headers=[
+            ("cookie", f"dbbasic_session={token}"),
+            ("origin", "https://object.dbbasic.com"),
+            ("host", "object.dbbasic.com"),
+        ],
+    )
+
+    assert cross_status == 403
+    assert cross_payload == {
+        "status": "error",
+        "error": "Cross-origin cookie request rejected",
+    }
+    assert same_status == 200
+    assert same_payload["session"]["revoked_at"] is not None
+
+
+def test_header_authenticated_writes_ignore_origin(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.PASSWORD_LOGIN_ENV, "true")
+    _create_password_user(monkeypatch)
+    token = _password_login_token()
+
+    status, _, payload = request(
+        "/identity/session",
+        method="DELETE",
+        headers=[
+            ("authorization", f"Bearer {token}"),
+            ("origin", "https://anywhere.example.com"),
+            ("host", "object.dbbasic.com"),
+        ],
+    )
+
+    assert status == 200
+    assert payload["session"]["revoked_at"] is not None
+
+
+def test_authorization_header_wins_over_session_cookie(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.PASSWORD_LOGIN_ENV, "true")
+    _create_password_user(monkeypatch)
+    token = _password_login_token()
+
+    status, _, payload = request(
+        "/identity",
+        headers=[
+            ("authorization", "Bearer not-a-real-token"),
+            ("cookie", f"dbbasic_session={token}"),
+        ],
+    )
+
+    assert status == 200
+    assert payload["subject"]["user_id"] is None
+    assert payload["auth"]["method"] == "anonymous"
+
+
 def test_identity_endpoint_ignores_untrusted_identity_headers(monkeypatch):
     monkeypatch.delenv("DBBASIC_PERMISSION_TRUST_HEADERS", raising=False)
     headers = [
