@@ -10,3 +10,8 @@ build/
 venv/
 .env
 .DS_Store
+
+# Runtime state — server-local data that must never reach source control
+# (identity, credentials, sessions, records, logs, versions, backups)
+/data/
+/objects/
