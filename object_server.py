@@ -31,6 +31,7 @@ import object_daemon_status
 import object_events
 import object_execution
 import object_field_permissions
+import object_file_changes
 import object_files
 import object_identity
 import object_logs
@@ -92,6 +93,7 @@ TRUE_VALUES = {"1", "true", "yes", "on"}
 SENSITIVE_GET_FLAGS = {
     "source",
     "source_changes",
+    "changes",
     "state",
     "logs",
     "metadata",
@@ -104,6 +106,7 @@ RECORD_EVENT_TYPES = {
     "update": "collection.record.updated",
     "delete": "collection.record.deleted",
 }
+ADMIN_CHANGE_KINDS = frozenset({"source", "file", "record", "package"})
 
 _runtime = PythonObjectRuntime()
 
@@ -405,6 +408,10 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
 
         if path == http_api_contract.ADMIN_STATUS_PATH:
             await _handle_admin_status(send, method, headers)
+            return
+
+        if path == http_api_contract.ADMIN_CHANGES_PATH:
+            await _handle_admin_changes(send, method, query, headers)
             return
 
         if path == http_api_contract.ADMIN_FILES_PATH:
@@ -1113,6 +1120,64 @@ async def _handle_admin_status(
     await _send_json(send, payload, status=status_code)
 
 
+async def _handle_admin_changes(
+    send,
+    method: str,
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Admin change history requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    try:
+        limit = _query_int(
+            query,
+            "limit",
+            default=100,
+            minimum=1,
+            maximum=object_source_changes.MAX_CHANGE_LIMIT,
+        )
+        offset = _query_int(
+            query,
+            "offset",
+            default=0,
+            minimum=0,
+            maximum=object_source_changes.MAX_CHANGE_LIMIT,
+        )
+        payload = _admin_changes_payload(query, limit=limit, offset=offset)
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except (InvalidObjectIdError, object_collections.InvalidCollectionNameError) as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except (object_records.InvalidRecordIdError, object_packages.InvalidPackageIdError) as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_file_changes.InvalidFileChangeError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except OSError as exc:
+        await _send_json(
+            send,
+            {"status": "error", "error": f"Could not list admin changes: {exc}"},
+            status=500,
+        )
+        return
+
+    await _send_json(send, {"status": "ok", **payload})
+
+
 async def _handle_admin_objects(
     send,
     method: str,
@@ -1186,6 +1251,10 @@ async def _handle_admin_object(
         await _handle_object_source_changes_get(send, object_id, query)
         return
 
+    if query.get("changes") == "true":
+        await _handle_object_changes_get(send, object_id, query)
+        return
+
     if query.get("files") == "true":
         await _handle_object_files_get(send, object_id)
         return
@@ -1211,6 +1280,7 @@ async def _handle_admin_object(
                 "versions=true",
                 "version=<id>",
                 "source_changes=true",
+                "changes=true",
                 "files=true",
                 "file=<name>",
             ],
@@ -1403,19 +1473,28 @@ async def _handle_admin_object_file_write(
         )
         return
 
+    correlation_id = object_correlation.current_correlation_id()
     _append_file_log(object_id, operation=operation, metadata=metadata, method=method)
-    await _send_json(
-        send,
-        {
-            "status": "ok",
-            "message": f"File {operation}: {metadata['name']}",
-            "object_id": object_id,
-            "operation": operation,
-            "file": {"object_id": object_id, **metadata},
-            "correlation_id": object_correlation.current_correlation_id(),
-        },
-        status=status_code,
+    change = _append_file_change_log(
+        object_id,
+        operation=operation,
+        metadata=metadata,
+        method=method,
+        actor=_record_change_actor(headers),
+        correlation_id=correlation_id,
     )
+    payload = {
+        "status": "ok",
+        "message": f"File {operation}: {metadata['name']}",
+        "object_id": object_id,
+        "operation": operation,
+        "file": {"object_id": object_id, **metadata},
+        "correlation_id": correlation_id,
+    }
+    if change is not None:
+        payload["change"] = change
+
+    await _send_json(send, payload, status=status_code)
 
 
 async def _handle_admin_collections(
@@ -3194,6 +3273,18 @@ async def _handle_object_get(
         await _handle_object_source_changes_get(send, object_id, query)
         return
 
+    if query.get("changes") == "true":
+        if await _send_permission_denied_if_needed(
+            send,
+            headers,
+            object_permissions.SOURCE,
+            object_id=object_id,
+            method="GET",
+        ):
+            return
+        await _handle_object_changes_get(send, object_id, query)
+        return
+
     if query.get("files") == "true":
         if await _send_permission_denied_if_needed(
             send,
@@ -3386,6 +3477,443 @@ async def _handle_object_source_changes_get(
         return
 
     await _send_json(send, {"status": "ok", **payload})
+
+
+async def _handle_object_changes_get(
+    send,
+    object_id: str,
+    query: dict[str, str],
+) -> None:
+    try:
+        _ensure_object_source_exists(object_id)
+        limit = _query_int(
+            query,
+            "limit",
+            default=100,
+            minimum=1,
+            maximum=object_source_changes.MAX_CHANGE_LIMIT,
+        )
+        offset = _query_int(
+            query,
+            "offset",
+            default=0,
+            minimum=0,
+            maximum=object_source_changes.MAX_CHANGE_LIMIT,
+        )
+        payload = _object_changes_payload(object_id, query, limit=limit, offset=offset)
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except InvalidObjectIdError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_file_changes.InvalidFileChangeError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_source.ObjectSourceNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+    except OSError as exc:
+        await _send_json(
+            send,
+            {"status": "error", "error": f"Could not list object changes: {exc}"},
+            status=500,
+        )
+        return
+
+    await _send_json(send, {"status": "ok", **payload})
+
+
+def _object_changes_payload(
+    object_id: str,
+    query: dict[str, str],
+    *,
+    limit: int,
+    offset: int,
+) -> dict[str, Any]:
+    kind = _admin_change_kind_filter(query)
+    if kind not in {None, "source", "file"}:
+        raise ValueError("Object changes only support kind=source or kind=file")
+
+    entries: list[dict[str, Any]] = []
+    if kind in {None, "source"}:
+        entries.extend(_source_admin_changes(object_id=object_id))
+    if kind in {None, "file"}:
+        entries.extend(
+            _file_admin_changes(
+                object_id=object_id,
+                file_name=_admin_change_file_filter(query),
+            )
+        )
+
+    entries = _sort_admin_changes(entries)
+    total = len(entries)
+    window = entries[offset:offset + limit]
+    return {
+        "object_id": object_id,
+        "changes": window,
+        "count": len(window),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + len(window) < total,
+    }
+
+
+def _admin_changes_payload(
+    query: dict[str, str],
+    *,
+    limit: int,
+    offset: int,
+) -> dict[str, Any]:
+    kind = _admin_change_kind_filter(query)
+    object_id = _admin_change_object_filter(query)
+    collection = _admin_change_collection_filter(query)
+    record_id = _admin_change_record_filter(query)
+    package_id = _admin_change_package_filter(query)
+    file_name = _admin_change_file_filter(query)
+
+    entries: list[dict[str, Any]] = []
+    if kind in {None, "source"}:
+        entries.extend(_source_admin_changes(object_id=object_id))
+    if kind in {None, "file"}:
+        entries.extend(_file_admin_changes(object_id=object_id, file_name=file_name))
+    if kind in {None, "record"}:
+        entries.extend(_record_admin_changes(collection=collection, record_id=record_id))
+    if kind in {None, "package"}:
+        entries.extend(_package_admin_changes(package_id=package_id))
+
+    entries = [
+        entry
+        for entry in entries
+        if _admin_change_matches(
+            entry,
+            object_id=object_id,
+            collection=collection,
+            record_id=record_id,
+            package_id=package_id,
+            file_name=file_name,
+        )
+    ]
+    entries = _sort_admin_changes(entries)
+    total = len(entries)
+    window = entries[offset:offset + limit]
+    return {
+        "changes": window,
+        "count": len(window),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + len(window) < total,
+        "filters": {
+            "kind": kind,
+            "object_id": object_id,
+            "collection": collection,
+            "record_id": record_id,
+            "package_id": package_id,
+            "file": file_name,
+        },
+    }
+
+
+def _source_admin_changes(object_id: str | None = None) -> list[dict[str, Any]]:
+    changes: list[dict[str, Any]] = []
+    for candidate in _admin_change_object_ids(
+        object_source_changes.SOURCE_CHANGES_DIR,
+        object_id=object_id,
+    ):
+        payload = object_source_changes.list_source_changes(
+            candidate,
+            base_dir=_data_dir(),
+            limit=object_source_changes.MAX_CHANGE_LIMIT,
+        )
+        changes.extend(_normalize_source_admin_change(change) for change in payload["changes"])
+    return changes
+
+
+def _file_admin_changes(
+    object_id: str | None = None,
+    file_name: str | None = None,
+) -> list[dict[str, Any]]:
+    changes: list[dict[str, Any]] = []
+    for candidate in _admin_change_object_ids(
+        object_file_changes.FILE_CHANGES_DIR,
+        object_id=object_id,
+    ):
+        payload = object_file_changes.list_file_changes(
+            candidate,
+            file_name=file_name,
+            base_dir=_data_dir(),
+            limit=object_file_changes.MAX_CHANGE_LIMIT,
+        )
+        changes.extend(_normalize_file_admin_change(change) for change in payload["changes"])
+    return changes
+
+
+def _record_admin_changes(
+    collection: str | None = None,
+    record_id: str | None = None,
+) -> list[dict[str, Any]]:
+    changes: list[dict[str, Any]] = []
+    for candidate in _admin_change_collections(collection=collection):
+        payload = object_record_changes.list_record_changes(
+            candidate,
+            record_id=record_id,
+            base_dir=_data_dir(),
+            limit=object_record_changes.MAX_CHANGE_LIMIT,
+        )
+        changes.extend(_normalize_record_admin_change(change) for change in payload["changes"])
+    return changes
+
+
+def _package_admin_changes(package_id: str | None = None) -> list[dict[str, Any]]:
+    changes: list[dict[str, Any]] = []
+    for candidate in _admin_change_package_ids(package_id=package_id):
+        payload = object_package_changes.list_package_changes(
+            candidate,
+            base_dir=_data_dir(),
+            limit=object_package_changes.MAX_CHANGE_LIMIT,
+        )
+        changes.extend(_normalize_package_admin_change(change) for change in payload["changes"])
+    return changes
+
+
+def _admin_change_object_ids(
+    change_dir: str,
+    *,
+    object_id: str | None,
+) -> list[str]:
+    if object_id is not None:
+        if not validate_object_id(object_id):
+            raise InvalidObjectIdError(f"Invalid object ID: {object_id}")
+        return [object_id]
+
+    root = Path(_data_dir()) / change_dir
+    if not root.exists():
+        return []
+    if not root.is_dir():
+        raise OSError(f"Change root is not a directory: {root}")
+    return sorted(
+        path.name
+        for path in root.iterdir()
+        if path.is_dir() and validate_object_id(path.name)
+    )
+
+
+def _admin_change_collections(*, collection: str | None) -> list[str]:
+    if collection is not None:
+        if not object_collections.validate_collection_name(collection):
+            raise object_collections.InvalidCollectionNameError(
+                f"Invalid collection name: {collection}"
+            )
+        return [collection]
+
+    root = Path(_data_dir()) / object_record_changes.RECORD_CHANGES_DIR
+    if not root.exists():
+        return []
+    if not root.is_dir():
+        raise OSError(f"Change root is not a directory: {root}")
+    return sorted(
+        path.name
+        for path in root.iterdir()
+        if path.is_dir() and object_collections.validate_collection_name(path.name)
+    )
+
+
+def _admin_change_package_ids(*, package_id: str | None) -> list[str]:
+    if package_id is not None:
+        if not object_packages.validate_package_id(package_id):
+            raise object_packages.InvalidPackageIdError(f"Invalid package id: {package_id}")
+        return [package_id]
+
+    root = Path(_data_dir()) / object_package_changes.PACKAGE_CHANGES_DIR
+    if not root.exists():
+        return []
+    if not root.is_dir():
+        raise OSError(f"Change root is not a directory: {root}")
+    return sorted(
+        path.name
+        for path in root.iterdir()
+        if path.is_dir() and object_packages.validate_package_id(path.name)
+    )
+
+
+def _admin_change_kind_filter(query: dict[str, str]) -> str | None:
+    kind = _optional_query_text(query, "kind")
+    if kind is None:
+        return None
+    if kind not in ADMIN_CHANGE_KINDS:
+        allowed = ", ".join(sorted(ADMIN_CHANGE_KINDS))
+        raise ValueError(f"Query parameter 'kind' must be one of: {allowed}")
+    return kind
+
+
+def _admin_change_object_filter(query: dict[str, str]) -> str | None:
+    object_id = _optional_query_text(query, "object_id")
+    if object_id is not None and not validate_object_id(object_id):
+        raise InvalidObjectIdError(f"Invalid object ID: {object_id}")
+    return object_id
+
+
+def _admin_change_collection_filter(query: dict[str, str]) -> str | None:
+    collection = _optional_query_text(query, "collection")
+    if collection is not None and not object_collections.validate_collection_name(collection):
+        raise object_collections.InvalidCollectionNameError(
+            f"Invalid collection name: {collection}"
+        )
+    return collection
+
+
+def _admin_change_record_filter(query: dict[str, str]) -> str | None:
+    record_id = _optional_query_text(query, "record_id")
+    if record_id is not None and not object_records.validate_record_id(record_id):
+        raise object_records.InvalidRecordIdError(f"Invalid record id: {record_id}")
+    return record_id
+
+
+def _admin_change_package_filter(query: dict[str, str]) -> str | None:
+    package_id = _optional_query_text(query, "package_id")
+    if package_id is not None and not object_packages.validate_package_id(package_id):
+        raise object_packages.InvalidPackageIdError(f"Invalid package id: {package_id}")
+    return package_id
+
+
+def _admin_change_file_filter(query: dict[str, str]) -> str | None:
+    file_name = _optional_query_text(query, "file")
+    if file_name is None:
+        return None
+    if "\x00" in file_name or file_name.startswith("/") or ".." in file_name:
+        raise object_file_changes.InvalidFileChangeError(f"Invalid file name: {file_name!r}")
+    path = Path(file_name)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise object_file_changes.InvalidFileChangeError(f"Invalid file name: {file_name!r}")
+    return path.as_posix()
+
+
+def _admin_change_matches(
+    entry: dict[str, Any],
+    *,
+    object_id: str | None,
+    collection: str | None,
+    record_id: str | None,
+    package_id: str | None,
+    file_name: str | None,
+) -> bool:
+    target = entry.get("target", {})
+    if not isinstance(target, dict):
+        return False
+    if object_id is not None and target.get("object_id") != object_id:
+        return False
+    if collection is not None and target.get("collection") != collection:
+        return False
+    if record_id is not None and target.get("record_id") != record_id:
+        return False
+    if package_id is not None and target.get("package_id") != package_id:
+        return False
+    if file_name is not None and target.get("file_name") != file_name:
+        return False
+    return True
+
+
+def _sort_admin_changes(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        entries,
+        key=lambda entry: (
+            str(entry.get("timestamp") or ""),
+            str(entry.get("change_id") or ""),
+        ),
+        reverse=True,
+    )
+
+
+def _normalize_source_admin_change(change: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "kind": "source",
+        "change_id": change.get("change_id"),
+        "timestamp": change.get("timestamp"),
+        "action": change.get("action"),
+        "actor": change.get("actor"),
+        "summary": change.get("message") or _source_change_summary(change),
+        "correlation_id": change.get("correlation_id"),
+        "target": {
+            "object_id": change.get("object_id"),
+            "version_id": change.get("version_id"),
+            "from_version_id": change.get("from_version_id"),
+        },
+        "change": dict(change),
+    }
+
+
+def _normalize_file_admin_change(change: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "kind": "file",
+        "change_id": change.get("change_id"),
+        "timestamp": change.get("timestamp"),
+        "action": change.get("action"),
+        "actor": change.get("actor"),
+        "summary": change.get("message") or _file_change_summary(change),
+        "correlation_id": change.get("correlation_id"),
+        "target": {
+            "object_id": change.get("object_id"),
+            "file_name": change.get("file_name"),
+            "file_size": change.get("file_size"),
+        },
+        "change": dict(change),
+    }
+
+
+def _normalize_record_admin_change(change: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "kind": "record",
+        "change_id": change.get("change_id"),
+        "timestamp": change.get("timestamp"),
+        "action": change.get("action"),
+        "actor": change.get("actor"),
+        "summary": change.get("message") or _record_change_summary(change),
+        "correlation_id": change.get("correlation_id"),
+        "target": {
+            "collection": change.get("collection"),
+            "record_id": change.get("record_id"),
+            "changed_fields": change.get("changed_fields", []),
+        },
+        "change": dict(change),
+    }
+
+
+def _normalize_package_admin_change(change: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "kind": "package",
+        "change_id": change.get("change_id"),
+        "timestamp": change.get("timestamp"),
+        "action": change.get("action"),
+        "actor": change.get("actor"),
+        "summary": change.get("message") or _package_change_summary(change),
+        "correlation_id": change.get("correlation_id"),
+        "target": {
+            "package_id": change.get("package_id"),
+            "package_version": change.get("package_version"),
+        },
+        "change": dict(change),
+    }
+
+
+def _source_change_summary(change: Mapping[str, Any]) -> str:
+    return f"{change.get('action', 'source_change')} {change.get('object_id', '')}".strip()
+
+
+def _file_change_summary(change: Mapping[str, Any]) -> str:
+    return f"{change.get('action', 'file_change')} {change.get('file_name', '')}".strip()
+
+
+def _record_change_summary(change: Mapping[str, Any]) -> str:
+    return (
+        f"{change.get('action', 'record_change')} "
+        f"{change.get('collection', '')}/{change.get('record_id', '')}"
+    ).strip()
+
+
+def _package_change_summary(change: Mapping[str, Any]) -> str:
+    return f"{change.get('action', 'package_change')} {change.get('package_id', '')}".strip()
 
 
 async def _handle_object_files_get(send, object_id: str) -> None:
@@ -5035,6 +5563,43 @@ def _append_file_log(
     except Exception:
         # File logs are operator feedback; file writes should not fail because logging failed.
         pass
+
+
+def _append_file_change_log(
+    object_id: str,
+    *,
+    operation: str,
+    metadata: Mapping[str, Any],
+    method: str,
+    actor: str,
+    correlation_id: str | None,
+) -> dict[str, Any] | None:
+    action = {
+        "created": "file_create",
+        "updated": "file_update",
+        "deleted": "file_delete",
+    }.get(operation)
+    if action is None:
+        return None
+
+    try:
+        return object_file_changes.append_file_change(
+            object_id=object_id,
+            action=action,
+            file_name=str(metadata.get("name") or ""),
+            file_size=int(metadata["size"]) if "size" in metadata else None,
+            actor=actor,
+            message=f"File {operation}: {metadata.get('name')}",
+            correlation_id=correlation_id,
+            details={
+                "method": method,
+                "modified": metadata.get("modified"),
+            },
+            base_dir=_data_dir(),
+        )
+    except Exception:
+        # File-change entries are operator feedback; file writes already succeeded.
+        return None
 
 
 def _append_source_change_log(

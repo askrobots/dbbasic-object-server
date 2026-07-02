@@ -89,6 +89,7 @@ This repository currently contains:
 - `object_source_changes.py` - append-only source edit/rollback changelog helpers
 - `object_state.py` - TSV-backed object state reads and runtime writes
 - `object_files.py` - object-owned file listing, download, and gated write helpers
+- `object_file_changes.py` - append-only file upload/update/delete changelog helpers
 - `object_identity.py` - file-backed accounts, users, and sessions for permission subjects
 - `object_logs.py` - TSV-backed object log reads, appends, rotation, compression, retention, and runtime logger helper
 - `object_metadata.py` - conservative object metadata summaries
@@ -140,6 +141,10 @@ that were not present in the snapshot. Dry-runs, installs, and restores append
 compact package changelog entries under
 `data/package_changes/{package_id}/changes.jsonl` so Scroll can show what was
 reviewed, installed, restored, or rejected.
+Object file writes append compact file changelog entries under
+`data/file_changes/{object_id}/changes.jsonl` so uploads, overwrites, and
+deletes can be shown in the same admin activity stream as source, record, and
+package changes.
 
 The package direction is how AskRobots-style primitives move into DBBASIC:
 messages, projects, tasks, notes, files, articles, links, contacts, finance,
@@ -182,6 +187,7 @@ Current endpoints:
 - `GET /health?capacity=true`
 - `GET /health?metrics=true`
 - `GET /admin/status`
+- `GET /admin/changes`
 - `GET /admin/objects`
 - `GET /admin/objects/{object_id}`
 - `GET /admin/objects/{object_id}?metadata=true`
@@ -189,6 +195,7 @@ Current endpoints:
 - `GET /admin/objects/{object_id}?state=true`
 - `GET /admin/objects/{object_id}?logs=true&limit=100`
 - `GET /admin/objects/{object_id}?source_changes=true&limit=100`
+- `GET /admin/objects/{object_id}?changes=true&limit=100`
 - `GET /admin/objects/{object_id}?versions=true&limit=10`
 - `GET /admin/objects/{object_id}?version=1`
 - `GET /admin/objects/{object_id}?files=true`
@@ -285,6 +292,7 @@ Current endpoints:
 - `GET /objects/{object_id}?metadata=true`
 - `GET /objects/{object_id}?source=true&format=json`
 - `GET /objects/{object_id}?source_changes=true&limit=100`
+- `GET /objects/{object_id}?changes=true&limit=100`
 - `GET /objects/{object_id}?versions=true&limit=10`
 - `GET /objects/{object_id}?version=1`
 - `PUT /objects/{object_id}?source=true`
@@ -424,6 +432,8 @@ rules the rest of the server will use:
   dry-run/install plans for Scroll/package manager workflows
 - `object_package_changes.py` records package dry-runs, installs, failures, and future rollbacks
   facts as append-only JSONL under `data/package_changes/`
+- `object_file_changes.py` records object-owned file creates, updates, and deletes
+  as append-only JSONL under `data/file_changes/`
 - `packages/admin-write-probe` installs a tiny `dbbasic_probe` schema/record
   file plus a public status object, so a staging server can prove object state
   writes and admin-token-gated collection CRUD without exposing broad routes

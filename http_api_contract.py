@@ -47,6 +47,7 @@ PACKAGE_INSTALL_PATH = "/packages/{package_id}/install"
 PACKAGE_RESTORE_PATH = "/packages/{package_id}/restore"
 PACKAGE_CHANGES_PATH = "/packages/{package_id}/changes"
 ADMIN_STATUS_PATH = "/admin/status"
+ADMIN_CHANGES_PATH = "/admin/changes"
 ADMIN_FILES_PATH = "/admin/files"
 ADMIN_OBJECT_FILES_PATH = "/admin/files/{object_id}"
 DAEMON_STATUS_PATH = "/daemon/status"
@@ -74,6 +75,7 @@ FILES_QUERY = {"files": "true"}
 FILE_QUERY = {"file": "name"}
 LOGS_QUERY = {"logs": "true", "format": "json", "limit": "100"}
 SOURCE_CHANGES_QUERY = {"source_changes": "true", "limit": "100"}
+CHANGES_QUERY = {"changes": "true", "limit": "100"}
 VERSIONS_QUERY = {"versions": "true", "limit": "10"}
 
 RESPONSE_FIELDS: dict[str, frozenset[str]] = {
@@ -101,6 +103,7 @@ RESPONSE_FIELDS: dict[str, frozenset[str]] = {
         {"status", "restore", "changes", "restore_point", "from_change"}
     ),
     "package_changes": frozenset({"status", "package_id", "changes", "count", "total"}),
+    "admin_changes": frozenset({"status", "changes", "count", "total"}),
     "admin_status": frozenset(
         {"status", "timestamp", "version", "health", "inventory", "capabilities", "packages"}
     ),
@@ -130,6 +133,7 @@ RESPONSE_FIELDS: dict[str, frozenset[str]] = {
     "file_list": frozenset({"status", "files", "count", "total"}),
     "logs": frozenset({"status", "object_id", "logs", "count"}),
     "source_changes": frozenset({"status", "object_id", "changes", "count", "total"}),
+    "object_changes": frozenset({"status", "object_id", "changes", "count", "total"}),
     "versions": frozenset({"status", "object_id", "versions", "count"}),
     "version": frozenset({"status", "object_id", "version"}),
     "rollback": frozenset({"status", "message", "version_id", "object_id"}),

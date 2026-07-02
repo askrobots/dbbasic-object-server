@@ -65,6 +65,7 @@ def test_contract_keeps_objects_paths_as_public_surface():
     assert http_api_contract.PACKAGE_RESTORE_PATH == "/packages/{package_id}/restore"
     assert http_api_contract.PACKAGE_CHANGES_PATH == "/packages/{package_id}/changes"
     assert http_api_contract.ADMIN_STATUS_PATH == "/admin/status"
+    assert http_api_contract.ADMIN_CHANGES_PATH == "/admin/changes"
     assert http_api_contract.DAEMON_STATUS_PATH == "/daemon/status"
     assert http_api_contract.DAEMON_SCHEDULER_TASKS_PATH == "/daemon/scheduler/tasks"
     assert http_api_contract.DAEMON_SCHEDULER_TASK_PATH == "/daemon/scheduler/tasks/{task_id}"
@@ -99,6 +100,7 @@ def test_contract_keeps_existing_introspection_query_flags():
         "source_changes": "true",
         "limit": "100",
     }
+    assert http_api_contract.CHANGES_QUERY == {"changes": "true", "limit": "100"}
     assert http_api_contract.VERSIONS_QUERY == {"versions": "true", "limit": "10"}
 
 
@@ -211,6 +213,10 @@ def test_contract_keeps_existing_introspection_query_flags():
                 "count": 0,
                 "total": 0,
             },
+        ),
+        (
+            "admin_changes",
+            {"status": "ok", "changes": [], "count": 0, "total": 0},
         ),
         (
             "file_list",
@@ -340,6 +346,16 @@ def test_contract_keeps_existing_introspection_query_flags():
         ),
         (
             "source_changes",
+            {
+                "status": "ok",
+                "object_id": "basics_counter",
+                "changes": [],
+                "count": 0,
+                "total": 0,
+            },
+        ),
+        (
+            "object_changes",
             {
                 "status": "ok",
                 "object_id": "basics_counter",

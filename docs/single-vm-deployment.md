@@ -598,6 +598,10 @@ dbbasic.example.com {
         reverse_proxy 127.0.0.1:8001
     }
 
+    handle /admin/changes* {
+        reverse_proxy 127.0.0.1:8001
+    }
+
     handle /admin/objects* {
         reverse_proxy 127.0.0.1:8001
     }
@@ -750,6 +754,7 @@ The portable runtime backup set is:
 /var/lib/dbbasic-object-server/data/schema_versions
 /var/lib/dbbasic-object-server/data/record_changes
 /var/lib/dbbasic-object-server/data/package_changes
+/var/lib/dbbasic-object-server/data/file_changes
 /var/lib/dbbasic-object-server/data/files
 /var/lib/dbbasic-object-server/data/schemas
 /var/lib/dbbasic-object-server/data/collections

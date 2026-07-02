@@ -25,6 +25,7 @@ data/source_changes/
 data/schema_versions/
 data/record_changes/
 data/package_changes/
+data/file_changes/
 data/files/
 data/schemas/
 data/collections/
@@ -32,8 +33,8 @@ data/collections/
 
 That covers object source, object state, current logs, rotated compressed logs,
 source versions, source change history, schema change history, record change
-history, package change history, object-owned files, schema metadata, and
-TSV-backed collection records.
+history, package change history, object file change history, object-owned
+files, schema metadata, and TSV-backed collection records.
 
 ## Excluded
 
@@ -93,8 +94,8 @@ not an arbitrary package path. The HTTP restore route calls
 by the package are removed if they were not present in the snapshot. Pruning is
 limited to known runtime roots such as `objects/`, `data/state/`,
 `data/logs/`, `data/collections/`, `data/schemas/`, and
-`data/source_changes/`, `data/package_changes/`; `data/backups/` is left
-alone.
+`data/source_changes/`, `data/package_changes/`, `data/file_changes/`;
+`data/backups/` is left alone.
 
 ## Verify
 

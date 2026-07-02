@@ -70,6 +70,10 @@ def make_runtime_tree(tmp_path):
         data_dir / "package_changes" / "hello-world" / "changes.jsonl",
         '{"action":"dry_run","package_id":"hello-world"}\n',
     )
+    write_file(
+        data_dir / "file_changes" / "site_home" / "changes.jsonl",
+        '{"action":"file_create","object_id":"site_home","file_name":"upload.txt"}\n',
+    )
     write_file(data_dir / "files" / "site_home" / "upload.txt", "file payload\n")
     write_file(data_dir / "schemas" / "contacts.json", '{"fields": [{"name": "id"}]}\n')
     write_file(data_dir / "collections" / "contacts" / "records.tsv", "id\tname\nc1\tAda\n")
@@ -114,6 +118,7 @@ def test_create_runtime_backup_includes_runtime_files_and_manifest(tmp_path):
     assert "data/schema_versions/contacts/v1.json" in names
     assert "data/record_changes/contacts/changes.jsonl" in names
     assert "data/package_changes/hello-world/changes.jsonl" in names
+    assert "data/file_changes/site_home/changes.jsonl" in names
     assert "data/files/site_home/upload.txt" in names
     assert "data/schemas/contacts.json" in names
     assert "data/collections/contacts/records.tsv" in names
@@ -127,14 +132,15 @@ def test_create_runtime_backup_includes_runtime_files_and_manifest(tmp_path):
     manifest = read_manifest(backup)
     assert manifest["format_version"] == object_backup.BACKUP_FORMAT_VERSION
     assert manifest["created_at"] == "2026-01-01T00:00:00Z"
-    assert manifest["files"] == summary.files == 14
+    assert manifest["files"] == summary.files == 15
     assert "deployment secrets are not included" in manifest["notes"]
 
     verification = object_backup.verify_runtime_backup(backup)
     assert verification.ok
-    assert verification.files == 14
+    assert verification.files == 15
     assert verification.entries == [
         "data/collections",
+        "data/file_changes",
         "data/files",
         "data/logs",
         "data/package_changes",
@@ -192,7 +198,7 @@ def test_restore_runtime_backup_restores_objects_state_logs_versions_and_files(t
         data_dir=restored_data,
     )
 
-    assert summary.files == 14
+    assert summary.files == 15
     assert (restored_objects / "site" / "home.py").read_text().startswith("def GET")
     assert object_state.get_object_state("site_home", base_dir=restored_data) == {"count": 3}
     assert (restored_data / "schema_versions" / "contacts" / "v1.json").exists()
@@ -204,6 +210,7 @@ def test_restore_runtime_backup_restores_objects_state_logs_versions_and_files(t
     assert (restored_data / "source_changes" / "site_home" / "changes.jsonl").exists()
     assert (restored_data / "record_changes" / "contacts" / "changes.jsonl").exists()
     assert (restored_data / "package_changes" / "hello-world" / "changes.jsonl").exists()
+    assert (restored_data / "file_changes" / "site_home" / "changes.jsonl").exists()
     assert (restored_data / "files" / "site_home" / "upload.txt").read_text() == "file payload\n"
     assert (restored_data / "schemas" / "contacts.json").exists()
     assert (restored_data / "collections" / "contacts" / "records.tsv").read_text() == "id\tname\nc1\tAda\n"
@@ -331,7 +338,7 @@ def test_cli_create_verify_and_restore_json(tmp_path, capsys):
     )
     create_payload = json.loads(capsys.readouterr().out)
     assert create_exit == 0
-    assert create_payload["files"] == 14
+    assert create_payload["files"] == 15
 
     verify_exit = object_backup.main(["verify", str(backup), "--json"])
     verify_payload = json.loads(capsys.readouterr().out)
@@ -351,7 +358,7 @@ def test_cli_create_verify_and_restore_json(tmp_path, capsys):
     )
     restore_payload = json.loads(capsys.readouterr().out)
     assert restore_exit == 0
-    assert restore_payload["files"] == 14
+    assert restore_payload["files"] == 15
 
 
 def _add_manifest(archive: tarfile.TarFile, *, files: int, bytes_count: int):

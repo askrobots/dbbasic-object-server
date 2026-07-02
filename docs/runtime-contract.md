@@ -77,6 +77,7 @@ The default runtime storage is file-backed:
 - object logs under `data/logs/`
 - object versions under `data/versions/`
 - object source changes under `data/source_changes/`
+- object file changes under `data/file_changes/`
 - object-owned files under `data/files/`
 - collection records under `data/collections/`
 - collection record changes under `data/record_changes/`
@@ -95,7 +96,7 @@ contract.
 Runtime backups should use `object_backup.py`. The portable archive contains
 object source plus `data/state/`, `data/logs/`, `data/versions/`,
 `data/source_changes/`, `data/schema_versions/`, `data/record_changes/`,
-`data/package_changes/`, `data/files/`, `data/schemas/`, and
+`data/package_changes/`, `data/file_changes/`, `data/files/`, `data/schemas/`, and
 `data/collections/`. It deliberately leaves
 deployment secrets, service files, virtualenvs, git history, lock files, temp
 files, and ephemeral rate-limit files outside the archive.
@@ -221,6 +222,30 @@ list_source_changes(object_id, base_dir="data", limit=100, offset=0)
 Entries include `change_id`, `timestamp`, `object_id`, `action`,
 `version_id`, `from_version_id`, `actor`, `message`, `correlation_id`, and
 `details`. History is returned newest first and does not include source content.
+
+## Object File Changes
+
+Public code should use `object_file_changes.py` for object-owned file write
+activity storage. This is separate from `data/files/`: files store current
+content, while file changes store the operator timeline for uploads,
+overwrites, and deletes.
+
+File changes are append-only JSON Lines:
+
+```text
+data/file_changes/{object_id}/changes.jsonl
+```
+
+The helper exposes:
+
+```python
+append_file_change(object_id, action, file_name, file_size=None, actor="api", message="", correlation_id=None, details=None, base_dir="data")
+list_file_changes(object_id, file_name=None, base_dir="data", limit=100, offset=0)
+```
+
+Entries include `change_id`, `timestamp`, `object_id`, `action`, `file_name`,
+`file_size`, `actor`, `message`, `correlation_id`, and `details`. History is
+returned newest first and does not include file content.
 
 ## State Manager Interface
 

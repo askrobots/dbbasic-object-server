@@ -1022,6 +1022,7 @@ GET /admin/objects/{object_id}?logs=true&format=json&limit=100
 GET /admin/objects/{object_id}?versions=true&limit=10
 GET /admin/objects/{object_id}?version=1
 GET /admin/objects/{object_id}?source_changes=true&limit=100
+GET /admin/objects/{object_id}?changes=true&limit=100
 GET /admin/objects/{object_id}?files=true
 GET /admin/objects/{object_id}?file=report.txt
 Authorization: Token <token>
@@ -1031,6 +1032,67 @@ If no inspection query is supplied, the server returns metadata. The admin
 inspection surface never executes the object. Unsupported query flags return a
 400 response so a client cannot accidentally turn an operator view into an
 execution endpoint.
+
+## Admin Changes
+
+Scroll and operator dashboards can read a single normalized activity stream
+instead of querying every changelog separately.
+
+```http
+GET /admin/changes?kind=file&object_id=site_home&limit=100&offset=0
+Authorization: Token <token>
+```
+
+Supported filters:
+
+- `kind`: `source`, `file`, `record`, or `package`
+- `object_id`: source and file changes for one object
+- `collection`: record changes for one collection
+- `record_id`: record changes for one record
+- `package_id`: package changes for one package
+- `file`: file changes for one object-owned file
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "changes": [
+    {
+      "kind": "file",
+      "change_id": "123e4567-e89b-42d3-a456-426614174000",
+      "timestamp": "2026-01-01T00:00:00+00:00",
+      "action": "file_update",
+      "actor": "api",
+      "summary": "File updated: reports/out.csv",
+      "correlation_id": "123e4567-e89b-42d3-a456-426614174001",
+      "target": {
+        "object_id": "site_home",
+        "file_name": "reports/out.csv",
+        "file_size": 42
+      },
+      "change": {}
+    }
+  ],
+  "count": 1,
+  "total": 1,
+  "limit": 100,
+  "offset": 0,
+  "has_more": false,
+  "filters": {
+    "kind": "file",
+    "object_id": "site_home",
+    "collection": null,
+    "record_id": null,
+    "package_id": null,
+    "file": "reports/out.csv"
+  }
+}
+```
+
+Each entry keeps the original changelog payload under `change`. Clients should
+render `kind`, `timestamp`, `actor`, `summary`, `target`, and
+`correlation_id` first, then expand `change` for detail views.
 
 ## Admin File Inspection
 
@@ -2766,6 +2828,39 @@ Response:
 History is newest first and does not include source content. Use the versions
 endpoint to inspect or restore source snapshots. Source changes are the operator
 activity timeline for source edits and rollbacks.
+
+## Object Changes
+
+```http
+GET /objects/{object_id}?changes=true&kind=source&limit=100&offset=0
+Authorization: Token <token>
+```
+
+This returns the normalized source/file timeline for one object. The admin
+inspection equivalent is:
+
+```http
+GET /admin/objects/{object_id}?changes=true&limit=100&offset=0
+Authorization: Token <token>
+```
+
+Response:
+
+```json
+{
+  "status": "ok",
+  "object_id": "basics_counter",
+  "changes": [],
+  "count": 0,
+  "total": 0,
+  "limit": 100,
+  "offset": 0,
+  "has_more": false
+}
+```
+
+`kind` can be omitted or set to `source` or `file`. Use `/admin/changes` when a
+global activity stream needs record and package changes too.
 
 ## Versions
 

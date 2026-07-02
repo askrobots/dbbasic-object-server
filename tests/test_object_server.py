@@ -7,12 +7,14 @@ from pathlib import Path
 import object_correlation
 import object_execution
 import object_events
+import object_file_changes
 import object_ids
 import object_logs
 import object_package_changes
 import object_packages
 import object_permission_audit
 import object_permission_store
+import object_record_changes
 import object_server
 import object_source_changes
 import object_state
@@ -4796,10 +4798,16 @@ def test_admin_file_upload_creates_file_and_log(tmp_path, monkeypatch):
     assert payload["file"]["object_id"] == "site_home"
     assert payload["file"]["name"] == "assets/report.txt"
     assert payload["file"]["size"] == 5
+    assert payload["change"]["action"] == "file_create"
+    assert payload["change"]["object_id"] == "site_home"
+    assert payload["change"]["file_name"] == "assets/report.txt"
     assert (data_dir / "files" / "site_home" / "assets" / "report.txt").read_bytes() == b"hello"
     logs = object_logs.get_object_logs("site_home", base_dir=data_dir)
     assert logs[-1]["message"] == "File created: assets/report.txt"
     assert logs[-1]["file_operation"] == "created"
+    changes = object_file_changes.list_file_changes("site_home", base_dir=data_dir)
+    assert changes["count"] == 1
+    assert changes["changes"][0]["change_id"] == payload["change"]["change_id"]
 
 
 def test_admin_file_upload_rejects_duplicate_without_overwrite(tmp_path, monkeypatch):
@@ -5533,6 +5541,155 @@ def test_source_changes_endpoint_requires_authorization_header(tmp_path, monkeyp
 
     assert status == 401
     assert payload == {"status": "error", "error": "Unauthorized"}
+
+
+def test_admin_changes_lists_normalized_history(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    source_change = object_source_changes.append_source_change(
+        object_id="site_home",
+        action="source_update",
+        version_id=1,
+        actor="source-admin",
+        correlation_id="source-correlation",
+        base_dir=data_dir,
+    )
+    file_change = object_file_changes.append_file_change(
+        object_id="site_home",
+        action="file_create",
+        file_name="assets/report.txt",
+        file_size=5,
+        actor="file-admin",
+        correlation_id="file-correlation",
+        base_dir=data_dir,
+    )
+    record_change = object_record_changes.append_record_change(
+        collection="contacts",
+        record_id="rec_1",
+        action="create",
+        before=None,
+        after={"id": "rec_1", "name": "Alice"},
+        actor="record-admin",
+        base_dir=data_dir,
+    )
+    package_change = object_package_changes.append_package_change(
+        package_id="hello-world",
+        action="dry_run",
+        package_version="0.1.0",
+        actor="package-admin",
+        base_dir=data_dir,
+    )
+
+    status, _, payload = request("/admin/changes", headers=auth_headers())
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["count"] == 4
+    assert payload["total"] == 4
+    by_kind = {entry["kind"]: entry for entry in payload["changes"]}
+    assert by_kind["source"]["change_id"] == source_change["change_id"]
+    assert by_kind["source"]["target"]["object_id"] == "site_home"
+    assert by_kind["source"]["correlation_id"] == "source-correlation"
+    assert by_kind["file"]["change_id"] == file_change["change_id"]
+    assert by_kind["file"]["target"]["file_name"] == "assets/report.txt"
+    assert by_kind["file"]["correlation_id"] == "file-correlation"
+    assert by_kind["record"]["change_id"] == record_change["change_id"]
+    assert by_kind["record"]["target"]["collection"] == "contacts"
+    assert by_kind["record"]["target"]["record_id"] == "rec_1"
+    assert by_kind["package"]["change_id"] == package_change["change_id"]
+    assert by_kind["package"]["target"]["package_id"] == "hello-world"
+
+
+def test_admin_changes_filters_by_kind_object_and_file(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {}\n")
+    write_source(root / "site" / "about.py", "def GET(request):\n    return {}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    object_file_changes.append_file_change(
+        object_id="site_home",
+        action="file_create",
+        file_name="assets/report.txt",
+        base_dir=data_dir,
+    )
+    object_file_changes.append_file_change(
+        object_id="site_about",
+        action="file_create",
+        file_name="assets/report.txt",
+        base_dir=data_dir,
+    )
+    object_source_changes.append_source_change(
+        object_id="site_home",
+        action="source_update",
+        version_id=1,
+        base_dir=data_dir,
+    )
+
+    status, _, payload = request(
+        "/admin/changes",
+        query_string="kind=file&object_id=site_home&file=assets/report.txt",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["count"] == 1
+    assert payload["filters"]["kind"] == "file"
+    assert payload["filters"]["object_id"] == "site_home"
+    assert payload["changes"][0]["kind"] == "file"
+    assert payload["changes"][0]["target"]["object_id"] == "site_home"
+    assert payload["changes"][0]["target"]["file_name"] == "assets/report.txt"
+
+
+def test_admin_changes_requires_authorization_header(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/admin/changes")
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
+
+
+def test_object_changes_endpoint_lists_source_and_file_history(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+    object_source_changes.append_source_change(
+        object_id="site_home",
+        action="source_update",
+        version_id=1,
+        base_dir=data_dir,
+    )
+    object_file_changes.append_file_change(
+        object_id="site_home",
+        action="file_create",
+        file_name="assets/report.txt",
+        base_dir=data_dir,
+    )
+
+    status, _, payload = request(
+        "/admin/objects/site_home",
+        query_string="changes=true",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["object_id"] == "site_home"
+    assert payload["count"] == 2
+    assert {entry["kind"] for entry in payload["changes"]} == {"source", "file"}
 
 
 def test_specific_version_endpoint_returns_content(tmp_path, monkeypatch):
