@@ -182,6 +182,8 @@ DBBASIC_ALLOW_UNREADY_PERMISSION_ENFORCEMENT=false
 DBBASIC_PERMISSION_TRUST_HEADERS=false
 DBBASIC_ENABLE_SESSION_LOGIN=false
 DBBASIC_SESSION_LOGIN_TOKEN=
+DBBASIC_ENABLE_PASSWORD_LOGIN=false
+DBBASIC_COOKIE_SECURE=true
 DBBASIC_ENABLE_RECORD_EVENTS=true
 DBBASIC_EVENT_KEEP_COUNT=1000
 DBBASIC_EVENT_KEEP_SECONDS=604800
@@ -200,6 +202,28 @@ Use that generated value for `DBBASIC_ADMIN_TOKEN`. Do not reuse test tokens,
 README placeholders, or tokens from another server. It is required for local or
 admin object listing and introspection requests such as source, state, logs,
 metadata, and versions.
+
+## Bootstrap Browser Login
+
+To enable browser login on a fresh VM, create the first admin user from the
+shell and turn on password login:
+
+```bash
+cd /opt/dbbasic-object-server
+sudo -u dbbasic DBBASIC_DATA_DIR=/var/lib/dbbasic-object-server/data \
+  .venv/bin/python object_identity_cli.py create-superuser \
+  --user-id operator --email you@example.com
+```
+
+The password is prompted twice without echo and stored only as a scrypt hash
+under `data/identity/credentials.tsv` (owner-only permissions, inside the
+runtime data directory that never enters source control). Then set
+`DBBASIC_ENABLE_PASSWORD_LOGIN=true` in the environment file, restart the
+service, and allow `/login` and `/logout` through the reverse proxy. Keep
+`DBBASIC_COOKIE_SECURE=true` behind HTTPS; set it to `false` only for
+plain-HTTP local development. Additional users can be managed with the same
+CLI (`create-user`, `set-password`, `list-users`) or through the admin HTTP
+surface from Scroll.
 
 For the first VM boot, leave source writes disabled. After health checks,
 backups, and proxy access are working, a staging server can enable source

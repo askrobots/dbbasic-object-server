@@ -417,10 +417,54 @@ Admin-token gates remain admin-token-only by default. A deployment can set
 subject has one of the policy admin roles, which gives Scroll a path away from
 storing the raw deployment token.
 Scroll and operator dashboards should use the GET-only `/admin/identity/*`
-aliases to inspect accounts, users, and sessions on public staging without
-exposing identity creation, arbitrary session minting, or session revocation.
-Production browser login, external auth gateway integration, and default-on
-permission enforcement still need to be finished before general public use.
+aliases to inspect accounts, users, and sessions on public staging — plus the
+password write aliases — without exposing identity creation, arbitrary session
+minting, or session revocation.
+External auth gateway integration and default-on permission enforcement still
+need to be finished before general public use.
+
+## First Auth Setup
+
+A fresh deployment has no users and all login paths disabled. To bootstrap
+browser login on a new VM:
+
+1. Create the first admin user and set its password from the shell on the VM
+   (like Django's `createsuperuser`; the password is prompted, never echoed,
+   and only the scrypt hash is stored under `data/identity/credentials.tsv`):
+
+   ```bash
+   cd /opt/dbbasic-object-server
+   sudo -u dbbasic DBBASIC_DATA_DIR=/var/lib/dbbasic-object-server/data \
+     .venv/bin/python object_identity_cli.py create-superuser \
+     --user-id dan --email dan@example.com
+   ```
+
+2. Enable password login in the environment file (for systemd deployments,
+   `/etc/dbbasic-object-server.env`) and restart the service:
+
+   ```bash
+   DBBASIC_ENABLE_PASSWORD_LOGIN=true
+   ```
+
+3. Allow `/login` and `/logout` through the reverse proxy. Users can then sign
+   in at `https://your-host/login`; the session is stored in an `HttpOnly`
+   `dbbasic_session` cookie and objects receive the caller in
+   `request["_identity"]`.
+
+Day-to-day user management works three ways, all against the same TSV-backed
+identity store:
+
+- **Shell**: `object_identity_cli.py` (`create-account`, `create-user`,
+  `create-superuser`, `set-password`, `remove-password`, `list-users`,
+  `list-accounts`)
+- **Scroll / HTTP admin surface**: `POST /identity/users`,
+  `POST /admin/identity/users/{user_id}/password`, and the read-only
+  `/admin/identity/*` inspection aliases
+- **Objects**: object code reads `request["_identity"]` for per-user behavior
+
+Secrets stay out of source control: password hashes and session token hashes
+live under the runtime `data/` directory (git-ignored), and deployment tokens
+live in the environment file on the VM.
 
 ## Current Extraction Slice
 
