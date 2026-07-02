@@ -430,7 +430,13 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
 
         admin_objects_prefix = f"{http_api_contract.ADMIN_OBJECTS_PATH}/"
         if path.startswith(admin_objects_prefix):
-            object_id = path.removeprefix(admin_objects_prefix)
+            object_tail = path.removeprefix(admin_objects_prefix)
+            if object_tail.endswith("/execute"):
+                object_id = object_tail.removesuffix("/execute")
+                await _handle_admin_object_execute(send, method, object_id, body, headers)
+                return
+
+            object_id = object_tail
             await _handle_admin_object(send, method, object_id, query, body, headers)
             return
 
@@ -1296,6 +1302,58 @@ async def _handle_admin_object(
             ],
         },
         status=400,
+    )
+
+
+async def _handle_admin_object_execute(
+    send,
+    method: str,
+    object_id: str,
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    if method != "POST":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Admin object execution requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    if "@" in object_id:
+        await _send_json(
+            send,
+            {"status": "error", "error": "Station routing is not available in admin execution"},
+            status=400,
+        )
+        return
+
+    try:
+        payload = _parse_json_body(body)
+        execute_method = _admin_execute_method(payload)
+        execute_payload = _admin_execute_payload(payload)
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    permission_action = object_permissions.EXECUTE
+    if execute_method == "PUT":
+        permission_action = object_permissions.UPDATE
+    elif execute_method == "DELETE":
+        permission_action = object_permissions.DELETE
+
+    await _execute_object_method(
+        send,
+        object_id,
+        execute_method,
+        execute_payload,
+        headers,
+        permission_action=permission_action,
     )
 
 
@@ -5878,6 +5936,24 @@ def _parse_post_payload(body: bytes, query: dict[str, str]) -> dict[str, Any]:
         payload.setdefault(key, value)
 
     return payload
+
+
+def _admin_execute_method(payload: dict[str, Any]) -> str:
+    value = payload.get("method", "GET")
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("Request JSON field 'method' must be one of GET, POST, PUT, DELETE")
+
+    method = value.strip().upper()
+    if method not in {"GET", "POST", "PUT", "DELETE"}:
+        raise ValueError("Request JSON field 'method' must be one of GET, POST, PUT, DELETE")
+    return method
+
+
+def _admin_execute_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    value = payload.get("payload", {})
+    if not isinstance(value, dict):
+        raise ValueError("Request JSON field 'payload' must be an object")
+    return value
 
 
 def _optional_payload_bool(payload: dict[str, Any], key: str) -> bool | None:

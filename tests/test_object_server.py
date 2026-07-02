@@ -1586,6 +1586,119 @@ def test_admin_object_alias_rejects_unsupported_queries(tmp_path, monkeypatch):
     assert "Unsupported admin object inspection query" in payload["error"]
 
 
+def test_admin_object_execute_requires_authorization_header(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {'ran': True}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/admin/objects/basics_counter/execute",
+        method="POST",
+        body=json.dumps({"method": "GET"}).encode(),
+    )
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
+    assert object_logs.get_object_logs("basics_counter", base_dir=data_dir) == []
+
+
+def test_admin_object_execute_runs_get_with_payload(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(
+        root / "basics" / "counter.py",
+        "def GET(request):\n"
+        "    return {'method': 'GET', 'value': request.get('value')}\n",
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/admin/objects/basics_counter/execute",
+        method="POST",
+        body=json.dumps({"method": "GET", "payload": {"value": "from-scroll"}}).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload == {"method": "GET", "value": "from-scroll"}
+    logs = object_logs.get_object_logs("basics_counter", base_dir=data_dir)
+    assert logs[0]["message"] == "GET completed successfully"
+    assert logs[0]["method"] == "GET"
+
+
+def test_admin_object_execute_runs_post_with_payload(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(
+        root / "basics" / "counter.py",
+        "def POST(request):\n"
+        "    return {'method': 'POST', 'value': request.get('value')}\n",
+    )
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/admin/objects/basics_counter/execute",
+        method="POST",
+        body=json.dumps({"method": "POST", "payload": {"value": "from-scroll"}}).encode(),
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload == {"method": "POST", "value": "from-scroll"}
+
+
+def test_admin_object_execute_rejects_bad_shape(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    enable_admin_token(monkeypatch)
+
+    method_status, _, method_payload = request(
+        "/admin/objects/basics_counter/execute",
+        method="POST",
+        body=json.dumps({"method": "PATCH"}).encode(),
+        headers=auth_headers(),
+    )
+    payload_status, _, payload_payload = request(
+        "/admin/objects/basics_counter/execute",
+        method="POST",
+        body=json.dumps({"payload": ["not", "object"]}).encode(),
+        headers=auth_headers(),
+    )
+
+    assert method_status == 400
+    assert method_payload == {
+        "status": "error",
+        "error": "Request JSON field 'method' must be one of GET, POST, PUT, DELETE",
+    }
+    assert payload_status == 400
+    assert payload_payload == {
+        "status": "error",
+        "error": "Request JSON field 'payload' must be an object",
+    }
+
+
+def test_admin_object_execute_rejects_non_post_method(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/admin/objects/basics_counter/execute",
+        method="GET",
+        headers=auth_headers(),
+    )
+
+    assert status == 405
+    assert payload == {"status": "error", "error": "Method not allowed"}
+
+
 def test_admin_collection_alias_exposes_read_only_collection_surfaces(tmp_path, monkeypatch):
     root = tmp_path / "objects"
     data_dir = tmp_path / "data"
