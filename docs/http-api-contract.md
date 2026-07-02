@@ -595,6 +595,37 @@ GET /identity/users/u_7
 `status` can be `active` or `disabled`. Disabled accounts and users cannot mint
 new sessions.
 
+### User Passwords
+
+Users can have one password credential for browser/password login. Hashes are
+stored separately from user records under `data/identity/credentials.tsv`
+(scrypt, owner-only file permissions), so user payloads never include
+credential material. Both routes are admin-token gated, and the admin alias
+form works through the reverse proxy for Scroll:
+
+```http
+POST /identity/users/{user_id}/password
+POST /admin/identity/users/{user_id}/password
+Authorization: Token <admin-token>
+Content-Type: application/json
+```
+
+```json
+{"password": "at least 8 characters"}
+```
+
+Response returns only `user_id`, `operation` (`created` or `replaced`), and
+`updated_at` — never the password or hash. `DELETE` on the same paths removes
+the credential:
+
+```http
+DELETE /identity/users/{user_id}/password
+DELETE /admin/identity/users/{user_id}/password
+Authorization: Token <admin-token>
+```
+
+Unknown users return `404`. Passwords must be 8 to 1024 characters.
+
 ### Identity Sessions
 
 The server can mint scoped subject tokens for Scroll, gateways, or controlled

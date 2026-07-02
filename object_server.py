@@ -26,6 +26,7 @@ import http_api_contract
 import object_backup
 import object_collections
 import object_correlation
+import object_credentials
 import object_daemon_control
 import object_daemon_status
 import object_events
@@ -357,7 +358,7 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
         identity_user_prefix = http_api_contract.IDENTITY_USERS_PATH + "/"
         if path.startswith(identity_user_prefix):
             user_id = path[len(identity_user_prefix):]
-            await _handle_identity_user(send, method, user_id, headers)
+            await _handle_identity_user(send, method, user_id, body, headers)
             return
 
         if path == http_api_contract.IDENTITY_SESSIONS_PATH:
@@ -477,7 +478,7 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
         admin_identity_users_prefix = f"{http_api_contract.ADMIN_IDENTITY_USERS_PATH}/"
         if path.startswith(admin_identity_users_prefix):
             user_id = path.removeprefix(admin_identity_users_prefix)
-            await _handle_admin_identity_user(send, method, user_id, headers)
+            await _handle_admin_identity_user(send, method, user_id, body, headers)
             return
 
         if path == http_api_contract.ADMIN_IDENTITY_SESSIONS_PATH:
@@ -826,12 +827,21 @@ async def _handle_identity_user(
     send,
     method: str,
     user_id: str,
+    body: bytes,
     headers: dict[str, str],
 ) -> None:
     gate_error = _admin_token_gate_error(headers, f"Identity users require {ADMIN_TOKEN_ENV}.")
     if gate_error is not None:
         status, message = gate_error
         await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    if user_id.endswith("/password"):
+        target_user_id = user_id.removesuffix("/password")
+        if "/" in target_user_id or not target_user_id:
+            await _send_json(send, {"status": "error", "error": "Invalid user id"}, status=400)
+            return
+        await _handle_identity_user_password(send, method, target_user_id, body)
         return
 
     if "/" in user_id or not user_id:
@@ -852,6 +862,74 @@ async def _handle_identity_user(
         return
 
     await _send_json(send, {"status": "ok", "user": user})
+
+
+async def _handle_identity_user_password(
+    send,
+    method: str,
+    user_id: str,
+    body: bytes,
+) -> None:
+    try:
+        user = object_identity.get_user(user_id, base_dir=_data_dir())
+    except object_identity.InvalidIdentityPayloadError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_identity.UserNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+
+    if method == "POST":
+        try:
+            payload = _parse_json_body(body)
+            password = payload.get("password")
+            result = object_credentials.set_password(
+                user["user_id"],
+                password,
+                base_dir=_data_dir(),
+            )
+        except object_credentials.InvalidPasswordError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        except ValueError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        except OSError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=500)
+            return
+
+        await _send_json(
+            send,
+            {
+                "status": "ok",
+                "user_id": result["user_id"],
+                "operation": result["operation"],
+                "updated_at": result["updated_at"],
+            },
+        )
+        return
+
+    if method == "DELETE":
+        try:
+            removed = object_credentials.remove_password(user["user_id"], base_dir=_data_dir())
+        except object_credentials.InvalidPasswordError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        except OSError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=500)
+            return
+
+        await _send_json(
+            send,
+            {
+                "status": "ok",
+                "user_id": user["user_id"],
+                "removed": removed,
+            },
+        )
+        return
+
+    await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
 
 
 async def _handle_identity_sessions(
@@ -1770,13 +1848,18 @@ async def _handle_admin_identity_user(
     send,
     method: str,
     user_id: str,
+    body: bytes,
     headers: dict[str, str],
 ) -> None:
+    if user_id.endswith("/password") and method in {"POST", "DELETE"}:
+        await _handle_identity_user(send, method, user_id, body, headers)
+        return
+
     if method != "GET":
         await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
         return
 
-    await _handle_identity_user(send, method, user_id, headers)
+    await _handle_identity_user(send, method, user_id, b"", headers)
 
 
 async def _handle_admin_identity_sessions(

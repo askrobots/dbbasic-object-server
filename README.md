@@ -229,6 +229,8 @@ Current endpoints:
 - `GET /admin/identity/accounts/{account_id}`
 - `GET /admin/identity/users`
 - `GET /admin/identity/users/{user_id}`
+- `POST /admin/identity/users/{user_id}/password`
+- `DELETE /admin/identity/users/{user_id}/password`
 - `GET /admin/identity/sessions`
 - `GET /admin/identity/sessions/{session_id}`
 - `GET /daemon/status`
@@ -252,6 +254,8 @@ Current endpoints:
 - `GET /identity/users`
 - `POST /identity/users`
 - `GET /identity/users/{user_id}`
+- `POST /identity/users/{user_id}/password`
+- `DELETE /identity/users/{user_id}/password`
 - `GET /identity/sessions`
 - `POST /identity/sessions`
 - `GET /identity/sessions/{session_id}`

@@ -5,6 +5,7 @@ import tarfile
 from pathlib import Path
 
 import object_correlation
+import object_credentials
 import object_execution
 import object_events
 import object_file_changes
@@ -367,6 +368,130 @@ def test_identity_users_create_list_filter_and_get(tmp_path, monkeypatch):
 
     assert status == 200
     assert fetched["user"] == created["user"]
+
+
+def test_identity_user_password_set_replace_and_remove(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    enable_admin_token(monkeypatch)
+    request(
+        "/identity/users",
+        method="POST",
+        body=json.dumps({"user_id": "u_7", "email": "alice@example.com"}).encode(),
+        headers=auth_headers(),
+    )
+
+    set_status, _, set_payload = request(
+        "/identity/users/u_7/password",
+        method="POST",
+        body=json.dumps({"password": "correct horse battery"}).encode(),
+        headers=auth_headers(),
+    )
+    replace_status, _, replace_payload = request(
+        "/identity/users/u_7/password",
+        method="POST",
+        body=json.dumps({"password": "another good password"}).encode(),
+        headers=auth_headers(),
+    )
+    remove_status, _, remove_payload = request(
+        "/identity/users/u_7/password",
+        method="DELETE",
+        headers=auth_headers(),
+    )
+
+    assert set_status == 200
+    assert set_payload == {
+        "status": "ok",
+        "user_id": "u_7",
+        "operation": "created",
+        "updated_at": set_payload["updated_at"],
+    }
+    assert "password" not in json.dumps(set_payload)
+    assert replace_status == 200
+    assert replace_payload["operation"] == "replaced"
+    assert remove_status == 200
+    assert remove_payload == {"status": "ok", "user_id": "u_7", "removed": True}
+
+    assert object_credentials.verify_password("u_7", "correct horse battery", base_dir=tmp_path) is False
+
+
+def test_identity_user_password_rejects_unknown_user_and_bad_payloads(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    enable_admin_token(monkeypatch)
+    request(
+        "/identity/users",
+        method="POST",
+        body=json.dumps({"user_id": "u_7"}).encode(),
+        headers=auth_headers(),
+    )
+
+    missing_status, _, missing_payload = request(
+        "/identity/users/u_missing/password",
+        method="POST",
+        body=json.dumps({"password": "long enough password"}).encode(),
+        headers=auth_headers(),
+    )
+    short_status, _, short_payload = request(
+        "/identity/users/u_7/password",
+        method="POST",
+        body=json.dumps({"password": "short"}).encode(),
+        headers=auth_headers(),
+    )
+    get_status, _, get_payload = request(
+        "/identity/users/u_7/password",
+        headers=auth_headers(),
+    )
+    unauth_status, _, unauth_payload = request(
+        "/identity/users/u_7/password",
+        method="POST",
+        body=json.dumps({"password": "long enough password"}).encode(),
+    )
+
+    assert missing_status == 404
+    assert short_status == 400
+    assert "at least 8 characters" in short_payload["error"]
+    assert get_status == 405
+    assert unauth_status == 401
+    assert unauth_payload == {"status": "error", "error": "Unauthorized"}
+    assert not object_credentials.credentials_path(tmp_path).exists() or (
+        "long enough password" not in object_credentials.credentials_path(tmp_path).read_text()
+    )
+    assert missing_payload["status"] == "error"
+    assert get_payload == {"status": "error", "error": "Method not allowed"}
+
+
+def test_admin_identity_user_password_alias(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    enable_admin_token(monkeypatch)
+    request(
+        "/identity/users",
+        method="POST",
+        body=json.dumps({"user_id": "u_7"}).encode(),
+        headers=auth_headers(),
+    )
+
+    set_status, _, set_payload = request(
+        "/admin/identity/users/u_7/password",
+        method="POST",
+        body=json.dumps({"password": "long enough password"}).encode(),
+        headers=auth_headers(),
+    )
+    unauth_status, _, unauth_payload = request(
+        "/admin/identity/users/u_7/password",
+        method="POST",
+        body=json.dumps({"password": "long enough password"}).encode(),
+    )
+    remove_status, _, remove_payload = request(
+        "/admin/identity/users/u_7/password",
+        method="DELETE",
+        headers=auth_headers(),
+    )
+
+    assert set_status == 200
+    assert set_payload["operation"] == "created"
+    assert unauth_status == 401
+    assert unauth_payload == {"status": "error", "error": "Unauthorized"}
+    assert remove_status == 200
+    assert remove_payload["removed"] is True
 
 
 def test_identity_account_and_user_routes_are_admin_gated(tmp_path, monkeypatch):
