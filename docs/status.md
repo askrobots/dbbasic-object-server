@@ -22,6 +22,11 @@ public users.
   and admin-token-gated collection record writes on a narrow public route
 - File-backed accounts, users, self-service session inspection/revocation, and
   permission subjects
+- Password credentials (scrypt, stored outside user records), admin password
+  set/reset routes, opt-in password login, session cookies with origin checks,
+  a built-in browser `/login` + `/logout` flow, request identity injected into
+  object execution (`request["_identity"]`), and a Django-style shell CLI for
+  bootstrap and user management
 - Permission policy storage, check API, audit mode, readiness status, row
   filters, field redaction, opt-in enforcement, and rollout gates for recovery,
   identity, and policy safety
@@ -62,8 +67,8 @@ public users.
 
 - Open signup where strangers can run arbitrary Python code
 - Public source writes
-- Default-on permissions for every route after login/auth gateway integration
-- Browser login/session UX on top of guarded existing-user session minting
+- Default-on permissions for every route after starter policy and rollout
+- Self-service signup, password reset flows, and login attempt lockout
 - Session admin gates are implemented, but opt-in with
   `DBBASIC_ENABLE_SESSION_ADMIN_GATES=true`
 - CPU and memory isolation for untrusted object code
@@ -74,10 +79,10 @@ public users.
 
 ## Next Work
 
-1. Connect guarded existing-user session minting to a real browser login or
-   trusted auth gateway.
-2. Make permission enforcement default-on after the login/auth gateway and
-   starter policy are wired.
+1. Ship a starter permission policy with real allow grants, then run audit
+   mode against live traffic.
+2. Make permission enforcement default-on after the starter policy holds up
+   under audit.
 3. Add event delivery controls after scheduler and queue controls stabilize.
 4. Add file upload/delete with quotas, content checks, permissions, and audit.
 5. Add CPU/memory isolation and a better worker boundary for untrusted code.
