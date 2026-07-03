@@ -15,6 +15,7 @@ import html
 import json
 import mimetypes
 import os
+import shutil
 import threading
 import time
 import urllib.parse
@@ -6625,7 +6626,68 @@ def _system_snapshot() -> dict[str, Any]:
     if memory is not None:
         snapshot["memory"] = memory
 
+    cpu_percent = _cpu_percent_snapshot()
+    if cpu_percent is not None:
+        snapshot["cpu_percent"] = cpu_percent
+
+    disk = _disk_snapshot()
+    if disk is not None:
+        snapshot["disk"] = disk
+
     return snapshot
+
+
+_CPU_TIMES_LOCK = threading.Lock()
+_LAST_CPU_TIMES: tuple[int, int] | None = None
+
+
+def _cpu_percent_snapshot() -> float | None:
+    """CPU utilization since the previous metrics call, from /proc/stat deltas."""
+    global _LAST_CPU_TIMES
+    try:
+        with open("/proc/stat", encoding="utf-8") as handle:
+            first_line = handle.readline()
+    except OSError:
+        return None
+
+    parts = first_line.split()
+    if not parts or parts[0] != "cpu":
+        return None
+    try:
+        values = [int(part) for part in parts[1:]]
+    except ValueError:
+        return None
+
+    idle = values[3] + (values[4] if len(values) > 4 else 0)
+    total = sum(values)
+
+    with _CPU_TIMES_LOCK:
+        previous = _LAST_CPU_TIMES
+        _LAST_CPU_TIMES = (idle, total)
+
+    if previous is None:
+        return None
+
+    idle_delta = idle - previous[0]
+    total_delta = total - previous[1]
+    if total_delta <= 0:
+        return None
+    return round(max(0.0, min(100.0, (1 - idle_delta / total_delta) * 100)), 2)
+
+
+def _disk_snapshot() -> dict[str, Any] | None:
+    """Capacity of the filesystem holding the runtime data directory."""
+    try:
+        usage = shutil.disk_usage(_data_dir())
+    except OSError:
+        return None
+    if usage.total <= 0:
+        return None
+    return {
+        "total_gb": round(usage.total / 1024**3, 2),
+        "used_gb": round(usage.used / 1024**3, 2),
+        "used_percent": round(usage.used / usage.total * 100, 2),
+    }
 
 
 def _linux_memory_snapshot() -> dict[str, Any] | None:

@@ -1716,6 +1716,26 @@ def test_health_metrics_keeps_old_dashboard_shape(monkeypatch):
     assert "top_paths" in payload["metrics"]
 
 
+def test_health_metrics_reports_disk_and_cpu_capacity(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    enable_admin_token(monkeypatch)
+
+    request("/health", query_string="metrics=true", headers=auth_headers())
+    status, _, payload = request(
+        "/health",
+        query_string="metrics=true",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    disk = payload["system"]["disk"]
+    assert disk["total_gb"] > 0
+    assert 0 <= disk["used_percent"] <= 100
+    assert disk["used_gb"] <= disk["total_gb"]
+    cpu_percent = payload["system"].get("cpu_percent")
+    assert cpu_percent is None or 0 <= cpu_percent <= 100
+
+
 def test_admin_status_requires_admin_token(monkeypatch):
     monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)
 
