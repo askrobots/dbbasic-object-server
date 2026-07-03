@@ -1,274 +1,227 @@
+"""Identity-aware operator dashboard, served as one DBBASIC object.
+
+Anonymous visitors see basic server health. Signed-in admins get live
+metrics, inventory, capability posture, and the recent change feed — the
+browser polls the admin APIs directly with the visitor's session cookie, so
+this page needs no data access of its own and shows exactly what the
+caller is allowed to see.
+"""
+
+_STYLE = """
+:root {
+  color-scheme: dark;
+  --bg: #0b0b10; --panel: #17171f; --line: #2b2b37;
+  --text: #f4f4f7; --muted: #a2a2ad;
+  --green: #52d273; --blue: #5aa7ff; --amber: #f1b747; --red: #ff6b6b;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+       font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.wrap { max-width: 1100px; margin: 0 auto; padding: 1.5rem; }
+header { display: flex; align-items: baseline; gap: 1rem; margin-bottom: 1.25rem; }
+header h1 { font-size: 1.15rem; margin: 0; }
+header .who { margin-left: auto; color: var(--muted); font-size: 0.85rem; }
+header .who a { color: var(--blue); text-decoration: none; }
+.grid { display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 0.75rem 0.9rem; }
+.tile .label { font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.tile .value { font-size: 1.35rem; font-weight: 600; margin-top: 0.15rem; }
+.tile .sub { font-size: 0.75rem; color: var(--muted); }
+.ok { color: var(--green); } .warn { color: var(--amber); } .bad { color: var(--red); }
+section { margin-top: 1.5rem; }
+section h2 { font-size: 0.8rem; letter-spacing: 0.06em; text-transform: uppercase;
+             color: var(--muted); margin: 0 0 0.6rem; }
+.bars { display: flex; gap: 1.25rem; align-items: flex-end; height: 76px;
+        background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+        padding: 0.75rem 1rem 0.5rem; }
+.bar { display: flex; flex-direction: column; justify-content: flex-end; align-items: center;
+       gap: 0.3rem; width: 64px; height: 100%; }
+.bar i { display: block; width: 100%; background: var(--blue); border-radius: 3px 3px 0 0; min-height: 2px; }
+.bar span { font-size: 0.68rem; color: var(--muted); }
+table { width: 100%; border-collapse: collapse; background: var(--panel);
+        border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+th, td { text-align: left; font-size: 0.82rem; padding: 0.45rem 0.75rem;
+         border-bottom: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 500; }
+tr:last-child td { border-bottom: 0; }
+td.kind { color: var(--blue); white-space: nowrap; }
+td.when { color: var(--muted); white-space: nowrap; }
+.hint { color: var(--muted); font-size: 0.85rem; background: var(--panel);
+        border: 1px solid var(--line); border-radius: 8px; padding: 0.9rem 1rem; }
+.hint a { color: var(--blue); }
+footer { margin-top: 2rem; color: var(--muted); font-size: 0.75rem; }
+"""
+
+_ADMIN_SCRIPT = """
+const fmt = (n) => typeof n === "number" ? n.toLocaleString() : (n ?? "-");
+const el = (id) => document.getElementById(id);
+
+function setTile(id, value, sub) {
+  const tile = el(id);
+  if (!tile) return;
+  tile.querySelector(".value").textContent = value;
+  if (sub !== undefined) tile.querySelector(".sub").textContent = sub;
+}
+
+function renderBars(times) {
+  const keys = ["avg", "p50", "p95", "p99"];
+  const max = Math.max(...keys.map((k) => times[k] || 0), 1);
+  for (const key of keys) {
+    const bar = el("bar-" + key);
+    if (!bar) continue;
+    bar.querySelector("i").style.height = Math.max(3, (times[key] || 0) / max * 52) + "px";
+    bar.querySelector("span").textContent = key + " " + (times[key] ?? 0) + "ms";
+  }
+}
+
+async function fetchJson(url) {
+  const response = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!response.ok) throw new Error(url + " -> " + response.status);
+  return response.json();
+}
+
+async function refresh() {
+  try {
+    const health = await fetchJson("/health?metrics=true");
+    setTile("tile-uptime", health.uptime, "pid " + health.pid);
+    setTile("tile-requests", fmt(health.requests), health.rps + " req/s");
+    const errValue = el("tile-errors").querySelector(".value");
+    errValue.textContent = fmt(health.errors);
+    errValue.className = "value " + (health.errors > 0 ? "bad" : "ok");
+    el("tile-errors").querySelector(".sub").textContent =
+      (health.error_rate * 100).toFixed(1) + "% error rate";
+    setTile("tile-capacity",
+      health.capacity.requests.in_flight + "/" + health.capacity.requests.max,
+      "exec " + health.capacity.object_executions.in_flight + "/" +
+      health.capacity.object_executions.max);
+    renderBars(health.response_time_ms || {});
+
+    const status = await fetchJson("/admin/status");
+    const inv = status.inventory || {};
+    setTile("tile-objects", fmt((inv.objects || {}).count), "objects");
+    setTile("tile-collections", fmt((inv.collections || {}).count), "collections");
+    const identity = (status.permissions || {}).identity || {};
+    setTile("tile-users", fmt((identity.users || {}).count), "users");
+    const enforced = (status.permissions || {}).enforcement_enabled;
+    const enfValue = el("tile-enforcement").querySelector(".value");
+    enfValue.textContent = enforced ? "ON" : "off";
+    enfValue.className = "value " + (enforced ? "ok" : "warn");
+
+    const changes = await fetchJson("/admin/changes?limit=12");
+    const rows = (changes.changes || []).map((change) => {
+      const when = (change.timestamp || "").replace("T", " ").slice(0, 19);
+      const target = change.target || change.object_id || change.collection || "";
+      return "<tr><td class=kind>" + (change.kind || "") + "</td><td>" +
+        (change.summary || change.action || "") + "</td><td>" + target +
+        "</td><td>" + (change.actor || "") + "</td><td class=when>" + when + "</td></tr>";
+    });
+    el("changes-body").innerHTML = rows.join("") ||
+      "<tr><td colspan=5 class=when>no recent changes</td></tr>";
+    el("updated").textContent = "updated " + new Date().toLocaleTimeString();
+  } catch (error) {
+    el("updated").textContent = "refresh failed: " + error.message;
+  }
+}
+
+refresh();
+setInterval(refresh, 10000);
+"""
+
+
+def _tile(tile_id, label, value="-", sub=""):
+    return (
+        f'<div class="tile" id="{tile_id}"><div class="label">{label}</div>'
+        f'<div class="value">{value}</div><div class="sub">{sub}</div></div>'
+    )
+
+
 def GET(request):
     count = int(_state_manager.get("served", 0) or 0) + 1
     _state_manager.set("served", count)
-    _logger.info("system_dashboard served", count=count, response_type="html")
+
+    identity = request.get("_identity", {})
+    user_id = identity.get("user_id")
+    is_admin = "admin" in (identity.get("roles") or [])
+    _logger.info(
+        "system_dashboard served",
+        count=count,
+        user_id=user_id or "anonymous",
+        admin=is_admin,
+    )
+
+    if user_id:
+        who = (
+            f"signed in as <strong>{user_id}</strong> &middot; "
+            '<form method="post" action="/logout" style="display:inline">'
+            '<button style="background:none;border:0;color:var(--blue);cursor:pointer;'
+            'padding:0;font:inherit">sign out</button></form>'
+        )
+    else:
+        who = '<a href="/login?next=/dashboard">sign in</a> for live metrics'
+
+    if is_admin:
+        body = f"""
+<div class="grid">
+{_tile("tile-uptime", "Uptime")}
+{_tile("tile-requests", "Requests")}
+{_tile("tile-errors", "Errors")}
+{_tile("tile-capacity", "In Flight")}
+{_tile("tile-objects", "Objects")}
+{_tile("tile-collections", "Collections")}
+{_tile("tile-users", "Users")}
+{_tile("tile-enforcement", "Enforcement")}
+</div>
+<section>
+<h2>Response Time</h2>
+<div class="bars">
+<div class="bar" id="bar-avg"><i></i><span>avg</span></div>
+<div class="bar" id="bar-p50"><i></i><span>p50</span></div>
+<div class="bar" id="bar-p95"><i></i><span>p95</span></div>
+<div class="bar" id="bar-p99"><i></i><span>p99</span></div>
+</div>
+</section>
+<section>
+<h2>Recent Changes</h2>
+<table>
+<thead><tr><th>Kind</th><th>Summary</th><th>Target</th><th>Actor</th><th>When</th></tr></thead>
+<tbody id="changes-body"><tr><td colspan="5" class="when">loading&hellip;</td></tr></tbody>
+</table>
+</section>
+<footer id="updated">loading&hellip;</footer>
+<script>{_ADMIN_SCRIPT}</script>"""
+    elif user_id:
+        body = (
+            '<div class="hint">You are signed in, but live metrics need an '
+            "admin role. The server itself is healthy if you can read this "
+            "page &mdash; it was rendered by a live object.</div>"
+        )
+    else:
+        body = (
+            '<div class="hint">This dashboard is a running DBBASIC object. '
+            'The server is <span class="ok">healthy</span> if you can read '
+            'this page. <a href="/login?next=/dashboard">Sign in</a> to see '
+            "live metrics, inventory, and the change feed. Curious how this "
+            'page works? It is one Python file with a <code>GET(request)</code> '
+            "method, editable without a deploy.</div>"
+        )
 
     html = f"""<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>DBBASIC Object Dashboard</title>
-  <style>
-    :root {{
-      color-scheme: dark;
-      --bg: #0b0b10;
-      --panel: #17171f;
-      --panel-2: #101018;
-      --line: #2b2b37;
-      --text: #f4f4f7;
-      --muted: #a2a2ad;
-      --green: #52d273;
-      --blue: #5aa7ff;
-      --amber: #f1b747;
-      --red: #ff6b6b;
-    }}
-    * {{ box-sizing: border-box; }}
-    body {{
-      margin: 0;
-      min-height: 100vh;
-      background: var(--bg);
-      color: var(--text);
-      font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }}
-    .shell {{
-      display: grid;
-      grid-template-columns: 72px 1fr;
-      min-height: 100vh;
-    }}
-    .rail {{
-      border-right: 1px solid var(--line);
-      background: #0f0f16;
-      padding: 16px 12px;
-    }}
-    .mark {{
-      display: grid;
-      place-items: center;
-      width: 42px;
-      height: 42px;
-      border: 1px solid #38384a;
-      border-radius: 8px;
-      background: #191928;
-      color: #c7bfff;
-      font-weight: 800;
-      letter-spacing: 0;
-    }}
-    main {{
-      padding: 28px clamp(20px, 5vw, 72px) 40px;
-    }}
-    .topbar {{
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      margin-bottom: 56px;
-    }}
-    .eyebrow {{
-      color: var(--muted);
-      font-size: 13px;
-      font-weight: 700;
-      letter-spacing: .08em;
-      text-transform: uppercase;
-    }}
-    h1 {{
-      max-width: 780px;
-      margin: 0 0 18px;
-      font-size: clamp(42px, 7vw, 88px);
-      line-height: .98;
-      letter-spacing: 0;
-    }}
-    .lead {{
-      max-width: 760px;
-      margin: 0;
-      color: #d3d3dc;
-      font-size: clamp(18px, 2.2vw, 24px);
-    }}
-    .badges {{
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      margin-top: 24px;
-    }}
-    .badge {{
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: var(--panel);
-      color: #dfdff0;
-      padding: 9px 12px;
-      font-weight: 700;
-    }}
-    .badge.ok {{ color: var(--green); }}
-    .grid {{
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 16px;
-      margin-top: 64px;
-    }}
-    .card {{
-      min-height: 170px;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: var(--panel);
-      padding: 20px;
-    }}
-    .card h2 {{
-      margin: 0 0 12px;
-      font-size: 18px;
-      letter-spacing: 0;
-    }}
-    .card p {{
-      margin: 0;
-      color: var(--muted);
-    }}
-    .metric {{
-      display: flex;
-      justify-content: space-between;
-      gap: 16px;
-      border-top: 1px solid var(--line);
-      padding-top: 12px;
-      margin-top: 18px;
-      color: #dfdff0;
-      font-weight: 700;
-    }}
-    .status-list {{
-      display: grid;
-      gap: 10px;
-      margin-top: 14px;
-    }}
-    .row {{
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      color: var(--muted);
-    }}
-    .pill {{
-      border-radius: 999px;
-      border: 1px solid var(--line);
-      padding: 4px 9px;
-      color: #dfdff0;
-      background: var(--panel-2);
-      font-size: 13px;
-      font-weight: 700;
-      white-space: nowrap;
-    }}
-    .pill.ok {{ color: var(--green); }}
-    .pill.warn {{ color: var(--amber); }}
-    .pill.err {{ color: var(--red); }}
-    code {{
-      color: #d9f06b;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: .95em;
-    }}
-    footer {{
-      display: flex;
-      justify-content: space-between;
-      gap: 16px;
-      margin-top: 44px;
-      color: #7e7e89;
-      font-size: 14px;
-    }}
-    @media (max-width: 900px) {{
-      .shell {{ grid-template-columns: 1fr; }}
-      .rail {{ display: none; }}
-      .topbar {{ margin-bottom: 36px; }}
-      .grid {{ grid-template-columns: 1fr; margin-top: 42px; }}
-      footer {{ flex-direction: column; }}
-    }}
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DBBASIC Dashboard</title>
+<style>{_STYLE}</style>
 </head>
 <body>
-  <div class="shell">
-    <aside class="rail" aria-hidden="true">
-      <div class="mark">DB</div>
-    </aside>
-    <main>
-      <div class="topbar">
-        <div>
-          <div class="eyebrow">object.dbbasic.com</div>
-          <strong>DBBASIC Object Dashboard</strong>
-        </div>
-        <span class="pill ok" id="health-pill">checking health</span>
-      </div>
-
-      <section>
-        <h1>Live object runtime, guarded staging surface.</h1>
-        <p class="lead">
-          This dashboard is installed as a DBBASIC package and served by one Python object.
-          It is meant to prove the open-source object loop before broader write routes are exposed.
-        </p>
-        <div class="badges">
-          <span class="badge ok">ASGI runtime</span>
-          <span class="badge">package-installed object</span>
-          <span class="badge">source writes blocked publicly</span>
-          <span class="badge">admin APIs allowlisted later</span>
-        </div>
-      </section>
-
-      <section class="grid" aria-label="Runtime summary">
-        <article class="card">
-          <h2>Object</h2>
-          <p><code>system_dashboard</code> keeps its own state and logs while rendering this page.</p>
-          <div class="metric">
-            <span>served</span>
-            <span>{count} times</span>
-          </div>
-        </article>
-
-        <article class="card">
-          <h2>Public Routes</h2>
-          <div class="status-list">
-            <div class="row"><span><code>/</code></span><span class="pill ok">site_home</span></div>
-            <div class="row"><span><code>/dashboard</code></span><span class="pill ok">this object</span></div>
-            <div class="row"><span><code>/health</code></span><span class="pill ok" id="health-row">checking</span></div>
-            <div class="row"><span><code>/identity/session</code></span><span class="pill warn" id="session-row">checking</span></div>
-          </div>
-        </article>
-
-        <article class="card">
-          <h2>Write Surface</h2>
-          <p>Collection records and object source writes exist, but public staging keeps them behind admin/session policy.</p>
-          <div class="status-list">
-            <div class="row"><span>collection writes</span><span class="pill warn">admin gated</span></div>
-            <div class="row"><span>object source writes</span><span class="pill warn">disabled publicly</span></div>
-            <div class="row"><span>package installs</span><span class="pill warn">reviewed only</span></div>
-          </div>
-        </article>
-      </section>
-
-      <footer>
-        <span>Installed from <code>packages/system-dashboard</code>.</span>
-        <span>Next: login/session minting, permission-on-by-default, then Scroll writes.</span>
-      </footer>
-    </main>
-  </div>
-  <script>
-    async function checkJson(path, expectedStatus) {{
-      try {{
-        const response = await fetch(path, {{ cache: "no-store" }});
-        const data = await response.json().catch(() => ({{}}));
-        return {{ ok: response.status === expectedStatus, status: response.status, data }};
-      }} catch (error) {{
-        return {{ ok: false, status: 0, data: {{ error: String(error) }} }};
-      }}
-    }}
-
-    checkJson("/health", 200).then((result) => {{
-      const top = document.getElementById("health-pill");
-      const row = document.getElementById("health-row");
-      const text = result.ok ? "healthy" : "error " + result.status;
-      top.textContent = text;
-      row.textContent = text;
-      top.className = result.ok ? "pill ok" : "pill err";
-      row.className = result.ok ? "pill ok" : "pill err";
-    }});
-
-    checkJson("/identity/session", 401).then((result) => {{
-      const row = document.getElementById("session-row");
-      row.textContent = result.ok ? "401 without token" : "check failed";
-      row.className = result.ok ? "pill warn" : "pill err";
-    }});
-  </script>
+<div class="wrap">
+<header>
+<h1>DBBASIC Dashboard</h1>
+<span class="who">{who}</span>
+</header>
+{body}
+</div>
 </body>
 </html>"""
+
     return {"content_type": "text/html; charset=utf-8", "body": html}

@@ -227,6 +227,46 @@ def test_mcp_tool_errors_are_marked(tmp_path, monkeypatch):
     assert unsafe_error and "unsafe characters" in unsafe["error"]
 
 
+def test_admin_gates_accept_session_cookie_when_gates_enabled(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.SESSION_ADMIN_GATES_ENV, "true")
+    enable_admin_token(monkeypatch)
+    request(
+        "/identity/users",
+        method="POST",
+        body=json.dumps({"user_id": "dan", "roles": ["admin"]}).encode(),
+        headers=auth_headers(),
+    )
+    token, _ = create_identity_session({"user_id": "dan", "label": "browser"})
+
+    cookie_status, _, cookie_payload = request(
+        "/admin/status",
+        headers=[("cookie", f"dbbasic_session={token}")],
+    )
+    metrics_status, _, _ = request(
+        "/health",
+        query_string="metrics=true",
+        headers=[("cookie", f"dbbasic_session={token}")],
+    )
+
+    monkeypatch.setenv(object_server.SESSION_ADMIN_GATES_ENV, "false")
+    gates_off_status, _, _ = request(
+        "/admin/status",
+        headers=[("cookie", f"dbbasic_session={token}")],
+    )
+    monkeypatch.setenv(object_server.SESSION_ADMIN_GATES_ENV, "true")
+    admin_token_cookie_status, _, _ = request(
+        "/admin/status",
+        headers=[("cookie", f"dbbasic_session={TEST_ADMIN_TOKEN}")],
+    )
+
+    assert cookie_status == 200
+    assert cookie_payload["status"] == "ok"
+    assert metrics_status == 200
+    assert gates_off_status == 401
+    assert admin_token_cookie_status == 401
+
+
 def test_mcp_works_with_admin_role_session_token(tmp_path, monkeypatch):
     monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
     monkeypatch.setenv(object_server.SESSION_ADMIN_GATES_ENV, "true")

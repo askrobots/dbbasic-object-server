@@ -7588,6 +7588,12 @@ def _admin_token_gate_error(
 
     request_token = _authorization_token(headers)
     if request_token is None:
+        # Browser pages authenticate with the session cookie. Only the
+        # session-admin path accepts it; the raw admin token never does.
+        if session_admin_gates:
+            cookie_token = _session_cookie_token(headers)
+            if cookie_token is not None and _admin_session_authorized(cookie_token):
+                return None
         return (401, "Unauthorized")
 
     if admin_token and hmac.compare_digest(request_token, admin_token):

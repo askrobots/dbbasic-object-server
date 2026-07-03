@@ -168,8 +168,8 @@ def test_repository_system_dashboard_package_installs_and_executes(tmp_path):
 
     assert result.ok is True
     assert result.result["content_type"] == "text/html; charset=utf-8"
-    assert "DBBASIC Object Dashboard" in result.result["body"]
-    assert "packages/system-dashboard" in result.result["body"]
+    assert "DBBASIC Dashboard" in result.result["body"]
+    assert "sign in</a> for live metrics" in result.result["body"]
     assert object_state.get_object_state("system_dashboard", base_dir=data_dir)["served"] == 1
 
 
