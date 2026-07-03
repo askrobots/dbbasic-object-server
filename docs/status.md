@@ -96,11 +96,10 @@ untrusted public users.
 
 ## Next Work
 
-1. Retire the `dbbasic_probe` Caddy exceptions now that Scroll writes through
-   admin aliases, or open runtime object routes more broadly under
-   enforcement.
-2. Enable session admin gates on staging so Scroll can operate on an
-   admin-role session instead of the raw deployment token.
+1. Migrate the first real website onto the platform as a package (objects,
+   schema, seed, routes, and permission grants in one reviewed unit).
+2. Design per-family gate tiers so agents can run under a scoped builder role
+   instead of admin-role sessions.
 3. Add event delivery controls after scheduler and queue controls stabilize.
 4. Add file upload/delete with quotas, content checks, permissions, and audit.
 5. Add CPU/memory isolation and a better worker boundary for untrusted code.
