@@ -41,6 +41,7 @@ import object_ids
 import object_logs
 import object_mcp
 import object_metadata
+import object_multipart
 import object_package_changes
 import object_permission_audit
 import object_permission_store
@@ -4919,6 +4920,8 @@ async def _handle_object_body_method(
     try:
         if body.strip() and _is_form_content_type(headers):
             payload: dict[str, Any] = _form_fields_payload(body)
+        elif body.strip() and _is_multipart_content_type(headers):
+            payload = object_multipart.parse_multipart(body, headers.get("content-type", ""))
         elif body.strip():
             payload = _parse_json_body(body)
         else:
@@ -6766,6 +6769,12 @@ def _parse_post_payload(
             payload.setdefault(key, value)
         return payload
 
+    if headers is not None and _is_multipart_content_type(headers):
+        payload = object_multipart.parse_multipart(body, headers.get("content-type", ""))
+        for key, value in query.items():
+            payload.setdefault(key, value)
+        return payload
+
     try:
         payload = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
@@ -6783,6 +6792,10 @@ def _parse_post_payload(
 def _is_form_content_type(headers: dict[str, str]) -> bool:
     content_type = headers.get("content-type", "").split(";")[0].strip().lower()
     return content_type == "application/x-www-form-urlencoded"
+
+
+def _is_multipart_content_type(headers: dict[str, str]) -> bool:
+    return object_multipart.is_multipart_content_type(headers.get("content-type", ""))
 
 
 def _form_fields_payload(body: bytes) -> dict[str, str]:

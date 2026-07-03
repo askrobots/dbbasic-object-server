@@ -226,6 +226,28 @@ and schemas are the step up from object state when the data needs listing,
 validation, and change history — see the collections sections of
 `http-api-contract.md`.
 
+## Upload Forms
+
+`multipart/form-data` posts (forms with `enctype="multipart/form-data"`) are
+parsed for you: text fields arrive as plain payload keys, and each uploaded
+file arrives under `request["_files"]` with its content base64-encoded so the
+payload survives the subprocess execution boundary:
+
+```python
+import base64
+
+def POST(request):
+    upload = request["_files"]["document"]
+    content = base64.b64decode(upload["content_base64"])
+    _logger.info("upload received", filename=upload["filename"], size=upload["size"])
+    return {"saved": upload["filename"], "bytes": len(content)}
+```
+
+Each `_files` entry has `filename`, `content_type`, `size`, and
+`content_base64`. Upload size is bounded by `DBBASIC_MAX_REQUEST_BYTES`.
+Store durable uploads through the object file APIs so they inherit
+permissions and change history.
+
 ## Low-Level Response
 
 When an object needs exact status and headers, return a tuple:
