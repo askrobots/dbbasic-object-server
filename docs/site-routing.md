@@ -74,6 +74,26 @@ catch-all `reverse_proxy` instead of a catch-all 404. Under permission
 enforcement, unrouted or unauthorized paths still return controlled 403/404
 responses from the server.
 
+## Static Assets
+
+Site CSS, JavaScript, images, and fonts are served by the reverse proxy from
+a plain directory — never through object execution — so they get file-server
+performance, gzip, and cache headers:
+
+```caddyfile
+handle_path /static/* {
+    root * /var/lib/dbbasic-object-server/static
+    file_server
+    header Cache-Control "public, max-age=3600"
+}
+```
+
+Pages reference them normally (`<link href="/static/site.css">`). The
+directory is deploy-time content owned by the service user; treat it like
+object source (versioned in the site package), not like runtime data.
+User-uploaded files are different: keep those in the object file APIs so they
+inherit permissions, audit, and backups.
+
 ## Writing Site Pages
 
 Site pages are normal objects (see `object-authoring.md`): return a dict for

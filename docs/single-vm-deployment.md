@@ -685,6 +685,12 @@ dbbasic.example.com {
         reverse_proxy 127.0.0.1:8001
     }
 
+    handle_path /static/* {
+        root * /var/lib/dbbasic-object-server/static
+        file_server
+        header Cache-Control "public, max-age=3600"
+    }
+
     handle /permissions/audit* {
         reverse_proxy 127.0.0.1:8001
     }
