@@ -44,6 +44,7 @@ import object_mcp
 import object_metadata
 import object_metrics_history
 import object_multipart
+import object_ops_log
 import object_package_changes
 import object_permission_audit
 import object_permission_store
@@ -461,6 +462,10 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
 
         if path == http_api_contract.ADMIN_CHANGES_PATH:
             await _handle_admin_changes(send, method, query, headers)
+            return
+
+        if path == http_api_contract.ADMIN_OPS_PATH:
+            await _handle_admin_ops(send, method, query, headers)
             return
 
         if path == http_api_contract.ADMIN_FILES_PATH:
@@ -1200,6 +1205,12 @@ async def _handle_identity_current_session(
             await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
             return
 
+        _append_ops_auth_event(
+            "session_minted",
+            user_id=result["session"]["user_id"],
+            method="session_login",
+            label=result["session"].get("label"),
+        )
         await _send_json(send, {"status": "ok", **result}, status=201)
         return
 
@@ -1254,7 +1265,9 @@ async def _handle_identity_password_login(
         base_dir=_data_dir(),
     )
 
+    attempted = login["user_id"] or login["email"] or ""
     if user is None or not verified:
+        _append_ops_auth_event("login_failed", identifier=attempted, method="password")
         await asyncio.sleep(PASSWORD_LOGIN_FAILURE_DELAY_SECONDS)
         await _send_json(send, {"status": "error", "error": "Invalid credentials"}, status=401)
         return
@@ -1270,10 +1283,17 @@ async def _handle_identity_password_login(
             require_known_user=True,
         )
     except ValueError:
+        _append_ops_auth_event("login_failed", identifier=attempted, method="password")
         await asyncio.sleep(PASSWORD_LOGIN_FAILURE_DELAY_SECONDS)
         await _send_json(send, {"status": "error", "error": "Invalid credentials"}, status=401)
         return
 
+    _append_ops_auth_event(
+        "login_succeeded",
+        user_id=user["user_id"],
+        method="password",
+        label=login["label"],
+    )
     await _send_json(send, {"status": "ok", **result}, status=201)
 
 
@@ -1538,6 +1558,7 @@ async def _handle_login(
     verified = object_credentials.verify_password(lookup_user_id, password, base_dir=_data_dir())
 
     if user is None or not verified:
+        _append_ops_auth_event("login_failed", identifier=email, method="password_form")
         await asyncio.sleep(PASSWORD_LOGIN_FAILURE_DELAY_SECONDS)
         await _send_redirect(send, failure_location)
         return
@@ -1549,10 +1570,17 @@ async def _handle_login(
             require_known_user=True,
         )
     except ValueError:
+        _append_ops_auth_event("login_failed", identifier=email, method="password_form")
         await asyncio.sleep(PASSWORD_LOGIN_FAILURE_DELAY_SECONDS)
         await _send_redirect(send, failure_location)
         return
 
+    _append_ops_auth_event(
+        "login_succeeded",
+        user_id=user["user_id"],
+        method="password_form",
+        label="browser login",
+    )
     await _send_redirect(
         send,
         next_path,
@@ -1576,6 +1604,7 @@ async def _handle_logout(send, method: str, headers: dict[str, str]) -> None:
             object_identity.revoke_session(session.session_id, base_dir=_data_dir())
         except (OSError, ValueError, LookupError):
             pass
+        _append_ops_auth_event("logout", user_id=session.user_id)
 
     await _send_redirect(
         send,
@@ -5168,6 +5197,7 @@ async def _execute_object_method(
         await _send_object_response(send, result.result)
         return
 
+    _append_ops_execution_error(object_id, method, result, headers)
     await _send_execution_error(send, result)
 
 
@@ -6623,6 +6653,99 @@ def _storage_check() -> dict[str, str]:
         }
 
     return {"status": "ok"}
+
+
+async def _handle_admin_ops(
+    send,
+    method: str,
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Ops events require {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    try:
+        events = object_ops_log.read_events(
+            base_dir=_data_dir(),
+            limit=_query_int(query, "limit", default=100, minimum=1, maximum=1000),
+            kind=_optional_query_text(query, "kind"),
+            event=_optional_query_text(query, "event"),
+            identifier=_optional_query_text(query, "identifier"),
+        )
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except OSError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=500)
+        return
+
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "events": events,
+            "count": len(events),
+        },
+    )
+
+
+def _append_ops_execution_error(
+    object_id: str,
+    method: str,
+    result: object_execution.ObjectExecutionResult,
+    headers: dict[str, str],
+) -> None:
+    try:
+        subject = _permission_subject(headers)
+        object_ops_log.append_event(
+            object_ops_log.EXECUTION_ERROR,
+            {
+                "object_id": object_id,
+                "method": method,
+                "error_type": result.error.type if result.error is not None else None,
+                "message": (result.error.message if result.error is not None else "")[:500],
+                "user_id": subject.user_id,
+                "correlation_id": object_correlation.current_correlation_id(),
+            },
+            base_dir=_data_dir(),
+        )
+    except (OSError, ValueError):
+        pass
+
+
+def _append_ops_auth_event(
+    event: str,
+    *,
+    identifier: str | None = None,
+    user_id: str | None = None,
+    method: str | None = None,
+    label: str | None = None,
+) -> None:
+    try:
+        object_ops_log.append_event(
+            object_ops_log.AUTH,
+            {
+                "event": event,
+                "identifier": identifier,
+                "user_id": user_id,
+                "auth_method": method,
+                "label": label,
+                "correlation_id": object_correlation.current_correlation_id(),
+            },
+            base_dir=_data_dir(),
+        )
+    except (OSError, ValueError):
+        pass
 
 
 _METRICS_SNAPSHOT_LOCK = threading.Lock()

@@ -197,6 +197,7 @@ Current endpoints:
 - `GET /health?metrics=true`
 - `GET /admin/status`
 - `GET /admin/changes`
+- `GET /admin/ops`
 - `GET /admin/objects`
 - `POST /admin/objects`
 - `GET /admin/objects/{object_id}`

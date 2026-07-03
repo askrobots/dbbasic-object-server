@@ -212,6 +212,18 @@ async function refresh() {
       "</td></tr>").join("") ||
       "<tr><td colspan=4 class=when>no active sessions</td></tr>";
 
+    const ops = await fetchJson("/admin/ops?limit=10");
+    el("ops-body").innerHTML = (ops.events || []).map((e) => {
+      const isError = e.kind === "execution_error";
+      const what = isError ? (e.error_type || "error") : (e.event || "auth");
+      const detail = isError
+        ? (e.object_id || "") + " — " + (e.message || "")
+        : [e.identifier || e.user_id || "", e.label || ""].filter(Boolean).join(" · ");
+      return "<tr><td class=" + (isError ? "bad" : "kind") + ">" + esc(what) +
+        "</td><td>" + esc(detail.slice(0, 110)) + "</td><td class=when>" +
+        esc((e.timestamp || "").replace("T", " ").slice(0, 19)) + "</td></tr>";
+    }).join("") || "<tr><td colspan=3 class=when>no ops events yet</td></tr>";
+
     const changes = await fetchJson("/admin/changes?limit=12");
     changeDetails = (changes.changes || []).map((change) => change.change || change);
     const rows = (changes.changes || []).map((change, index) => {
@@ -304,6 +316,13 @@ def GET(request):
 <table>
 <thead><tr><th>Path</th><th>Requests</th><th>Errors</th></tr></thead>
 <tbody id="paths-body"><tr><td colspan="3" class="when">loading&hellip;</td></tr></tbody>
+</table>
+</section>
+<section>
+<h2>Ops Events</h2>
+<table>
+<thead><tr><th>What</th><th>Detail</th><th>When</th></tr></thead>
+<tbody id="ops-body"><tr><td colspan="3" class="when">loading&hellip;</td></tr></tbody>
 </table>
 </section>
 <section>

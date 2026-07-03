@@ -1558,6 +1558,56 @@ def test_record_changes_carry_correlation_id(tmp_path, monkeypatch):
     assert payload["changes"][0]["correlation_id"] == correlation_id
 
 
+def test_ops_feed_records_auth_and_execution_events(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    write_source(root / "site" / "broken.py", "def GET(request):\n    raise ValueError('kaboom')\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path / "data"))
+    monkeypatch.setenv(object_server.TRUSTED_IN_PROCESS_OBJECTS_ENV, "site_broken")
+    monkeypatch.setenv(object_server.PASSWORD_LOGIN_ENV, "true")
+    monkeypatch.setattr(object_server, "PASSWORD_LOGIN_FAILURE_DELAY_SECONDS", 0)
+    _create_password_user(monkeypatch)
+
+    request(
+        "/identity/session",
+        method="POST",
+        body=json.dumps({"email": "alice@example.com", "password": "wrong password"}).encode(),
+    )
+    token = _password_login_token()
+    request("/objects/site_broken")
+    raw_request(
+        "/logout",
+        method="POST",
+        headers=[("cookie", f"dbbasic_session={token}")],
+    )
+
+    status, _, payload = request("/admin/ops", headers=auth_headers())
+    failures_status, _, failures = request(
+        "/admin/ops",
+        query_string="kind=auth&event=login_failed",
+        headers=auth_headers(),
+    )
+    unauth_status, _, _ = request("/admin/ops")
+
+    assert status == 200
+    events = payload["events"]
+    kinds = [(entry["kind"], entry.get("event") or entry.get("error_type")) for entry in events]
+    assert ("auth", "logout") in kinds
+    assert ("execution_error", "ObjectMethodExecutionError") in kinds
+    assert ("auth", "login_succeeded") in kinds
+    assert ("auth", "login_failed") in kinds
+    execution = next(e for e in events if e["kind"] == "execution_error")
+    assert execution["object_id"] == "site_broken"
+    assert "kaboom" in execution["message"]
+    assert execution["correlation_id"]
+    assert failures_status == 200
+    assert failures["events"][0]["identifier"] == "alice@example.com"
+    serialized = json.dumps(payload)
+    assert "correct horse battery" not in serialized
+    assert "wrong password" not in serialized
+    assert unauth_status == 401
+
+
 def test_identity_endpoint_ignores_untrusted_identity_headers(monkeypatch):
     monkeypatch.delenv("DBBASIC_PERMISSION_TRUST_HEADERS", raising=False)
     headers = [

@@ -1318,6 +1318,30 @@ absolute paths, null bytes, and `..` traversal are rejected with `400`. File
 content is capped by `DBBASIC_MAX_OBJECT_FILE_BYTES` and the request body is
 still capped by `DBBASIC_MAX_REQUEST_BYTES`.
 
+## Admin Ops Events
+
+The operational event feed records object execution failures and auth
+activity in one admin-gated stream:
+
+```http
+GET /admin/ops
+GET /admin/ops?limit=100
+GET /admin/ops?kind=execution_error
+GET /admin/ops?kind=auth&event=login_failed
+GET /admin/ops?identifier=alice@example.com
+Authorization: Token <token>
+```
+
+Events are newest-first. `execution_error` entries carry `object_id`,
+`method`, `error_type`, a truncated `message`, the caller's `user_id`, and
+the `correlation_id` linking back to source versions and object logs. `auth`
+entries carry `event` (`login_succeeded`, `login_failed`, `logout`,
+`session_minted`), the attempted `identifier` on failures, `user_id` on
+successes, `auth_method`, and session `label`. Rows never contain passwords,
+tokens, or hashes. The feed lives in `data/ops/events.jsonl`, capped to the
+most recent 5000 rows. Failed-login rows are queryable per identifier, which
+is the data the future login-lockout gate will read.
+
 ## MCP Endpoint
 
 AI agents can operate the server through MCP (Model Context Protocol) instead

@@ -228,6 +228,18 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "list_ops_events",
+        "description": "Recent operational events: object execution errors and auth activity (login/logout/session mints)",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": _LIMIT_ARG,
+                "kind": {"type": "string", "enum": ["execution_error", "auth"]},
+                "event": {"type": "string", "description": "Auth event filter, like login_failed"},
+            },
+        },
+    },
+    {
         "name": "list_changes",
         "description": "Unified source/file/record/package change history, filterable",
         "inputSchema": {
@@ -354,6 +366,15 @@ def tool_route(name: str, arguments: Mapping[str, Any]) -> tuple[str, str, str, 
             raise ValueError("version_id must be an integer")
         body = {"action": "rollback", "version_id": version_id}
         return ("POST", _schema_path(args), "", _json_bytes(body))
+    if name == "list_ops_events":
+        pairs = [("limit", str(_limit(args)))]
+        for key in ("kind", "event"):
+            value = args.get(key)
+            if value is not None:
+                if not isinstance(value, str) or not value.strip():
+                    raise ValueError(f"{key} must be a non-empty string")
+                pairs.append((key, value.strip()))
+        return ("GET", "/admin/ops", urllib.parse.urlencode(pairs), b"")
     if name == "list_changes":
         pairs = [("limit", str(_limit(args)))]
         for key in ("kind", "object_id", "collection"):
