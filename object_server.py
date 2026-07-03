@@ -5076,6 +5076,7 @@ async def _handle_object_source_put(
         await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
         return
 
+    methods, method_warnings = object_source.source_method_report(code)
     await _send_json(
         send,
         {
@@ -5083,6 +5084,8 @@ async def _handle_object_source_put(
             "message": f"Code updated to version {version_id}",
             "version_id": version_id,
             "object_id": object_id,
+            "methods": methods,
+            "warnings": method_warnings,
             "correlation_id": object_correlation.current_correlation_id(),
         },
     )
@@ -5238,6 +5241,7 @@ async def _handle_objects_post(send, body: bytes, headers: dict[str, str]) -> No
         details={"description": _payload_text(payload, "description", "")},
     )
 
+    methods, method_warnings = object_source.source_method_report(code)
     await _send_json(
         send,
         {
@@ -5245,6 +5249,8 @@ async def _handle_objects_post(send, body: bytes, headers: dict[str, str]) -> No
             "message": f"Object created: {object_id}",
             "object_id": object_id,
             "version_id": version_id,
+            "methods": methods,
+            "warnings": method_warnings,
             "correlation_id": object_correlation.current_correlation_id(),
         },
         status=201,
@@ -5582,6 +5588,7 @@ async def _handle_collection_record_create(
             before=None,
             after=record,
             actor=_record_change_actor(headers),
+            correlation_id=object_correlation.current_correlation_id(),
             base_dir=_data_dir(),
         )
     except (OSError, ValueError) as exc:
@@ -5818,6 +5825,7 @@ async def _handle_collection_record_update(
             before=existing,
             after=record,
             actor=_record_change_actor(headers),
+            correlation_id=object_correlation.current_correlation_id(),
             base_dir=_data_dir(),
         )
     except (OSError, ValueError) as exc:
@@ -5916,6 +5924,7 @@ async def _handle_collection_record_delete(
             before=record,
             after=None,
             actor=_record_change_actor(headers),
+            correlation_id=object_correlation.current_correlation_id(),
             base_dir=_data_dir(),
         )
     except (OSError, ValueError) as exc:

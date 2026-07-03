@@ -1507,6 +1507,57 @@ def test_admin_role_session_matches_admin_token_across_gated_surfaces(tmp_path, 
     assert not mismatches, f"Session/token parity failures: {mismatches}"
 
 
+def test_object_create_warns_when_source_defines_no_http_methods(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    enable_source_writes(monkeypatch, root, data_dir)
+
+    no_methods_status, _, no_methods = request(
+        "/admin/objects",
+        method="POST",
+        body=json.dumps(
+            {"object_id": "probe_legacy", "code": "def handle_get(state, query):\n    return {}\n"}
+        ).encode(),
+        headers=auth_headers(),
+    )
+    syntax_status, _, syntax = request(
+        "/admin/objects",
+        method="POST",
+        body=json.dumps({"object_id": "probe_broken", "code": "def GET(request:\n"}).encode(),
+        headers=auth_headers(),
+    )
+
+    assert no_methods_status == 201
+    assert no_methods["methods"] == []
+    assert "cannot execute" in no_methods["warnings"][0]
+    assert "GET(request)" in no_methods["warnings"][0]
+    assert syntax_status == 201
+    assert syntax["methods"] == []
+    assert "syntax error" in syntax["warnings"][0]
+
+
+def test_record_changes_carry_correlation_id(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(data_dir))
+    enable_admin_token(monkeypatch)
+    correlation_id = "123e4567-e89b-42d3-a456-426614174000"
+
+    request(
+        "/admin/collections/contacts/records",
+        method="POST",
+        body=json.dumps({"id": "c2", "name": "Grace"}).encode(),
+        headers=[*auth_headers(), ("x-dbbasic-correlation-id", correlation_id)],
+    )
+    status, _, payload = request(
+        "/admin/collections/contacts/changes",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["changes"][0]["correlation_id"] == correlation_id
+
+
 def test_identity_endpoint_ignores_untrusted_identity_headers(monkeypatch):
     monkeypatch.delenv("DBBASIC_PERMISSION_TRUST_HEADERS", raising=False)
     headers = [
@@ -6190,6 +6241,8 @@ def test_object_create_creates_source_version_and_runs_new_code(tmp_path, monkey
         "message": "Object created: site_home",
         "object_id": "site_home",
         "version_id": 1,
+        "methods": ["GET"],
+        "warnings": [],
         "correlation_id": correlation_id,
     }
     assert (root / "site" / "home.py").read_text() == code
@@ -6520,6 +6573,8 @@ def test_source_update_versions_source_and_immediately_runs_new_code(tmp_path, m
         "message": "Code updated to version 1",
         "version_id": 1,
         "object_id": "basics_counter",
+        "methods": ["GET"],
+        "warnings": [],
         "correlation_id": correlation_id,
     }
     assert source_path.read_text() == new_code

@@ -41,6 +41,7 @@ def append_record_change(
     after: dict[str, Any] | None,
     actor: str = "api",
     message: str = "",
+    correlation_id: str | None = None,
     base_dir: Path | str = DEFAULT_DATA_DIR,
 ) -> dict[str, Any]:
     """Append one record change and return the stored entry."""
@@ -64,6 +65,7 @@ def append_record_change(
         "action": action,
         "actor": _clean_text(actor, default="api"),
         "message": _clean_text(message, default=_default_message(action)),
+        "correlation_id": correlation_id or None,
         "changed_fields": _changed_fields(before_snapshot, after_snapshot),
         "before": before_snapshot,
         "after": after_snapshot,

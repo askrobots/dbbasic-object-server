@@ -7,8 +7,11 @@ server/runtime layers that call this code.
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 from typing import Iterable
+
+HTTP_METHOD_NAMES = ("GET", "POST", "PUT", "DELETE")
 
 from object_namespace import (
     get_object_roots,
@@ -36,6 +39,35 @@ def get_object_source(object_id: str, roots: Iterable[Path] | None = None) -> st
     """Read source text for an existing object."""
     source_path = _resolve_existing_source(object_id, roots)
     return source_path.read_text()
+
+
+def source_method_report(code: str) -> tuple[list[str], list[str]]:
+    """Return (executable HTTP methods, authoring warnings) for object source.
+
+    Detection is static (AST), so it runs safely at write time and lets the
+    create/update responses tell authors — human or AI — that a saved object
+    cannot execute, instead of leaving that discovery to the first request.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as exc:
+        return [], [f"Source has a Python syntax error: {exc.msg} (line {exc.lineno})"]
+
+    methods = sorted(
+        {
+            node.name
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name in HTTP_METHOD_NAMES
+        }
+    )
+    if not methods:
+        return [], [
+            "Source defines no HTTP methods; the object cannot execute. "
+            "Define GET(request), POST(request), PUT(request), or DELETE(request) "
+            "at module top level (see docs/object-authoring.md)."
+        ]
+    return methods, []
 
 
 def create_object_source(
