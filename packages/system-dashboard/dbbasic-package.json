@@ -1,7 +1,7 @@
 {
   "id": "system-dashboard",
   "name": "System Dashboard",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Identity-aware staging dashboard with live admin metrics, served by a DBBASIC object.",
   "compatibility": {
     "object_server": ">=0.0.1"

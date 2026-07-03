@@ -1736,6 +1736,36 @@ def test_health_metrics_reports_disk_and_cpu_capacity(tmp_path, monkeypatch):
     assert cpu_percent is None or 0 <= cpu_percent <= 100
 
 
+def test_health_metrics_history_snapshots_and_readback(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.METRICS_SNAPSHOT_SECONDS_ENV, "1")
+    monkeypatch.setattr(object_server, "_LAST_METRICS_SNAPSHOT", 0.0)
+    enable_admin_token(monkeypatch)
+
+    request("/health")
+    monkeypatch.setattr(object_server, "_LAST_METRICS_SNAPSHOT", 0.0)
+    status, _, payload = request(
+        "/health",
+        query_string="metrics=true&history=true",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert len(payload["history"]) >= 2
+    latest = payload["history"][-1]
+    assert latest["requests"] >= 1
+    assert latest["timestamp"].endswith("Z")
+
+    monkeypatch.setenv(object_server.METRICS_SNAPSHOT_SECONDS_ENV, "0")
+    plain_status, _, plain_payload = request(
+        "/health",
+        query_string="metrics=true",
+        headers=auth_headers(),
+    )
+    assert plain_status == 200
+    assert "history" not in plain_payload
+
+
 def test_admin_status_requires_admin_token(monkeypatch):
     monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)
 

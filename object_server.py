@@ -42,6 +42,7 @@ import object_ids
 import object_logs
 import object_mcp
 import object_metadata
+import object_metrics_history
 import object_multipart
 import object_package_changes
 import object_permission_audit
@@ -95,6 +96,8 @@ PASSWORD_LOGIN_FAILURE_DELAY_SECONDS = 0.5
 SESSION_COOKIE_NAME = "dbbasic_session"
 COOKIE_SECURE_ENV = "DBBASIC_COOKIE_SECURE"
 SITE_ROUTES_ENV = "DBBASIC_ENABLE_SITE_ROUTES"
+METRICS_SNAPSHOT_SECONDS_ENV = "DBBASIC_METRICS_SNAPSHOT_SECONDS"
+DEFAULT_METRICS_SNAPSHOT_SECONDS = 60
 RECORD_EVENTS_ENV = "DBBASIC_ENABLE_RECORD_EVENTS"
 EVENT_KEEP_COUNT_ENV = "DBBASIC_EVENT_KEEP_COUNT"
 EVENT_KEEP_SECONDS_ENV = "DBBASIC_EVENT_KEEP_SECONDS"
@@ -336,6 +339,8 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
     correlation_id = object_correlation.current_correlation_id()
     if correlation_id is not None:
         headers[object_correlation.CORRELATION_ID_HEADER] = correlation_id
+
+    _maybe_append_metrics_snapshot()
 
     if path == "/health":
         if _is_detailed_health(query) and await _send_rate_limit_if_needed(scope, headers, send):
@@ -789,6 +794,14 @@ async def _handle_health(
         return
 
     payload = _health_payload(include_metrics=query.get("metrics") == "true")
+    if query.get("metrics") == "true" and query.get("history") == "true":
+        try:
+            payload["history"] = object_metrics_history.read_history(
+                base_dir=_data_dir(),
+                limit=_query_int(query, "history_limit", default=360, minimum=1, maximum=2000),
+            )
+        except (OSError, ValueError):
+            payload["history"] = []
     status_code = 503 if payload["status"] == "degraded" else 200
     await _send_json(send, payload, status=status_code)
 
@@ -6610,6 +6623,53 @@ def _storage_check() -> dict[str, str]:
         }
 
     return {"status": "ok"}
+
+
+_METRICS_SNAPSHOT_LOCK = threading.Lock()
+_LAST_METRICS_SNAPSHOT = 0.0
+
+
+def _maybe_append_metrics_snapshot() -> None:
+    """Persist one metrics history row per interval while traffic flows."""
+    global _LAST_METRICS_SNAPSHOT
+    interval = _metrics_snapshot_seconds()
+    if interval <= 0:
+        return
+
+    now = time.time()
+    with _METRICS_SNAPSHOT_LOCK:
+        if now - _LAST_METRICS_SNAPSHOT < interval:
+            return
+        _LAST_METRICS_SNAPSHOT = now
+
+    try:
+        metrics = _metrics.snapshot()
+        system = _system_snapshot()
+        object_metrics_history.append_snapshot(
+            {
+                "uptime_seconds": metrics["uptime_seconds"],
+                "requests": metrics["total_requests"],
+                "errors": metrics["total_errors"],
+                "rps": metrics["requests_per_second"],
+                "error_rate": metrics["error_rate"],
+                "p50_ms": metrics["response_time_ms"].get("p50"),
+                "p95_ms": metrics["response_time_ms"].get("p95"),
+                "cpu_percent": system.get("cpu_percent"),
+                "memory_used_percent": (system.get("memory") or {}).get("used_percent"),
+                "disk_used_percent": (system.get("disk") or {}).get("used_percent"),
+            },
+            base_dir=_data_dir(),
+        )
+    except (OSError, ValueError, KeyError):
+        pass
+
+
+def _metrics_snapshot_seconds() -> int:
+    value = os.environ.get(METRICS_SNAPSHOT_SECONDS_ENV, "")
+    try:
+        return int(value) if value.strip() else DEFAULT_METRICS_SNAPSHOT_SECONDS
+    except ValueError:
+        return DEFAULT_METRICS_SNAPSHOT_SECONDS
 
 
 def _system_snapshot() -> dict[str, Any]:

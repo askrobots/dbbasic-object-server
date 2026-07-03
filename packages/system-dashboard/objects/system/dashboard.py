@@ -27,6 +27,14 @@ header .who a { color: var(--blue); text-decoration: none; }
 .tile .label { font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
 .tile .value { font-size: 1.35rem; font-weight: 600; margin-top: 0.15rem; }
 .tile .sub { font-size: 0.75rem; color: var(--muted); }
+.tile svg.spark { display: block; width: 100%; height: 22px; margin-top: 0.35rem; }
+.tile svg.spark polyline { fill: none; stroke: var(--blue); stroke-width: 1.5; }
+svg.chart { display: block; width: 100%; height: 120px; background: var(--panel);
+            border: 1px solid var(--line); border-radius: 8px; }
+svg.chart polyline { fill: none; stroke-width: 1.5; }
+.chart-legend { font-size: 0.72rem; color: var(--muted); margin-top: 0.35rem; }
+.chart-legend b { font-weight: 500; }
+.legend-p95 { color: var(--blue); } .legend-p50 { color: var(--green); }
 .ok { color: var(--green); } .warn { color: var(--amber); } .bad { color: var(--red); }
 section { margin-top: 1.5rem; }
 section h2 { font-size: 0.8rem; letter-spacing: 0.06em; text-transform: uppercase;
@@ -118,9 +126,38 @@ function toggleChange(index) {
   row.after(detailRow);
 }
 
+function polylinePoints(values, width, height, maxValue) {
+  const numbers = values.map((v) => (typeof v === "number" && isFinite(v) ? v : 0));
+  const max = maxValue ?? Math.max(...numbers, 0.001);
+  const step = numbers.length > 1 ? width / (numbers.length - 1) : width;
+  return numbers.map((v, i) =>
+    (i * step).toFixed(1) + "," + (height - 2 - (v / max) * (height - 4)).toFixed(1)
+  ).join(" ");
+}
+
+function renderSpark(id, values) {
+  const host = el(id);
+  if (!host || values.length < 2) return;
+  host.innerHTML = "<polyline points=\\"" + polylinePoints(values, 100, 22) + "\\"/>";
+}
+
+function renderHistoryChart(history) {
+  const chart = el("history-chart");
+  if (!chart || history.length < 2) return;
+  const p95 = history.map((row) => row.p95_ms);
+  const p50 = history.map((row) => row.p50_ms);
+  const max = Math.max(...p95.map((v) => v || 0), ...p50.map((v) => v || 0), 1);
+  chart.innerHTML =
+    "<polyline style=\\"stroke:var(--green)\\" points=\\"" + polylinePoints(p50, 600, 120, max) + "\\"/>" +
+    "<polyline style=\\"stroke:var(--blue)\\" points=\\"" + polylinePoints(p95, 600, 120, max) + "\\"/>";
+  el("chart-note").innerHTML =
+    "<b class=legend-p95>p95</b> / <b class=legend-p50>p50</b> over last " +
+    history.length + " samples &middot; peak " + max.toFixed(1) + "ms";
+}
+
 async function refresh() {
   try {
-    const health = await fetchJson("/health?metrics=true");
+    const health = await fetchJson("/health?metrics=true&history=true");
     setTile("tile-uptime", health.uptime, "pid " + health.pid);
     setTile("tile-requests", fmt(health.requests), health.rps + " req/s");
     const errValue = el("tile-errors").querySelector(".value");
@@ -133,6 +170,25 @@ async function refresh() {
       "exec " + health.capacity.object_executions.in_flight + "/" +
       health.capacity.object_executions.max);
     renderBars(health.response_time_ms || {});
+
+    const history = health.history || [];
+    renderSpark("spark-requests", history.map((row) => row.rps));
+    renderSpark("spark-errors", history.map((row) => row.error_rate));
+    renderHistoryChart(history);
+
+    const topPaths = ((health.metrics || {}).top_paths || []).slice(0, 8);
+    el("paths-body").innerHTML = topPaths.map((p) =>
+      "<tr><td>" + esc(p.path) + "</td><td>" + fmt(p.requests) +
+      "</td><td class=" + (p.errors > 0 ? "bad" : "when") + ">" + fmt(p.errors) + "</td></tr>"
+    ).join("") || "<tr><td colspan=3 class=when>no traffic yet</td></tr>";
+
+    const httpErrors = ((health.metrics || {}).recent_errors || []).slice(-8).reverse();
+    el("errors-body").innerHTML = httpErrors.map((e) =>
+      "<tr><td class=" + (e.status >= 500 ? "bad" : "warn") + ">" + esc(e.status) +
+      "</td><td>" + esc(e.method) + " " + esc(e.path) + "</td><td class=when>" +
+      esc(e.duration_ms) + "ms</td><td class=when>" +
+      esc((e.timestamp || "").replace("T", " ").slice(0, 19)) + "</td></tr>"
+    ).join("") || "<tr><td colspan=4 class=when>no 4xx/5xx recorded</td></tr>";
 
     const status = await fetchJson("/admin/status");
     const inv = status.inventory || {};
@@ -179,10 +235,16 @@ setInterval(refresh, 10000);
 """
 
 
-def _tile(tile_id, label, value="-", sub=""):
+def _tile(tile_id, label, value="-", sub="", spark=False):
+    spark_svg = (
+        f'<svg class="spark" id="spark-{tile_id.removeprefix("tile-")}" '
+        f'viewBox="0 0 100 22" preserveAspectRatio="none"></svg>'
+        if spark
+        else ""
+    )
     return (
         f'<div class="tile" id="{tile_id}"><div class="label">{label}</div>'
-        f'<div class="value">{value}</div><div class="sub">{sub}</div></div>'
+        f'<div class="value">{value}</div><div class="sub">{sub}</div>{spark_svg}</div>'
     )
 
 
@@ -214,8 +276,8 @@ def GET(request):
         body = f"""
 <div class="grid">
 {_tile("tile-uptime", "Uptime")}
-{_tile("tile-requests", "Requests")}
-{_tile("tile-errors", "Errors")}
+{_tile("tile-requests", "Requests", spark=True)}
+{_tile("tile-errors", "Errors", spark=True)}
 {_tile("tile-capacity", "In Flight")}
 {_tile("tile-objects", "Objects")}
 {_tile("tile-collections", "Collections")}
@@ -231,6 +293,25 @@ def GET(request):
 <div class="bar" id="bar-p95"><i></i><span>p95</span></div>
 <div class="bar" id="bar-p99"><i></i><span>p99</span></div>
 </div>
+</section>
+<section>
+<h2>Response Time History</h2>
+<svg class="chart" id="history-chart" viewBox="0 0 600 120" preserveAspectRatio="none"></svg>
+<div class="chart-legend" id="chart-note">collecting samples&hellip;</div>
+</section>
+<section>
+<h2>Top Paths</h2>
+<table>
+<thead><tr><th>Path</th><th>Requests</th><th>Errors</th></tr></thead>
+<tbody id="paths-body"><tr><td colspan="3" class="when">loading&hellip;</td></tr></tbody>
+</table>
+</section>
+<section>
+<h2>Recent HTTP Errors</h2>
+<table>
+<thead><tr><th>Status</th><th>Request</th><th>Duration</th><th>When</th></tr></thead>
+<tbody id="errors-body"><tr><td colspan="4" class="when">loading&hellip;</td></tr></tbody>
+</table>
 </section>
 <section>
 <h2>Active Sessions</h2>
