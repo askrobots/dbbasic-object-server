@@ -686,7 +686,7 @@ dbbasic.example.com {
     }
 
     handle_path /static/* {
-        root * /var/lib/dbbasic-object-server/static
+        root * /var/lib/dbbasic-static
         file_server
         header Cache-Control "public, max-age=3600"
     }

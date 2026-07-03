@@ -82,7 +82,7 @@ performance, gzip, and cache headers:
 
 ```caddyfile
 handle_path /static/* {
-    root * /var/lib/dbbasic-object-server/static
+    root * /var/lib/dbbasic-static
     file_server
     header Cache-Control "public, max-age=3600"
 }
