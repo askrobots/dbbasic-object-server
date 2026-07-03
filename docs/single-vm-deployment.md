@@ -681,6 +681,10 @@ dbbasic.example.com {
         reverse_proxy 127.0.0.1:8001
     }
 
+    handle /api/mcp {
+        reverse_proxy 127.0.0.1:8001
+    }
+
     handle /permissions/audit* {
         reverse_proxy 127.0.0.1:8001
     }

@@ -1318,6 +1318,47 @@ absolute paths, null bytes, and `..` traversal are rejected with `400`. File
 content is capped by `DBBASIC_MAX_OBJECT_FILE_BYTES` and the request body is
 still capped by `DBBASIC_MAX_REQUEST_BYTES`.
 
+## MCP Endpoint
+
+AI agents can operate the server through MCP (Model Context Protocol) instead
+of raw HTTP. The endpoint speaks JSON-RPC 2.0 over HTTP POST (the Streamable
+HTTP transport):
+
+```http
+POST /api/mcp
+Authorization: Token <admin-token-or-admin-role-session-token>
+Content-Type: application/json
+```
+
+Supported methods: `initialize` (protocol negotiation, returns an
+`mcp-session-id` header), `tools/list`, `tools/call`, and
+`notifications/*` (acknowledged with `202`). The gate is the same admin gate
+as the rest of the admin surface: the deployment token always works, and an
+admin-role session token works when `DBBASIC_ENABLE_SESSION_ADMIN_GATES=true`.
+
+Register with Claude Code:
+
+```bash
+claude mcp add dbbasic --transport http \
+    --url https://your-host/api/mcp \
+    --header "Authorization: Bearer YOUR_SESSION_TOKEN"
+```
+
+The tool catalog wraps the existing admin surface — objects
+(list/read/create/update-source/execute, state, logs, metadata, changes),
+collections and records (list/get/create/update/delete), schemas
+(get/update/rollback), the unified change history, and admin status. Every
+tool call is dispatched back through the server's own routing with the
+caller's credentials, so tools inherit the same gates, capability flags
+(source writes, package installs), permission checks, audit trail, and
+correlation ids as external HTTP callers. Tool results carry the underlying
+`http_status` plus the route's JSON response, and failures set `isError`.
+
+Give each agent its own identity instead of the deployment token: create a
+user (for example `agent-claude`) with the admin role, mint a labeled session,
+and connect with that bearer token, so `/admin/changes` distinguishes agent
+actions from operator actions.
+
 ## Admin Collection And Schema Inspection
 
 `/collections` and `/schemas` remain the data and schema API surfaces. Scroll

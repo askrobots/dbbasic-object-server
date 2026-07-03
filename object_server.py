@@ -37,7 +37,9 @@ import object_field_permissions
 import object_file_changes
 import object_files
 import object_identity
+import object_ids
 import object_logs
+import object_mcp
 import object_metadata
 import object_package_changes
 import object_permission_audit
@@ -358,6 +360,10 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
             body = await _read_body(receive, headers=headers)
         except RequestBodyTooLargeError as exc:
             await _send_request_too_large(send, exc)
+            return
+
+        if path == http_api_contract.MCP_PATH:
+            await _handle_mcp(send, method, body, headers)
             return
 
         if path == http_api_contract.LOGIN_PATH:
@@ -1197,6 +1203,177 @@ def _identity_password_login_payload(payload: Mapping[str, Any]) -> dict[str, An
         "label": label or "password login",
         "ttl_seconds": payload.get("ttl_seconds"),
     }
+
+
+async def _handle_mcp(
+    send,
+    method: str,
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    if method != "POST":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    protocol_header = headers.get("mcp-protocol-version", "").strip()
+    if protocol_header and protocol_header not in object_mcp.SUPPORTED_MCP_PROTOCOL_VERSIONS:
+        await _send_json(
+            send,
+            object_mcp.jsonrpc_error(
+                -32600, f"Unsupported MCP protocol version: {protocol_header}"
+            ),
+            status=400,
+        )
+        return
+
+    gate_error = _admin_token_gate_error(headers, f"MCP requires {ADMIN_TOKEN_ENV}.")
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, object_mcp.jsonrpc_error(-32000, message), status=status)
+        return
+
+    try:
+        message = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        await _send_json(send, object_mcp.jsonrpc_error(-32700, "Parse error"))
+        return
+
+    if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
+        await _send_json(
+            send,
+            object_mcp.jsonrpc_error(-32600, "Invalid Request: missing jsonrpc 2.0"),
+        )
+        return
+
+    rpc_method = message.get("method")
+    params = message.get("params") or {}
+    request_id = message.get("id")
+
+    if not isinstance(rpc_method, str) or not rpc_method:
+        await _send_json(
+            send,
+            object_mcp.jsonrpc_error(-32600, "Invalid Request: missing method", request_id),
+        )
+        return
+
+    if rpc_method.startswith("notifications/"):
+        await _send_response(send, status=202, headers=[], body=b"")
+        return
+
+    if rpc_method == "initialize":
+        session_id = headers.get("mcp-session-id", "").strip() or object_ids.new_uuid4()
+        await _send_json(
+            send,
+            object_mcp.jsonrpc_response(object_mcp.handle_initialize(params), request_id),
+            headers=[("mcp-session-id", session_id)],
+        )
+        return
+
+    if rpc_method == "tools/list":
+        await _send_json(
+            send,
+            object_mcp.jsonrpc_response(object_mcp.handle_tools_list(), request_id),
+        )
+        return
+
+    if rpc_method == "tools/call":
+        tool_name = params.get("name")
+        arguments = params.get("arguments") or {}
+        try:
+            route_method, path, query_string, route_body = object_mcp.tool_route(
+                tool_name, arguments
+            )
+        except ValueError as exc:
+            await _send_json(
+                send,
+                object_mcp.jsonrpc_response(
+                    {
+                        "content": [
+                            {"type": "text", "text": json.dumps({"error": str(exc)})}
+                        ],
+                        "isError": True,
+                    },
+                    request_id,
+                ),
+            )
+            return
+
+        status, payload = await _internal_request(
+            route_method,
+            path,
+            query_string,
+            route_body,
+            authorization=headers.get("authorization", ""),
+        )
+        await _send_json(
+            send,
+            object_mcp.jsonrpc_response(
+                object_mcp.tool_result_content(status, payload), request_id
+            ),
+        )
+        return
+
+    await _send_json(
+        send,
+        object_mcp.jsonrpc_error(-32601, f"Method not found: {rpc_method}", request_id),
+    )
+
+
+async def _internal_request(
+    method: str,
+    path: str,
+    query_string: str,
+    body: bytes,
+    *,
+    authorization: str,
+) -> tuple[int, Any]:
+    """Dispatch one request through the server's own routing.
+
+    Used by the MCP layer so tool calls hit the exact same gates, permission
+    checks, audit trail, and correlation ids as external HTTP callers.
+    """
+    messages: list[dict[str, Any]] = []
+    sent = False
+
+    async def receive() -> dict[str, Any]:
+        nonlocal sent
+        if not sent:
+            sent = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        return {"type": "http.disconnect"}
+
+    async def send(message: dict[str, Any]) -> None:
+        messages.append(message)
+
+    scope_headers = [(b"content-type", b"application/json")]
+    if authorization:
+        scope_headers.append((b"authorization", authorization.encode("latin-1")))
+
+    scope = {
+        "type": "http",
+        "method": method,
+        "path": path,
+        "query_string": query_string.encode("utf-8"),
+        "headers": scope_headers,
+        "client": ("127.0.0.1", 0),
+    }
+    await app(scope, receive, send)
+
+    status = 500
+    for message in messages:
+        if message["type"] == "http.response.start":
+            status = message["status"]
+            break
+    raw = b"".join(
+        message.get("body", b"")
+        for message in messages
+        if message["type"] == "http.response.body"
+    )
+    try:
+        payload: Any = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        payload = raw.decode("utf-8", errors="replace")
+    return status, payload
 
 
 async def _handle_login(
