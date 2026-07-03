@@ -57,6 +57,10 @@ flowchart TD
 - `package-authoring.md` - the practical guide for building an installable
   package: manifest, layout, install semantics, dry-run workflow, and rules
   for generated packages.
+- `site-routing.md` - clean public URLs for websites: convention routing,
+  the `site_routes` records table with `{param}`/`{param:uuid}` patterns,
+  `site_404`, and why routing maps URLs while the permission policy decides
+  access.
 - `runtime-contract.md#packages` and `http-api-contract.md#packages` - package
   manifest layout, package discovery, dry-runs, and package change history.
 

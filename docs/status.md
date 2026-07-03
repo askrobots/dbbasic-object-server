@@ -59,6 +59,10 @@ untrusted public users.
 - An MCP endpoint (`POST /api/mcp`, JSON-RPC 2.0) so AI agents can run the
   full object and data loops through the same gated admin surface, with
   per-agent session identity in the audit trail
+- Opt-in site routing (`DBBASIC_ENABLE_SITE_ROUTES`) for clean website URLs:
+  convention (`/about` -> `site_about`), a `site_routes` records table with
+  `{param}`/`{param:uuid}` patterns, and `site_404`, all resolving through
+  the policy-enforced execution path
 - Runtime backups, restore helpers, deployment checks, GitHub Actions tests, and
   a working public staging deployment shape
 

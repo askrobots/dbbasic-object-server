@@ -52,11 +52,18 @@ import object_record_changes
 import object_records
 import object_schema_versions
 import object_schemas
+import object_site_routes
 import object_source
 import object_source_changes
 import object_state
 import object_versions
-from object_namespace import get_object_roots, iter_object_sources, parse_user_object_id, validate_object_id
+from object_namespace import (
+    get_object_roots,
+    iter_object_sources,
+    parse_user_object_id,
+    resolve_object_id,
+    validate_object_id,
+)
 from object_versions import InvalidObjectIdError
 from python_object_runtime import MethodNotSupportedError, PythonObjectRuntime
 
@@ -85,6 +92,7 @@ PASSWORD_LOGIN_ENV = "DBBASIC_ENABLE_PASSWORD_LOGIN"
 PASSWORD_LOGIN_FAILURE_DELAY_SECONDS = 0.5
 SESSION_COOKIE_NAME = "dbbasic_session"
 COOKIE_SECURE_ENV = "DBBASIC_COOKIE_SECURE"
+SITE_ROUTES_ENV = "DBBASIC_ENABLE_SITE_ROUTES"
 RECORD_EVENTS_ENV = "DBBASIC_ENABLE_RECORD_EVENTS"
 EVENT_KEEP_COUNT_ENV = "DBBASIC_EVENT_KEEP_COUNT"
 EVENT_KEEP_SECONDS_ENV = "DBBASIC_EVENT_KEEP_SECONDS"
@@ -678,9 +686,86 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
             await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
             return
 
+        if await _handle_site_route(send, method, path, query, body, headers):
+            return
+
         await _send_json(send, {"status": "error", "error": "Not found"}, status=404)
     finally:
         request_token.release()
+
+
+async def _handle_site_route(
+    send,
+    method: str,
+    path: str,
+    query: dict[str, str],
+    body: bytes,
+    headers: dict[str, str],
+) -> bool:
+    """Serve clean public URLs by resolving them to objects.
+
+    Runs only after every built-in route family has declined the path, so
+    reserved surfaces can never be shadowed. Resolution order: convention
+    (`/about` -> `site_about`), then `site_routes` records patterns, then the
+    `site_404` object. The resolved object executes through the normal
+    execution path, so permission policy, audit, timeouts, and correlation
+    ids all apply. Returns False when site routing is disabled or nothing
+    resolves, leaving the plain JSON 404.
+    """
+    if not _env_enabled(SITE_ROUTES_ENV):
+        return False
+
+    if method not in {"GET", "POST", "PUT", "DELETE"}:
+        return False
+
+    params: dict[str, str] = {}
+    target_id = object_site_routes.convention_object_id(path)
+    if target_id is None or resolve_object_id(target_id, get_object_roots()) is None:
+        match = object_site_routes.match_records(path, _site_route_records())
+        if match is not None:
+            target_id, params = match
+        elif resolve_object_id(object_site_routes.NOT_FOUND_OBJECT_ID, get_object_roots()) is not None:
+            target_id = object_site_routes.NOT_FOUND_OBJECT_ID
+            params = {"path": path}
+        else:
+            return False
+
+    try:
+        if method == "GET":
+            payload: dict[str, Any] = dict(query)
+        else:
+            payload = _parse_post_payload(body, query, headers)
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return True
+
+    payload.update(params)
+
+    permission_action = object_permissions.EXECUTE
+    if method == "PUT":
+        permission_action = object_permissions.UPDATE
+    elif method == "DELETE":
+        permission_action = object_permissions.DELETE
+
+    await _execute_object_method(
+        send,
+        target_id,
+        method,
+        payload,
+        headers,
+        permission_action=permission_action,
+    )
+    return True
+
+
+def _site_route_records() -> list[dict[str, Any]]:
+    try:
+        return object_records.read_collection_records(
+            object_site_routes.SITE_ROUTES_COLLECTION,
+            base_dir=_data_dir(),
+        )
+    except (ValueError, LookupError, OSError):
+        return []
 
 
 async def _handle_health(
