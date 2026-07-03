@@ -94,6 +94,30 @@ function describeTarget(target) {
   return Object.values(target).filter((v) => typeof v === "string").join(" ");
 }
 
+function esc(value) {
+  return String(value ?? "").replace(/[&<>"]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+let changeDetails = [];
+
+function toggleChange(index) {
+  const detail = el("change-detail-" + index);
+  if (detail) { detail.remove(); return; }
+  const row = el("change-row-" + index);
+  if (!row) return;
+  const detailRow = document.createElement("tr");
+  detailRow.id = "change-detail-" + index;
+  const cell = document.createElement("td");
+  cell.colSpan = 5;
+  const pre = document.createElement("pre");
+  pre.style.cssText = "margin:0;font-size:0.72rem;color:var(--muted);white-space:pre-wrap;";
+  pre.textContent = JSON.stringify(changeDetails[index], null, 2);
+  cell.appendChild(pre);
+  detailRow.appendChild(cell);
+  row.after(detailRow);
+}
+
 async function refresh() {
   try {
     const health = await fetchJson("/health?metrics=true");
@@ -122,12 +146,25 @@ async function refresh() {
     const users = await fetchJson("/admin/identity/users");
     setTile("tile-users", fmt(users.count), "registered users");
 
+    const sessions = await fetchJson("/admin/identity/sessions");
+    const active = (sessions.sessions || []).filter((s) => s.active);
+    setTile("tile-sessions", fmt(active.length), "active sessions");
+    el("sessions-body").innerHTML = active.map((s) =>
+      "<tr><td>" + esc(s.label || "-") + "</td><td>" + esc(s.user_id) +
+      "</td><td class=when>" + esc((s.created_at || "").replace("T", " ").slice(0, 19)) +
+      "</td><td class=when>" + esc((s.expires_at || "").replace("T", " ").slice(0, 19)) +
+      "</td></tr>").join("") ||
+      "<tr><td colspan=4 class=when>no active sessions</td></tr>";
+
     const changes = await fetchJson("/admin/changes?limit=12");
-    const rows = (changes.changes || []).map((change) => {
+    changeDetails = (changes.changes || []).map((change) => change.change || change);
+    const rows = (changes.changes || []).map((change, index) => {
       const when = (change.timestamp || "").replace("T", " ").slice(0, 19);
-      return "<tr><td class=kind>" + (change.kind || "") + "</td><td>" +
-        (change.summary || change.action || "") + "</td><td>" + describeTarget(change.target) +
-        "</td><td>" + (change.actor || "") + "</td><td class=when>" + when + "</td></tr>";
+      return "<tr id=change-row-" + index + " style=cursor:pointer " +
+        "onclick=toggleChange(" + index + ")><td class=kind>" + esc(change.kind) +
+        "</td><td>" + esc(change.summary || change.action) +
+        "</td><td>" + esc(describeTarget(change.target)) +
+        "</td><td>" + esc(change.actor) + "</td><td class=when>" + when + "</td></tr>";
     });
     el("changes-body").innerHTML = rows.join("") ||
       "<tr><td colspan=5 class=when>no recent changes</td></tr>";
@@ -183,6 +220,7 @@ def GET(request):
 {_tile("tile-objects", "Objects")}
 {_tile("tile-collections", "Collections")}
 {_tile("tile-users", "Users")}
+{_tile("tile-sessions", "Sessions")}
 {_tile("tile-enforcement", "Enforcement")}
 </div>
 <section>
@@ -195,7 +233,14 @@ def GET(request):
 </div>
 </section>
 <section>
-<h2>Recent Changes</h2>
+<h2>Active Sessions</h2>
+<table>
+<thead><tr><th>Label</th><th>User</th><th>Created</th><th>Expires</th></tr></thead>
+<tbody id="sessions-body"><tr><td colspan="4" class="when">loading&hellip;</td></tr></tbody>
+</table>
+</section>
+<section>
+<h2>Recent Changes <span style="text-transform:none;letter-spacing:0">(click a row for detail)</span></h2>
 <table>
 <thead><tr><th>Kind</th><th>Summary</th><th>Target</th><th>Actor</th><th>When</th></tr></thead>
 <tbody id="changes-body"><tr><td colspan="5" class="when">loading&hellip;</td></tr></tbody>

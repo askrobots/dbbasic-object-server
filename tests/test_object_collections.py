@@ -87,6 +87,7 @@ def test_list_collections_derives_summaries_from_sources_state_logs_files_and_po
         "state_object_count": 1,
         "log_object_count": 1,
         "has_records": True,
+        "has_schema": False,
         "owners": ["system"],
         "kinds": {"system": 2},
         "permission": {
@@ -155,6 +156,7 @@ def test_permission_only_collection_is_listed(tmp_path):
             "state_object_count": 0,
             "log_object_count": 0,
             "has_records": False,
+            "has_schema": False,
             "owners": [],
             "kinds": {},
             "permission": {
@@ -184,6 +186,7 @@ def test_record_only_collection_is_listed(tmp_path):
             "state_object_count": 0,
             "log_object_count": 0,
             "has_records": True,
+            "has_schema": False,
             "owners": [],
             "kinds": {},
             "permission": {
@@ -206,3 +209,17 @@ def test_get_collection_rejects_unsafe_names(tmp_path):
 def test_get_collection_rejects_missing_collections(tmp_path):
     with pytest.raises(object_collections.CollectionNotFoundError):
         object_collections.get_collection("missing", base_dir=tmp_path / "data", roots=[])
+
+
+def test_schema_defined_collections_are_listed(tmp_path):
+    schema_file = tmp_path / "schemas" / "site_routes.json"
+    schema_file.parent.mkdir(parents=True)
+    schema_file.write_text('{"fields": [{"name": "pattern"}, {"name": "object_id"}]}')
+
+    collections = object_collections.list_collections(base_dir=tmp_path, roots=[tmp_path / "objects"])
+    by_name = {item["name"]: item for item in collections}
+
+    assert "site_routes" in by_name
+    assert by_name["site_routes"]["has_schema"] is True
+    assert by_name["site_routes"]["has_records"] is False
+    assert by_name["site_routes"]["object_count"] == 0

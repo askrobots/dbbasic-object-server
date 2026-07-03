@@ -130,8 +130,11 @@ def _summaries_by_collection(
         if rule.collection is not None and validate_collection_name(rule.collection)
     }
     record_collections = set(_iter_record_collections(base_dir))
+    schema_collections = set(_iter_schema_collections(base_dir))
 
-    collection_names = set(object_groups) | policy_collections | record_collections
+    collection_names = (
+        set(object_groups) | policy_collections | record_collections | schema_collections
+    )
     summaries: dict[str, dict[str, Any]] = {}
     for collection in collection_names:
         objects = sorted(object_groups.get(collection, []), key=lambda item: item.object_id)
@@ -140,6 +143,7 @@ def _summaries_by_collection(
             objects,
             policy,
             has_records=collection in record_collections,
+            has_schema=collection in schema_collections,
             include_objects=include_objects,
         )
 
@@ -171,6 +175,7 @@ def _collection_summary(
     policy: object_permissions.PermissionPolicy,
     *,
     has_records: bool,
+    has_schema: bool = False,
     include_objects: bool,
 ) -> dict[str, Any]:
     owners = sorted({item.owner for item in objects})
@@ -182,6 +187,7 @@ def _collection_summary(
         "state_object_count": sum(1 for item in objects if item.state_count > 0),
         "log_object_count": sum(1 for item in objects if item.has_logs),
         "has_records": has_records,
+        "has_schema": has_schema,
         "owners": owners,
         "kinds": dict(sorted(kinds.items())),
         "permission": _permission_summary(collection, policy),
@@ -225,6 +231,19 @@ def _has_logs(object_id: str, *, base_dir: Path | str) -> bool:
         return True
 
     return any(path.is_file() for path in log_dir.glob("log-*.tsv*"))
+
+
+def _iter_schema_collections(base_dir: Path | str) -> list[str]:
+    root = Path(base_dir) / "schemas"
+    if not root.exists() or not root.is_dir():
+        return []
+
+    names = []
+    for path in sorted(root.glob("*.json"), key=lambda item: item.as_posix()):
+        name = path.stem
+        if validate_collection_name(name):
+            names.append(name)
+    return names
 
 
 def _iter_record_collections(base_dir: Path | str) -> list[str]:
