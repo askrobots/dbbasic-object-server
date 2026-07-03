@@ -80,6 +80,20 @@ async function fetchJson(url) {
   return response.json();
 }
 
+function describeTarget(target) {
+  if (!target) return "";
+  if (typeof target === "string") return target;
+  if (target.object_id) {
+    return target.object_id + (target.version_id ? " v" + target.version_id : "");
+  }
+  if (target.collection) {
+    return target.collection + (target.record_id ? "/" + target.record_id : "");
+  }
+  if (target.package_id) return target.package_id;
+  if (target.file) return target.file;
+  return Object.values(target).filter((v) => typeof v === "string").join(" ");
+}
+
 async function refresh() {
   try {
     const health = await fetchJson("/health?metrics=true");
@@ -98,21 +112,21 @@ async function refresh() {
 
     const status = await fetchJson("/admin/status");
     const inv = status.inventory || {};
-    setTile("tile-objects", fmt((inv.objects || {}).count), "objects");
-    setTile("tile-collections", fmt((inv.collections || {}).count), "collections");
-    const identity = (status.permissions || {}).identity || {};
-    setTile("tile-users", fmt((identity.users || {}).count), "users");
+    setTile("tile-objects", fmt(inv.objects), inv.packages + " packages");
+    setTile("tile-collections", fmt(inv.collections), inv.schemas + " schemas");
     const enforced = (status.permissions || {}).enforcement_enabled;
     const enfValue = el("tile-enforcement").querySelector(".value");
     enfValue.textContent = enforced ? "ON" : "off";
     enfValue.className = "value " + (enforced ? "ok" : "warn");
 
+    const users = await fetchJson("/admin/identity/users");
+    setTile("tile-users", fmt(users.count), "registered users");
+
     const changes = await fetchJson("/admin/changes?limit=12");
     const rows = (changes.changes || []).map((change) => {
       const when = (change.timestamp || "").replace("T", " ").slice(0, 19);
-      const target = change.target || change.object_id || change.collection || "";
       return "<tr><td class=kind>" + (change.kind || "") + "</td><td>" +
-        (change.summary || change.action || "") + "</td><td>" + target +
+        (change.summary || change.action || "") + "</td><td>" + describeTarget(change.target) +
         "</td><td>" + (change.actor || "") + "</td><td class=when>" + when + "</td></tr>";
     });
     el("changes-body").innerHTML = rows.join("") ||
