@@ -25,7 +25,8 @@ untrusted public users.
   permission subjects
 - Password credentials (scrypt, stored outside user records), admin password
   set/reset routes, opt-in password login, session cookies with origin checks,
-  a built-in browser `/login` + `/logout` flow, request identity injected into
+  a built-in browser `/login` + `/logout` flow with per-identifier login
+  lockout, request identity injected into
   object execution (`request["_identity"]`), and a Django-style shell CLI for
   bootstrap and user management
 - Permission policy storage, check API, audit mode, readiness status, row
@@ -84,7 +85,7 @@ untrusted public users.
   has it on)
 - Policy checks for the admin-token-only surfaces (identity, permissions,
   schemas, daemon, events, packages stay admin-gated by design)
-- Self-service signup, password reset flows, and login attempt lockout
+- Self-service signup and password reset flows
 - Session admin gates are implemented, but opt-in with
   `DBBASIC_ENABLE_SESSION_ADMIN_GATES=true`
 - CPU and memory isolation for untrusted object code

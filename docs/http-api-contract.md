@@ -734,6 +734,18 @@ also applies. Password login availability (enabled flag plus at least one
 active user) counts as a non-admin identity path for permission enforcement
 readiness.
 
+Repeated failures lock the identifier: after
+`DBBASIC_LOGIN_LOCKOUT_ATTEMPTS` failed attempts (default 5) within
+`DBBASIC_LOGIN_LOCKOUT_WINDOW_SECONDS` (default 900), further attempts —
+even with the correct password — return `429 Too many failed attempts` (the
+browser form redirects to `/login?error=locked`). A successful login resets
+the count; the lock clears on its own when the window passes. Locked attempts
+are recorded as `login_locked` ops events rather than new failures, so
+hammering a locked identifier does not extend the lock. Set attempts to `0`
+to disable. The counters are the `login_failed` rows in the ops event feed —
+`GET /admin/ops?kind=auth&identifier=...` shows exactly why an identifier is
+locked.
+
 List sessions:
 
 ```http

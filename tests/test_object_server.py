@@ -1608,6 +1608,104 @@ def test_ops_feed_records_auth_and_execution_events(tmp_path, monkeypatch):
     assert unauth_status == 401
 
 
+def test_login_lockout_blocks_after_repeated_failures(tmp_path, monkeypatch):
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.PASSWORD_LOGIN_ENV, "true")
+    monkeypatch.setenv(object_server.LOGIN_LOCKOUT_ATTEMPTS_ENV, "3")
+    monkeypatch.setattr(object_server, "PASSWORD_LOGIN_FAILURE_DELAY_SECONDS", 0)
+    _create_password_user(monkeypatch)
+
+    for _ in range(3):
+        request(
+            "/identity/session",
+            method="POST",
+            body=json.dumps({"email": "alice@example.com", "password": "wrong password"}).encode(),
+        )
+
+    locked_status, _, locked_payload = request(
+        "/identity/session",
+        method="POST",
+        body=json.dumps({"email": "alice@example.com", "password": "correct horse battery"}).encode(),
+    )
+    other_status, _, _ = request(
+        "/identity/session",
+        method="POST",
+        body=json.dumps({"email": "other@example.com", "password": "correct horse battery"}).encode(),
+    )
+    form_status, form_headers, _ = raw_request(
+        "/login",
+        method="POST",
+        body=b"email=alice%40example.com&password=correct+horse+battery",
+        headers=[("content-type", "application/x-www-form-urlencoded")],
+    )
+    locked_page_status, _, locked_page = raw_request("/login", query_string="error=locked")
+
+    assert locked_status == 429
+    assert locked_payload == {"status": "error", "error": object_server.LOGIN_LOCKED_MESSAGE}
+    assert other_status == 401  # different identifier is not locked
+    assert form_status == 303
+    assert form_headers[b"location"].startswith(b"/login?error=locked")
+    assert locked_page_status == 200
+    assert object_server.LOGIN_LOCKED_MESSAGE.encode() in locked_page
+
+    events = request("/admin/ops", query_string="kind=auth", headers=auth_headers())[2]["events"]
+    assert any(entry.get("event") == "login_locked" for entry in events)
+
+
+def test_login_lockout_resets_after_success_and_respects_window(tmp_path, monkeypatch):
+    import object_ops_log
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(object_server.PASSWORD_LOGIN_ENV, "true")
+    monkeypatch.setenv(object_server.LOGIN_LOCKOUT_ATTEMPTS_ENV, "3")
+    monkeypatch.setattr(object_server, "PASSWORD_LOGIN_FAILURE_DELAY_SECONDS", 0)
+    _create_password_user(monkeypatch)
+
+    old = datetime.now(timezone.utc) - timedelta(hours=2)
+    for _ in range(5):
+        object_ops_log.append_event(
+            object_ops_log.AUTH,
+            {"event": "login_failed", "identifier": "alice@example.com"},
+            base_dir=tmp_path,
+            now=old,
+        )
+
+    stale_status, _, _ = request(
+        "/identity/session",
+        method="POST",
+        body=json.dumps({"email": "alice@example.com", "password": "correct horse battery"}).encode(),
+    )
+    assert stale_status == 201  # old failures are outside the window
+
+    for _ in range(2):
+        request(
+            "/identity/session",
+            method="POST",
+            body=json.dumps({"email": "alice@example.com", "password": "wrong password"}).encode(),
+        )
+    after_success_status, _, _ = request(
+        "/identity/session",
+        method="POST",
+        body=json.dumps({"email": "alice@example.com", "password": "correct horse battery"}).encode(),
+    )
+    assert after_success_status == 201  # two recent failures stay under the threshold
+
+    monkeypatch.setenv(object_server.LOGIN_LOCKOUT_ATTEMPTS_ENV, "0")
+    for _ in range(6):
+        request(
+            "/identity/session",
+            method="POST",
+            body=json.dumps({"email": "alice@example.com", "password": "wrong password"}).encode(),
+        )
+    disabled_status, _, _ = request(
+        "/identity/session",
+        method="POST",
+        body=json.dumps({"email": "alice@example.com", "password": "correct horse battery"}).encode(),
+    )
+    assert disabled_status == 201  # lockout disabled via env
+
+
 def test_identity_endpoint_ignores_untrusted_identity_headers(monkeypatch):
     monkeypatch.delenv("DBBASIC_PERMISSION_TRUST_HEADERS", raising=False)
     headers = [

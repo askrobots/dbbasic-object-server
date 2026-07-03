@@ -94,6 +94,11 @@ SESSION_LOGIN_TOKEN_ENV = "DBBASIC_SESSION_LOGIN_TOKEN"
 SESSION_ADMIN_GATES_ENV = "DBBASIC_ENABLE_SESSION_ADMIN_GATES"
 PASSWORD_LOGIN_ENV = "DBBASIC_ENABLE_PASSWORD_LOGIN"
 PASSWORD_LOGIN_FAILURE_DELAY_SECONDS = 0.5
+LOGIN_LOCKOUT_ATTEMPTS_ENV = "DBBASIC_LOGIN_LOCKOUT_ATTEMPTS"
+LOGIN_LOCKOUT_WINDOW_SECONDS_ENV = "DBBASIC_LOGIN_LOCKOUT_WINDOW_SECONDS"
+DEFAULT_LOGIN_LOCKOUT_ATTEMPTS = 5
+DEFAULT_LOGIN_LOCKOUT_WINDOW_SECONDS = 900
+LOGIN_LOCKED_MESSAGE = "Too many failed attempts. Try again later."
 SESSION_COOKIE_NAME = "dbbasic_session"
 COOKIE_SECURE_ENV = "DBBASIC_COOKIE_SECURE"
 SITE_ROUTES_ENV = "DBBASIC_ENABLE_SITE_ROUTES"
@@ -1257,6 +1262,16 @@ async def _handle_identity_password_login(
         await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
         return
 
+    attempted = login["user_id"] or login["email"] or ""
+    if _login_locked(attempted):
+        _append_ops_auth_event("login_locked", identifier=attempted, method="password")
+        await _send_json(
+            send,
+            {"status": "error", "error": LOGIN_LOCKED_MESSAGE},
+            status=429,
+        )
+        return
+
     user = _password_login_user(login)
     lookup_user_id = user["user_id"] if user is not None else "__unknown_password_login__"
     verified = object_credentials.verify_password(
@@ -1265,7 +1280,6 @@ async def _handle_identity_password_login(
         base_dir=_data_dir(),
     )
 
-    attempted = login["user_id"] or login["email"] or ""
     if user is None or not verified:
         _append_ops_auth_event("login_failed", identifier=attempted, method="password")
         await asyncio.sleep(PASSWORD_LOGIN_FAILURE_DELAY_SECONDS)
@@ -1290,6 +1304,7 @@ async def _handle_identity_password_login(
 
     _append_ops_auth_event(
         "login_succeeded",
+        identifier=attempted,
         user_id=user["user_id"],
         method="password",
         label=login["label"],
@@ -1510,7 +1525,11 @@ async def _handle_login(
         if _current_identity_session(headers) is not None:
             await _send_redirect(send, _safe_next_path(query.get("next")))
             return
-        error = "Invalid email or password." if query.get("error") else None
+        error = None
+        if query.get("error") == "locked":
+            error = LOGIN_LOCKED_MESSAGE
+        elif query.get("error"):
+            error = "Invalid email or password."
         await _send_login_page(send, error=error, next_path=_safe_next_path(query.get("next")))
         return
 
@@ -1552,6 +1571,14 @@ async def _handle_login(
         await _send_redirect(send, failure_location)
         return
 
+    if _login_locked(email):
+        _append_ops_auth_event("login_locked", identifier=email, method="password_form")
+        locked_location = f"{http_api_contract.LOGIN_PATH}?error=locked"
+        if next_path != "/":
+            locked_location += f"&next={urllib.parse.quote(next_path)}"
+        await _send_redirect(send, locked_location)
+        return
+
     login = {"user_id": None, "email": email, "password": password}
     user = _password_login_user(login)
     lookup_user_id = user["user_id"] if user is not None else "__unknown_password_login__"
@@ -1577,6 +1604,7 @@ async def _handle_login(
 
     _append_ops_auth_event(
         "login_succeeded",
+        identifier=email,
         user_id=user["user_id"],
         method="password_form",
         label="browser login",
@@ -6721,6 +6749,66 @@ def _append_ops_execution_error(
         )
     except (OSError, ValueError):
         pass
+
+
+def _login_lockout_attempts() -> int:
+    value = os.environ.get(LOGIN_LOCKOUT_ATTEMPTS_ENV, "")
+    try:
+        return int(value) if value.strip() else DEFAULT_LOGIN_LOCKOUT_ATTEMPTS
+    except ValueError:
+        return DEFAULT_LOGIN_LOCKOUT_ATTEMPTS
+
+
+def _login_lockout_window_seconds() -> int:
+    value = os.environ.get(LOGIN_LOCKOUT_WINDOW_SECONDS_ENV, "")
+    try:
+        return int(value) if value.strip() else DEFAULT_LOGIN_LOCKOUT_WINDOW_SECONDS
+    except ValueError:
+        return DEFAULT_LOGIN_LOCKOUT_WINDOW_SECONDS
+
+
+def _login_locked(identifier: str) -> bool:
+    """Return whether recent failures lock this identifier out of login.
+
+    Counts `login_failed` ops events for the identifier that are newer than
+    the lockout window and newer than the identifier's last successful login.
+    Locked attempts are recorded as `login_locked`, so an attacker cannot
+    extend the lockout window by hammering a locked identifier.
+    """
+    attempts = _login_lockout_attempts()
+    if attempts <= 0 or not identifier:
+        return False
+
+    window = _login_lockout_window_seconds()
+    cutoff = datetime.now(timezone.utc).timestamp() - window
+    try:
+        events = object_ops_log.read_events(
+            base_dir=_data_dir(),
+            kind=object_ops_log.AUTH,
+            identifier=identifier,
+            limit=max(attempts * 3, 20),
+        )
+    except (OSError, ValueError):
+        return False
+
+    failures = 0
+    for entry in events:
+        try:
+            timestamp = datetime.fromisoformat(
+                str(entry.get("timestamp", "")).replace("Z", "+00:00")
+            ).timestamp()
+        except ValueError:
+            continue
+        if timestamp < cutoff:
+            break
+        event = entry.get("event")
+        if event == "login_succeeded":
+            break
+        if event == "login_failed":
+            failures += 1
+            if failures >= attempts:
+                return True
+    return False
 
 
 def _append_ops_auth_event(
