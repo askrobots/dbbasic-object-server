@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
 import object_collections
+import object_permission_store
+import object_permissions
 import object_schemas
 from object_namespace import get_object_roots, object_id_from_path, resolve_object_id, validate_object_id
 from object_versions import DEFAULT_DATA_DIR
@@ -103,7 +105,13 @@ def dry_run_package(
         for entry in package["schemas"]
     ]
     permissions = [
-        _path_change(entry, package_dir=package_dir, section="permissions", action="merge", warnings=warnings)
+        _permission_change(
+            entry,
+            package_id=package_id,
+            package_dir=package_dir,
+            base_dir=base,
+            warnings=warnings,
+        )
         for entry in package["permissions"]
     ]
     seed = [
@@ -193,6 +201,11 @@ def install_package(
         _ensure_inside(destination, base / "collections", label="seed")
         seed_writes.append((entry, planned, destination, source.read_bytes()))
 
+    permission_writes = []
+    for entry, planned in zip(package["permissions"], plan["permissions"], strict=True):
+        rules = _load_permission_rules(package_dir, entry, package_id=package_id)
+        permission_writes.append((planned, rules))
+
     restore_point = before_write(plan) if before_write is not None else None
 
     installed_objects = []
@@ -228,6 +241,18 @@ def install_package(
             }
         )
 
+    installed_permissions = []
+    for planned, rules in permission_writes:
+        total, added = _merge_permission_rules(rules, base_dir=base)
+        installed_permissions.append(
+            {
+                **planned,
+                "status": "merged",
+                "rules": total,
+                "new_rules": added,
+            }
+        )
+
     result = {
         "package": plan["package"],
         "mode": "install",
@@ -236,7 +261,7 @@ def install_package(
         "safe_to_install": True,
         "objects": installed_objects,
         "schemas": installed_schemas,
-        "permissions": plan["permissions"],
+        "permissions": installed_permissions,
         "seed": installed_seed,
         "migrations": plan["migrations"],
         "warnings": [],
@@ -518,6 +543,115 @@ def _migration_change(
     }
 
 
+def _permission_change(
+    entry: Mapping[str, str],
+    *,
+    package_id: str,
+    package_dir: Path,
+    base_dir: Path,
+    warnings: list[str],
+) -> dict[str, Any]:
+    change = {
+        "path": entry["path"],
+        "action": "merge",
+        "exists": False,
+        "rules": 0,
+        "new_rules": 0,
+    }
+    file_status = _package_file_status(package_dir, entry["path"])
+    if not file_status["exists"]:
+        warnings.append(f"Missing package permissions file: {entry['path']}")
+        return change
+    change["exists"] = True
+
+    try:
+        rules = _load_permission_rules(package_dir, entry, package_id=package_id)
+    except PackageInstallError as exc:
+        warnings.append(str(exc))
+        return change
+
+    change["rules"] = len(rules)
+    try:
+        policy = object_permission_store.load_policy(base_dir)
+        existing_keys = {_rule_merge_key(rule) for rule in policy.rules}
+    except ValueError:
+        existing_keys = set()
+    change["new_rules"] = sum(1 for rule in rules if _rule_merge_key(rule) not in existing_keys)
+    return change
+
+
+def _load_permission_rules(
+    package_dir: Path,
+    entry: Mapping[str, str],
+    *,
+    package_id: str,
+) -> list[object_permissions.PermissionRule]:
+    source = _package_file(package_dir, entry["path"])
+    try:
+        payload = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PackageInstallError(
+            f"Package permissions file contains invalid JSON: {entry['path']}"
+        ) from exc
+
+    rules_payload = payload.get("rules") if isinstance(payload, dict) else payload
+    if not isinstance(rules_payload, list):
+        raise PackageInstallError(
+            f"Package permissions file must contain a rules list: {entry['path']}"
+        )
+
+    rules = []
+    for rule_payload in rules_payload:
+        if not isinstance(rule_payload, dict):
+            raise PackageInstallError(
+                f"Package permission rules must be objects: {entry['path']}"
+            )
+        merged_payload = {**rule_payload, "package": package_id}
+        try:
+            rules.append(object_permissions.rule_from_dict(merged_payload))
+        except ValueError as exc:
+            raise PackageInstallError(
+                f"Package permission rule is invalid in {entry['path']}: {exc}"
+            ) from exc
+    return rules
+
+
+def _rule_merge_key(rule: object_permissions.PermissionRule) -> str:
+    payload = object_permissions.rule_to_dict(rule)
+    payload.pop("reason", None)
+    payload.pop("package", None)
+    return json.dumps(payload, sort_keys=True)
+
+
+def _merge_permission_rules(
+    rules: list[object_permissions.PermissionRule],
+    *,
+    base_dir: Path,
+) -> tuple[int, int]:
+    """Append new package rules to the policy; return (total, newly added)."""
+    policy = object_permission_store.load_policy(base_dir)
+    existing_keys = {_rule_merge_key(rule) for rule in policy.rules}
+
+    added = []
+    for rule in rules:
+        if _rule_merge_key(rule) in existing_keys:
+            continue
+        added.append(rule)
+        existing_keys.add(_rule_merge_key(rule))
+
+    if added:
+        merged = object_permissions.PermissionPolicy(
+            access_mode=policy.access_mode,
+            rules=tuple(policy.rules) + tuple(added),
+            roles=policy.roles,
+            user_roles=policy.user_roles,
+            admin_roles=policy.admin_roles,
+        )
+        object_permission_store.save_policy(merged, base_dir=base_dir)
+
+    return len(rules), len(added)
+
+
 def _path_change(
     entry: Mapping[str, str],
     *,
@@ -555,8 +689,6 @@ def _install_blockers(
 ) -> list[str]:
     blockers = [str(warning) for warning in plan.get("warnings", [])]
 
-    if package["permissions"]:
-        blockers.append("Package permission installs are not implemented yet")
     if package["migrations"]:
         blockers.append("Package migration execution is not implemented yet")
 

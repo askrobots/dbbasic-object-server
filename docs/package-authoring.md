@@ -68,10 +68,17 @@ Installs are deliberately conservative:
   schemas require `allow_replace`.
 - `seed` TSV is written only when the target collection records file does not
   already exist — seed never overwrites live data.
-- `permissions` and `migrations` are accepted in the manifest and reported in
-  dry-runs, but install rejects them until explicit merge/run semantics land.
-  Grant app permissions by editing the deployment policy
-  (see `permissions-model.md`) for now.
+- `permissions` entries MERGE: each fragment file is
+  `{"rules": [ ... ]}` using the same rule shape as the policy document
+  (`effect`, `principal`, `actions`, optional `collection`/`object_id`,
+  row filters, field lists). On install the rules are validated, stamped
+  with `"package": "<package_id>"` provenance, and appended to the
+  deployment policy — skipping any rule that already exists, so reinstalls
+  are idempotent. This is how a site package makes its own pages public:
+  ship the grant with the code instead of hand-editing policy after install.
+  Invalid fragments block the whole install.
+- `migrations` are accepted in the manifest and reported in dry-runs, but
+  install rejects them until explicit run semantics land.
 - The HTTP install route creates a restore point first and appends changelog
   rows under `data/package_changes/{package_id}/changes.jsonl`.
 

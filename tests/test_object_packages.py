@@ -86,7 +86,7 @@ def test_dry_run_reports_create_replace_merge_apply_and_missing_files(tmp_path):
         files=(
             ("objects/crm/contacts.py", "def GET(request): return {}\n"),
             ("schemas/contacts.json", '{"fields":[]}\n'),
-            ("permissions/policy.json", "{}\n"),
+            ("permissions/policy.json", '{"rules": []}\n'),
             ("seed/contacts.tsv", "id\tname\nc2\tBob\n"),
         ),
     )
@@ -426,7 +426,7 @@ def test_install_package_rejects_unsupported_permission_and_migration_writes(tmp
         files=(
             ("objects/crm/contacts.py", "def GET(request): return {}\n"),
             ("schemas/contacts.json", '{"fields":[]}\n'),
-            ("permissions/policy.json", "{}\n"),
+            ("permissions/policy.json", '{"rules": []}\n'),
             ("seed/contacts.tsv", "id\tname\nc2\tBob\n"),
             ("migrations/001_init.py", "def run(): pass\n"),
         ),
@@ -435,8 +435,105 @@ def test_install_package_rejects_unsupported_permission_and_migration_writes(tmp
     with pytest.raises(object_packages.PackageInstallError) as exc:
         object_packages.install_package("crm-starter", root=packages_root)
 
-    assert "permission installs" in str(exc.value)
     assert "migration execution" in str(exc.value)
+
+
+def test_install_package_merges_permission_rules_with_provenance(tmp_path):
+    import object_permission_store
+
+    packages_root = tmp_path / "packages"
+    data_dir = tmp_path / "data"
+    object_root = tmp_path / "objects"
+    object_root.mkdir()
+    fragment = json.dumps(
+        {
+            "rules": [
+                {
+                    "effect": "allow",
+                    "principal": "public",
+                    "actions": ["execute"],
+                    "object_id": "crm_contacts",
+                    "reason": "public contacts page",
+                },
+                {
+                    "effect": "allow",
+                    "principal": "registered",
+                    "actions": ["read", "create"],
+                    "collection": "contacts",
+                },
+            ]
+        }
+    )
+    payload = manifest(dependencies=[], migrations=[], seed=[])
+    write_package(
+        packages_root,
+        "crm-starter",
+        payload,
+        files=(
+            ("objects/crm/contacts.py", "def GET(request): return {}\n"),
+            ("schemas/contacts.json", '{"fields":[]}\n'),
+            ("permissions/policy.json", fragment),
+        ),
+    )
+
+    plan = object_packages.dry_run_package(
+        "crm-starter", root=packages_root, base_dir=data_dir, object_roots=[object_root]
+    )
+    install = object_packages.install_package(
+        "crm-starter", root=packages_root, base_dir=data_dir, object_roots=[object_root]
+    )
+    policy = object_permission_store.load_policy(data_dir)
+
+    assert plan["permissions"][0] == {
+        "path": "permissions/policy.json",
+        "action": "merge",
+        "exists": True,
+        "rules": 2,
+        "new_rules": 2,
+    }
+    assert install["permissions"][0]["status"] == "merged"
+    assert install["permissions"][0]["new_rules"] == 2
+    assert len(policy.rules) == 2
+    assert all(rule.package == "crm-starter" for rule in policy.rules)
+    assert policy.rules[0].object_id == "crm_contacts"
+
+    reinstall = object_packages.install_package(
+        "crm-starter",
+        root=packages_root,
+        base_dir=data_dir,
+        object_roots=[object_root],
+        allow_replace=True,
+    )
+    policy_after = object_permission_store.load_policy(data_dir)
+
+    assert reinstall["permissions"][0]["new_rules"] == 0
+    assert len(policy_after.rules) == 2
+
+
+def test_install_package_rejects_invalid_permission_fragment(tmp_path):
+    packages_root = tmp_path / "packages"
+    object_root = tmp_path / "objects"
+    object_root.mkdir()
+    payload = manifest(dependencies=[], migrations=[], schemas=[], seed=[])
+    write_package(
+        packages_root,
+        "crm-starter",
+        payload,
+        files=(
+            ("objects/crm/contacts.py", "def GET(request): return {}\n"),
+            ("permissions/policy.json", '{"rules": [{"effect": "allow"}]}\n'),
+        ),
+    )
+
+    with pytest.raises(object_packages.PackageInstallError) as exc:
+        object_packages.install_package(
+            "crm-starter",
+            root=packages_root,
+            base_dir=tmp_path / "data",
+            object_roots=[object_root],
+        )
+
+    assert "permission rule is invalid" in str(exc.value)
 
 
 def test_install_package_refuses_existing_seed_data(tmp_path):

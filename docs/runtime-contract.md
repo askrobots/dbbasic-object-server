@@ -838,8 +838,11 @@ The first install contract is intentionally conservative:
 - seed TSV is created only when the target collection records file does not
   already exist
 - existing objects and schemas require `allow_replace=True`
-- permission files and migrations are rejected until explicit merge and run
-  semantics are added
+- permission fragments (`{"rules": [...]}`) are validated, stamped with
+  `package` provenance, and merged into the deployment policy, skipping rules
+  that already exist so reinstalls stay idempotent; invalid fragments block
+  the install
+- migrations are rejected until explicit run semantics are added
 
 Package change history lives here:
 

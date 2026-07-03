@@ -74,6 +74,7 @@ class PermissionRule:
     valid_from: str | None = None
     expires_at: str | None = None
     reason: str = ""
+    package: str | None = None
 
     @classmethod
     def allow(
@@ -318,6 +319,7 @@ def rule_from_dict(payload: Mapping[str, Any]) -> PermissionRule:
         valid_from=_optional_string(payload.get("valid_from")),
         expires_at=_optional_string(payload.get("expires_at")),
         reason=_optional_string(payload.get("reason")) or "",
+        package=_optional_string(payload.get("package")),
     )
 
 
@@ -390,6 +392,8 @@ def rule_to_dict(rule: PermissionRule) -> dict[str, Any]:
         payload["valid_from"] = rule.valid_from
     if rule.expires_at is not None:
         payload["expires_at"] = rule.expires_at
+    if rule.package is not None:
+        payload["package"] = rule.package
 
     return payload
 
