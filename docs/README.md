@@ -57,6 +57,9 @@ flowchart TD
 - `package-authoring.md` - the practical guide for building an installable
   package: manifest, layout, install semantics, dry-run workflow, and rules
   for generated packages.
+- `schema-forms.md` - the schema field contract that generates forms and
+  views: types, enums, relations, validation bounds, form layout, and list
+  modes, all enforced on record writes.
 - `site-routing.md` - clean public URLs for websites: convention routing,
   the `site_routes` records table with `{param}`/`{param:uuid}` patterns,
   `site_404`, and why routing maps URLs while the permission policy decides

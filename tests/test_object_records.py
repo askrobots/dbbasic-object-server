@@ -390,3 +390,65 @@ def test_iter_record_collections_lists_safe_record_directories(tmp_path):
     write_records(data_dir, "bad-name", "id\tname\nbad\tBad\n")
 
     assert object_records.iter_record_collections(data_dir) == ["contacts"]
+
+
+def test_relation_fields_require_existing_target_records(tmp_path):
+    write_records(tmp_path, "projects", "id\tname\np1\tWebsite\n")
+    schema_file = tmp_path / "schemas" / "tasks.json"
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text(
+        json.dumps(
+            {
+                "fields": [
+                    {"name": "id"},
+                    {"name": "title", "required": True},
+                    {"name": "project_id", "relation": {"collection": "projects", "display_field": "name"}},
+                ]
+            }
+        )
+    )
+
+    created = object_records.create_collection_record(
+        "tasks",
+        {"id": "t1", "title": "Launch", "project_id": "p1"},
+        base_dir=tmp_path,
+    )
+    assert created["project_id"] == "p1"
+
+    with pytest.raises(object_records.InvalidRecordPayloadError) as missing:
+        object_records.create_collection_record(
+            "tasks",
+            {"id": "t2", "title": "Broken", "project_id": "p999"},
+            base_dir=tmp_path,
+        )
+    assert "missing record: projects/p999" in str(missing.value)
+
+    # Empty relation values stay allowed unless the field is required.
+    optional = object_records.create_collection_record(
+        "tasks",
+        {"id": "t3", "title": "No project"},
+        base_dir=tmp_path,
+    )
+    assert optional["project_id"] == ""
+
+
+def test_relation_accepts_string_shorthand_and_rejects_bad_shapes(tmp_path):
+    write_records(tmp_path, "projects", "id\tname\np1\tWebsite\n")
+    schema_file = tmp_path / "schemas" / "tasks.json"
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text(
+        json.dumps({"fields": [{"name": "id"}, {"name": "project_id", "relation": "projects"}]})
+    )
+
+    created = object_records.create_collection_record(
+        "tasks", {"id": "t1", "project_id": "p1"}, base_dir=tmp_path
+    )
+    assert created["project_id"] == "p1"
+
+    schema_file.write_text(
+        json.dumps({"fields": [{"name": "id"}, {"name": "project_id", "relation": 42}]})
+    )
+    with pytest.raises(object_records.InvalidRecordPayloadError):
+        object_records.create_collection_record(
+            "tasks", {"id": "t2", "project_id": "p1"}, base_dir=tmp_path
+        )

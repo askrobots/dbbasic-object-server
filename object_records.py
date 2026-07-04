@@ -501,6 +501,7 @@ def _validate_record_against_schema(
         _validate_field_type(field, value)
         _validate_field_enum(field, value)
         _validate_field_rules(field, value)
+        _validate_field_relation(field, value, base_dir=base_dir)
 
 
 def _schema_fields(
@@ -593,6 +594,48 @@ def _enum_values(enum_payload: Any) -> list[str]:
         if isinstance(item, (str, int, float, bool)):
             values.append(str(item))
     return values
+
+
+def _validate_field_relation(
+    field: dict[str, Any],
+    value: str,
+    *,
+    base_dir: Path | str,
+) -> None:
+    """Require relation values to be existing record ids in the target collection.
+
+    A relation is a validated pointer plus a display hint — deliberately not
+    an association framework: no joins, no lazy loading, no cascades.
+    """
+    relation = field.get("relation")
+    if relation is None:
+        return
+
+    name = field["name"]
+    if isinstance(relation, str):
+        target = relation
+    elif isinstance(relation, dict):
+        target = relation.get("collection")
+    else:
+        raise InvalidRecordPayloadError(
+            f"Record field '{name}' relation must be a collection name or object"
+        )
+
+    if not isinstance(target, str) or not object_collections.validate_collection_name(target):
+        raise InvalidRecordPayloadError(
+            f"Record field '{name}' relation has an invalid collection"
+        )
+
+    try:
+        get_collection_record(target, value, base_dir=base_dir)
+    except (object_collections.CollectionNotFoundError, RecordNotFoundError) as exc:
+        raise InvalidRecordPayloadError(
+            f"Record field '{name}' references a missing record: {target}/{value}"
+        ) from exc
+    except InvalidRecordIdError as exc:
+        raise InvalidRecordPayloadError(
+            f"Record field '{name}' relation value is not a valid record id"
+        ) from exc
 
 
 def _validate_field_rules(field: dict[str, Any], value: str) -> None:
