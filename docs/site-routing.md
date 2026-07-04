@@ -97,24 +97,32 @@ rows only match their domain and beat host-agnostic rows.
 Pointing a new domain at the server is then:
 
 1. DNS: point the domain's A record at the VM.
-2. Caddy: add a site block for it. Public domains should expose only the
-   site surface — TLS is automatic:
+2. Caddy: add a site block for it and reload — Caddy only answers (and only
+   fetches certificates) for hostnames it has a block for, and DNS must
+   already point at the VM for the certificate challenge to succeed. With
+   the `public_site` snippet defined once at the top of the Caddyfile, each
+   new domain is three lines:
 
    ```caddyfile
-   newsite.example {
+   (public_site) {
        handle /login { reverse_proxy 127.0.0.1:8001 }
        handle /logout { reverse_proxy 127.0.0.1:8001 }
        handle_path /static/* {
-           root * /var/lib/dbbasic-static/newsite
+           root * /var/lib/dbbasic-static/{args[0]}
            file_server
            header Cache-Control "public, max-age=3600"
        }
        handle { reverse_proxy 127.0.0.1:8001 }
    }
+
+   newsite.example {
+       import public_site newsite
+   }
    ```
 
-   Keep the admin/API/MCP handles only on the operations domain, so public
-   sites never route to the operator surface at all.
+   Public domains expose only the site surface; keep the admin/API/MCP
+   handles only on the operations domain, so public sites never route to
+   the operator surface at all.
 3. Add the `site_hosts` record and create `{prefix}_home` — the site is live.
 
 Identity, sessions, records, policy, and audit are shared across domains:
