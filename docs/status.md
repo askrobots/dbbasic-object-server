@@ -67,7 +67,11 @@ untrusted public users.
 - Multi-domain hosting on one server: a `site_hosts` records table maps each
   domain to its own object prefix, home, and 404, with host-scoped route
   patterns, so many websites share one runtime, identity store, and audit
-  trail
+  trail. Be aware: users and credentials are ONE shared store across all
+  domains on an instance — one login works everywhere, and per-site member
+  separation is done with accounts and policy grants, not separate user
+  tables. Domains needing fully separate identity belong on their own server
+  instance.
 - Runtime backups, restore helpers, deployment checks, GitHub Actions tests, and
   a working public staging deployment shape
 
