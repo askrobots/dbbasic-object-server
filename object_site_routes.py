@@ -24,21 +24,62 @@ import re
 from typing import Any, Iterable, Mapping
 
 SITE_ROUTES_COLLECTION = "site_routes"
+SITE_HOSTS_COLLECTION = "site_hosts"
+DEFAULT_PREFIX = "site"
 ROOT_OBJECT_ID = "site_home"
 NOT_FOUND_OBJECT_ID = "site_404"
 SITE_OBJECT_PREFIX = "site_"
 
 _SEGMENT_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_PREFIX_RE = re.compile(r"^[a-z0-9][a-z0-9_]{0,63}$")
 _PARAM_RE = re.compile(r"^\{([A-Za-z_][A-Za-z0-9_]*)(?::(uuid))?\}$")
 _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
 
 
-def convention_object_id(path: str) -> str | None:
+def normalize_host(value: str | None) -> str:
+    """Lowercase one Host header value and strip any port."""
+    host = (value or "").strip().lower()
+    if host.startswith("["):
+        return host.partition("]")[0].lstrip("[")
+    return host.partition(":")[0]
+
+
+def resolve_host(
+    host: str | None,
+    records: Iterable[Mapping[str, Any]],
+) -> dict[str, str]:
+    """Return the site config for one request host.
+
+    `site_hosts` records carry `host`, `prefix`, and optional `home_object`
+    and `not_found_object`. Hosts without a record keep the default `site_*`
+    behavior, so a single-site deployment needs no configuration.
+    """
+    normalized = normalize_host(host)
+    for record in records:
+        record_host = normalize_host(str(record.get("host") or ""))
+        prefix = str(record.get("prefix") or "").strip()
+        if not record_host or record_host != normalized:
+            continue
+        if not _PREFIX_RE.fullmatch(prefix):
+            continue
+        home = str(record.get("home_object") or "").strip() or f"{prefix}_home"
+        not_found = str(record.get("not_found_object") or "").strip() or f"{prefix}_404"
+        return {"host": record_host, "prefix": prefix, "home": home, "not_found": not_found}
+
+    return {
+        "host": normalized,
+        "prefix": DEFAULT_PREFIX,
+        "home": ROOT_OBJECT_ID,
+        "not_found": NOT_FOUND_OBJECT_ID,
+    }
+
+
+def convention_object_id(path: str, *, prefix: str = DEFAULT_PREFIX, home: str | None = None) -> str | None:
     """Map one URL path to its conventional site object id, or None."""
     if path == "/":
-        return ROOT_OBJECT_ID
+        return home or f"{prefix}_home"
 
     segments = _path_segments(path)
     if segments is None or not segments:
@@ -49,18 +90,25 @@ def convention_object_id(path: str) -> str | None:
         if not _SEGMENT_RE.fullmatch(segment):
             return None
         parts.append(segment.replace("-", "_"))
-    return SITE_OBJECT_PREFIX + "_".join(parts)
+    return f"{prefix}_" + "_".join(parts)
 
 
 def match_records(
     path: str,
     records: Iterable[Mapping[str, Any]],
+    *,
+    host: str | None = None,
 ) -> tuple[str, dict[str, str]] | None:
-    """Match one path against site_routes records; most specific pattern wins."""
+    """Match one path against site_routes records; most specific pattern wins.
+
+    Records with a `host` value only match that host; records without one
+    match every host. Host-specific matches beat host-agnostic ones.
+    """
     segments = _path_segments(path)
     if segments is None:
         return None
 
+    normalized_host = normalize_host(host)
     candidates = []
     for record in records:
         pattern = record.get("pattern")
@@ -68,6 +116,9 @@ def match_records(
         if not isinstance(pattern, str) or not isinstance(object_id, str):
             continue
         if not pattern.startswith("/") or not object_id.strip():
+            continue
+        record_host = normalize_host(str(record.get("host") or ""))
+        if record_host and record_host != normalized_host:
             continue
         parsed = _parse_pattern(pattern)
         if parsed is None:
@@ -81,13 +132,14 @@ def match_records(
             priority_value = int(priority) if priority not in (None, "") else 100
         except (TypeError, ValueError):
             priority_value = 100
-        candidates.append((priority_value, -literal_count, object_id.strip(), params))
+        host_rank = 0 if record_host else 1
+        candidates.append((host_rank, priority_value, -literal_count, object_id.strip(), params))
 
     if not candidates:
         return None
 
-    candidates.sort(key=lambda item: (item[0], item[1]))
-    _, _, object_id, params = candidates[0]
+    candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+    _, _, _, object_id, params = candidates[0]
     return object_id, params
 
 

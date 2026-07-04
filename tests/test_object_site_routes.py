@@ -159,6 +159,101 @@ def test_reserved_routes_are_never_shadowed(tmp_path, monkeypatch):
     assert b"Password login is disabled" in login_body
 
 
+def test_normalize_host_and_resolve_host():
+    records = [
+        {"id": "h1", "host": "DBBasic.com:443", "prefix": "db", "home_object": "db_start"},
+        {"id": "h2", "host": "q9.is", "prefix": "q9"},
+        {"id": "bad", "host": "evil.example", "prefix": "Bad-Prefix!"},
+    ]
+
+    assert object_site_routes.normalize_host("DBBasic.com:8443") == "dbbasic.com"
+    db = object_site_routes.resolve_host("dbbasic.com", records)
+    q9 = object_site_routes.resolve_host("Q9.IS:443", records)
+    unknown = object_site_routes.resolve_host("other.example", records)
+    invalid = object_site_routes.resolve_host("evil.example", records)
+
+    assert db == {"host": "dbbasic.com", "prefix": "db", "home": "db_start", "not_found": "db_404"}
+    assert q9["prefix"] == "q9" and q9["home"] == "q9_home" and q9["not_found"] == "q9_404"
+    assert unknown["prefix"] == "site" and unknown["home"] == "site_home"
+    assert invalid["prefix"] == "site"  # bad prefix records are ignored
+
+
+def test_multi_domain_conventions_serve_separate_sites(tmp_path, monkeypatch):
+    root, data_dir = enable_site_routes(monkeypatch, tmp_path)
+    write_source(root / "site" / "home.py", "def GET(request):\n    return {'site': 'default'}\n")
+    write_source(root / "db" / "home.py", "def GET(request):\n    return {'site': 'dbbasic'}\n")
+    write_source(root / "db" / "pricing.py", "def GET(request):\n    return {'page': 'pricing'}\n")
+    write_source(root / "q9" / "home.py", "def GET(request):\n    return {'site': 'q9'}\n")
+    write_records(
+        data_dir,
+        "site_hosts",
+        "id\thost\tprefix\thome_object\tnot_found_object\n"
+        "h1\tdbbasic.com\tdb\t\t\n"
+        "h2\tq9.is\tq9\t\t\n",
+    )
+
+    default_status, _, default_home = request("/")
+    db_status, _, db_home = request("/", headers=[("host", "dbbasic.com")])
+    db_page_status, _, db_page = request("/pricing", headers=[("host", "DBBASIC.COM:443")])
+    q9_status, _, q9_home = request("/", headers=[("host", "q9.is")])
+    cross_status, _, _ = request("/pricing", headers=[("host", "q9.is")])
+
+    assert default_status == 200 and default_home == {"site": "default"}
+    assert db_status == 200 and db_home == {"site": "dbbasic"}
+    assert db_page_status == 200 and db_page == {"page": "pricing"}
+    assert q9_status == 200 and q9_home == {"site": "q9"}
+    assert cross_status == 404  # q9.is has no pricing page; sites do not leak
+
+
+def test_host_scoped_route_records(tmp_path, monkeypatch):
+    root, data_dir = enable_site_routes(monkeypatch, tmp_path)
+    write_source(root / "db" / "article.py", "def GET(request):\n    return {'site': 'db', 'slug': request['slug']}\n")
+    write_source(root / "q9" / "article.py", "def GET(request):\n    return {'site': 'q9', 'slug': request['slug']}\n")
+    write_records(
+        data_dir,
+        "site_hosts",
+        "id\thost\tprefix\nh1\tdbbasic.com\tdb\nh2\tq9.is\tq9\n",
+    )
+    write_records(
+        data_dir,
+        "site_routes",
+        "id\tpattern\tobject_id\thost\tpriority\n"
+        "r1\t/blog/{slug}\tdb_article\tdbbasic.com\t10\n"
+        "r2\t/blog/{slug}\tq9_article\tq9.is\t10\n",
+    )
+
+    db_status, _, db_payload = request("/blog/hello", headers=[("host", "dbbasic.com")])
+    q9_status, _, q9_payload = request("/blog/hello", headers=[("host", "q9.is")])
+
+    assert db_status == 200 and db_payload == {"site": "db", "slug": "hello"}
+    assert q9_status == 200 and q9_payload == {"site": "q9", "slug": "hello"}
+
+
+def test_host_specific_404_with_generic_fallback(tmp_path, monkeypatch):
+    root, data_dir = enable_site_routes(monkeypatch, tmp_path)
+    write_source(
+        root / "db" / "404.py",
+        "def GET(request):\n"
+        "    return {'content_type': 'text/html', 'status_code': 404, 'body': 'db missing'}\n",
+    )
+    write_source(
+        root / "site" / "404.py",
+        "def GET(request):\n"
+        "    return {'content_type': 'text/html', 'status_code': 404, 'body': 'generic missing'}\n",
+    )
+    write_records(
+        data_dir,
+        "site_hosts",
+        "id\thost\tprefix\nh1\tdbbasic.com\tdb\nh2\tq9.is\tq9\n",
+    )
+
+    db_status, _, db_body = raw_request("/nope", headers=[("host", "dbbasic.com")])
+    q9_status, _, q9_body = raw_request("/nope", headers=[("host", "q9.is")])
+
+    assert db_status == 404 and b"db missing" in db_body
+    assert q9_status == 404 and b"generic missing" in q9_body  # q9 has no q9_404; generic serves
+
+
 def test_site_routes_respect_permission_enforcement(tmp_path, monkeypatch):
     from test_object_server import save_permission_policy
 

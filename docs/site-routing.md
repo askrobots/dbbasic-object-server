@@ -74,6 +74,54 @@ catch-all `reverse_proxy` instead of a catch-all 404. Under permission
 enforcement, unrouted or unauthorized paths still return controlled 403/404
 responses from the server.
 
+## Multiple Domains
+
+One object server can serve many websites. The `site_hosts` collection maps
+request hosts to object prefixes:
+
+```text
+id  host         prefix  home_object  not_found_object
+h1  dbbasic.com  db
+h2  q9.is        q9
+```
+
+With those records, `/` on dbbasic.com serves `db_home` and `/pricing`
+serves `db_pricing`, while `/` on q9.is serves `q9_home` — same server, same
+data directory, fully separate page namespaces. `home_object` and
+`not_found_object` default to `{prefix}_home` and `{prefix}_404` (falling
+back to the generic `site_404`). Hosts without a record keep the default
+`site_*` behavior, so single-site deployments need no configuration.
+`site_routes` pattern records take an optional `host` column; host-specific
+rows only match their domain and beat host-agnostic rows.
+
+Pointing a new domain at the server is then:
+
+1. DNS: point the domain's A record at the VM.
+2. Caddy: add a site block for it. Public domains should expose only the
+   site surface — TLS is automatic:
+
+   ```caddyfile
+   newsite.example {
+       handle /login { reverse_proxy 127.0.0.1:8001 }
+       handle /logout { reverse_proxy 127.0.0.1:8001 }
+       handle_path /static/* {
+           root * /var/lib/dbbasic-static/newsite
+           file_server
+           header Cache-Control "public, max-age=3600"
+       }
+       handle { reverse_proxy 127.0.0.1:8001 }
+   }
+   ```
+
+   Keep the admin/API/MCP handles only on the operations domain, so public
+   sites never route to the operator surface at all.
+3. Add the `site_hosts` record and create `{prefix}_home` — the site is live.
+
+Identity, sessions, records, policy, and audit are shared across domains:
+one operator account works everywhere, and browsers scope session cookies
+per domain automatically. Domains that must not share those belong on their
+own server instance instead (one process per trust boundary).
+
 ## Static Assets
 
 Site CSS, JavaScript, images, and fonts are served by the reverse proxy from

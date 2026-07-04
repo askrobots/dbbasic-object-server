@@ -735,13 +735,29 @@ async def _handle_site_route(
     if method not in {"GET", "POST", "PUT", "DELETE"}:
         return False
 
+    site = object_site_routes.resolve_host(headers.get("host"), _site_host_records())
     params: dict[str, str] = {}
-    target_id = object_site_routes.convention_object_id(path)
+    target_id = object_site_routes.convention_object_id(
+        path,
+        prefix=site["prefix"],
+        home=site["home"],
+    )
     if target_id is None or resolve_object_id(target_id, get_object_roots()) is None:
-        match = object_site_routes.match_records(path, _site_route_records())
+        match = object_site_routes.match_records(
+            path,
+            _site_route_records(),
+            host=site["host"],
+        )
         if match is not None:
             target_id, params = match
-        elif resolve_object_id(object_site_routes.NOT_FOUND_OBJECT_ID, get_object_roots()) is not None:
+        elif resolve_object_id(site["not_found"], get_object_roots()) is not None:
+            target_id = site["not_found"]
+            params = {"path": path}
+        elif (
+            site["not_found"] != object_site_routes.NOT_FOUND_OBJECT_ID
+            and resolve_object_id(object_site_routes.NOT_FOUND_OBJECT_ID, get_object_roots())
+            is not None
+        ):
             target_id = object_site_routes.NOT_FOUND_OBJECT_ID
             params = {"path": path}
         else:
@@ -779,6 +795,16 @@ def _site_route_records() -> list[dict[str, Any]]:
     try:
         return object_records.read_collection_records(
             object_site_routes.SITE_ROUTES_COLLECTION,
+            base_dir=_data_dir(),
+        )
+    except (ValueError, LookupError, OSError):
+        return []
+
+
+def _site_host_records() -> list[dict[str, Any]]:
+    try:
+        return object_records.read_collection_records(
+            object_site_routes.SITE_HOSTS_COLLECTION,
             base_dir=_data_dir(),
         )
     except (ValueError, LookupError, OSError):

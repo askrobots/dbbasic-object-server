@@ -64,6 +64,10 @@ untrusted public users.
   convention (`/about` -> `site_about`), a `site_routes` records table with
   `{param}`/`{param:uuid}` patterns, and `site_404`, all resolving through
   the policy-enforced execution path
+- Multi-domain hosting on one server: a `site_hosts` records table maps each
+  domain to its own object prefix, home, and 404, with host-scoped route
+  patterns, so many websites share one runtime, identity store, and audit
+  trail
 - Runtime backups, restore helpers, deployment checks, GitHub Actions tests, and
   a working public staging deployment shape
 
