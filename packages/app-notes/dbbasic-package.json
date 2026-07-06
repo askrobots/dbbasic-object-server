@@ -1,0 +1,34 @@
+{
+  "id": "app-notes",
+  "name": "Notes",
+  "version": "0.1.0",
+  "description": "Quick owner-scoped notes with optional project links, searchable via global search.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": ["app-projects"],
+  "objects": [
+    {
+      "id": "site_notes",
+      "path": "objects/site/notes.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "notes",
+      "path": "schemas/notes.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "notes",
+      "path": "seed/notes.tsv"
+    }
+  ],
+  "migrations": []
+}

@@ -72,6 +72,12 @@ untrusted public users.
   separation is done with accounts and policy grants, not separate user
   tables. Domains needing fully separate identity belong on their own server
   instance.
+- Schema-driven global search (`GET /api/search` + the `global_search` MCP
+  tool): collections opt in with `search.fields`, and results respect
+  permission row filters and field redaction per caller
+- First app packages (`app-projects`, `app-notes`): schema + owner-scoped
+  permission grants + a signed-in web page in one installable unit — the
+  template for migrating the Django app suite
 - Runtime backups, restore helpers, deployment checks, GitHub Actions tests, and
   a working public staging deployment shape
 
@@ -106,6 +112,8 @@ untrusted public users.
 
 1. Migrate the first real website onto the platform as a package (objects,
    schema, seed, routes, and permission grants in one reviewed unit).
+   `app-projects`/`app-notes` prove the app-package shape; continue the
+   Django app migration wave by wave (contacts, articles, tasks, ...).
 2. Design per-family gate tiers so agents can run under a scoped builder role
    instead of admin-role sessions.
 3. Add event delivery controls after scheduler and queue controls stabilize.

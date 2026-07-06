@@ -1,0 +1,45 @@
+{
+  "name": "projects",
+  "title": "Projects",
+  "version": 1,
+  "description": "Projects group tasks, notes, and other app records.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "name",
+      "type": "text",
+      "required": true,
+      "label": "Name",
+      "validation": {"min_length": 1, "max_length": 120}
+    },
+    {
+      "name": "description",
+      "type": "textarea",
+      "label": "Description"
+    },
+    {
+      "name": "status",
+      "type": "enum",
+      "label": "Status",
+      "default": "active",
+      "enum": ["active", "completed", "on_hold"]
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["name", "description", "status"]}
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["name", "status"]
+  },
+  "search": {
+    "fields": ["name", "description"]
+  }
+}

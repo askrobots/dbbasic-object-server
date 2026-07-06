@@ -118,7 +118,11 @@ Installs are deliberately conservative:
 `packages/hello-world/` in this repository is the smallest complete package.
 `packages/admin-write-probe/` is the smallest complete *app-shaped* package:
 one HTML page object, one schema, one seed file, exercising records end to
-end. Start from either.
+end. `packages/app-projects/` and `packages/app-notes/` are the reference
+*user apps*: an owner-scoped schema with `search` metadata, permission
+rules granting signed-in users their own rows (`row_filter` on
+`$user_id`), and a signed-in page that reads and writes records with the
+visitor's session cookie. Start a new app package from `app-notes`.
 
 Object files inside packages are normal DBBASIC objects. A package page that
 renders per-user content reads `request["_identity"]`; a package form posts to

@@ -1,0 +1,44 @@
+{
+  "name": "notes",
+  "title": "Notes",
+  "version": 1,
+  "description": "Quick notes, optionally linked to a project.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "content",
+      "type": "textarea",
+      "required": true,
+      "label": "Content",
+      "validation": {"min_length": 1}
+    },
+    {
+      "name": "project_id",
+      "label": "Project",
+      "relation": {"collection": "projects", "display_field": "name"}
+    },
+    {
+      "name": "is_public",
+      "type": "boolean",
+      "label": "Public",
+      "default": "false"
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["content", "project_id", "is_public"]}
+  },
+  "views": {
+    "list_mode": "cards",
+    "list_fields": ["content", "project_id"]
+  },
+  "search": {
+    "fields": ["content"]
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "id": "app-projects",
+  "name": "Projects",
+  "version": "0.1.0",
+  "description": "Project records with owner-scoped permissions and a signed-in web page.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "objects": [
+    {
+      "id": "site_projects",
+      "path": "objects/site/projects.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "projects",
+      "path": "schemas/projects.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "projects",
+      "path": "seed/projects.tsv"
+    }
+  ],
+  "migrations": []
+}
