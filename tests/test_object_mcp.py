@@ -214,6 +214,49 @@ def test_mcp_record_and_schema_tools(tmp_path, monkeypatch):
     assert not changes_error and changes["response"]["count"] >= 3
 
 
+def test_mcp_global_search_tool(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "notes", "id\tcontent\nn1\tflywheel growth loop\nn2\tother memo\n")
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    call_tool(
+        "update_schema",
+        {
+            "collection": "notes",
+            "schema": {
+                "fields": [{"name": "id"}, {"name": "content"}],
+                "search": {"fields": ["content"]},
+            },
+        },
+    )
+
+    search_error, found = call_tool("global_search", {"query": "flywheel growth"})
+    scoped_error, scoped = call_tool(
+        "global_search", {"query": "flywheel", "collections": ["notes"], "limit": 5}
+    )
+
+    assert not search_error
+    assert found["response"]["results"]["notes"] == [
+        {"id": "n1", "content": "flywheel growth loop"}
+    ]
+    assert found["response"]["total_count"] == 1
+    assert not scoped_error and scoped["response"]["total_count"] == 1
+
+
+def test_global_search_tool_route_validates_arguments():
+    with pytest.raises(ValueError, match="query"):
+        object_mcp.tool_route("global_search", {})
+    with pytest.raises(ValueError, match="collections"):
+        object_mcp.tool_route("global_search", {"query": "x", "collections": "notes"})
+
+    method, path, query_string, body = object_mcp.tool_route(
+        "global_search", {"query": "fly wheel", "collections": ["notes", "tasks"]}
+    )
+    assert (method, path, body) == ("GET", "/api/search", b"")
+    assert query_string == "q=fly+wheel&limit=10&collections=notes%2Ctasks"
+
+
 def test_mcp_tool_errors_are_marked(tmp_path, monkeypatch):
     monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
     enable_admin_token(monkeypatch)

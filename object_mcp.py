@@ -228,6 +228,23 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "global_search",
+        "description": "Search records across all collections whose schema declares search fields",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search terms; all must match"},
+                "limit": {"type": "integer", "description": "Max results per collection", "default": 10},
+                "collections": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional collection names to restrict the search to",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "list_ops_events",
         "description": "Recent operational events: object execution errors and auth activity (login/logout/session mints)",
         "inputSchema": {
@@ -366,6 +383,17 @@ def tool_route(name: str, arguments: Mapping[str, Any]) -> tuple[str, str, str, 
             raise ValueError("version_id must be an integer")
         body = {"action": "rollback", "version_id": version_id}
         return ("POST", _schema_path(args), "", _json_bytes(body))
+    if name == "global_search":
+        search_limit = _bounded_int(args.get("limit"), default=10, minimum=1, maximum=100, name="limit")
+        pairs = [("q", _required_str(args, "query")), ("limit", str(search_limit))]
+        collections = args.get("collections")
+        if collections is not None:
+            if not isinstance(collections, list) or not all(
+                isinstance(item, str) and item.strip() for item in collections
+            ):
+                raise ValueError("collections must be a list of collection names")
+            pairs.append(("collections", ",".join(item.strip() for item in collections)))
+        return ("GET", "/api/search", urllib.parse.urlencode(pairs), b"")
     if name == "list_ops_events":
         pairs = [("limit", str(_limit(args)))]
         for key in ("kind", "event"):
