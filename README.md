@@ -277,6 +277,7 @@ Current endpoints:
 - `POST /login`
 - `POST /logout`
 - `POST /api/mcp`
+- `GET /api/search`
 - `GET /collections`
 - `GET /collections/{collection}`
 - `GET /collections/{collection}/records`

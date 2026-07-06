@@ -85,6 +85,18 @@ rollback like source code:
   notes, contacts, messages), or `feed` (sequential with social context).
   Generated list views pick their shape from this.
 - `views.list_fields` — columns/summary fields for list rendering.
+- `search` — opts the collection into global search (`GET /api/search`
+  and the `global_search` MCP tool):
+
+  ```json
+  {"search": {"fields": ["title", "content"], "result_fields": ["id", "title"]}}
+  ```
+
+  `fields` are the searchable fields; `result_fields` (optional) trims
+  what each search hit returns, defaulting to `id` plus
+  `views.list_fields`. Collections without a `search` section never
+  appear in search results. Search runs inside the permission engine, so
+  row filters and field permissions bound what any caller can find.
 
 ## Worked Example: tasks
 

@@ -221,6 +221,7 @@ def _normalize_schema(
         "layout",
         "views",
         "forms",
+        "search",
         "table",
         "diagram",
         "validation",

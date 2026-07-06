@@ -56,6 +56,7 @@ import object_record_changes
 import object_records
 import object_schema_versions
 import object_schemas
+import object_search
 import object_site_routes
 import object_source
 import object_source_changes
@@ -385,6 +386,10 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
 
         if path == http_api_contract.MCP_PATH:
             await _handle_mcp(send, method, body, headers)
+            return
+
+        if path == http_api_contract.SEARCH_PATH:
+            await _handle_search(send, method, query, headers)
             return
 
         if path == http_api_contract.LOGIN_PATH:
@@ -5356,6 +5361,135 @@ async def _handle_objects_post(send, body: bytes, headers: dict[str, str]) -> No
         },
         status=201,
     )
+
+
+async def _handle_search(
+    send,
+    method: str,
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    search_query = (query.get("q") or "").strip()
+    if not search_query:
+        await _send_json(
+            send,
+            {"status": "error", "error": "Search requires a q query parameter."},
+            status=400,
+        )
+        return
+
+    try:
+        limit = _query_int(
+            query,
+            "limit",
+            default=object_search.DEFAULT_COLLECTION_LIMIT,
+            minimum=1,
+            maximum=object_search.MAX_COLLECTION_LIMIT,
+        )
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    requested_raw = (query.get("collections") or "").strip()
+    requested = {name.strip() for name in requested_raw.split(",") if name.strip()} or None
+
+    subject = None
+    policy = None
+    enforced = False
+    if _permission_checks_enabled():
+        subject = _permission_subject(headers)
+        enforced = _permission_enforcement_enabled()
+        try:
+            policy = object_permission_store.load_policy(_data_dir())
+        except ValueError as exc:
+            await _send_json(
+                send,
+                {"status": "error", "error": f"Permission policy is invalid: {exc}"},
+                status=500,
+            )
+            return
+    else:
+        gate_error = _admin_token_gate_error(headers, f"Search requires {ADMIN_TOKEN_ENV}.")
+        if gate_error is not None:
+            status, message = gate_error
+            await _send_json(send, {"status": "error", "error": message}, status=status)
+            return
+
+    results: dict[str, list[dict[str, str]]] = {}
+    warnings: list[str] = []
+    total = 0
+    for summary in object_schemas.list_schemas(base_dir=_data_dir()):
+        name = summary["name"]
+        if requested is not None and name not in requested:
+            continue
+        try:
+            schema = object_schemas.get_schema(name, base_dir=_data_dir())
+        except (LookupError, ValueError):
+            continue
+
+        try:
+            config = object_search.search_config(schema)
+        except object_search.InvalidSearchConfigError as exc:
+            warnings.append(f"{name}: {exc}")
+            continue
+        if config is None:
+            continue
+
+        if subject is not None and policy is not None:
+            decision = object_permissions.check_permission(
+                subject,
+                object_permissions.READ,
+                policy=policy,
+                collection=name,
+            )
+            _append_permission_audit_entry(
+                action=object_permissions.READ,
+                object_id=None,
+                collection=name,
+                method="GET",
+                subject=subject,
+                enforced=enforced,
+                decision=decision,
+            )
+            if enforced and not decision.allowed:
+                continue
+
+        try:
+            records = object_records.read_collection_records(name, base_dir=_data_dir())
+        except (
+            object_collections.CollectionNotFoundError,
+            object_collections.InvalidCollectionNameError,
+        ):
+            records = []
+        except ValueError:
+            continue
+
+        if subject is not None and policy is not None and enforced:
+            records = _filter_records_for_permission(
+                records,
+                collection=name,
+                subject=subject,
+                policy=policy,
+            )
+
+        matches = object_search.search_records(records, search_query, config, limit=limit)
+        results[name] = matches
+        total += len(matches)
+
+    payload: dict[str, Any] = {
+        "status": "ok",
+        "query": search_query,
+        "limit": limit,
+        "results": results,
+        "total_count": total,
+    }
+    if warnings:
+        payload["warnings"] = warnings
+    await _send_json(send, payload)
 
 
 async def _handle_collections(

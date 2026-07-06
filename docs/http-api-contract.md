@@ -1383,7 +1383,8 @@ claude mcp add dbbasic --transport http \
 The tool catalog wraps the existing admin surface — objects
 (list/read/create/update-source/execute, state, logs, metadata, changes),
 collections and records (list/get/create/update/delete), schemas
-(get/update/rollback), the unified change history, and admin status. Every
+(get/update/rollback), cross-collection search (`global_search`), the
+unified change history, and admin status. Every
 tool call is dispatched back through the server's own routing with the
 caller's credentials, so tools inherit the same gates, capability flags
 (source writes, package installs), permission checks, audit trail, and
@@ -1394,6 +1395,46 @@ Give each agent its own identity instead of the deployment token: create a
 user (for example `agent-claude`) with the admin role, mint a labeled session,
 and connect with that bearer token, so `/admin/changes` distinguishes agent
 actions from operator actions.
+
+## Global Search
+
+Records can be searched across every collection whose schema declares
+searchable fields (see the schema field contract's `search` section):
+
+```http
+GET /api/search?q=flywheel+growth&limit=10
+GET /api/search?q=flywheel&collections=notes,tasks
+Authorization: Token <token-or-session>   (or the dbbasic_session cookie)
+```
+
+The query is split on whitespace; every term must match at least one
+searchable field (case-insensitive substring), and a short hex-ish query
+also matches record ids by prefix. Results come back per collection with
+no ranking:
+
+```json
+{
+  "status": "ok",
+  "query": "flywheel growth",
+  "limit": 10,
+  "results": {
+    "notes": [{"id": "n1", "content": "flywheel growth loop"}],
+    "tasks": []
+  },
+  "total_count": 1
+}
+```
+
+Each result record is trimmed to the schema's `search.result_fields`
+(default: `id` plus the schema's `views.list_fields`, falling back to the
+searchable fields). Search runs inside the permission engine: with
+enforcement on, collections the caller cannot read are skipped entirely,
+row filters hide other users' records, and field permissions redact
+fields before results are returned — the same subject resolution as
+record reads (admin token, session token, or session cookie). Without
+permission checks the endpoint stays behind the admin gate. Malformed
+`search` sections surface in a `warnings` list instead of failing the
+whole request.
 
 ## Admin Collection And Schema Inspection
 

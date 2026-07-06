@@ -211,6 +211,22 @@ def test_replace_schema_writes_normalized_schema_atomically(tmp_path):
     assert object_schemas.get_schema("invoices", base_dir=data_dir, roots=[]) == schema
 
 
+def test_replace_schema_keeps_search_metadata(tmp_path):
+    data_dir = tmp_path / "data"
+
+    schema = object_schemas.replace_schema(
+        "notes",
+        {
+            "fields": [{"name": "id"}, {"name": "content"}],
+            "search": {"fields": ["content"], "result_fields": ["id", "content"]},
+        },
+        base_dir=data_dir,
+    )
+
+    assert schema["search"] == {"fields": ["content"], "result_fields": ["id", "content"]}
+    assert object_schemas.get_schema("notes", base_dir=data_dir, roots=[])["search"] == schema["search"]
+
+
 def test_replace_schema_rejects_mismatched_name(tmp_path):
     with pytest.raises(ValueError, match="does not match"):
         object_schemas.replace_schema(
