@@ -220,6 +220,75 @@ def test_search_endpoint_warns_on_malformed_search_config(tmp_path, monkeypatch)
     assert payload["warnings"] == ["broken: Schema search.fields must be a non-empty list"]
 
 
+def test_search_endpoint_public_row_filter_serves_anonymous(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_schema(
+        data_dir,
+        "notes",
+        {
+            "fields": [
+                {"name": "id"},
+                {"name": "content"},
+                {"name": "is_public", "type": "boolean", "default": "false"},
+            ],
+            "search": {"fields": ["content"]},
+        },
+    )
+    write_records(
+        data_dir,
+        "notes",
+        "id\tcontent\tis_public\towner_id\n"
+        "n1\tshared flywheel note\ttrue\t7\n"
+        "n2\tprivate flywheel note\tfalse\t7\n",
+    )
+    save_permission_policy(
+        data_dir,
+        {
+            "access_mode": "role_based",
+            "rules": [
+                {
+                    "effect": "allow",
+                    "principal": "registered",
+                    "actions": ["create", "read", "update", "delete"],
+                    "collection": "notes",
+                    "row_filter": {"owner_id": "$user_id"},
+                    "reason": "owners manage their own notes",
+                },
+                {
+                    "effect": "allow",
+                    "principal": "public",
+                    "actions": ["read"],
+                    "collection": "notes",
+                    "row_filter": {"is_public": "true"},
+                    "reason": "public notes are readable by anyone",
+                },
+            ],
+        },
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+    monkeypatch.setenv(object_server.PERMISSION_TRUST_HEADERS_ENV, "true")
+    enable_admin_token(monkeypatch)
+
+    anonymous_status, _, anonymous = request("/api/search", query_string="q=flywheel")
+    assert anonymous_status == 200
+    assert [note["id"] for note in anonymous["results"]["notes"]] == ["n1"]
+
+    owner_status, _, owner = request(
+        "/api/search",
+        query_string="q=flywheel",
+        headers=[("x-dbbasic-user-id", "7"), ("x-dbbasic-roles", "member")],
+    )
+    assert owner_status == 200
+    assert [note["id"] for note in owner["results"]["notes"]] == ["n1", "n2"]
+
+    private_record_status, _, _ = request("/collections/notes/records/n2")
+    assert private_record_status == 403
+    public_record_status, _, public_record = request("/collections/notes/records/n1")
+    assert public_record_status == 200
+    assert public_record["record"]["content"] == "shared flywheel note"
+
+
 def test_search_endpoint_enforcement_applies_row_filters_and_skips_denied(
     tmp_path, monkeypatch
 ):

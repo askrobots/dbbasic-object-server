@@ -233,6 +233,39 @@ def test_update_collection_record_merges_changes_and_preserves_fields(tmp_path):
     assert object_records.get_collection_record("contacts", "c1", base_dir=data_dir, roots=[]) == record
 
 
+def test_boolean_fields_are_stored_canonically(tmp_path):
+    data_dir = tmp_path / "data"
+    write_schema(
+        data_dir,
+        "notes",
+        [
+            {"name": "id"},
+            {"name": "content"},
+            {"name": "is_public", "type": "boolean", "default": "false"},
+        ],
+    )
+    write_records(data_dir, "notes", "id\tcontent\tis_public\n")
+
+    for record_id, submitted in (("n1", "True"), ("n2", "YES"), ("n3", "1")):
+        record = object_records.create_collection_record(
+            "notes",
+            {"id": record_id, "content": "x", "is_public": submitted},
+            base_dir=data_dir,
+            roots=[],
+        )
+        assert record["is_public"] == "true"
+
+    defaulted = object_records.create_collection_record(
+        "notes", {"id": "n4", "content": "x"}, base_dir=data_dir, roots=[]
+    )
+    assert defaulted["is_public"] == "false"
+
+    updated = object_records.update_collection_record(
+        "notes", "n1", {"is_public": "OFF"}, base_dir=data_dir, roots=[]
+    )
+    assert updated["is_public"] == "false"
+
+
 def test_update_collection_record_validates_final_schema_record(tmp_path):
     data_dir = tmp_path / "data"
     write_schema(

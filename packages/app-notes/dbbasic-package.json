@@ -1,8 +1,8 @@
 {
   "id": "app-notes",
   "name": "Notes",
-  "version": "0.1.0",
-  "description": "Quick owner-scoped notes with optional project links, searchable via global search.",
+  "version": "0.2.0",
+  "description": "Quick notes: owner-scoped with public sharing, project links, permalinks, and global search. Permalinks need a site_routes record mapping /notes/{note_id:uuid} to site_note_view.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
@@ -11,6 +11,10 @@
     {
       "id": "site_notes",
       "path": "objects/site/notes.py"
+    },
+    {
+      "id": "site_note_view",
+      "path": "objects/site/note_view.py"
     }
   ],
   "schemas": [

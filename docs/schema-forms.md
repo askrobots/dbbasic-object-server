@@ -34,6 +34,9 @@ code, versioned and rolled back through the normal schema history.
 - `type` — `text` (default), `textarea`, `integer`, `number`, `boolean`,
   `date`, `datetime`, `enum`, `computed`. Types are validated on write
   (integers must parse, dates must be ISO, enums must match, and so on).
+  Boolean fields accept several spellings on input (`True`, `1`, `yes`)
+  but are stored canonically as `true`/`false`, so permission row
+  filters like `{"is_public": "true"}` match reliably.
 - `required` — empty values rejected on write.
 - `label`, `help`, `placeholder` — presentation text for generated forms.
 - `default` — filled in when the field is not submitted.

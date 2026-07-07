@@ -124,6 +124,15 @@ rules granting signed-in users their own rows (`row_filter` on
 `$user_id`), and a signed-in page that reads and writes records with the
 visitor's session cookie. Start a new app package from `app-notes`.
 
+`app-notes` also shows the public/private pattern: a boolean `is_public`
+field plus a second permission rule (`principal: public`, `row_filter:
+{"is_public": "true"}`) makes shared records readable by anyone across
+every surface — pages, records API, MCP, and search — with no
+visibility code in the app itself. Its permalink page (`site_note_view`)
+expects a `site_routes` record mapping `/notes/{note_id:uuid}` to it;
+route records are site data, so each deployment adds them next to its
+other routes.
+
 Object files inside packages are normal DBBASIC objects. A package page that
 renders per-user content reads `request["_identity"]`; a package form posts to
 its own object id and writes records through the object runtime. Signed-in

@@ -29,6 +29,7 @@ input.search { margin-bottom: 1rem; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
         padding: 0.85rem 1rem; white-space: pre-wrap; word-break: break-word; }
 .card .meta { margin-top: 0.5rem; color: var(--muted); font-size: 0.75rem; }
+.card .meta a { color: var(--blue); }
 .hint { color: var(--muted); font-size: 0.85rem; background: var(--panel);
         border: 1px solid var(--line); border-radius: 8px; padding: 0.9rem 1rem; }
 .error { color: var(--red); font-size: 0.85rem; min-height: 1.2rem; }
@@ -41,9 +42,12 @@ let projectNames = {};
 
 function renderCards(records) {
   const cards = records.map((note) => {
-    const project = note.project_id
-      ? `<div class="meta">${esc(projectNames[note.project_id] || note.project_id)}</div>` : "";
-    return `<div class="card">${esc(note.content)}${project}</div>`;
+    const bits = [];
+    if (note.project_id) bits.push(esc(projectNames[note.project_id] || note.project_id));
+    if (note.is_public === "true") bits.push("public");
+    bits.push(`<a href="/notes/${encodeURIComponent(note.id)}">open</a>`);
+    return `<div class="card">${esc(note.content)}` +
+           `<div class="meta">${bits.join(" \\u00b7 ")}</div></div>`;
   });
   document.getElementById("cards").innerHTML =
     cards.join("") || '<p class="hint">No notes yet.</p>';

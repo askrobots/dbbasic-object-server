@@ -153,6 +153,7 @@ def create_collection_record(
         base_dir=base_dir,
         roots=roots,
     )
+    clean = _canonicalize_schema_values(collection, clean, base_dir=base_dir, roots=roots)
 
     path = collection_records_file(collection, base_dir=base_dir)
     with _records_file_lock(path):
@@ -198,6 +199,9 @@ def update_collection_record(
                     submitted_fields=submitted_fields,
                     base_dir=base_dir,
                     roots=roots,
+                )
+                updated = _canonicalize_schema_values(
+                    collection, updated, base_dir=base_dir, roots=roots
                 )
                 merged_fields = _merge_fields(fields, updated)
                 records[index] = updated
@@ -468,6 +472,36 @@ def _apply_schema_defaults(
         if "default" not in field:
             continue
         clean[name] = _schema_scalar_to_string(field["default"], field_name=name)
+    return clean
+
+
+def _canonicalize_schema_values(
+    collection: str,
+    record: dict[str, str],
+    *,
+    base_dir: Path | str,
+    roots: Iterable[Path] | None,
+) -> dict[str, str]:
+    """Store schema-typed values in one canonical form.
+
+    Boolean fields accept several spellings on input ("True", "1", "yes")
+    but must be stored as "true"/"false" so permission row filters like
+    {"is_public": "true"} match by string comparison. Runs after
+    validation, so every value here is known to parse.
+    """
+    fields = _schema_fields(collection, base_dir=base_dir, roots=roots)
+    if not fields:
+        return record
+
+    clean = dict(record)
+    for field in fields:
+        name = field["name"]
+        value = clean.get(name)
+        if _is_empty(value):
+            continue
+        field_type = str(field.get("type") or "text").lower()
+        if field_type in _BOOLEAN_TYPES:
+            clean[name] = "true" if _parse_boolean(value, field_name=name) else "false"
     return clean
 
 
