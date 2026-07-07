@@ -104,10 +104,16 @@ def run_chat(
     message: str,
     system: str | None = None,
     tools: list[dict[str, Any]] | None = None,
+    history: list[dict[str, str]] | None = None,
     max_rounds: int = DEFAULT_MAX_ROUNDS,
     max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> dict[str, Any]:
-    """Run one chat turn, looping through tool calls until a final reply."""
+    """Run one chat turn, looping through tool calls until a final reply.
+
+    ``history`` is prior conversation turns ({"role": "user"|"assistant",
+    "content": ...}) so a caller can resume a conversation it logged —
+    the server itself stays stateless about chats.
+    """
     if not isinstance(message, str) or not message.strip():
         raise InvalidChatRequestError("message is required")
     rounds = max(1, min(int(max_rounds), MAX_ROUNDS_LIMIT))
@@ -117,6 +123,8 @@ def run_chat(
     else:
         provider = _OpenAIProvider(key, model, system, tools or [], max_tokens)
 
+    for turn in normalize_history(history):
+        provider.messages.append(turn)
     provider.start(message.strip())
     tool_log: list[dict[str, Any]] = []
     usage = {"input_tokens": 0, "output_tokens": 0}
@@ -157,6 +165,29 @@ def run_chat(
     }
 
 
+MAX_HISTORY_TURNS = 40
+
+
+def normalize_history(history: list[dict[str, str]] | None) -> list[dict[str, str]]:
+    """Validate and trim prior turns to plain user/assistant text messages."""
+    if history is None:
+        return []
+    if not isinstance(history, list):
+        raise InvalidChatRequestError("history must be a list of {role, content} turns")
+    turns = []
+    for item in history:
+        if not isinstance(item, dict):
+            raise InvalidChatRequestError("history turns must be objects")
+        role = item.get("role")
+        content = item.get("content")
+        if role not in ("user", "assistant") or not isinstance(content, str) or not content.strip():
+            raise InvalidChatRequestError(
+                "history turns need role user|assistant and non-empty content"
+            )
+        turns.append({"role": role, "content": content.strip()})
+    return turns[-MAX_HISTORY_TURNS:]
+
+
 class _AnthropicProvider:
     def __init__(self, key, model, system, tools, max_tokens):
         self.key = key
@@ -167,7 +198,7 @@ class _AnthropicProvider:
         self.messages: list[dict[str, Any]] = []
 
     def start(self, message: str) -> None:
-        self.messages = [{"role": "user", "content": message}]
+        self.messages.append({"role": "user", "content": message})
 
     def request(self) -> tuple[str, dict[str, str], bytes]:
         payload: dict[str, Any] = {

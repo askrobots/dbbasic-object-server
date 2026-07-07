@@ -5631,6 +5631,7 @@ async def _handle_ai_chat(
             message=message,
             system=system if isinstance(system, str) else None,
             tools=provider_tools,
+            history=payload.get("history"),
             max_rounds=max_rounds,
         )
     except object_ai.InvalidChatRequestError as exc:

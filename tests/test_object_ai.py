@@ -106,6 +106,34 @@ def test_run_chat_loops_through_tool_calls():
     assert followup[-1]["content"][0]["type"] == "tool_result"
 
 
+def test_run_chat_resumes_from_history():
+    requests_seen = []
+
+    def send_http(url, headers, body):
+        requests_seen.append(json.loads(body))
+        return anthropic_text_response("Continuing where we left off.")
+
+    result = object_ai.run_chat(
+        send_http=send_http,
+        dispatch_tool=lambda name, arguments: {},
+        service="anthropic",
+        model="claude-haiku-4-5",
+        key="sk-test",
+        message="and then?",
+        history=[
+            {"role": "user", "content": "tell me about the flywheel"},
+            {"role": "assistant", "content": "It spins."},
+        ],
+    )
+    assert result["reply"] == "Continuing where we left off."
+    messages = requests_seen[0]["messages"]
+    assert [m["role"] for m in messages] == ["user", "assistant", "user"]
+    assert messages[-1]["content"] == "and then?"
+
+    with pytest.raises(object_ai.InvalidChatRequestError, match="history"):
+        object_ai.normalize_history([{"role": "system", "content": "x"}])
+
+
 def test_run_chat_stops_at_round_limit():
     def send_http(url, headers, body):
         return anthropic_tool_response("global_search", {"query": "again"})

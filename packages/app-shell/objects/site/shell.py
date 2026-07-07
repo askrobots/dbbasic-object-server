@@ -61,6 +61,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
 const log = document.getElementById("log");
 let prefs = {id: OWNER_ID, ai_model: "anthropic:claude-haiku-4-5",
              tools: "global_search,list_records,get_record,create_record"};
+let aiHistory = [];
 
 function entry(input) {
   const div = document.createElement("div");
@@ -103,6 +104,21 @@ async function loadPrefs() {
   const res = await fetch(`/collections/shell_preferences/records/${OWNER_ID}`,
                           {credentials: "same-origin", headers: {accept: "application/json"}});
   if (res.ok) { const body = await res.json(); prefs = body.record || prefs; }
+}
+
+async function loadHistory() {
+  const res = await fetch("/collections/shell_commands/records?limit=1000",
+                          {credentials: "same-origin", headers: {accept: "application/json"}});
+  if (!res.ok) return;
+  const body = await res.json();
+  for (const row of (body.records || []).slice(-30)) {
+    const out = entry(row.input);
+    finish(out, row.output || "");
+    if (row.kind === "ai" && row.output) {
+      aiHistory.push({role: "user", content: row.input});
+      aiHistory.push({role: "assistant", content: row.output});
+    }
+  }
 }
 
 async function savePrefs(changes) {
@@ -176,8 +192,12 @@ async function run(input) {
 
   const tools = prefs.tools.split(",").map((t) => t.trim()).filter(Boolean);
   const [ok, body] = await api("POST", "/api/ai/chat",
-    {message: input, model: prefs.ai_model, tools});
+    {message: input, model: prefs.ai_model, tools, history: aiHistory.slice(-20)});
   finish(out, ok ? body.reply : body.error, {err: !ok, tools: ok ? body.tool_calls : null});
+  if (ok) {
+    aiHistory.push({role: "user", content: input});
+    aiHistory.push({role: "assistant", content: body.reply});
+  }
   record(input, ok ? body.reply : body.error, "ai");
 }
 
@@ -190,6 +210,7 @@ document.getElementById("prompt").addEventListener("submit", (event) => {
   run(input);
 });
 loadPrefs();
+loadHistory();
 </script>
 """
 
