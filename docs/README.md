@@ -22,6 +22,7 @@ flowchart TD
     APPS --> SR["Site routing"]
 
     C --> M["Object authoring"]
+    M --> CAP["Capability objects<br/>(ffmpeg, OCR, media)"]
     C --> E["REST and object messages"]
     C --> D["ASGI and realtime direction"]
 
@@ -44,6 +45,10 @@ flowchart TD
 - `shell-and-ai.md` - the talk-to-everything terminal: per-user AI
   provider keys, model choice, MCP tool subsets, conversation resume,
   and building live objects by asking ("coding without coding").
+- `capability-objects.md` - objects that shell out to system tools
+  (ffmpeg, tesseract/OCR, ImageMagick, PDF text): the subprocess
+  execution model, worked examples, the trust boundary, and how they
+  compose with files, records, and AI.
 - `runtime-contract.md` - runtime, daemon, namespace, version, queue, scheduler,
   and event contracts.
 - `http-api-contract.md` - existing `/objects` HTTP API shape used by current

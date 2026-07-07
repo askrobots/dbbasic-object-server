@@ -245,6 +245,11 @@ def POST(request):
 
 Each `_files` entry has `filename`, `content_type`, `size`, and
 `content_base64`. Upload size is bounded by `DBBASIC_MAX_REQUEST_BYTES`.
+
+An object that receives an upload can process it with system tools —
+OCR, transcode, thumbnail, extract — by shelling out to binaries like
+`tesseract` or `ffmpeg`. See [capability objects](capability-objects.md)
+for the subprocess model, worked examples, and the trust boundary.
 Store durable uploads through the object file APIs so they inherit
 permissions and change history.
 
