@@ -61,6 +61,7 @@ import object_ai
 import object_schemas
 import object_search
 import object_service_keys
+import object_user_files
 import object_site_routes
 import object_source
 import object_source_changes
@@ -398,6 +399,15 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
 
         if path == http_api_contract.AI_CHAT_PATH:
             await _handle_ai_chat(send, method, body, headers)
+            return
+
+        if path == http_api_contract.USER_FILES_PATH:
+            await _handle_user_file_upload(send, method, body, headers)
+            return
+
+        user_file_prefix = http_api_contract.USER_FILES_PATH + "/"
+        if path.startswith(user_file_prefix):
+            await _handle_user_file(send, method, path[len(user_file_prefix):], headers)
             return
 
         if path == http_api_contract.LOGIN_PATH:
@@ -5486,6 +5496,265 @@ async def _handle_objects_post(send, body: bytes, headers: dict[str, str]) -> No
         },
         status=201,
     )
+
+
+USER_FILES_ENABLED_ENV = "DBBASIC_ENABLE_USER_FILES"
+USER_FILES_QUOTA_ENV = "DBBASIC_USER_FILES_QUOTA_BYTES"
+DEFAULT_USER_FILES_QUOTA = 104_857_600
+USER_FILES_COLLECTION = "files"
+_INLINE_CONTENT_TYPES = frozenset(
+    {"image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf", "text/plain"}
+)
+
+
+async def _handle_user_file_upload(
+    send,
+    method: str,
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    """Accept one multipart upload; bytes to disk, metadata to the files collection.
+
+    The metadata record is the authority: owner_id comes from the session
+    (unspoofable), size and content type are measured server-side, and the
+    create is permission-checked like any record write. Quotas count real
+    bytes on disk.
+    """
+    if method != "POST":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+    if not _env_enabled(USER_FILES_ENABLED_ENV):
+        await _send_json(
+            send,
+            {"status": "error", "error": f"User files are disabled. Set {USER_FILES_ENABLED_ENV}=true."},
+            status=403,
+        )
+        return
+    session = _current_identity_session(headers)
+    if session is None:
+        await _send_json(
+            send, {"status": "error", "error": "File uploads require a signed-in session."}, status=401
+        )
+        return
+    if (
+        _session_cookie_token(headers)
+        and not _authorization_token(headers)
+        and not _cookie_request_origin_allowed(headers)
+    ):
+        await _send_json(
+            send,
+            {"status": "error", "error": "Cross-origin cookie writes are not allowed."},
+            status=403,
+        )
+        return
+
+    content_type = headers.get("content-type", "")
+    if not object_multipart.is_multipart_content_type(content_type):
+        await _send_json(
+            send,
+            {"status": "error", "error": "Upload must be multipart/form-data with a file field."},
+            status=400,
+        )
+        return
+    try:
+        payload = object_multipart.parse_multipart(body, content_type)
+    except object_multipart.InvalidMultipartError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    uploads = payload.get("_files") or {}
+    upload = uploads.get("file") or next(iter(uploads.values()), None)
+    if upload is None:
+        await _send_json(
+            send, {"status": "error", "error": "Upload needs a file form field."}, status=400
+        )
+        return
+
+    content = base64.b64decode(upload.get("content_base64", ""))
+    quota = _env_int(USER_FILES_QUOTA_ENV, DEFAULT_USER_FILES_QUOTA)
+    used = object_user_files.usage_bytes(session.user_id, base_dir=_data_dir())
+    if used + len(content) > quota:
+        await _send_json(
+            send,
+            {
+                "status": "error",
+                "error": f"Storage quota exceeded: {used + len(content)} of {quota} bytes.",
+                "code": "quota_exceeded",
+            },
+            status=413,
+        )
+        return
+
+    file_id = object_ids.new_uuid4()
+    record = {
+        "id": file_id,
+        "filename": (upload.get("filename") or "unnamed")[:255],
+        "content_type": upload.get("content_type") or "application/octet-stream",
+        "size": str(len(content)),
+        "description": str(payload.get("description") or "")[:300],
+        "is_public": str(payload.get("is_public") or "false"),
+        "owner_id": session.user_id,
+    }
+    if payload.get("project_id"):
+        record["project_id"] = str(payload["project_id"])
+
+    permission_check = await _authorize_collection_write(
+        send,
+        headers,
+        object_permissions.CREATE,
+        collection=USER_FILES_COLLECTION,
+        method="POST",
+        record=record,
+        gate_message=f"Collection record writes require {ADMIN_TOKEN_ENV}.",
+    )
+    if permission_check is None:
+        return
+
+    try:
+        stored = object_records.create_collection_record(
+            USER_FILES_COLLECTION, record, base_dir=_data_dir()
+        )
+    except object_collections.CollectionNotFoundError:
+        await _send_json(
+            send,
+            {"status": "error", "error": "The files collection is not installed (app-files package)."},
+            status=404,
+        )
+        return
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    object_user_files.save_file(session.user_id, file_id, content, base_dir=_data_dir())
+    await _send_json(send, {"status": "ok", "file": stored, "url": f"/api/files/{file_id}"}, status=201)
+
+
+async def _handle_user_file(
+    send,
+    method: str,
+    file_id: str,
+    headers: dict[str, str],
+) -> None:
+    """Serve or delete one file, authorized against its metadata record."""
+    if not _env_enabled(USER_FILES_ENABLED_ENV):
+        await _send_json(
+            send,
+            {"status": "error", "error": f"User files are disabled. Set {USER_FILES_ENABLED_ENV}=true."},
+            status=403,
+        )
+        return
+    if "/" in file_id or not file_id:
+        await _send_json(send, {"status": "error", "error": "Invalid file id"}, status=400)
+        return
+
+    try:
+        record = object_records.get_collection_record(
+            USER_FILES_COLLECTION, file_id, base_dir=_data_dir()
+        )
+    except (LookupError, ValueError):
+        record = None
+
+    action = object_permissions.READ if method == "GET" else object_permissions.DELETE
+    if _permission_checks_enabled():
+        permission_check = await _collection_permission_check(
+            send,
+            headers,
+            action,
+            collection=USER_FILES_COLLECTION,
+            method=method,
+            record=record,
+        )
+        if permission_check is None:
+            return
+    else:
+        gate_error = _admin_token_gate_error(headers, f"Files require {ADMIN_TOKEN_ENV}.")
+        if gate_error is not None:
+            status, message = gate_error
+            await _send_json(send, {"status": "error", "error": message}, status=status)
+            return
+
+    if record is None:
+        await _send_json(send, {"status": "error", "error": "File not found"}, status=404)
+        return
+    owner_id = record.get("owner_id", "")
+
+    if method == "GET":
+        try:
+            content = object_user_files.read_file(owner_id, file_id, base_dir=_data_dir())
+        except (object_user_files.UserFileNotFoundError, object_user_files.InvalidUserFileError):
+            await _send_json(send, {"status": "error", "error": "File bytes missing"}, status=404)
+            return
+        content_type = record.get("content_type") or "application/octet-stream"
+        disposition = "inline" if content_type in _INLINE_CONTENT_TYPES else "attachment"
+        filename = (record.get("filename") or "download").replace('"', "")
+        await _send_bytes(
+            send,
+            content,
+            content_type=content_type,
+            extra_headers=[
+                (b"content-disposition", f'{disposition}; filename="{filename}"'.encode("latin-1", "replace")),
+                (b"x-content-type-options", b"nosniff"),
+            ],
+        )
+        return
+
+    if method == "DELETE":
+        if (
+            _session_cookie_token(headers)
+            and not _authorization_token(headers)
+            and not _cookie_request_origin_allowed(headers)
+        ):
+            await _send_json(
+                send,
+                {"status": "error", "error": "Cross-origin cookie writes are not allowed."},
+                status=403,
+            )
+            return
+        try:
+            object_records.delete_collection_record(
+                USER_FILES_COLLECTION, file_id, base_dir=_data_dir()
+            )
+        except (LookupError, ValueError) as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+            return
+        try:
+            object_user_files.delete_file(owner_id, file_id, base_dir=_data_dir())
+        except object_user_files.InvalidUserFileError:
+            pass
+        await _send_json(send, {"status": "ok", "deleted": True, "file_id": file_id})
+        return
+
+    await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+
+
+async def _send_bytes(
+    send,
+    content: bytes,
+    *,
+    content_type: str,
+    status: int = 200,
+    extra_headers: list[tuple[bytes, bytes]] | None = None,
+) -> None:
+    response_headers = [
+        (b"content-type", content_type.encode("latin-1", "replace")),
+        (b"content-length", str(len(content)).encode("ascii")),
+    ]
+    response_headers.extend(extra_headers or [])
+    await send(
+        {"type": "http.response.start", "status": status, "headers": response_headers}
+    )
+    await send({"type": "http.response.body", "body": content})
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
 
 
 AI_CHAT_ENABLED_ENV = "DBBASIC_ENABLE_AI_CHAT"

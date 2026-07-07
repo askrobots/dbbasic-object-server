@@ -1,0 +1,34 @@
+{
+  "id": "app-files",
+  "name": "Files",
+  "version": "0.1.0",
+  "description": "User file storage: upload, share, and download files whose visibility is governed by their metadata records. Requires DBBASIC_ENABLE_USER_FILES=true.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": ["app-projects"],
+  "objects": [
+    {
+      "id": "site_files",
+      "path": "objects/site/files.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "files",
+      "path": "schemas/files.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "files",
+      "path": "seed/files.tsv"
+    }
+  ],
+  "migrations": []
+}
