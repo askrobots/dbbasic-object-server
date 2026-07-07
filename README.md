@@ -45,6 +45,10 @@ rules + one page object, with no app-specific server code. See
 AI-operated shell, and `docs/why-dbbasic.md` for the advantages and their
 boundaries, honestly stated.
 
+**Get it running:** `docs/quickstart.md` takes a fresh VM to a running
+server, a login, an HTTPS domain, and a first app in about thirty
+minutes, using `scripts/install.sh`.
+
 The loop is meant to happen inside the running object server, not through a full
 CI, build, and deployment cycle, so small object changes can be tested and
 repaired much faster than normal application releases.

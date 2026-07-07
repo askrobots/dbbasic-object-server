@@ -114,25 +114,33 @@ untrusted public users.
 - Session admin gates are implemented, but opt-in with
   `DBBASIC_ENABLE_SESSION_ADMIN_GATES=true`
 - CPU and memory isolation for untrusted object code
-- File upload/delete from untrusted users
 - Fully managed event delivery/admin control API
-- One-command installer
+- Realtime push (websockets/SSE) — polling works today; push is the next
+  platform slice
+- A background-job runtime (long media transcodes, PDF text extraction,
+  thumbnails, scheduled AI work wait on it)
 - Cluster correctness claims
 
 ## Next Work
 
-1. Migrate the first real website onto the platform as a package (objects,
-   schema, seed, routes, and permission grants in one reviewed unit).
-   `app-projects`/`app-notes` prove the app-package shape; continue the
-   Django app migration wave by wave (contacts, articles, tasks, ...).
-2. Design per-family gate tiers so agents can run under a scoped builder role
-   instead of admin-role sessions.
-3. Add event delivery controls after scheduler and queue controls stabilize.
-4. Add file upload/delete with quotas, content checks, permissions, and audit.
-5. Add CPU/memory isolation and a better worker boundary for untrusted code.
-6. Wire Scroll to the public identity, permissions, package, event, backup, and
-   status APIs.
-7. Create the repeatable single-VM installer.
+The application suite is ported (see `app-packages.md`) and the single-VM
+installer and quickstart exist (`scripts/install.sh`, `quickstart.md`).
+The remaining work is platform capability, in rough priority order:
+
+1. Realtime push over websockets (uvicorn already speaks the ASGI
+   websocket protocol): authenticated connect, permission-checked
+   subscriptions to record-change/ops/feed streams, and push on writes.
+   Turns today's polling surfaces (dashboard, shell, coordination feed,
+   notifications) into live streams.
+2. Write-level project sharing (`$writable_projects`) and a per-family
+   "builder role" so agents and collaborators can be scoped below admin.
+3. A background-job runtime: submit → job record → worker object → result
+   record + notification. Unlocks long media work, PDF extraction,
+   thumbnails, and scheduled AI summarization.
+4. Add CPU/memory isolation and a better worker boundary for untrusted code.
+5. Self-service signup and password reset flows.
+6. The remaining q9 apps that need infrastructure: messaging/email
+   (mail server), finance/catalog (large but no infra blocker), billing.
 
 ## Release Rule
 

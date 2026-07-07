@@ -8,10 +8,13 @@ hold the deeper contracts, design rules, and implementation notes.
 
 ```mermaid
 flowchart TD
-    A["README"] --> W["Why DBBASIC"]
+    A["README"] --> QS["Quickstart<br/>(VM to first app)"]
+    A --> W["Why DBBASIC"]
     A --> R["Status"]
     A --> B["Runtime contract"]
     A --> C["HTTP API contract"]
+
+    QS --> L["Single VM deployment<br/>(full reference)"]
 
     W --> APPS["App packages<br/>(the suite)"]
     W --> SH["Shell and AI"]
@@ -33,6 +36,9 @@ flowchart TD
 
 ## Current Docs
 
+- `quickstart.md` - the linear path from a fresh VM to a running
+  server, a login, a domain with HTTPS, and a first app installed —
+  about thirty minutes, using `scripts/install.sh`.
 - `why-dbbasic.md` - the advantages, honestly stated with their
   boundaries: live change, apps-as-data, one permission engine,
   speed-through-less, AI-native without lock-in.
@@ -100,8 +106,6 @@ Useful next docs:
 
 - object method reference
 - realtime event contract (with the websocket slice)
-- a cold-start self-hosting walkthrough for someone who has never seen
-  the project (DNS to first app install in one sitting)
 
 PHP-style community notes were useful because examples and corrections lived
 near the function being used. GitHub does not provide inline manual comments in
