@@ -10,6 +10,22 @@
     },
     {
       "effect": "allow",
+      "principal": "registered",
+      "actions": ["read"],
+      "collection": "projects",
+      "row_filter": {"id": "$accessible_projects"},
+      "reason": "projects shared with a user are readable"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["read"],
+      "collection": "project_access",
+      "row_filter": {"user_id": "$user_id"},
+      "reason": "users can see grants that name them; creating grants stays with operators until a grant flow ships"
+    },
+    {
+      "effect": "allow",
       "principal": "public",
       "actions": ["execute"],
       "object_id": "site_projects",

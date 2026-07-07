@@ -7864,21 +7864,58 @@ def _permission_identity(
         except (OSError, ValueError):
             session = None
         if session is not None:
-            return session.subject(), "session_cookie" if cookie_token else "session_token"
+            subject = _with_accessible_projects(session.subject())
+            return subject, "session_cookie" if cookie_token else "session_token"
 
     if not _env_enabled(PERMISSION_TRUST_HEADERS_ENV):
         return object_permissions.PermissionSubject.anonymous(), "anonymous"
 
     user_id = _optional_header_text(headers, "x-dbbasic-user-id")
     account_id = _optional_header_text(headers, "x-dbbasic-account-id")
-    subject = object_permissions.PermissionSubject(
-        user_id=user_id,
-        account_id=account_id,
-        roles=_csv_header(headers.get("x-dbbasic-roles", "")),
-        subscriptions=_csv_header(headers.get("x-dbbasic-subscriptions", "")),
+    subject = _with_accessible_projects(
+        object_permissions.PermissionSubject(
+            user_id=user_id,
+            account_id=account_id,
+            roles=_csv_header(headers.get("x-dbbasic-roles", "")),
+            subscriptions=_csv_header(headers.get("x-dbbasic-subscriptions", "")),
+        )
     )
     method = "trusted_headers" if _trusted_identity_headers_present(headers) else "anonymous"
     return subject, method
+
+
+PROJECT_ACCESS_COLLECTION = "project_access"
+
+
+def _with_accessible_projects(
+    subject: object_permissions.PermissionSubject,
+) -> object_permissions.PermissionSubject:
+    """Resolve the subject's shared-project grants before checks run.
+
+    Grants live in the plain ``project_access`` records collection
+    (project_id, user_id), so sharing is data: browseable, audited, and
+    versioned like every other record. Rules opt in with the
+    ``$accessible_projects`` row-filter value.
+    """
+    if subject.user_id is None:
+        return subject
+    try:
+        records = object_records.read_collection_records(
+            PROJECT_ACCESS_COLLECTION, base_dir=_data_dir()
+        )
+    except (object_collections.CollectionNotFoundError, object_collections.InvalidCollectionNameError):
+        return subject
+    except (OSError, ValueError):
+        return subject
+
+    project_ids = [
+        record["project_id"]
+        for record in records
+        if record.get("user_id") == subject.user_id and record.get("project_id")
+    ]
+    if not project_ids:
+        return subject
+    return subject.with_projects(dict.fromkeys(project_ids))
 
 
 def _current_identity_session(headers: dict[str, str]) -> object_identity.IdentitySession | None:
@@ -7984,13 +8021,16 @@ def _append_permission_audit_entry(
 
 
 def _permission_subject_payload(subject: object_permissions.PermissionSubject) -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "user_id": subject.user_id,
         "account_id": subject.account_id,
         "roles": list(subject.roles),
         "subscriptions": list(subject.subscriptions),
         "authenticated": subject.is_authenticated,
     }
+    if subject.project_ids:
+        payload["project_ids"] = list(subject.project_ids)
+    return payload
 
 
 def _record_change_actor(headers: dict[str, str]) -> str:

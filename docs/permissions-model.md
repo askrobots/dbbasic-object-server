@@ -473,6 +473,29 @@ PermissionRule.allow(
 That covers the common case where a customer has multiple employees and they all
 need access to the customer portal, invoices, files, or support tickets.
 
+Project sharing — "records I own OR records in a project shared with me" —
+uses grant records plus one filter value. Grants are rows in the plain
+`project_access` collection (`project_id`, `user_id`), so sharing is data:
+browseable, audited, versioned. Before checks run, the server resolves the
+subject's grants; rules opt in with `$accessible_projects`, which matches
+when the record's field value is any granted project id:
+
+```python
+PermissionRule.allow(
+    "registered",
+    ["read"],
+    collection="notes",
+    row_filter={"project_id": "$accessible_projects"},
+    reason="notes in shared projects are readable",
+)
+```
+
+Pair it with an owner rule on the same collection: matching stays
+first-rule-wins at the collection level, but list, single-record, and
+search reads evaluate rules per record, so "own" and "shared" rules
+combine naturally. The engine itself stays pure — grant resolution is IO
+the server does once per request, and the subject carries the result.
+
 ## Row And Field Rules
 
 Row filters model rules like:

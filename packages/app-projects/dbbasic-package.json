@@ -1,8 +1,8 @@
 {
   "id": "app-projects",
   "name": "Projects",
-  "version": "0.1.0",
-  "description": "Project records with owner-scoped permissions and a signed-in web page.",
+  "version": "0.2.0",
+  "description": "Project records with owner-scoped permissions, sharing grants (project_access), and a signed-in web page.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
@@ -16,6 +16,10 @@
     {
       "collection": "projects",
       "path": "schemas/projects.json"
+    },
+    {
+      "collection": "project_access",
+      "path": "schemas/project_access.json"
     }
   ],
   "permissions": [
@@ -27,6 +31,10 @@
     {
       "collection": "projects",
       "path": "seed/projects.tsv"
+    },
+    {
+      "collection": "project_access",
+      "path": "seed/project_access.tsv"
     }
   ],
   "migrations": []

@@ -289,6 +289,81 @@ def test_search_endpoint_public_row_filter_serves_anonymous(tmp_path, monkeypatc
     assert public_record["record"]["content"] == "shared flywheel note"
 
 
+def test_project_access_grants_shared_visibility(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_schema(
+        data_dir,
+        "notes",
+        {
+            "fields": [{"name": "id"}, {"name": "content"}, {"name": "project_id"}],
+            "search": {"fields": ["content"]},
+        },
+    )
+    write_records(
+        data_dir,
+        "notes",
+        "id\tcontent\tproject_id\towner_id\n"
+        "n1\tshared flywheel plan\tp1\t7\n"
+        "n2\tprivate flywheel plan\tp9\t7\n",
+    )
+    write_records(
+        data_dir,
+        "project_access",
+        "id\tproject_id\tuser_id\tpermission\n"
+        "g1\tp1\t8\tread\n",
+    )
+    save_permission_policy(
+        data_dir,
+        {
+            "access_mode": "role_based",
+            "rules": [
+                {
+                    "effect": "allow",
+                    "principal": "registered",
+                    "actions": ["create", "read", "update", "delete"],
+                    "collection": "notes",
+                    "row_filter": {"owner_id": "$user_id"},
+                    "reason": "owners manage their own notes",
+                },
+                {
+                    "effect": "allow",
+                    "principal": "registered",
+                    "actions": ["read"],
+                    "collection": "notes",
+                    "row_filter": {"project_id": "$accessible_projects"},
+                    "reason": "notes in shared projects are readable",
+                },
+            ],
+        },
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+    monkeypatch.setenv(object_server.PERMISSION_TRUST_HEADERS_ENV, "true")
+    enable_admin_token(monkeypatch)
+
+    granted_headers = [("x-dbbasic-user-id", "8"), ("x-dbbasic-roles", "member")]
+
+    status, _, listed = request("/collections/notes/records", headers=granted_headers)
+    assert status == 200
+    assert [note["id"] for note in listed["records"]] == ["n1"]
+
+    status, _, found = request(
+        "/api/search", query_string="q=flywheel", headers=granted_headers
+    )
+    assert status == 200
+    assert [note["id"] for note in found["results"]["notes"]] == ["n1"]
+
+    status, _, _ = request("/collections/notes/records/n2", headers=granted_headers)
+    assert status == 403
+
+    ungranted_headers = [("x-dbbasic-user-id", "9"), ("x-dbbasic-roles", "member")]
+    status, _, found = request(
+        "/api/search", query_string="q=flywheel", headers=ungranted_headers
+    )
+    assert status == 200
+    assert found["results"]["notes"] == []
+
+
 def test_search_endpoint_enforcement_applies_row_filters_and_skips_denied(
     tmp_path, monkeypatch
 ):

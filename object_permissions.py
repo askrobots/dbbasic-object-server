@@ -6,7 +6,7 @@ but clients should not be trusted to enforce them.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping
 
@@ -38,12 +38,18 @@ RULE_EFFECTS = frozenset({"allow", "deny"})
 
 @dataclass(frozen=True)
 class PermissionSubject:
-    """The authenticated actor being checked."""
+    """The authenticated actor being checked.
+
+    ``project_ids`` are the projects shared with this subject, resolved by
+    the server from grant records before checks run — the engine itself
+    stays pure and does no IO.
+    """
 
     user_id: str | None = None
     account_id: str | None = None
     roles: tuple[str, ...] = ()
     subscriptions: tuple[str, ...] = ()
+    project_ids: tuple[str, ...] = ()
 
     @classmethod
     def anonymous(cls) -> "PermissionSubject":
@@ -52,6 +58,9 @@ class PermissionSubject:
     @property
     def is_authenticated(self) -> bool:
         return self.user_id is not None
+
+    def with_projects(self, project_ids: Iterable[str]) -> "PermissionSubject":
+        return replace(self, project_ids=tuple(project_ids))
 
 
 @dataclass(frozen=True)
@@ -282,6 +291,7 @@ def subject_from_dict(payload: Mapping[str, Any] | None) -> PermissionSubject:
         account_id=_optional_string(payload.get("account_id")),
         roles=_string_tuple(payload.get("roles", ()), "subject.roles"),
         subscriptions=_string_tuple(payload.get("subscriptions", ()), "subject.subscriptions"),
+        project_ids=_string_tuple(payload.get("project_ids", ()), "subject.project_ids"),
     )
 
 
@@ -636,7 +646,12 @@ def _record_matches_filter(
     subject: PermissionSubject,
 ) -> bool:
     for key, expected in row_filter.items():
-        if _string_value(record.get(key)) != _string_value(_resolve_filter_value(expected, subject)):
+        resolved = _resolve_filter_value(expected, subject)
+        actual = _string_value(record.get(key))
+        if isinstance(resolved, tuple):
+            if actual is None or actual not in {_string_value(item) for item in resolved}:
+                return False
+        elif actual != _string_value(resolved):
             return False
     return True
 
@@ -646,6 +661,8 @@ def _resolve_filter_value(value: Any, subject: PermissionSubject) -> Any:
         return subject.user_id
     if value == "$account_id":
         return subject.account_id
+    if value == "$accessible_projects":
+        return tuple(subject.project_ids)
     return value
 
 

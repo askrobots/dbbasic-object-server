@@ -1,7 +1,7 @@
 {
   "id": "app-notes",
   "name": "Notes",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Quick notes: owner-scoped with public sharing, project links, permalinks, and global search. Permalinks need a site_routes record mapping /notes/{note_id:uuid} to site_note_view.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"

@@ -137,6 +137,44 @@ def test_role_rule_with_row_filter_checks_record_when_supplied():
     assert other_contact.allowed is False
 
 
+def test_accessible_projects_filter_matches_by_membership():
+    policy = permissions.PermissionPolicy(
+        access_mode="role_based",
+        rules=(
+            permissions.PermissionRule.allow(
+                "registered",
+                [permissions.READ],
+                collection="notes",
+                row_filter={"project_id": "$accessible_projects"},
+            ),
+        ),
+    )
+    granted = permissions.PermissionSubject(user_id="8", project_ids=("p1", "p2"))
+    ungranted = permissions.PermissionSubject(user_id="9")
+    shared_note = {"id": "n1", "project_id": "p1", "owner_id": "7"}
+    other_note = {"id": "n2", "project_id": "p9", "owner_id": "7"}
+    unfiled_note = {"id": "n3", "project_id": "", "owner_id": "7"}
+
+    assert permissions.check_permission(
+        granted, permissions.READ, policy=policy, collection="notes", record=shared_note
+    ).allowed is True
+    assert permissions.check_permission(
+        granted, permissions.READ, policy=policy, collection="notes", record=other_note
+    ).allowed is False
+    assert permissions.check_permission(
+        granted, permissions.READ, policy=policy, collection="notes", record=unfiled_note
+    ).allowed is False
+    assert permissions.check_permission(
+        ungranted, permissions.READ, policy=policy, collection="notes", record=shared_note
+    ).allowed is False
+
+
+def test_subject_from_dict_reads_project_ids():
+    subject = permissions.subject_from_dict({"user_id": "8", "project_ids": ["p1", "p2"]})
+    assert subject.project_ids == ("p1", "p2")
+    assert subject.with_projects(["p3"]).project_ids == ("p3",)
+
+
 def test_customer_employee_account_rule_models_tenant_shared_access():
     policy = permissions.PermissionPolicy(
         access_mode="role_based",

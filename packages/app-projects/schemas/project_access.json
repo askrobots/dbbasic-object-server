@@ -1,0 +1,42 @@
+{
+  "name": "project_access",
+  "title": "Project Access",
+  "version": 1,
+  "description": "Sharing grants: each row gives one user access to one project. Rules opt in with the $accessible_projects row-filter value.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "project_id",
+      "required": true,
+      "label": "Project",
+      "relation": {"collection": "projects", "display_field": "name"}
+    },
+    {
+      "name": "user_id",
+      "type": "text",
+      "required": true,
+      "label": "User"
+    },
+    {
+      "name": "permission",
+      "type": "enum",
+      "label": "Permission",
+      "default": "read",
+      "enum": ["read", "write"]
+    },
+    {
+      "name": "granted_by",
+      "type": "text",
+      "label": "Granted By"
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["project_id", "user_id", "permission"]}
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["project_id", "user_id", "permission"]
+  }
+}
