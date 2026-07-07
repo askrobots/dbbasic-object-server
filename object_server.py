@@ -18,7 +18,9 @@ import os
 import shutil
 import threading
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 from collections import Counter, deque
 from datetime import datetime, timezone
 from importlib import metadata as importlib_metadata
@@ -55,6 +57,7 @@ import object_rate_limit
 import object_record_changes
 import object_records
 import object_schema_versions
+import object_ai
 import object_schemas
 import object_search
 import object_service_keys
@@ -391,6 +394,10 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
 
         if path == http_api_contract.SEARCH_PATH:
             await _handle_search(send, method, query, headers)
+            return
+
+        if path == http_api_contract.AI_CHAT_PATH:
+            await _handle_ai_chat(send, method, body, headers)
             return
 
         if path == http_api_contract.LOGIN_PATH:
@@ -5479,6 +5486,179 @@ async def _handle_objects_post(send, body: bytes, headers: dict[str, str]) -> No
         },
         status=201,
     )
+
+
+AI_CHAT_ENABLED_ENV = "DBBASIC_ENABLE_AI_CHAT"
+AI_CHAT_TIMEOUT_ENV = "DBBASIC_AI_TIMEOUT_SECONDS"
+AI_DEFAULT_MODEL_ENV = "DBBASIC_AI_DEFAULT_MODEL"
+DEFAULT_AI_MODEL = "anthropic:claude-haiku-4-5"
+DEFAULT_AI_TIMEOUT_SECONDS = 60.0
+
+
+async def _handle_ai_chat(
+    send,
+    method: str,
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    """One AI conversation turn using the caller's stored provider key.
+
+    The model may call a caller-chosen subset of the MCP tool catalog;
+    every tool call dispatches through the server's own routing with the
+    caller's credentials, so the AI can do exactly what the caller could
+    do directly — nothing more — and it all lands in the audit trail.
+    """
+    if method != "POST":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    if not _env_enabled(AI_CHAT_ENABLED_ENV):
+        await _send_json(
+            send,
+            {"status": "error", "error": f"AI chat is disabled. Set {AI_CHAT_ENABLED_ENV}=true."},
+            status=403,
+        )
+        return
+
+    session = _current_identity_session(headers)
+    if session is None:
+        await _send_json(
+            send,
+            {"status": "error", "error": "AI chat requires a signed-in session."},
+            status=401,
+        )
+        return
+
+    cookie_token = _session_cookie_token(headers)
+    if cookie_token and not _authorization_token(headers) and not _cookie_request_origin_allowed(headers):
+        await _send_json(
+            send,
+            {"status": "error", "error": "Cross-origin cookie writes are not allowed."},
+            status=403,
+        )
+        return
+
+    try:
+        payload = _parse_json_body(body)
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    message = payload.get("message")
+    model = payload.get("model") or os.environ.get(AI_DEFAULT_MODEL_ENV, DEFAULT_AI_MODEL)
+    tool_names = payload.get("tools") or []
+    system = payload.get("system")
+
+    if not isinstance(tool_names, list) or not all(
+        isinstance(name, str) and name for name in tool_names
+    ):
+        await _send_json(
+            send,
+            {"status": "error", "error": "tools must be a list of MCP tool names"},
+            status=400,
+        )
+        return
+
+    try:
+        service, model_name = object_ai.split_model(model)
+        provider_tools = object_ai.mcp_tools_as_provider_tools(
+            tool_names, object_mcp.TOOLS, service=service
+        )
+        max_rounds_raw = payload.get("max_rounds", object_ai.DEFAULT_MAX_ROUNDS)
+        if isinstance(max_rounds_raw, bool) or not isinstance(max_rounds_raw, int):
+            raise object_ai.InvalidChatRequestError("max_rounds must be an integer")
+        max_rounds = max_rounds_raw
+    except (object_ai.InvalidChatRequestError, ValueError) as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    key = object_service_keys.get_service_key(session.user_id, service, base_dir=_data_dir())
+    if key is None:
+        await _send_json(
+            send,
+            {
+                "status": "error",
+                "error": (
+                    f"No {service} key stored. Set one with "
+                    f"PUT /identity/users/{session.user_id}/service-keys."
+                ),
+            },
+            status=400,
+        )
+        return
+
+    authorization = headers.get("authorization") or f"Bearer {cookie_token}"
+    allowed_tools = set(tool_names)
+    loop = asyncio.get_running_loop()
+    timeout = _env_float(AI_CHAT_TIMEOUT_ENV, DEFAULT_AI_TIMEOUT_SECONDS)
+
+    def send_http(url: str, request_headers, request_body: bytes) -> tuple[int, bytes]:
+        request = urllib.request.Request(
+            url, data=request_body, method="POST", headers=dict(request_headers)
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.status, response.read()
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read()
+
+    def dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        if name not in allowed_tools:
+            return {"http_status": 400, "response": {"error": f"Tool not offered: {name}"}}
+        try:
+            tool_method, tool_path, tool_query, tool_body = object_mcp.tool_route(
+                name, dict(arguments or {})
+            )
+        except ValueError as exc:
+            return {"http_status": 400, "response": {"error": str(exc)}}
+        future = asyncio.run_coroutine_threadsafe(
+            _internal_request(
+                tool_method, tool_path, tool_query, tool_body, authorization=authorization
+            ),
+            loop,
+        )
+        status, response_payload = future.result(timeout=timeout)
+        return {"http_status": status, "response": response_payload}
+
+    try:
+        result = await asyncio.to_thread(
+            object_ai.run_chat,
+            send_http=send_http,
+            dispatch_tool=dispatch_tool,
+            service=service,
+            model=model_name,
+            key=key,
+            message=message,
+            system=system if isinstance(system, str) else None,
+            tools=provider_tools,
+            max_rounds=max_rounds,
+        )
+    except object_ai.InvalidChatRequestError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_ai.AIProviderError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=502)
+        return
+    except (TimeoutError, OSError) as exc:
+        await _send_json(
+            send,
+            {"status": "error", "error": f"AI provider request failed: {exc}"},
+            status=502,
+        )
+        return
+
+    await _send_json(send, {"status": "ok", "model": model, **result})
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
 
 
 async def _handle_search(

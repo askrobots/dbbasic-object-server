@@ -1396,6 +1396,56 @@ user (for example `agent-claude`) with the admin role, mint a labeled session,
 and connect with that bearer token, so `/admin/changes` distinguishes agent
 actions from operator actions.
 
+## Service Keys (Per-User AI Provider Keys)
+
+Users store API keys for AI providers so the server can call providers on
+their behalf. The contract is write-only: set a key, list which services
+have one, delete one — key material never appears in any response, never
+lives in record collections, and stays out of portable backups (it sits
+beside `credentials.tsv` in the owner-only identity directory).
+
+```http
+GET    /identity/users/{user_id}/service-keys            -> {"services": [{"service", "created_at", "updated_at"}]}
+PUT    /identity/users/{user_id}/service-keys            {"service": "anthropic", "key": "sk-..."}
+DELETE /identity/users/{user_id}/service-keys/{service}
+```
+
+A signed-in user manages their own keys (session token or cookie; cookie
+writes require a same-origin request); the admin gate covers operator
+use. Set/remove events land in the ops feed without key material.
+
+## AI Chat (The Shell's Brain)
+
+One conversation turn against an AI provider, using the caller's stored
+service key, with optional MCP tool calling:
+
+```http
+POST /api/ai/chat
+Authorization: Bearer <session-token>   (or the session cookie)
+
+{"message": "find my notes about the flywheel",
+ "model": "anthropic:claude-haiku-4-5",
+ "tools": ["global_search", "get_record"],
+ "max_rounds": 6}
+```
+
+Models are named `service:model`; the service picks which stored key is
+used (`anthropic`, `openai`). `tools` names a subset of the MCP tool
+catalog — handing small models only a few tools keeps their context
+small, and the subset is per-request configuration. When the model calls
+a tool, the server dispatches it through its own routing **with the
+caller's credentials**, so the AI can do exactly what the caller could do
+directly — permission checks, row filters, and the audit trail all apply.
+
+Response: `{"reply", "model", "rounds", "tool_calls": [{name, arguments,
+http_status}], "usage": {input_tokens, output_tokens}}`, plus
+`"truncated": true` when the round limit stopped a tool loop.
+
+Requires `DBBASIC_ENABLE_AI_CHAT=true` and a signed-in session; callers
+without a stored key for the model's service get a pointed 400. Timeout
+per provider round: `DBBASIC_AI_TIMEOUT_SECONDS` (default 60); default
+model: `DBBASIC_AI_DEFAULT_MODEL`.
+
 ## Global Search
 
 Records can be searched across every collection whose schema declares
