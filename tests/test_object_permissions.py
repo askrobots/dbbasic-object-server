@@ -170,9 +170,39 @@ def test_accessible_projects_filter_matches_by_membership():
 
 
 def test_subject_from_dict_reads_project_ids():
-    subject = permissions.subject_from_dict({"user_id": "8", "project_ids": ["p1", "p2"]})
+    subject = permissions.subject_from_dict(
+        {"user_id": "8", "project_ids": ["p1", "p2"], "owned_project_ids": ["p9"]}
+    )
     assert subject.project_ids == ("p1", "p2")
-    assert subject.with_projects(["p3"]).project_ids == ("p3",)
+    assert subject.owned_project_ids == ("p9",)
+    enriched = subject.with_projects(["p3"], ["p4"])
+    assert enriched.project_ids == ("p3",)
+    assert enriched.owned_project_ids == ("p4",)
+
+
+def test_owned_projects_filter_gates_grant_writes():
+    policy = permissions.PermissionPolicy(
+        access_mode="role_based",
+        rules=(
+            permissions.PermissionRule.allow(
+                "registered",
+                [permissions.CREATE, permissions.DELETE],
+                collection="project_access",
+                row_filter={"project_id": "$owned_projects"},
+            ),
+        ),
+    )
+    owner = permissions.PermissionSubject(user_id="7", owned_project_ids=("p1",))
+
+    own_grant = {"id": "g1", "project_id": "p1", "user_id": "8"}
+    foreign_grant = {"id": "g2", "project_id": "p9", "user_id": "7"}
+
+    assert permissions.check_permission(
+        owner, permissions.CREATE, policy=policy, collection="project_access", record=own_grant
+    ).allowed is True
+    assert permissions.check_permission(
+        owner, permissions.CREATE, policy=policy, collection="project_access", record=foreign_grant
+    ).allowed is False
 
 
 def test_customer_employee_account_rule_models_tenant_shared_access():

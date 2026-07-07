@@ -1,8 +1,8 @@
 {
   "id": "app-projects",
   "name": "Projects",
-  "version": "0.2.0",
-  "description": "Project records with owner-scoped permissions, sharing grants (project_access), and a signed-in web page.",
+  "version": "0.3.0",
+  "description": "Project records with owner-scoped permissions, self-serve sharing grants (project_access), and a signed-in web page.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },

@@ -496,6 +496,24 @@ search reads evaluate rules per record, so "own" and "shared" rules
 combine naturally. The engine itself stays pure — grant resolution is IO
 the server does once per request, and the subject carries the result.
 
+Granting is self-serve through the companion value `$owned_projects`,
+which resolves to the projects whose `owner_id` is the subject. "Only a
+project's owner may share it" — a cross-record condition — becomes a
+plain row filter on the grant collection itself:
+
+```python
+PermissionRule.allow(
+    "registered",
+    ["create", "read", "delete"],
+    collection="project_access",
+    row_filter={"project_id": "$owned_projects"},
+    reason="project owners share and revoke access to their own projects",
+)
+```
+
+Creating a grant is creating a record; revoking is deleting it; both are
+audited and appear in the change history like every other write.
+
 ## Row And Field Rules
 
 Row filters model rules like:

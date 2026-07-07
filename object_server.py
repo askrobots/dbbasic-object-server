@@ -7885,37 +7885,51 @@ def _permission_identity(
 
 
 PROJECT_ACCESS_COLLECTION = "project_access"
+PROJECTS_COLLECTION = "projects"
 
 
 def _with_accessible_projects(
     subject: object_permissions.PermissionSubject,
 ) -> object_permissions.PermissionSubject:
-    """Resolve the subject's shared-project grants before checks run.
+    """Resolve the subject's project grants and ownership before checks run.
 
     Grants live in the plain ``project_access`` records collection
     (project_id, user_id), so sharing is data: browseable, audited, and
     versioned like every other record. Rules opt in with the
-    ``$accessible_projects`` row-filter value.
+    ``$accessible_projects`` row-filter value; ``$owned_projects``
+    resolves from the projects collection's owner_id, which is what lets
+    "owners may share their own projects" stay a plain row filter.
     """
     if subject.user_id is None:
-        return subject
-    try:
-        records = object_records.read_collection_records(
-            PROJECT_ACCESS_COLLECTION, base_dir=_data_dir()
-        )
-    except (object_collections.CollectionNotFoundError, object_collections.InvalidCollectionNameError):
-        return subject
-    except (OSError, ValueError):
         return subject
 
     project_ids = [
         record["project_id"]
-        for record in records
+        for record in _read_records_or_empty(PROJECT_ACCESS_COLLECTION)
         if record.get("user_id") == subject.user_id and record.get("project_id")
     ]
-    if not project_ids:
+    owned_project_ids = [
+        record["id"]
+        for record in _read_records_or_empty(PROJECTS_COLLECTION)
+        if record.get("owner_id") == subject.user_id and record.get("id")
+    ]
+    if not project_ids and not owned_project_ids:
         return subject
-    return subject.with_projects(dict.fromkeys(project_ids))
+    return subject.with_projects(
+        dict.fromkeys(project_ids), dict.fromkeys(owned_project_ids)
+    )
+
+
+def _read_records_or_empty(collection: str) -> list[dict[str, str]]:
+    try:
+        return object_records.read_collection_records(collection, base_dir=_data_dir())
+    except (
+        object_collections.CollectionNotFoundError,
+        object_collections.InvalidCollectionNameError,
+        OSError,
+        ValueError,
+    ):
+        return []
 
 
 def _current_identity_session(headers: dict[str, str]) -> object_identity.IdentitySession | None:
@@ -8030,6 +8044,8 @@ def _permission_subject_payload(subject: object_permissions.PermissionSubject) -
     }
     if subject.project_ids:
         payload["project_ids"] = list(subject.project_ids)
+    if subject.owned_project_ids:
+        payload["owned_project_ids"] = list(subject.owned_project_ids)
     return payload
 
 

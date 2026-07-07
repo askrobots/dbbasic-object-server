@@ -22,7 +22,15 @@
       "actions": ["read"],
       "collection": "project_access",
       "row_filter": {"user_id": "$user_id"},
-      "reason": "users can see grants that name them; creating grants stays with operators until a grant flow ships"
+      "reason": "users can see grants that name them"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "delete"],
+      "collection": "project_access",
+      "row_filter": {"project_id": "$owned_projects"},
+      "reason": "project owners share and revoke access to their own projects"
     },
     {
       "effect": "allow",

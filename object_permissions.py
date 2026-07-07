@@ -50,6 +50,7 @@ class PermissionSubject:
     roles: tuple[str, ...] = ()
     subscriptions: tuple[str, ...] = ()
     project_ids: tuple[str, ...] = ()
+    owned_project_ids: tuple[str, ...] = ()
 
     @classmethod
     def anonymous(cls) -> "PermissionSubject":
@@ -59,8 +60,16 @@ class PermissionSubject:
     def is_authenticated(self) -> bool:
         return self.user_id is not None
 
-    def with_projects(self, project_ids: Iterable[str]) -> "PermissionSubject":
-        return replace(self, project_ids=tuple(project_ids))
+    def with_projects(
+        self,
+        project_ids: Iterable[str],
+        owned_project_ids: Iterable[str] = (),
+    ) -> "PermissionSubject":
+        return replace(
+            self,
+            project_ids=tuple(project_ids),
+            owned_project_ids=tuple(owned_project_ids),
+        )
 
 
 @dataclass(frozen=True)
@@ -292,6 +301,9 @@ def subject_from_dict(payload: Mapping[str, Any] | None) -> PermissionSubject:
         roles=_string_tuple(payload.get("roles", ()), "subject.roles"),
         subscriptions=_string_tuple(payload.get("subscriptions", ()), "subject.subscriptions"),
         project_ids=_string_tuple(payload.get("project_ids", ()), "subject.project_ids"),
+        owned_project_ids=_string_tuple(
+            payload.get("owned_project_ids", ()), "subject.owned_project_ids"
+        ),
     )
 
 
@@ -663,6 +675,8 @@ def _resolve_filter_value(value: Any, subject: PermissionSubject) -> Any:
         return subject.account_id
     if value == "$accessible_projects":
         return tuple(subject.project_ids)
+    if value == "$owned_projects":
+        return tuple(subject.owned_project_ids)
     return value
 
 

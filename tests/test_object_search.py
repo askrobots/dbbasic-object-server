@@ -364,6 +364,68 @@ def test_project_access_grants_shared_visibility(tmp_path, monkeypatch):
     assert found["results"]["notes"] == []
 
 
+def test_project_owners_manage_grants_self_serve(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_schema(
+        data_dir,
+        "project_access",
+        {
+            "fields": [
+                {"name": "id"},
+                {"name": "project_id", "required": True},
+                {"name": "user_id", "required": True},
+            ],
+        },
+    )
+    write_records(data_dir, "projects", "id\tname\towner_id\np1\tAlpha\t7\np9\tOther\t9\n")
+    write_records(data_dir, "project_access", "id\tproject_id\tuser_id\n")
+    save_permission_policy(
+        data_dir,
+        {
+            "access_mode": "role_based",
+            "rules": [
+                {
+                    "effect": "allow",
+                    "principal": "registered",
+                    "actions": ["create", "read", "delete"],
+                    "collection": "project_access",
+                    "row_filter": {"project_id": "$owned_projects"},
+                    "reason": "owners share their own projects",
+                }
+            ],
+        },
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+    monkeypatch.setenv(object_server.PERMISSION_TRUST_HEADERS_ENV, "true")
+    enable_admin_token(monkeypatch)
+
+    owner_headers = [("x-dbbasic-user-id", "7"), ("x-dbbasic-roles", "member")]
+
+    status, _, granted = request(
+        "/collections/project_access/records",
+        method="POST",
+        body=json.dumps({"id": "g1", "project_id": "p1", "user_id": "8"}).encode(),
+        headers=owner_headers + [("content-type", "application/json")],
+    )
+    assert status == 201, granted
+
+    status, _, foreign = request(
+        "/collections/project_access/records",
+        method="POST",
+        body=json.dumps({"id": "g2", "project_id": "p9", "user_id": "7"}).encode(),
+        headers=owner_headers + [("content-type", "application/json")],
+    )
+    assert status == 403, foreign
+
+    status, _, revoked = request(
+        "/collections/project_access/records/g1",
+        method="DELETE",
+        headers=owner_headers,
+    )
+    assert status == 200, revoked
+
+
 def test_search_endpoint_enforcement_applies_row_filters_and_skips_denied(
     tmp_path, monkeypatch
 ):
