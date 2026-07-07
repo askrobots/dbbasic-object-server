@@ -44,6 +44,19 @@ code, versioned and rolled back through the normal schema history.
   a dropdown/segment control in form UIs.
 - `computed` / `read_only` — the server rejects client writes to these
   fields; forms render them display-only.
+- `transitions` — for lifecycle fields, which values each current value
+  may move to. Enforced on record update; values missing from the map
+  are terminal. This is data plus one check, not a state machine
+  framework — no hooks, no callbacks, no side effects:
+
+  ```json
+  {"name": "status", "type": "enum",
+   "enum": ["open", "assigned", "done"],
+   "transitions": {"open": ["assigned"], "assigned": ["done", "open"]}}
+  ```
+
+  Form UIs can offer only the moves allowed from the record's current
+  value; the server rejects everything else either way.
 - `relation` — a validated pointer to another collection:
 
   ```json

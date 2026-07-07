@@ -200,6 +200,13 @@ def update_collection_record(
                     base_dir=base_dir,
                     roots=roots,
                 )
+                _validate_field_transitions(
+                    collection,
+                    existing,
+                    updated,
+                    base_dir=base_dir,
+                    roots=roots,
+                )
                 updated = _canonicalize_schema_values(
                     collection, updated, base_dir=base_dir, roots=roots
                 )
@@ -473,6 +480,46 @@ def _apply_schema_defaults(
             continue
         clean[name] = _schema_scalar_to_string(field["default"], field_name=name)
     return clean
+
+
+def _validate_field_transitions(
+    collection: str,
+    existing: dict[str, str],
+    updated: dict[str, str],
+    *,
+    base_dir: Path | str,
+    roots: Iterable[Path] | None,
+) -> None:
+    """Enforce declared value transitions on update.
+
+    A field may declare which values each current value can move to:
+
+        {"name": "status", "type": "enum", "enum": [...],
+         "transitions": {"open": ["assigned", "cancelled"], ...}}
+
+    This is deliberately data plus one check — not a state machine
+    framework: no hooks, no side effects, no transition callbacks. A
+    current value missing from the map cannot change; an empty existing
+    value may move anywhere.
+    """
+    fields = _schema_fields(collection, base_dir=base_dir, roots=roots)
+    for field in fields:
+        transitions = field.get("transitions")
+        if not isinstance(transitions, dict):
+            continue
+        name = field["name"]
+        old_value = existing.get(name, "")
+        new_value = updated.get(name, "")
+        if old_value == new_value or _is_empty(old_value):
+            continue
+        allowed = transitions.get(old_value)
+        allowed_values = [str(item) for item in allowed] if isinstance(allowed, list) else []
+        if new_value not in allowed_values:
+            options = ", ".join(allowed_values) if allowed_values else "none"
+            raise InvalidRecordPayloadError(
+                f"Record field '{name}' cannot move from '{old_value}' to "
+                f"'{new_value}' (allowed: {options})"
+            )
 
 
 def _canonicalize_schema_values(

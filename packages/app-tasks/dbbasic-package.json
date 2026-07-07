@@ -1,0 +1,34 @@
+{
+  "id": "app-tasks",
+  "name": "Tasks",
+  "version": "0.1.0",
+  "description": "Task lifecycle: status transitions enforced by schema, owner and assignee access, project sharing, and global search.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": ["app-projects"],
+  "objects": [
+    {
+      "id": "site_tasks",
+      "path": "objects/site/tasks.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "tasks",
+      "path": "schemas/tasks.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "tasks",
+      "path": "seed/tasks.tsv"
+    }
+  ],
+  "migrations": []
+}

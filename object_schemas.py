@@ -253,6 +253,7 @@ def _normalize_field(payload: Any, *, schema: str) -> dict[str, Any]:
         "validation",
         "default",
         "enum",
+        "transitions",
         "computed",
         "read_only",
         "readonly",

@@ -1,0 +1,35 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "tasks",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "signed-in users manage tasks they created"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["read", "update"],
+      "collection": "tasks",
+      "row_filter": {"assigned_to": "$user_id"},
+      "reason": "assignees see and progress tasks assigned to them"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["read"],
+      "collection": "tasks",
+      "row_filter": {"project_id": "$accessible_projects"},
+      "reason": "tasks in projects shared with a user are readable"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_tasks",
+      "reason": "the tasks page is public; it shows a sign-in prompt to visitors"
+    }
+  ]
+}

@@ -266,6 +266,59 @@ def test_boolean_fields_are_stored_canonically(tmp_path):
     assert updated["is_public"] == "false"
 
 
+def test_enum_transitions_are_enforced_on_update(tmp_path):
+    data_dir = tmp_path / "data"
+    write_schema(
+        data_dir,
+        "tasks",
+        [
+            {"name": "id"},
+            {"name": "title"},
+            {
+                "name": "status",
+                "type": "enum",
+                "default": "open",
+                "enum": ["open", "assigned", "done", "cancelled"],
+                "transitions": {
+                    "open": ["assigned", "cancelled"],
+                    "assigned": ["done", "open", "cancelled"],
+                },
+            },
+        ],
+    )
+    write_records(data_dir, "tasks", "id\ttitle\tstatus\nt1\tShip it\topen\n")
+
+    with pytest.raises(
+        object_records.InvalidRecordPayloadError,
+        match="cannot move from 'open' to 'done'",
+    ):
+        object_records.update_collection_record(
+            "tasks", "t1", {"status": "done"}, base_dir=data_dir, roots=[]
+        )
+
+    record = object_records.update_collection_record(
+        "tasks", "t1", {"status": "assigned"}, base_dir=data_dir, roots=[]
+    )
+    assert record["status"] == "assigned"
+
+    record = object_records.update_collection_record(
+        "tasks", "t1", {"status": "done"}, base_dir=data_dir, roots=[]
+    )
+    assert record["status"] == "done"
+
+    # done is not in the transitions map, so it is terminal.
+    with pytest.raises(object_records.InvalidRecordPayloadError, match="allowed: none"):
+        object_records.update_collection_record(
+            "tasks", "t1", {"status": "open"}, base_dir=data_dir, roots=[]
+        )
+
+    # Unrelated updates to a record sitting in a terminal state stay fine.
+    record = object_records.update_collection_record(
+        "tasks", "t1", {"title": "Shipped"}, base_dir=data_dir, roots=[]
+    )
+    assert record["title"] == "Shipped"
+
+
 def test_update_collection_record_validates_final_schema_record(tmp_path):
     data_dir = tmp_path / "data"
     write_schema(
