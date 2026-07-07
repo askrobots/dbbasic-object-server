@@ -1,0 +1,37 @@
+{
+  "id": "app-articles",
+  "name": "Articles",
+  "version": "0.1.0",
+  "description": "Long-form writing: owner-drafted articles with public permalinks and global search. Permalinks need a site_routes record mapping /articles/{article_id:uuid} to site_article_view.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "objects": [
+    {
+      "id": "site_articles",
+      "path": "objects/site/articles.py"
+    },
+    {
+      "id": "site_article_view",
+      "path": "objects/site/article_view.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "articles",
+      "path": "schemas/articles.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "articles",
+      "path": "seed/articles.tsv"
+    }
+  ],
+  "migrations": []
+}

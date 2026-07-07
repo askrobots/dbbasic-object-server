@@ -1,0 +1,34 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "articles",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "signed-in users manage their own articles"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["read"],
+      "collection": "articles",
+      "row_filter": {"is_public": "true"},
+      "reason": "published articles are readable by anyone"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_articles",
+      "reason": "the articles page is public; visitors see published articles"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_article_view",
+      "reason": "article permalinks are public; the policy decides which articles are visible"
+    }
+  ]
+}
