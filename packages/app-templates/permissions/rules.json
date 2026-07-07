@@ -1,0 +1,20 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "templates",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "signed-in users manage their own templates"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["read"],
+      "collection": "templates",
+      "row_filter": {"is_public": "true"},
+      "reason": "public templates are reusable by any signed-in user"
+    }
+  ]
+}

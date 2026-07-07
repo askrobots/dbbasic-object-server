@@ -1,0 +1,28 @@
+{
+  "id": "app-templates",
+  "name": "Templates",
+  "version": "0.1.0",
+  "description": "Reusable templates: named bodies with categories, tags, and public sharing. No page object — generated UIs (Scroll) manage templates from the schema.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "objects": [],
+  "schemas": [
+    {
+      "collection": "templates",
+      "path": "schemas/templates.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "templates",
+      "path": "seed/templates.tsv"
+    }
+  ],
+  "migrations": []
+}

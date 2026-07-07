@@ -1,0 +1,29 @@
+{
+  "id": "app-timers",
+  "name": "Timers",
+  "version": "0.1.0",
+  "description": "Time logs against tasks: start/stop rows with an is_running flag. No page object — generated UIs (Scroll) manage time logs from the schema.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": ["app-tasks"],
+  "objects": [],
+  "schemas": [
+    {
+      "collection": "time_logs",
+      "path": "schemas/time_logs.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "time_logs",
+      "path": "seed/time_logs.tsv"
+    }
+  ],
+  "migrations": []
+}

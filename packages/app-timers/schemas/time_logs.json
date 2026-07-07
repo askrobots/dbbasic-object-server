@@ -1,0 +1,50 @@
+{
+  "name": "time_logs",
+  "title": "Time Logs",
+  "version": 1,
+  "description": "Work time against tasks. A running timer is a row with is_running true and no ended_at.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "task_id",
+      "label": "Task",
+      "relation": {"collection": "tasks", "display_field": "title"}
+    },
+    {
+      "name": "started_at",
+      "type": "datetime",
+      "required": true,
+      "label": "Started"
+    },
+    {
+      "name": "ended_at",
+      "type": "datetime",
+      "label": "Ended"
+    },
+    {
+      "name": "is_running",
+      "type": "boolean",
+      "label": "Running",
+      "default": "false"
+    },
+    {
+      "name": "notes",
+      "type": "text",
+      "label": "Notes"
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["task_id", "started_at", "ended_at", "is_running", "notes"]}
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["task_id", "started_at", "ended_at", "is_running"]
+  }
+}
