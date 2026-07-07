@@ -1,10 +1,25 @@
 # DBBASIC Object Server
 
-DBBASIC Object Server runs live, versioned Python application objects.
+DBBASIC Object Server runs live, versioned Python application objects on a
+single VM. It ships with a working suite of apps — projects, notes, tasks,
+contacts, articles, links, a calendar, files, and a shell you can talk to —
+each one a package of a schema, permission rules, and at most one page
+object, with no app-specific server code. Changes to objects, schemas, and
+permissions are live on the next request; there is no build or deploy step.
 
-This repository is being assembled from an existing working prototype. The public codebase is intentionally moving in small reviewed slices so each piece can be tested, documented, and checked for private deployment details before release.
+It is stdlib-only Python plus uvicorn, data in human-readable files you can
+grep and back up, one permission engine enforced across every surface
+(web, API, search, files, MCP agents, and AI), and MIT licensed. A $5–$7
+VM is plenty.
 
-The rest of the server will move here as it is cleaned up for release.
+**Get it running:** [`docs/quickstart.md`](docs/quickstart.md) takes a fresh
+VM to a running server, a login, an HTTPS domain, and a first app in about
+thirty minutes with [`scripts/install.sh`](scripts/install.sh). New to the
+idea? Start with [why it is different](docs/why-dbbasic.md).
+
+This public codebase was assembled from a working prototype in small,
+reviewed, tested slices — each checked for private deployment details before
+release. That discipline continues as new capability lands.
 
 ## The Core Idea
 
@@ -35,19 +50,10 @@ flowchart TD
     E --> A
 ```
 
-This is the `100x dev loop` this project is trying to protect.
-
-On top of that loop the server now carries a working application suite —
-projects, notes, tasks, contacts, articles, links, calendar, files, and a
-shell you can talk to — each installed as a package of schema + permission
-rules + one page object, with no app-specific server code. See
-`docs/app-packages.md` for the suite, `docs/shell-and-ai.md` for the
-AI-operated shell, and `docs/why-dbbasic.md` for the advantages and their
-boundaries, honestly stated.
-
-**Get it running:** `docs/quickstart.md` takes a fresh VM to a running
-server, a login, an HTTPS domain, and a first app in about thirty
-minutes, using `scripts/install.sh`.
+This is the `100x dev loop` this project is trying to protect. The whole
+app suite is built on it — see [`docs/app-packages.md`](docs/app-packages.md)
+for the apps and [`docs/shell-and-ai.md`](docs/shell-and-ai.md) for the
+shell that lets you (or an AI) operate the server by talking to it.
 
 The loop is meant to happen inside the running object server, not through a full
 CI, build, and deployment cycle, so small object changes can be tested and
