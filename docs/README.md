@@ -35,6 +35,9 @@ flowchart TD
 - `why-dbbasic.md` - the advantages, honestly stated with their
   boundaries: live change, apps-as-data, one permission engine,
   speed-through-less, AI-native without lock-in.
+- `comparisons.md` - what DBBASIC deletes relative to Django/Rails,
+  enterprise stacks, JS meta-frameworks, SaaS suites, and no-code
+  platforms — with the cost of each deletion stated, and receipts.
 - `app-packages.md` - the installed application suite (projects, notes,
   tasks, contacts, articles, links, events, files, shell,
   collaboration) and the schema+rules+page pattern every app repeats.
