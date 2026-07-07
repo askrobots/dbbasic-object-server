@@ -1,0 +1,33 @@
+{
+  "id": "app-links",
+  "name": "Links",
+  "version": "0.1.0",
+  "description": "Saved links: owner-scoped bookmarks with tags and global search.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "objects": [
+    {
+      "id": "site_links",
+      "path": "objects/site/links.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "links",
+      "path": "schemas/links.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "links",
+      "path": "seed/links.tsv"
+    }
+  ],
+  "migrations": []
+}

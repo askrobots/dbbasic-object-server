@@ -1,0 +1,19 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "links",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "signed-in users manage their own links"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_links",
+      "reason": "the links page is public; it shows a sign-in prompt to visitors"
+    }
+  ]
+}
