@@ -75,9 +75,20 @@ untrusted public users.
 - Schema-driven global search (`GET /api/search` + the `global_search` MCP
   tool): collections opt in with `search.fields`, and results respect
   permission row filters and field redaction per caller
-- First app packages (`app-projects`, `app-notes`): schema + owner-scoped
-  permission grants + a signed-in web page in one installable unit — the
-  template for migrating the Django app suite
+- A twelve-package application suite (projects with self-serve sharing
+  grants, notes, tasks with an enforced status lifecycle, contacts,
+  articles, links, events, files, templates, timers, the shell, and the
+  collaboration layer of comments/feed/notifications) — every app is
+  schema + permission rules + at most one page object, with no
+  app-specific server code (see `app-packages.md`)
+- Per-user AI: write-only provider key storage, model choice per request,
+  and `POST /api/ai/chat` — an AI turn that can call a caller-chosen
+  subset of the MCP tools with the caller's own credentials, so an AI
+  acting for a user is never more powerful than the user
+  (see `shell-and-ai.md`)
+- User file storage with per-user disk quotas, where downloads are
+  authorized against each file's metadata record — owner rows, public
+  links, and project sharing govern files like any other record
 - Runtime backups, restore helpers, deployment checks, GitHub Actions tests, and
   a working public staging deployment shape
 

@@ -37,6 +37,14 @@ flowchart TD
 
 This is the `100x dev loop` this project is trying to protect.
 
+On top of that loop the server now carries a working application suite —
+projects, notes, tasks, contacts, articles, links, calendar, files, and a
+shell you can talk to — each installed as a package of schema + permission
+rules + one page object, with no app-specific server code. See
+`docs/app-packages.md` for the suite, `docs/shell-and-ai.md` for the
+AI-operated shell, and `docs/why-dbbasic.md` for the advantages and their
+boundaries, honestly stated.
+
 The loop is meant to happen inside the running object server, not through a full
 CI, build, and deployment cycle, so small object changes can be tested and
 repaired much faster than normal application releases.
@@ -278,6 +286,13 @@ Current endpoints:
 - `POST /logout`
 - `POST /api/mcp`
 - `GET /api/search`
+- `POST /api/ai/chat`
+- `POST /api/files`
+- `GET /api/files/{file_id}`
+- `DELETE /api/files/{file_id}`
+- `GET /identity/users/{user_id}/service-keys`
+- `PUT /identity/users/{user_id}/service-keys`
+- `DELETE /identity/users/{user_id}/service-keys/{service}`
 - `GET /collections`
 - `GET /collections/{collection}`
 - `GET /collections/{collection}/records`
@@ -557,6 +572,9 @@ These pieces come first so the ASGI server, daemon, Scroll, tests, and migration
 tools all agree on the same object rules.
 
 See `docs/README.md` for the documentation map,
+`docs/why-dbbasic.md` for the advantages and boundaries,
+`docs/app-packages.md` for the application suite,
+`docs/shell-and-ai.md` for the shell and AI operation,
 `docs/status.md` for the current readiness checklist,
 `docs/runtime-contract.md` for the daemon-facing runtime contract,
 `docs/http-api-contract.md` for the HTTP API shape that existing clients expect,

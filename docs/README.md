@@ -8,29 +8,39 @@ hold the deeper contracts, design rules, and implementation notes.
 
 ```mermaid
 flowchart TD
-    A["README"] --> B["Runtime contract"]
-    A --> C["HTTP API contract"]
+    A["README"] --> W["Why DBBASIC"]
     A --> R["Status"]
-    A --> M["Object authoring"]
-    A --> D["ASGI and realtime direction"]
-    A --> E["REST and object messages"]
-    A --> L["Single VM deployment"]
-    A --> N["Backup and restore"]
-    A --> O["Traffic limits"]
-    A --> P["Permissions model"]
-    A --> Q["Package manifests"]
+    A --> B["Runtime contract"]
+    A --> C["HTTP API contract"]
 
-    B --> F["Object namespace"]
-    B --> G["Execution result shape"]
-    B --> H["Version storage"]
+    W --> APPS["App packages<br/>(the suite)"]
+    W --> SH["Shell and AI"]
 
-    C --> I["Existing client compatibility"]
-    D --> J["WebSocket/SSE direction"]
-    E --> K["Resource vs behavior split"]
+    APPS --> Q["Package authoring"]
+    APPS --> SF["Schema forms contract"]
+    APPS --> P["Permissions model"]
+    APPS --> SR["Site routing"]
+
+    C --> M["Object authoring"]
+    C --> E["REST and object messages"]
+    C --> D["ASGI and realtime direction"]
+
+    R --> L["Single VM deployment"]
+    L --> N["Backup and restore"]
+    L --> O["Traffic limits"]
 ```
 
 ## Current Docs
 
+- `why-dbbasic.md` - the advantages, honestly stated with their
+  boundaries: live change, apps-as-data, one permission engine,
+  speed-through-less, AI-native without lock-in.
+- `app-packages.md` - the installed application suite (projects, notes,
+  tasks, contacts, articles, links, events, files, shell,
+  collaboration) and the schema+rules+page pattern every app repeats.
+- `shell-and-ai.md` - the talk-to-everything terminal: per-user AI
+  provider keys, model choice, MCP tool subsets, conversation resume,
+  and building live objects by asking ("coding without coding").
 - `runtime-contract.md` - runtime, daemon, namespace, version, queue, scheduler,
   and event contracts.
 - `http-api-contract.md` - existing `/objects` HTTP API shape used by current
@@ -81,9 +91,9 @@ flowchart TD
 Useful next docs:
 
 - object method reference
-- AI repair loop guide
-- realtime event contract
-- package/install guide
+- realtime event contract (with the websocket slice)
+- a cold-start self-hosting walkthrough for someone who has never seen
+  the project (DNS to first app install in one sitting)
 
 PHP-style community notes were useful because examples and corrections lived
 near the function being used. GitHub does not provide inline manual comments in
