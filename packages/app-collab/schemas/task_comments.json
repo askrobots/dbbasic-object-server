@@ -1,0 +1,44 @@
+{
+  "name": "task_comments",
+  "title": "Task Comments",
+  "version": 1,
+  "description": "Discussion on tasks. project_id is copied from the task so project sharing governs comment visibility.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "task_id",
+      "required": true,
+      "label": "Task",
+      "relation": {"collection": "tasks", "display_field": "title"}
+    },
+    {
+      "name": "body",
+      "type": "textarea",
+      "required": true,
+      "label": "Comment",
+      "validation": {"min_length": 1}
+    },
+    {
+      "name": "project_id",
+      "label": "Project",
+      "relation": {"collection": "projects", "display_field": "name"}
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Author"
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["task_id", "body"]}
+  },
+  "views": {
+    "list_mode": "feed",
+    "list_fields": ["task_id", "body", "owner_id"]
+  },
+  "search": {
+    "fields": ["body"]
+  }
+}

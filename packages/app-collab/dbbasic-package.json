@@ -1,0 +1,45 @@
+{
+  "id": "app-collab",
+  "name": "Collaboration",
+  "version": "0.1.0",
+  "description": "The coordination layer: task comments, a shared project feed for humans and agents, and notification records. No pages — generated UIs, the shell, and MCP are the interfaces.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": ["app-projects", "app-tasks"],
+  "objects": [],
+  "schemas": [
+    {
+      "collection": "task_comments",
+      "path": "schemas/task_comments.json"
+    },
+    {
+      "collection": "feed_posts",
+      "path": "schemas/feed_posts.json"
+    },
+    {
+      "collection": "notifications",
+      "path": "schemas/notifications.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "task_comments",
+      "path": "seed/task_comments.tsv"
+    },
+    {
+      "collection": "feed_posts",
+      "path": "seed/feed_posts.tsv"
+    },
+    {
+      "collection": "notifications",
+      "path": "seed/notifications.tsv"
+    }
+  ],
+  "migrations": []
+}

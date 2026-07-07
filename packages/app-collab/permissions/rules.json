@@ -1,0 +1,43 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "task_comments",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "authors manage their own comments"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["read"],
+      "collection": "task_comments",
+      "row_filter": {"project_id": "$accessible_projects"},
+      "reason": "comments on shared-project tasks are readable"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create"],
+      "collection": "feed_posts",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "signed-in users and agents post to the feed as themselves"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["read"],
+      "collection": "feed_posts",
+      "reason": "the coordination feed is readable by every signed-in collaborator"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["read", "update", "delete"],
+      "collection": "notifications",
+      "row_filter": {"user_id": "$user_id"},
+      "reason": "users see and clear their own notifications; creation is for operators and agents"
+    }
+  ]
+}

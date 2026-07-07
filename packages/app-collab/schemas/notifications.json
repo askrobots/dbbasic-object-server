@@ -1,0 +1,45 @@
+{
+  "name": "notifications",
+  "title": "Notifications",
+  "version": 1,
+  "description": "Per-user notification records. Push arrives with the websocket slice; the storage and read/unread state live here now.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "user_id",
+      "type": "text",
+      "required": true,
+      "label": "User"
+    },
+    {
+      "name": "kind",
+      "type": "text",
+      "label": "Kind",
+      "default": "info"
+    },
+    {
+      "name": "body",
+      "type": "text",
+      "required": true,
+      "label": "Notification"
+    },
+    {
+      "name": "target",
+      "type": "text",
+      "label": "Target",
+      "help": "collection/record_id the notification points at"
+    },
+    {
+      "name": "is_read",
+      "type": "boolean",
+      "label": "Read",
+      "default": "false"
+    }
+  ],
+  "views": {
+    "list_mode": "feed",
+    "list_fields": ["kind", "body", "is_read"]
+  }
+}

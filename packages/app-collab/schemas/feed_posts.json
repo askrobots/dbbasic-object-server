@@ -1,0 +1,50 @@
+{
+  "name": "feed_posts",
+  "title": "Feed",
+  "version": 1,
+  "description": "The shared coordination feed for humans and agents: statuses, questions, answers, releases.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "kind",
+      "type": "enum",
+      "label": "Kind",
+      "default": "status",
+      "enum": ["status", "question", "answer", "release", "claim", "alert", "info"]
+    },
+    {
+      "name": "body",
+      "type": "textarea",
+      "required": true,
+      "label": "Post",
+      "validation": {"min_length": 1}
+    },
+    {
+      "name": "project_id",
+      "label": "Project",
+      "relation": {"collection": "projects", "display_field": "name"}
+    },
+    {
+      "name": "in_reply_to",
+      "label": "In Reply To",
+      "relation": {"collection": "feed_posts", "display_field": "body"}
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Author"
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["kind", "body", "project_id", "in_reply_to"]}
+  },
+  "views": {
+    "list_mode": "feed",
+    "list_fields": ["kind", "body", "owner_id"]
+  },
+  "search": {
+    "fields": ["body"]
+  }
+}
