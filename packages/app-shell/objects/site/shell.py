@@ -49,6 +49,8 @@ _HELP = (
     ".title       quick task\\n"
     "^url title   save a link\\n"
     "~query       global search\\n"
+    "/key anthropic sk-...   store your AI key (masked, not logged)\\n"
+    "/keys        which services have keys\\n"
     "/model x     set AI model (service:model)\\n"
     "/tools a,b   set AI tool subset\\n"
     "/help        this text\\n"
@@ -128,7 +130,10 @@ async function savePrefs(changes) {
 }
 
 async function run(input) {
-  const out = entry(input);
+  const display = input.startsWith("/key ")
+    ? input.split(/\\s+/).slice(0, 2).join(" ") + " \\u2022\\u2022\\u2022\\u2022"
+    : input;
+  const out = entry(display);
   const first = input[0];
 
   if (first === "$" || first === ".") {
@@ -175,6 +180,21 @@ async function run(input) {
   if (first === "/") {
     const [cmd, ...rest] = input.slice(1).split(/\\s+/);
     if (cmd === "help") { finish(out, HELP); return; }
+    if (cmd === "key" && rest.length >= 2) {
+      const [service, ...keyParts] = rest;
+      const [ok, body] = await api("PUT", `/identity/users/${OWNER_ID}/service-keys`,
+                                   {service, key: keyParts.join("")});
+      finish(out, ok ? `${service} key stored (never logged, never readable back)` : body.error,
+             {err: !ok});
+      return;
+    }
+    if (cmd === "keys") {
+      const [ok, body] = await api("GET", `/identity/users/${OWNER_ID}/service-keys`);
+      const lines = ok ? (body.services || []).map((s) => `${s.service}  set ${s.updated_at}`) : [];
+      finish(out, ok ? (lines.join("\\n") || "no keys stored; /key anthropic sk-...") : body.error,
+             {err: !ok});
+      return;
+    }
     if (cmd === "model" && rest.length) {
       await savePrefs({ai_model: rest[0]});
       finish(out, `model set to ${rest[0]}`);
