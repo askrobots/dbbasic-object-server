@@ -1,0 +1,51 @@
+{
+  "name": "interactions",
+  "title": "Interactions",
+  "version": 1,
+  "description": "Calls, emails, and meetings logged against a contact.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "contact_id",
+      "required": true,
+      "label": "Contact",
+      "relation": {"collection": "contacts", "display_field": "first_name"}
+    },
+    {
+      "name": "kind",
+      "type": "enum",
+      "label": "Kind",
+      "default": "note",
+      "enum": ["call", "email", "meeting", "note"]
+    },
+    {
+      "name": "occurred_on",
+      "type": "date",
+      "label": "Date"
+    },
+    {
+      "name": "summary",
+      "type": "textarea",
+      "required": true,
+      "label": "Summary",
+      "validation": {"min_length": 1}
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["contact_id", "kind", "occurred_on", "summary"]}
+  },
+  "views": {
+    "list_mode": "feed",
+    "list_fields": ["contact_id", "kind", "occurred_on", "summary"]
+  },
+  "search": {
+    "fields": ["summary"]
+  }
+}

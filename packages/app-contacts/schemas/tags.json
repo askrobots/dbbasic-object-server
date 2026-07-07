@@ -1,0 +1,30 @@
+{
+  "name": "tags",
+  "title": "Tags",
+  "version": 1,
+  "description": "Reusable tag names for contact categorization.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "name",
+      "type": "text",
+      "required": true,
+      "label": "Name",
+      "validation": {"min_length": 1, "max_length": 60}
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["name"]}
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["name"]
+  }
+}

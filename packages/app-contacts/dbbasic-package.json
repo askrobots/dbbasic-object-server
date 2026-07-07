@@ -1,0 +1,58 @@
+{
+  "id": "app-contacts",
+  "name": "Contacts",
+  "version": "0.1.0",
+  "description": "CRM records: contacts, organizations, interactions, and tags, owner-scoped with project sharing and global search.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": ["app-projects"],
+  "objects": [
+    {
+      "id": "site_contacts",
+      "path": "objects/site/contacts.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "contacts",
+      "path": "schemas/contacts.json"
+    },
+    {
+      "collection": "organizations",
+      "path": "schemas/organizations.json"
+    },
+    {
+      "collection": "interactions",
+      "path": "schemas/interactions.json"
+    },
+    {
+      "collection": "tags",
+      "path": "schemas/tags.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "contacts",
+      "path": "seed/contacts.tsv"
+    },
+    {
+      "collection": "organizations",
+      "path": "seed/organizations.tsv"
+    },
+    {
+      "collection": "interactions",
+      "path": "seed/interactions.tsv"
+    },
+    {
+      "collection": "tags",
+      "path": "seed/tags.tsv"
+    }
+  ],
+  "migrations": []
+}

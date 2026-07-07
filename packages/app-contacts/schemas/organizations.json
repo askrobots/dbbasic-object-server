@@ -1,0 +1,44 @@
+{
+  "name": "organizations",
+  "title": "Organizations",
+  "version": 1,
+  "description": "Companies and groups contacts belong to.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "name",
+      "type": "text",
+      "required": true,
+      "label": "Name",
+      "validation": {"min_length": 1, "max_length": 120}
+    },
+    {
+      "name": "website",
+      "type": "text",
+      "label": "Website",
+      "validation": {"max_length": 254}
+    },
+    {
+      "name": "notes",
+      "type": "textarea",
+      "label": "Notes"
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["name", "website", "notes"]}
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["name", "website"]
+  },
+  "search": {
+    "fields": ["name", "website", "notes"]
+  }
+}
