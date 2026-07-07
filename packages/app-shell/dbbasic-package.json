@@ -1,0 +1,41 @@
+{
+  "id": "app-shell",
+  "name": "Shell",
+  "version": "0.1.0",
+  "description": "The talk-to-everything terminal: prefix commands create records, bare text goes to AI chat with the user's model and MCP tool subset.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "objects": [
+    {
+      "id": "site_shell",
+      "path": "objects/site/shell.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "shell_preferences",
+      "path": "schemas/shell_preferences.json"
+    },
+    {
+      "collection": "shell_commands",
+      "path": "schemas/shell_commands.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "shell_preferences",
+      "path": "seed/shell_preferences.tsv"
+    },
+    {
+      "collection": "shell_commands",
+      "path": "seed/shell_commands.tsv"
+    }
+  ],
+  "migrations": []
+}

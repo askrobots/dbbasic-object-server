@@ -1,0 +1,32 @@
+{
+  "name": "shell_preferences",
+  "title": "Shell Preferences",
+  "version": 1,
+  "description": "Per-user shell settings; the record id is the user id.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "ai_model",
+      "type": "text",
+      "label": "AI Model",
+      "default": "anthropic:claude-haiku-4-5",
+      "help": "service:model, like anthropic:claude-haiku-4-5 or openai:gpt-5-mini"
+    },
+    {
+      "name": "tools",
+      "type": "text",
+      "label": "AI Tools",
+      "default": "global_search,list_records,get_record,create_record",
+      "help": "Comma-separated MCP tool names offered to the model"
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["ai_model", "tools"]}
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["ai_model", "tools"]
+  }
+}

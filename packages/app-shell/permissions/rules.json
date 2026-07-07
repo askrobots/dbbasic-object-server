@@ -1,0 +1,27 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "shell_preferences",
+      "row_filter": {"id": "$user_id"},
+      "reason": "each user manages their own shell preferences row"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "delete"],
+      "collection": "shell_commands",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "each user owns their shell history"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_shell",
+      "reason": "the shell page is public; it shows a sign-in prompt to visitors"
+    }
+  ]
+}
