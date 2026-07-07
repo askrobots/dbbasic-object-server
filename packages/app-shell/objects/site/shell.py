@@ -212,7 +212,10 @@ async function run(input) {
 
   const tools = prefs.tools.split(",").map((t) => t.trim()).filter(Boolean);
   const [ok, body] = await api("POST", "/api/ai/chat",
-    {message: input, model: prefs.ai_model, tools, history: aiHistory.slice(-20)});
+    {message: input, model: prefs.ai_model, tools, history: aiHistory.slice(-20),
+     system: "You are the shell of this user's object server. Answer in plain terminal text " +
+             "with no markdown formatting. Be concise. Use your tools when the question is " +
+             "about the user's records."});
   finish(out, ok ? body.reply : body.error, {err: !ok, tools: ok ? body.tool_calls : null});
   if (ok) {
     aiHistory.push({role: "user", content: input});
