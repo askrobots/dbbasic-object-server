@@ -1,0 +1,80 @@
+{
+  "name": "events",
+  "title": "Events",
+  "version": 1,
+  "description": "Calendar events with attendees drawn from contacts.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "title",
+      "type": "text",
+      "required": true,
+      "label": "Title",
+      "validation": {"min_length": 1, "max_length": 255}
+    },
+    {
+      "name": "description",
+      "type": "textarea",
+      "label": "Description"
+    },
+    {
+      "name": "starts_at",
+      "type": "datetime",
+      "required": true,
+      "label": "Starts"
+    },
+    {
+      "name": "ends_at",
+      "type": "datetime",
+      "label": "Ends"
+    },
+    {
+      "name": "location",
+      "type": "text",
+      "label": "Location",
+      "validation": {"max_length": 255}
+    },
+    {
+      "name": "url",
+      "type": "text",
+      "label": "URL",
+      "validation": {"max_length": 2000}
+    },
+    {
+      "name": "purpose",
+      "type": "enum",
+      "label": "Purpose",
+      "default": "meeting",
+      "enum": ["meeting", "workshop", "recreation", "others"]
+    },
+    {
+      "name": "attendee_ids",
+      "type": "text",
+      "label": "Attendees",
+      "help": "Comma-separated contact ids"
+    },
+    {
+      "name": "project_id",
+      "label": "Project",
+      "relation": {"collection": "projects", "display_field": "name"}
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["title", "description", "starts_at", "ends_at",
+                           "location", "url", "purpose", "attendee_ids", "project_id"]}
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["title", "starts_at", "location", "purpose"]
+  },
+  "search": {
+    "fields": ["title", "description", "location"]
+  }
+}

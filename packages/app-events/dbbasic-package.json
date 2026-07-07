@@ -1,0 +1,37 @@
+{
+  "id": "app-events",
+  "name": "Events",
+  "version": "0.1.0",
+  "description": "Calendar events: meetings, workshops, and gatherings with attendees, projects, and search.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": [
+    "app-projects",
+    "app-contacts"
+  ],
+  "objects": [
+    {
+      "id": "site_calendar",
+      "path": "objects/site/calendar.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "events",
+      "path": "schemas/events.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "events",
+      "path": "seed/events.tsv"
+    }
+  ],
+  "migrations": []
+}
