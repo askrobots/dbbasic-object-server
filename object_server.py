@@ -57,6 +57,7 @@ import object_records
 import object_schema_versions
 import object_schemas
 import object_search
+import object_service_keys
 import object_site_routes
 import object_source
 import object_source_changes
@@ -997,6 +998,116 @@ async def _handle_identity_users(
     await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
 
 
+def _service_keys_route_parts(user_id: str) -> tuple[str | None, str | None]:
+    """Split '{user}/service-keys[/{service}]' route tails; (None, None) otherwise."""
+    if "/service-keys" not in user_id:
+        return None, None
+    target, _, tail = user_id.partition("/service-keys")
+    if "/" in target or not target:
+        return None, None
+    if tail == "":
+        return target, None
+    if tail.startswith("/") and tail.count("/") == 1 and len(tail) > 1:
+        return target, tail[1:]
+    return None, None
+
+
+async def _handle_identity_user_service_keys(
+    send,
+    method: str,
+    user_id: str,
+    service: str | None,
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    """Write-only per-user service keys: set, list status, delete — never read.
+
+    A signed-in user manages their own keys; the admin gate covers operator
+    use. Key material never appears in any response.
+    """
+    session = _current_identity_session(headers)
+    self_service = session is not None and session.user_id == user_id
+    if not self_service:
+        gate_error = _admin_token_gate_error(
+            headers, "Service keys require the account owner's session or the admin gate."
+        )
+        if gate_error is not None:
+            status, message = gate_error
+            await _send_json(send, {"status": "error", "error": message}, status=status)
+            return
+
+    if (
+        method in {"PUT", "POST", "DELETE"}
+        and _session_cookie_token(headers)
+        and not _authorization_token(headers)
+        and not _cookie_request_origin_allowed(headers)
+    ):
+        await _send_json(
+            send,
+            {"status": "error", "error": "Cross-origin cookie writes are not allowed."},
+            status=403,
+        )
+        return
+
+    if method == "GET" and service is None:
+        try:
+            statuses = object_service_keys.list_service_key_status(
+                user_id, base_dir=_data_dir()
+            )
+        except object_service_keys.InvalidServiceKeyError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        await _send_json(send, {"status": "ok", "user_id": user_id, "services": statuses})
+        return
+
+    if method in {"PUT", "POST"} and service is None:
+        try:
+            payload = _parse_json_body(body)
+        except ValueError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        try:
+            result = object_service_keys.set_service_key(
+                user_id,
+                payload.get("service"),
+                payload.get("key"),
+                base_dir=_data_dir(),
+            )
+        except object_service_keys.InvalidServiceKeyError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        _append_ops_auth_event(
+            event="service_key_set",
+            identifier=user_id,
+            label=result["service"],
+        )
+        await _send_json(send, {"status": "ok", **result})
+        return
+
+    if method == "DELETE" and service is not None:
+        try:
+            deleted = object_service_keys.remove_service_key(
+                user_id, service, base_dir=_data_dir()
+            )
+        except object_service_keys.InvalidServiceKeyError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        if not deleted:
+            await _send_json(
+                send, {"status": "error", "error": "No key stored for that service"}, status=404
+            )
+            return
+        _append_ops_auth_event(
+            event="service_key_removed",
+            identifier=user_id,
+            label=service,
+        )
+        await _send_json(send, {"status": "ok", "deleted": True, "service": service})
+        return
+
+    await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+
+
 async def _handle_identity_user(
     send,
     method: str,
@@ -1004,6 +1115,13 @@ async def _handle_identity_user(
     body: bytes,
     headers: dict[str, str],
 ) -> None:
+    service_keys_target, service_name = _service_keys_route_parts(user_id)
+    if service_keys_target is not None:
+        await _handle_identity_user_service_keys(
+            send, method, service_keys_target, service_name, body, headers
+        )
+        return
+
     gate_error = _admin_token_gate_error(headers, f"Identity users require {ADMIN_TOKEN_ENV}.")
     if gate_error is not None:
         status, message = gate_error
