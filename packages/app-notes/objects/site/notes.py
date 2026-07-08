@@ -5,34 +5,12 @@ visitor's session cookie, so the permission policy decides what this page
 can see and write — the page itself holds no data access.
 """
 
+# Page-unique layout only; everything else comes from the shared /style sheet.
 _STYLE = """
-:root { color-scheme: dark; --bg: #0b0b10; --panel: #17171f; --line: #2b2b37;
-        --text: #f4f4f7; --muted: #a2a2ad; --blue: #5aa7ff; --red: #ff6b6b; }
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--text);
-       font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-.wrap { max-width: 720px; margin: 0 auto; padding: 1.5rem; }
-header { display: flex; align-items: baseline; gap: 1rem; margin-bottom: 1.25rem; }
-header h1 { font-size: 1.15rem; margin: 0; }
-header .who { margin-left: auto; color: var(--muted); font-size: 0.85rem; }
-header .who a, a { color: var(--blue); text-decoration: none; }
-form.capture { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
-               padding: 1rem; display: grid; gap: 0.6rem; margin-bottom: 1rem; }
-form.capture textarea, form.capture select, input.search {
-  background: var(--bg); color: var(--text); border: 1px solid var(--line);
-  border-radius: 6px; padding: 0.45rem 0.6rem; font: inherit; width: 100%; }
-form.capture button { background: var(--blue); color: #0b0b10; border: 0; border-radius: 6px;
-                      padding: 0.5rem 1rem; font: inherit; font-weight: 600; cursor: pointer;
-                      justify-self: start; }
-input.search { margin-bottom: 1rem; }
-.cards { display: grid; gap: 0.75rem; }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
-        padding: 0.85rem 1rem; white-space: pre-wrap; word-break: break-word; }
-.card .meta { margin-top: 0.5rem; color: var(--muted); font-size: 0.75rem; }
-.card .meta a { color: var(--blue); }
-.hint { color: var(--muted); font-size: 0.85rem; background: var(--panel);
-        border: 1px solid var(--line); border-radius: 8px; padding: 0.9rem 1rem; }
-.error { color: var(--red); font-size: 0.85rem; min-height: 1.2rem; }
+.card { white-space: pre-wrap; }
+form.capture { background: var(--panel); border: 1px solid var(--line);
+               border-radius: var(--radius-md); padding: var(--pad); margin-bottom: var(--gap); }
+#search-box { margin-bottom: var(--gap); }
 """
 
 _SCRIPT = """
@@ -119,10 +97,10 @@ def GET(request):
         script = ""
     else:
         body = """
-<form class="capture" id="capture-form">
+<form class="capture stack" id="capture-form">
 <textarea name="content" placeholder="Write a note&hellip;" rows="3" required></textarea>
 <select name="project" id="project-select"><option value="">No project</option></select>
-<button type="submit">Save Note</button>
+<button type="submit" class="btn primary">Save Note</button>
 <div class="error" id="form-error"></div>
 </form>
 <input class="search" id="search-box" placeholder="Search notes&hellip;" autocomplete="off">
@@ -141,11 +119,12 @@ def GET(request):
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Notes</title>
+<link rel="stylesheet" href="/style">
 <style>{_STYLE}</style>
 </head>
 <body>
-<div class="wrap">
-<header><h1>Notes</h1><div class="who">{who}</div></header>
+<div class="wrap narrow">
+<header class="app"><h1>Notes</h1><div class="who">{who}</div></header>
 {body}
 </div>
 {script}

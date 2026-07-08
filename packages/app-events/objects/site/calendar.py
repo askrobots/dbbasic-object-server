@@ -4,39 +4,16 @@ The collection is named events (matching the q9 app); this page lives at
 /calendar because /events is the server's built-in event-delivery API.
 """
 
+# Page-unique layout only; everything else comes from the shared /style sheet.
 _STYLE = """
-:root { color-scheme: dark; --bg: #0b0b10; --panel: #17171f; --line: #2b2b37;
-        --text: #f4f4f7; --muted: #a2a2ad; --blue: #5aa7ff; --green: #52d273;
-        --red: #ff6b6b; }
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--text);
-       font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-.wrap { max-width: 860px; margin: 0 auto; padding: 1.5rem; }
-header { display: flex; align-items: baseline; gap: 1rem; margin-bottom: 1.25rem; }
-header h1 { font-size: 1.15rem; margin: 0; }
-header .who { margin-left: auto; color: var(--muted); font-size: 0.85rem; }
-a { color: var(--blue); text-decoration: none; }
-form.capture { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
-               padding: 1rem; display: grid; gap: 0.6rem; margin-bottom: 1rem;
+form.capture { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md);
+               padding: var(--pad); display: grid; gap: var(--gap); margin-bottom: var(--gap);
                grid-template-columns: 2fr 1fr 1fr; }
-form.capture input, form.capture select {
-  background: var(--bg); color: var(--text); border: 1px solid var(--line);
-  border-radius: 6px; padding: 0.45rem 0.6rem; font: inherit; width: 100%; }
-form.capture button { background: var(--blue); color: #0b0b10; border: 0; border-radius: 6px;
-                      padding: 0.5rem 1rem; font: inherit; font-weight: 600; cursor: pointer;
-                      justify-self: start; }
-table { width: 100%; border-collapse: collapse; background: var(--panel);
-        border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-th, td { text-align: left; font-size: 0.85rem; padding: 0.5rem 0.75rem;
-         border-bottom: 1px solid var(--line); }
-th { color: var(--muted); font-weight: 500; }
-tr:last-child td { border-bottom: 0; }
+form.capture .btn { justify-self: start; }
+form.capture .error { grid-column: 1 / -1; }
 tr.past td { color: var(--muted); }
 td.when { white-space: nowrap; }
-td .purpose { color: var(--green); font-size: 0.75rem; }
-.hint { color: var(--muted); font-size: 0.85rem; background: var(--panel);
-        border: 1px solid var(--line); border-radius: 8px; padding: 0.9rem 1rem; }
-.error { color: var(--red); font-size: 0.85rem; min-height: 1.2rem; grid-column: 1 / -1; }
+td .purpose { color: var(--positive); font-size: 0.75rem; }
 """
 
 _SCRIPT = """
@@ -106,7 +83,7 @@ def GET(request):
 <option value="recreation">recreation</option>
 <option value="others">others</option>
 </select>
-<button type="submit">Add Event</button>
+<button type="submit" class="btn primary">Add Event</button>
 <div class="error" id="form-error"></div>
 </form>
 <table>
@@ -127,11 +104,12 @@ def GET(request):
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Calendar</title>
+<link rel="stylesheet" href="/style">
 <style>{_STYLE}</style>
 </head>
 <body>
 <div class="wrap">
-<header><h1>Calendar</h1><div class="who">{who}</div></header>
+<header class="app"><h1>Calendar</h1><div class="who">{who}</div></header>
 {body}
 </div>
 {script}

@@ -6,32 +6,11 @@ decides visibility: a public-read rule row-filtered on is_public serves
 anonymous visitors, and owners get edit, share, and delete controls.
 """
 
+# Page-unique layout only; everything else comes from the shared /style sheet.
 _STYLE = """
-:root { color-scheme: dark; --bg: #0b0b10; --panel: #17171f; --line: #2b2b37;
-        --text: #f4f4f7; --muted: #a2a2ad; --blue: #5aa7ff; --red: #ff6b6b; }
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--text);
-       font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-.wrap { max-width: 720px; margin: 0 auto; padding: 1.5rem; }
-header { display: flex; align-items: baseline; gap: 1rem; margin-bottom: 1.25rem; }
-header h1 { font-size: 1.15rem; margin: 0; }
-header .who { margin-left: auto; color: var(--muted); font-size: 0.85rem; }
-a { color: var(--blue); text-decoration: none; }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
-        padding: 1rem 1.1rem; white-space: pre-wrap; word-break: break-word; }
-.card .meta { margin-top: 0.6rem; color: var(--muted); font-size: 0.78rem; }
+.card { white-space: pre-wrap; }
 .owner-tools { margin-top: 1rem; display: none; gap: 0.5rem; flex-wrap: wrap; }
-.owner-tools button { border: 1px solid var(--line); background: var(--panel);
-                      color: var(--text); border-radius: 6px; padding: 0.4rem 0.9rem;
-                      font: inherit; cursor: pointer; }
-.owner-tools button.primary { background: var(--blue); color: #0b0b10; border: 0; font-weight: 600; }
-.owner-tools button.danger { color: var(--red); }
-textarea.edit { display: none; width: 100%; min-height: 8rem; background: var(--bg);
-                color: var(--text); border: 1px solid var(--line); border-radius: 6px;
-                padding: 0.6rem; font: inherit; margin-top: 1rem; }
-.hint { color: var(--muted); font-size: 0.85rem; background: var(--panel);
-        border: 1px solid var(--line); border-radius: 8px; padding: 0.9rem 1rem; }
-.error { color: var(--red); font-size: 0.85rem; min-height: 1.2rem; margin-top: 0.5rem; }
+textarea.edit { display: none; min-height: 8rem; margin-top: 1rem; }
 """
 
 _SCRIPT = """
@@ -137,21 +116,22 @@ def GET(request):
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Note</title>
+<link rel="stylesheet" href="/style">
 <style>{_STYLE}</style>
 </head>
 <body>
-<div class="wrap">
-<header><h1><a href="/notes">Notes</a> / note</h1><div class="who">{who}</div></header>
+<div class="wrap narrow">
+<header class="app"><h1><a href="/notes">Notes</a> / note</h1><div class="who">{who}</div></header>
 <div class="card" id="card">
 <div id="note-content">loading&hellip;</div>
 <div class="meta" id="note-meta"></div>
 </div>
 <textarea class="edit" id="edit-box"></textarea>
 <div class="owner-tools" id="owner-tools">
-<button id="edit-btn">Edit</button>
-<button id="save-btn" class="primary" style="display:none">Save</button>
-<button id="share-btn">Make Public</button>
-<button id="delete-btn" class="danger">Delete</button>
+<button id="edit-btn" class="btn">Edit</button>
+<button id="save-btn" class="btn primary" style="display:none">Save</button>
+<button id="share-btn" class="btn">Make Public</button>
+<button id="delete-btn" class="btn danger">Delete</button>
 </div>
 <div class="error" id="page-error"></div>
 </div>

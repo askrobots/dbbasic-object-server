@@ -9,32 +9,16 @@ import re
 
 _RECORD_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
+# Page-unique layout only: the reading column, plus the edit inputs and
+# owner-tools row that JS toggles between display:none and shown. All colors
+# come from shared tokens at /style — no palette here.
 _STYLE = """
-:root { color-scheme: dark; --bg: #0b0b10; --panel: #17171f; --line: #2b2b37;
-        --text: #f4f4f7; --muted: #a2a2ad; --blue: #5aa7ff; --red: #ff6b6b; }
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--text);
-       font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-.wrap { max-width: 680px; margin: 0 auto; padding: 1.5rem; }
-header { display: flex; align-items: baseline; gap: 1rem; margin-bottom: 1.5rem; }
-header .who { margin-left: auto; color: var(--muted); font-size: 0.8rem; }
-a { color: var(--blue); text-decoration: none; }
 h1#title { font-size: 1.6rem; margin: 0 0 0.25rem; }
-.meta { color: var(--muted); font-size: 0.8rem; margin-bottom: 1.25rem; }
+#meta { color: var(--muted); font-size: 0.8rem; margin-bottom: 1.25rem; }
 #content { white-space: pre-wrap; word-break: break-word; }
 .owner-tools { margin-top: 1.5rem; display: none; gap: 0.5rem; flex-wrap: wrap; }
-.owner-tools button { border: 1px solid var(--line); background: var(--panel);
-                      color: var(--text); border-radius: 6px; padding: 0.4rem 0.9rem;
-                      font: inherit; cursor: pointer; }
-.owner-tools button.primary { background: var(--blue); color: #0b0b10; border: 0; font-weight: 600; }
-.owner-tools button.danger { color: var(--red); }
-textarea.edit, input.edit-title { display: none; width: 100%; background: var(--bg);
-    color: var(--text); border: 1px solid var(--line); border-radius: 6px;
-    padding: 0.6rem; font: inherit; margin-top: 0.75rem; }
+textarea.edit, input.edit-title { display: none; margin-top: 0.75rem; }
 textarea.edit { min-height: 14rem; }
-.hint { color: var(--muted); font-size: 0.9rem; background: var(--panel);
-        border: 1px solid var(--line); border-radius: 8px; padding: 0.9rem 1rem; }
-.error { color: var(--red); font-size: 0.85rem; min-height: 1.2rem; margin-top: 0.5rem; }
 """
 
 _SCRIPT = """
@@ -141,11 +125,12 @@ def GET(request):
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Article</title>
+<link rel="stylesheet" href="/style">
 <style>{_STYLE}</style>
 </head>
 <body>
-<div class="wrap">
-<header><a href="/articles">Articles</a><div class="who">{who}</div></header>
+<div class="wrap narrow">
+<header class="app"><a href="/articles">Articles</a><div class="who">{who}</div></header>
 <div id="body">
 <h1 id="title">loading&hellip;</h1>
 <div class="meta" id="meta"></div>
@@ -154,10 +139,10 @@ def GET(request):
 <input class="edit-title" id="edit-title">
 <textarea class="edit" id="edit-box"></textarea>
 <div class="owner-tools" id="owner-tools">
-<button id="edit-btn">Edit</button>
-<button id="save-btn" class="primary" style="display:none">Save</button>
-<button id="publish-btn">Publish</button>
-<button id="delete-btn" class="danger">Delete</button>
+<button id="edit-btn" class="btn">Edit</button>
+<button id="save-btn" class="btn primary" style="display:none">Save</button>
+<button id="publish-btn" class="btn">Publish</button>
+<button id="delete-btn" class="btn danger">Delete</button>
 </div>
 <div class="error" id="page-error"></div>
 </div>
