@@ -1446,6 +1446,32 @@ without a stored key for the model's service get a pointed 400. Timeout
 per provider round: `DBBASIC_AI_TIMEOUT_SECONDS` (default 60); default
 model: `DBBASIC_AI_DEFAULT_MODEL`.
 
+## Backups
+
+Runtime backups are tar/gzip archives of the whole data directory. They
+contain everything — records, identity, credentials, service keys — so
+the surface is **strictly admin-gated** (admin token or admin-role
+session; never public):
+
+```http
+GET    /admin/backups                 -> {backups: [{id, created_at, size, kind, scope}], count, schedule}
+POST   /admin/backups                 -> {backup: {id, created_at, size, kind, scope}}   (creates one now, 201)
+GET    /admin/backups/{id}/download   -> the archive bytes (application/gzip, attachment)
+```
+
+`kind` is `manual` (created on demand), `package` (auto restore point
+before a package install; `scope` is the package), or `restore-point`.
+The `/admin/status` `capabilities.backups` block reports
+`{available, can_create, can_download, can_restore, scheduled, schedule}`
+so clients gate their buttons off real capability. Restore over HTTP is
+not exposed yet (`can_restore: false`); use the `object_backup.py restore`
+CLI, which is deliberately a deliberate, on-box operation.
+
+**Automatic backups are a config option, not on by default.** A scheduled
+run is an external timer (systemd/cron) calling `object_backup.py create`;
+`DBBASIC_BACKUP_SCHEDULE` records the operator's intent so clients can show
+it. On-demand create and download always work regardless.
+
 ## Realtime Push (Websocket)
 
 Clients get live record-change signals over a websocket at `/ws`, so open
