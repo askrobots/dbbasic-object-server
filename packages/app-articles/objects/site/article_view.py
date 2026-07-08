@@ -147,6 +147,7 @@ def GET(request):
 <div class="error" id="page-error"></div>
 </div>
 <script>const ARTICLE_ID = {article_id!r}; const VIEWER_ID = {(user_id or "")!r};{_SCRIPT}</script>
+<script src="/nav"></script>
 </body>
 </html>"""
     return {"content_type": "text/html; charset=utf-8", "body": html}

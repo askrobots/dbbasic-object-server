@@ -101,6 +101,7 @@ def GET(request):
 {body}
 </div>
 {script}
+<script src="/nav"></script>
 </body>
 </html>"""
     return {"content_type": "text/html; charset=utf-8", "body": html}

@@ -14,6 +14,10 @@
     {
       "id": "site_appearance",
       "path": "objects/site/appearance.py"
+    },
+    {
+      "id": "site_nav",
+      "path": "objects/site/nav.py"
     }
   ],
   "schemas": [],

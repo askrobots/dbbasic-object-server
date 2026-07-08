@@ -196,6 +196,36 @@ td.muted, .muted { color: var(--muted); }
 .alert.positive { color: var(--positive); border-color: var(--positive); }
 
 footer.app { margin-top: 2.5rem; color: var(--muted); font-size: 0.78rem; }
+
+/* App shell / navigation bar (injected by /nav) */
+body.has-appbar { padding-top: 3rem; }
+.appbar { position: fixed; top: 0; left: 0; right: 0; height: 3rem; display: flex; align-items: center;
+          gap: 0.6rem; padding: 0 0.9rem; background: var(--panel); border-bottom: 1px solid var(--line);
+          z-index: 50; font: 14px/1.4 var(--font-ui); }
+.appbar .brand { font-weight: 700; color: var(--text); padding: 0.2rem 0.3rem; }
+.appbar .brand:hover { text-decoration: none; color: var(--accent-strong); }
+.appbar .search { flex: 1; max-width: 480px; position: relative; }
+.appbar .search input { padding-right: 2.6rem; height: 2rem; }
+.appbar .search .kbd { position: absolute; right: 0.45rem; top: 50%; transform: translateY(-50%);
+  color: var(--muted); font-size: 0.7rem; border: 1px solid var(--line); border-radius: 4px; padding: 0 0.3rem;
+  pointer-events: none; }
+.appbar .spacer { flex: 1; }
+.appbar .navbtn { background: transparent; border: 1px solid transparent; color: var(--muted); cursor: pointer;
+  border-radius: var(--radius-sm); padding: 0.3rem 0.55rem; position: relative; font: inherit; white-space: nowrap; }
+.appbar .navbtn:hover { border-color: var(--line); color: var(--text); }
+.appbar .navbtn.accent { color: var(--accent-strong); }
+.appbar .count { position: absolute; top: -3px; right: -3px; background: var(--accent); color: var(--accent-ink);
+  border-radius: 999px; font-size: 0.6rem; line-height: 1; padding: 0.12rem 0.28rem; }
+.navmenu { position: fixed; top: 2.7rem; background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius-md); box-shadow: var(--shadow); min-width: 190px; z-index: 60; display: none;
+  overflow: hidden; }
+.navmenu.open { display: block; }
+.navmenu a, .navmenu .item { display: block; padding: 0.5rem 0.8rem; color: var(--text); font-size: 0.85rem;
+  cursor: pointer; background: none; border: 0; width: 100%; text-align: left; font: inherit; }
+.navmenu a:hover, .navmenu .item:hover { background: var(--panel-2); text-decoration: none; }
+.navmenu .head { color: var(--muted); font-size: 0.72rem; text-transform: uppercase; padding: 0.5rem 0.8rem 0.2rem; }
+.navmenu.results { width: 480px; max-width: 92vw; max-height: 62vh; overflow-y: auto; }
+.navmenu .hit .sub { color: var(--muted); font-size: 0.75rem; }
 """
 
 

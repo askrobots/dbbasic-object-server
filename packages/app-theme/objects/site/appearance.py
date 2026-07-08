@@ -97,6 +97,7 @@ def GET(request):
 design system's token roles. Themes also install as packages — see docs/design-system.md.</p>
 </div>
 <script>const ADMIN = {"true" if is_admin else "false"};{_SCRIPT}</script>
+<script src="/nav"></script>
 </body>
 </html>"""
     return {"content_type": "text/html; charset=utf-8", "body": html}

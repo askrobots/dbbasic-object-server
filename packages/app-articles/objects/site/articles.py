@@ -87,6 +87,7 @@ def GET(request):
 <div id="items" class="stack"><p class="hint">loading&hellip;</p></div>
 </div>
 <script>{owner_snippet}{_SCRIPT}</script>
+<script src="/nav"></script>
 </body>
 </html>"""
     return {"content_type": "text/html; charset=utf-8", "body": html}
