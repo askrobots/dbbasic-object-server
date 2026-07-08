@@ -77,7 +77,24 @@ TERMINAL = {
     "focus": "#3ddc8455",
 }
 
-THEMES = {"base": BASE, "paper": PAPER, "terminal": TERMINAL}
+MIDNIGHT = {
+    "color-scheme": "dark",
+    "bg": "#0b0b10",
+    "panel": "#17171f",
+    "panel-2": "#1f1f2b",
+    "line": "#2b2b37",
+    "text": "#f4f4f7",
+    "muted": "#a2a2ad",
+    "accent": "#5aa7ff",
+    "accent-strong": "#7ab6ff",
+    "accent-ink": "#0b0b10",
+    "positive": "#52d273",
+    "warning": "#f1b747",
+    "danger": "#ff6b6b",
+    "focus": "#5aa7ff55",
+}
+
+THEMES = {"base": BASE, "midnight": MIDNIGHT, "paper": PAPER, "terminal": TERMINAL}
 
 # Shape, rhythm, and type are theme-independent for now (a theme could
 # override these too by shipping custom tokens).

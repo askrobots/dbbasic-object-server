@@ -12,36 +12,22 @@ answers with the user's own model, key, and MCP tool subset:
     anything else      AI chat with tools
 """
 
+# Terminal-specific layout only; palette, chrome, and inputs come from /style,
+# so the shell reskins with the active theme like every other page.
 _STYLE = """
-:root { color-scheme: dark; --bg: #0b0b10; --panel: #17171f; --line: #2b2b37;
-        --text: #f4f4f7; --muted: #a2a2ad; --blue: #5aa7ff; --green: #52d273;
-        --amber: #f1b747; --red: #ff6b6b; }
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--text);
-       font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
-.wrap { max-width: 860px; margin: 0 auto; padding: 1.25rem; display: flex;
-        flex-direction: column; min-height: 100vh; }
-header { display: flex; align-items: baseline; gap: 1rem; margin-bottom: 0.75rem;
-         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-header h1 { font-size: 1.05rem; margin: 0; }
-header .who { margin-left: auto; color: var(--muted); font-size: 0.8rem; }
-a { color: var(--blue); text-decoration: none; }
-#log { flex: 1; overflow-y: auto; padding-bottom: 1rem; }
+.wrap { display: flex; flex-direction: column; min-height: calc(100vh - 3.5rem); }
+#log { flex: 1; overflow-y: auto; padding-bottom: 1rem;
+       font-family: var(--font-mono); font-size: 0.9rem; }
 .entry { margin-bottom: 0.75rem; }
-.entry .in { color: var(--green); white-space: pre-wrap; word-break: break-word; }
+.entry .in { color: var(--positive); white-space: pre-wrap; word-break: break-word; }
 .entry .in::before { content: "> "; color: var(--muted); }
 .entry .out { color: var(--text); white-space: pre-wrap; word-break: break-word; }
-.entry .out.err { color: var(--red); }
-.entry .tools { color: var(--amber); font-size: 0.78rem; }
+.entry .out.err { color: var(--danger); }
+.entry .tools { color: var(--warning); font-size: 0.78rem; }
 .entry .pending { color: var(--muted); }
 form#prompt { display: flex; gap: 0.5rem; border-top: 1px solid var(--line);
               padding-top: 0.75rem; }
-form#prompt input { flex: 1; background: var(--panel); color: var(--text);
-                    border: 1px solid var(--line); border-radius: 6px;
-                    padding: 0.55rem 0.7rem; font: inherit; }
-.hint { color: var(--muted); background: var(--panel); border: 1px solid var(--line);
-        border-radius: 8px; padding: 0.9rem 1rem;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+form#prompt input { flex: 1; font-family: var(--font-mono); }
 """
 
 _HELP = (
@@ -269,14 +255,16 @@ def GET(request):
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Shell</title>
+<link rel="stylesheet" href="/style">
 <style>{_STYLE}</style>
 </head>
 <body>
 <div class="wrap">
-<header><h1>Shell</h1><div class="who">{who}</div></header>
+<header class="app"><h1>Shell</h1><div class="who">{who}</div></header>
 {body}
 </div>
 {script}
+<script src="/nav"></script>
 </body>
 </html>"""
     return {"content_type": "text/html; charset=utf-8", "body": html}
