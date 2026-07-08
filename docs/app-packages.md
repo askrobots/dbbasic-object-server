@@ -24,8 +24,15 @@ flowchart LR
 Because every surface reads the same schema and passes the same
 permission engine, installing an app instantly gives it: a validated
 records API, generated forms and lists in Scroll, global search, MCP
-tools for agents, and AI chat access — with row-level visibility rules
-applied identically everywhere.
+tools for agents, AI chat access, and a live web page — with row-level
+visibility rules applied identically everywhere.
+
+Each app's page is also **realtime**: it subscribes to its collection
+over the shared `/ws` websocket and re-renders when a record it can see
+changes, so a note added in one tab (or by an agent) appears in another
+with no reload — one line per page, permission-filtered like everything
+else. See [design-system](design-system.md) and the
+[realtime contract](http-api-contract.md#realtime-push-websocket).
 
 ## The Suite
 

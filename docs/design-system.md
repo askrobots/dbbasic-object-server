@@ -95,9 +95,12 @@ to `site_nav`.
 
 The bell is **live**: it subscribes to the `notifications` collection over
 the `/ws` websocket and updates the instant something happens, with a 20s
-poll as backup. Pages can follow their own collection the same way via
-`window.dbbasicSubscribe(collection, handler)`. Auto-update on events is
-the thing the old dashboard/Channels stacks never did cleanly — see the
+poll as backup. Every app page is live the same way — each subscribes to
+its collection and auto-refreshes (150ms debounced) when a record it can
+see changes, over the one shared socket, via
+`window.dbbasicSubscribe(collection, handler)`. Add a live list to a new
+page in one line. Auto-update on events is the thing the old
+dashboard/Channels stacks never did cleanly — see the
 [realtime contract](http-api-contract.md#realtime-push-websocket).
 
 ## Themes are data — and packages

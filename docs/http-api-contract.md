@@ -1484,9 +1484,12 @@ must forward websocket upgrades (Caddy does by default). Single-process
 deployment assumption applies — see
 [asgi-realtime-direction](asgi-realtime-direction.md).
 
-The shared nav (`/nav`) already uses this: the notification bell
-subscribes to `notifications` and updates live, with a 20s poll as
-backup. Pages can follow their own collection via
+The shared nav (`/nav`) and every app page already use this. The
+notification bell subscribes to `notifications` and updates live (with a
+20s poll as backup); each list page (`/notes`, `/tasks`, `/contacts`, …)
+subscribes to its own collection and re-renders when a record it can see
+changes — in another tab, by another user, or by an agent — over the same
+single shared socket. Any page opts in with one line:
 `window.dbbasicSubscribe(collection, handler)`.
 
 ## Global Search

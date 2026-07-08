@@ -89,6 +89,14 @@ untrusted public users.
 - User file storage with per-user disk quotas, where downloads are
   authorized against each file's metadata record — owner rows, public
   links, and project sharing govern files like any other record
+- Realtime push over websockets (`/ws`): the notification bell and every
+  app-page list update the instant a record changes — in another tab, by
+  another user, or by an agent — over one shared socket, permission-
+  filtered so you only receive events for records you may read; the
+  durable event log stays as the poll fallback
+- A themeable design system delivered as objects: semantic token roles,
+  swappable themes (`/appearance`), a shared component vocabulary, and a
+  persistent app-shell nav (`/nav`) contributed to every page by a package
 - Runtime backups, restore helpers, deployment checks, GitHub Actions tests, and
   a working public staging deployment shape
 
@@ -128,10 +136,12 @@ see `http-api-contract.md` and `asgi-realtime-direction.md`; the nav's
 notification bell already updates on push). The remaining work is platform
 capability, in rough priority order:
 
-1. Extend realtime to more surfaces: object source/state/version rooms
-   (`/ws/objects/{id}`) for the dashboard, and list auto-refresh in the
-   app pages via `window.dbbasicSubscribe`. A shared broker before scaling
-   past one uvicorn worker.
+1. Extend realtime further: object source/state/version rooms
+   (`/ws/objects/{id}`) so the dashboard goes live, organic notification
+   triggers (a task assigned to you mints a notification) plus
+   click-to-dismiss on the bell, and a shared broker before scaling past
+   one uvicorn worker. (The notification bell and every app-page list are
+   already live over `/ws`.)
 2. Write-level project sharing (`$writable_projects`) and a per-family
    "builder role" so agents and collaborators can be scoped below admin.
 3. A background-job runtime: submit → job record → worker object → result
