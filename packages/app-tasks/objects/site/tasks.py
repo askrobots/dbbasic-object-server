@@ -1,105 +1,30 @@
-"""Tasks page: the visitor's tasks as a table with quick add and status moves.
+"""Tasks page — built from metadata, not markup.
 
-Status buttons offer only the transitions the schema allows from the
-row's current status — and the server enforces the same map, so the UI
-is a convenience, not the boundary.
-"""
-
-# Page-specific layout the shared sheet lacks: the quick-add form's column grid.
-_STYLE = """
-form.capture { background: var(--panel); border: 1px solid var(--line);
-               border-radius: var(--radius-md); padding: var(--pad); display: grid;
-               gap: var(--gap); margin-bottom: var(--gap);
-               grid-template-columns: 2fr 1fr 1fr auto; align-items: start; }
-form.capture .error { grid-column: 1 / -1; }
+The form and the list both come from the schema via the shared generators
+(/form -> window.dbbasicForm, /list -> window.dbbasicList). This page is
+just the chrome: a breadcrumb, an Add button, a search/sort toolbar, and
+two mount points. Add or edit opens the schema-driven form; the list
+auto-refreshes over the websocket. No hand-written fields or rows.
 """
 
 _SCRIPT = """
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
-  (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
-const TRANSITIONS = {open: ["assigned", "cancelled"],
-                     assigned: ["waiting_on_client", "open", "cancelled"],
-                     waiting_on_client: ["approved", "disputed", "assigned"],
-                     disputed: ["assigned", "cancelled"]};
-const BADGE = {approved: "positive", assigned: "warning", waiting_on_client: "warning",
-               disputed: "danger", cancelled: "danger"};
-let projectNames = {};
-
-function render(records) {
-  const rows = records.map((t) => {
-    const moves = (TRANSITIONS[t.status] || []).map((next) =>
-      `<button class="move btn ghost sm" data-id="${esc(t.id)}" data-next="${esc(next)}">${esc(next)}</button>`);
-    return `<tr><td>${esc(t.title)}<div style="color:var(--muted);font-size:0.75rem">` +
-           `${esc(projectNames[t.project_id] || t.project_id || "")}</div></td>` +
-           `<td><span class="badge ${BADGE[t.status] || ""}">${esc(t.status)}</span><br>${moves.join("")}</td>` +
-           `<td>${esc(t.urgency)}</td><td>${esc(t.due_date)}</td><td>${esc(t.assigned_to)}</td></tr>`;
-  });
-  document.getElementById("rows").innerHTML =
-    rows.join("") || '<tr><td colspan="5">No tasks yet.</td></tr>';
-}
-
-async function loadProjects() {
-  const res = await fetch("/collections/projects/records?limit=200",
-                          {credentials: "same-origin", headers: {accept: "application/json"}});
-  if (!res.ok) return;
-  const body = await res.json();
-  const select = document.getElementById("project-select");
-  for (const project of body.records || []) {
-    projectNames[project.id] = project.name;
-    const option = document.createElement("option");
-    option.value = project.id;
-    option.textContent = project.name;
-    select.appendChild(option);
-  }
-}
-
-async function load() {
-  const res = await fetch("/collections/tasks/records?limit=200",
-                          {credentials: "same-origin", headers: {accept: "application/json"}});
-  const body = await res.json();
-  render(body.records || []);
-}
-
-document.getElementById("rows").addEventListener("click", async (event) => {
-  const button = event.target.closest("button.move");
-  if (!button) return;
-  const res = await fetch(`/collections/tasks/records/${button.dataset.id}`, {
-    method: "PUT", credentials: "same-origin",
-    headers: {"content-type": "application/json", accept: "application/json"},
-    body: JSON.stringify({status: button.dataset.next}),
-  });
-  const body = await res.json();
-  document.getElementById("page-error").textContent = res.ok ? "" : (body.error || "Move failed");
-  if (res.ok) load();
+const panel = document.getElementById("formpanel");
+const list = window.dbbasicList("tasks", {
+  mount: "#list", search: "#search", sort: "#sort", owner: OWNER_ID,
+  title: (r) => r.title,
+  subtitle: (r) => [r.status, r.urgency].filter(Boolean).join(" · "),
+  created: (r) => r.created_at, onEdit: (r) => openForm(r),
 });
-
-document.getElementById("capture-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const fields = event.target.elements;
-  const record = {id: crypto.randomUUID(), title: fields["title"].value.trim(),
-                  urgency: fields["urgency"].value, owner_id: OWNER_ID};
-  if (fields["project"].value) record.project_id = fields["project"].value;
-  const res = await fetch("/collections/tasks/records", {
-    method: "POST", credentials: "same-origin",
-    headers: {"content-type": "application/json", accept: "application/json"},
-    body: JSON.stringify(record),
+function openForm(record) {
+  document.getElementById("formtitle").textContent = record ? "Edit Task" : "New Task";
+  panel.style.display = "block";
+  window.dbbasicForm("tasks", {
+    mount: "#formmount", record: record, owner: OWNER_ID,
+    onSaved: () => { panel.style.display = "none"; list.reload(); },
+    onCancel: () => { panel.style.display = "none"; },
   });
-  const body = await res.json();
-  document.getElementById("page-error").textContent = res.ok ? "" : (body.error || "Save failed");
-  if (res.ok) { event.target.reset(); load(); }
-});
-loadProjects();
-load();
-
-// Realtime: auto-refresh when this collection changes (another tab, user, or agent).
-(function () {
-  let _lt = null;
-  const reload = () => { clearTimeout(_lt); _lt = setTimeout(load, 150); };
-  (function wait() {
-    if (window.dbbasicSubscribe) window.dbbasicSubscribe("tasks", reload);
-    else setTimeout(wait, 300);
-  })();
-})();
+}
+document.getElementById("add").addEventListener("click", () => openForm(null));
 """
 
 
@@ -113,24 +38,23 @@ def GET(request):
         script = ""
     else:
         body = """
-<form class="capture" id="capture-form">
-<input name="title" placeholder="Task title" required maxlength="200">
-<select name="project" id="project-select"><option value="">No project</option></select>
-<select name="urgency">
-<option value="low">low</option>
-<option value="normal" selected>normal</option>
-<option value="high">high</option>
-<option value="critical">critical</option>
-</select>
-<button type="submit" class="btn primary">Add Task</button>
-<div class="error" id="page-error"></div>
-</form>
-<table>
-<thead><tr><th>Task</th><th>Status</th><th>Urgency</th><th>Due</th><th>Assigned</th></tr></thead>
-<tbody id="rows"><tr><td colspan="5">loading&hellip;</td></tr></tbody>
-</table>
+<div class="breadcrumb"><a href="/">Home</a> / Tasks</div>
+<div class="pagehead"><h1>Tasks</h1><button class="btn primary" id="add">+ New Task</button></div>
+<div id="formpanel" style="display:none; margin-bottom:1rem">
+  <h2 id="formtitle" style="font-size:1rem; margin:0 0 0.5rem">New Task</h2>
+  <div id="formmount"></div>
+</div>
+<div class="toolbar">
+  <input class="search grow" id="search" placeholder="Search tasks&hellip;" autocomplete="off">
+  <select id="sort"><option value="newest">Newest</option><option value="oldest">Oldest</option></select>
+</div>
+<div id="list"><div class="state">loading&hellip;</div></div>
 """
-        script = f"<script>const OWNER_ID = {user_id!r};{_SCRIPT}</script>"
+        script = (
+            f"<script>const OWNER_ID = {user_id!r};</script>"
+            '<script src="/list"></script><script src="/form"></script>'
+            f"<script>{_SCRIPT}</script>"
+        )
 
     who = (
         f"signed in as <strong>{user_id}</strong>"
@@ -144,11 +68,10 @@ def GET(request):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tasks</title>
 <link rel="stylesheet" href="/style">
-<style>{_STYLE}</style>
 </head>
 <body>
 <div class="wrap">
-<header class="app"><h1>Tasks</h1><div class="who">{who}</div></header>
+<header class="app"><h1><a href="/">DBBASIC</a></h1><div class="who">{who}</div></header>
 {body}
 </div>
 {script}

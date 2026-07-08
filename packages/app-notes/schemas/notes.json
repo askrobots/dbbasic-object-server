@@ -1,7 +1,7 @@
 {
   "name": "notes",
   "title": "Notes",
-  "version": 1,
+  "version": 2,
   "description": "Quick notes, optionally linked to a project.",
   "fields": [
     {
@@ -24,6 +24,12 @@
       "type": "boolean",
       "label": "Public",
       "default": "false"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
     },
     {
       "name": "owner_id",

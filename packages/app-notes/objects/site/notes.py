@@ -1,99 +1,30 @@
-"""Notes page: the visitor's own notes as cards, with quick capture and search.
+"""Notes page — built from metadata, not markup.
 
-The browser talks to /collections/notes/records and /api/search with the
-visitor's session cookie, so the permission policy decides what this page
-can see and write — the page itself holds no data access.
-"""
-
-# Page-unique layout only; everything else comes from the shared /style sheet.
-_STYLE = """
-.card { white-space: pre-wrap; }
-form.capture { background: var(--panel); border: 1px solid var(--line);
-               border-radius: var(--radius-md); padding: var(--pad); margin-bottom: var(--gap); }
-#search-box { margin-bottom: var(--gap); }
+The form and the list both come from the schema via the shared generators
+(/form -> window.dbbasicForm, /list -> window.dbbasicList). This page is
+just the chrome: a breadcrumb, an Add button, a search/sort toolbar, and
+two mount points. Add or edit opens the schema-driven form; the list
+auto-refreshes over the websocket. No hand-written fields or rows.
 """
 
 _SCRIPT = """
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
-  (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
-let projectNames = {};
-
-function renderCards(records) {
-  const cards = records.map((note) => {
-    const bits = [];
-    if (note.project_id) bits.push(esc(projectNames[note.project_id] || note.project_id));
-    if (note.is_public === "true") bits.push("public");
-    bits.push(`<a href="/notes/${encodeURIComponent(note.id)}">open</a>`);
-    return `<div class="card">${esc(note.content)}` +
-           `<div class="meta">${bits.join(" \\u00b7 ")}</div></div>`;
+const panel = document.getElementById("formpanel");
+const list = window.dbbasicList("notes", {
+  mount: "#list", search: "#search", sort: "#sort", owner: OWNER_ID,
+  title: (r) => r.content || "(empty note)", href: (r) => "/notes/" + r.id,
+  subtitle: (r) => r.is_public === "true" ? "public" : "",
+  created: (r) => r.created_at, onEdit: (r) => openForm(r),
+});
+function openForm(record) {
+  document.getElementById("formtitle").textContent = record ? "Edit Note" : "New Note";
+  panel.style.display = "block";
+  window.dbbasicForm("notes", {
+    mount: "#formmount", record: record, owner: OWNER_ID,
+    onSaved: () => { panel.style.display = "none"; list.reload(); },
+    onCancel: () => { panel.style.display = "none"; },
   });
-  document.getElementById("cards").innerHTML =
-    cards.join("") || '<p class="hint">No notes yet.</p>';
 }
-
-async function loadProjects() {
-  const res = await fetch("/collections/projects/records?limit=200",
-                          {credentials: "same-origin", headers: {accept: "application/json"}});
-  if (!res.ok) return;
-  const body = await res.json();
-  const select = document.getElementById("project-select");
-  for (const project of body.records || []) {
-    projectNames[project.id] = project.name;
-    const option = document.createElement("option");
-    option.value = project.id;
-    option.textContent = project.name;
-    select.appendChild(option);
-  }
-}
-
-async function load() {
-  const res = await fetch("/collections/notes/records?limit=200",
-                          {credentials: "same-origin", headers: {accept: "application/json"}});
-  const body = await res.json();
-  renderCards((body.records || []).slice().reverse());
-}
-
-async function search(event) {
-  const query = event.target.value.trim();
-  if (!query) { load(); return; }
-  const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&collections=notes&limit=50`,
-                          {credentials: "same-origin", headers: {accept: "application/json"}});
-  if (!res.ok) return;
-  const body = await res.json();
-  renderCards((body.results || {}).notes || []);
-}
-
-async function create(event) {
-  event.preventDefault();
-  const form = event.target;
-  const fields = form.elements;
-  const record = {id: crypto.randomUUID(), content: fields["content"].value.trim(),
-                  owner_id: OWNER_ID, is_public: "false"};
-  if (fields["project"].value) record.project_id = fields["project"].value;
-  const res = await fetch("/collections/notes/records", {
-    method: "POST", credentials: "same-origin",
-    headers: {"content-type": "application/json", accept: "application/json"},
-    body: JSON.stringify(record),
-  });
-  const body = await res.json();
-  document.getElementById("form-error").textContent = res.ok ? "" : (body.error || "Save failed");
-  if (res.ok) { form.reset(); load(); }
-}
-
-document.getElementById("capture-form").addEventListener("submit", create);
-document.getElementById("search-box").addEventListener("input", search);
-loadProjects();
-load();
-
-// Realtime: auto-refresh when this collection changes (another tab, user, or agent).
-(function () {
-  let _lt = null;
-  const reload = () => { clearTimeout(_lt); _lt = setTimeout(load, 150); };
-  (function wait() {
-    if (window.dbbasicSubscribe) window.dbbasicSubscribe("notes", reload);
-    else setTimeout(wait, 300);
-  })();
-})();
+document.getElementById("add").addEventListener("click", () => openForm(null));
 """
 
 
@@ -107,16 +38,23 @@ def GET(request):
         script = ""
     else:
         body = """
-<form class="capture stack" id="capture-form">
-<textarea name="content" placeholder="Write a note&hellip;" rows="3" required></textarea>
-<select name="project" id="project-select"><option value="">No project</option></select>
-<button type="submit" class="btn primary">Save Note</button>
-<div class="error" id="form-error"></div>
-</form>
-<input class="search" id="search-box" placeholder="Search notes&hellip;" autocomplete="off">
-<div class="cards" id="cards"><p class="hint">loading&hellip;</p></div>
+<div class="breadcrumb"><a href="/">Home</a> / Notes</div>
+<div class="pagehead"><h1>Notes</h1><button class="btn primary" id="add">+ New Note</button></div>
+<div id="formpanel" style="display:none; margin-bottom:1rem">
+  <h2 id="formtitle" style="font-size:1rem; margin:0 0 0.5rem">New Note</h2>
+  <div id="formmount"></div>
+</div>
+<div class="toolbar">
+  <input class="search grow" id="search" placeholder="Search notes&hellip;" autocomplete="off">
+  <select id="sort"><option value="newest">Newest</option><option value="oldest">Oldest</option></select>
+</div>
+<div id="list"><div class="state">loading&hellip;</div></div>
 """
-        script = f"<script>const OWNER_ID = {user_id!r};{_SCRIPT}</script>"
+        script = (
+            f"<script>const OWNER_ID = {user_id!r};</script>"
+            '<script src="/list"></script><script src="/form"></script>'
+            f"<script>{_SCRIPT}</script>"
+        )
 
     who = (
         f"signed in as <strong>{user_id}</strong>"
@@ -130,11 +68,10 @@ def GET(request):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Notes</title>
 <link rel="stylesheet" href="/style">
-<style>{_STYLE}</style>
 </head>
 <body>
-<div class="wrap narrow">
-<header class="app"><h1>Notes</h1><div class="who">{who}</div></header>
+<div class="wrap">
+<header class="app"><h1><a href="/">DBBASIC</a></h1><div class="who">{who}</div></header>
 {body}
 </div>
 {script}

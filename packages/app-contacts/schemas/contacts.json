@@ -1,7 +1,7 @@
 {
   "name": "contacts",
   "title": "Contacts",
-  "version": 1,
+  "version": 2,
   "description": "People: the core CRM record.",
   "fields": [
     {
@@ -52,6 +52,12 @@
       "name": "notes",
       "type": "textarea",
       "label": "Notes"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
     },
     {
       "name": "owner_id",

@@ -1,7 +1,7 @@
 {
   "name": "articles",
   "title": "Articles",
-  "version": 1,
+  "version": 2,
   "description": "Long-form writing. Schema versions and record changelogs provide edit history.",
   "fields": [
     {
@@ -32,6 +32,12 @@
       "name": "published_on",
       "type": "date",
       "label": "Published On"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
     },
     {
       "name": "owner_id",

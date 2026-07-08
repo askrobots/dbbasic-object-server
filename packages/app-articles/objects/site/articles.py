@@ -1,61 +1,34 @@
-"""Articles page: published writing for visitors, drafts and writing for owners.
+"""Articles page — built from metadata, not markup.
 
-Anonymous visitors see published articles because the public-read rule
-returns them from /collections/articles/records — this page is a working
-blog with zero visibility code of its own.
+The form and the list both come from the schema via the shared generators
+(/form -> window.dbbasicForm, /list -> window.dbbasicList). This page is
+just the chrome: a breadcrumb, a search/sort toolbar, and two mount points.
+
+Articles are public: anonymous visitors still see the PUBLISHED articles
+list (this is a working blog), served by the public-read rule. Only signed-in
+owners get the "+ New Article" button, the schema-driven form panel, and the
+per-row edit/delete controls (dbbasicList decides those from the owner match).
 """
 
 _SCRIPT = """
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
-  (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
-
-function render(records) {
-  const items = records.map((a) => {
-    const published = a.is_public === "true";
-    const label = published ? (a.published_on || "published") : "draft";
-    const badge = `<span class="badge${published ? " positive" : ""}">${esc(label)}</span>`;
-    const preview = esc(String(a.content || "").slice(0, 200));
-    return `<div class="card"><h2 class="title"><a href="/articles/${encodeURIComponent(a.id)}">` +
-           `${esc(a.title)}</a></h2><div class="meta">${badge}</div><p>${preview}</p></div>`;
-  });
-  document.getElementById("items").innerHTML =
-    items.join("") || '<p class="hint">Nothing published yet.</p>';
-}
-
-async function load() {
-  const res = await fetch("/collections/articles/records?limit=200",
-                          {credentials: "same-origin", headers: {accept: "application/json"}});
-  if (!res.ok) { render([]); return; }
-  const body = await res.json();
-  render((body.records || []).slice().reverse());
-}
-
-const form = document.getElementById("capture-form");
-if (form) form.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const fields = form.elements;
-  const record = {id: crypto.randomUUID(), title: fields["title"].value.trim(),
-                  content: fields["content"].value, is_public: "false", owner_id: OWNER_ID};
-  const res = await fetch("/collections/articles/records", {
-    method: "POST", credentials: "same-origin",
-    headers: {"content-type": "application/json", accept: "application/json"},
-    body: JSON.stringify(record),
-  });
-  const body = await res.json();
-  document.getElementById("form-error").textContent = res.ok ? "" : (body.error || "Save failed");
-  if (res.ok) { window.location = `/articles/${record.id}`; }
+const panel = document.getElementById("formpanel");
+const list = window.dbbasicList("articles", {
+  mount: "#list", search: "#search", sort: "#sort", owner: OWNER_ID,
+  title: (r) => r.title, href: (r) => "/articles/" + r.id,
+  subtitle: (r) => (r.is_public === "true" ? (r.published_on || "published") : "draft"),
+  created: (r) => r.published_on || r.created_at, onEdit: (r) => openForm(r),
 });
-load();
-
-// Realtime: auto-refresh when this collection changes (another tab, user, or agent).
-(function () {
-  let _lt = null;
-  const reload = () => { clearTimeout(_lt); _lt = setTimeout(load, 150); };
-  (function wait() {
-    if (window.dbbasicSubscribe) window.dbbasicSubscribe("articles", reload);
-    else setTimeout(wait, 300);
-  })();
-})();
+function openForm(record) {
+  document.getElementById("formtitle").textContent = record ? "Edit Article" : "New Article";
+  panel.style.display = "block";
+  window.dbbasicForm("articles", {
+    mount: "#formmount", record: record, owner: OWNER_ID,
+    onSaved: () => { panel.style.display = "none"; list.reload(); },
+    onCancel: () => { panel.style.display = "none"; },
+  });
+}
+const add = document.getElementById("add");
+if (add) add.addEventListener("click", () => openForm(null));
 """
 
 
@@ -64,18 +37,33 @@ def GET(request):
     user_id = identity.get("user_id")
     _logger.info("site_articles served", user_id=user_id or "anonymous")
 
-    capture = ""
-    owner_snippet = "const OWNER_ID = null;"
-    if user_id:
-        capture = """
-<form class="card stack" id="capture-form">
-<input name="title" placeholder="Title" required maxlength="200">
-<textarea name="content" placeholder="Write&hellip;" rows="6" required></textarea>
-<button type="submit" class="btn primary">Save Draft</button>
-<div class="error" id="form-error"></div>
-</form>
+    add_btn = (
+        '<button class="btn primary" id="add">+ New Article</button>' if user_id else ""
+    )
+    form_panel = (
+        """
+<div id="formpanel" style="display:none; margin-bottom:1rem">
+  <h2 id="formtitle" style="font-size:1rem; margin:0 0 0.5rem">New Article</h2>
+  <div id="formmount"></div>
+</div>"""
+        if user_id
+        else ""
+    )
+    body = f"""
+<div class="breadcrumb"><a href="/">Home</a> / Articles</div>
+<div class="pagehead"><h1>Articles</h1>{add_btn}</div>{form_panel}
+<div class="toolbar">
+  <input class="search grow" id="search" placeholder="Search articles&hellip;" autocomplete="off">
+  <select id="sort"><option value="newest">Newest</option><option value="oldest">Oldest</option></select>
+</div>
+<div id="list"><div class="state">loading&hellip;</div></div>
 """
-        owner_snippet = f"const OWNER_ID = {user_id!r};"
+
+    script = (
+        f'<script>const OWNER_ID = {user_id or ""!r};</script>'
+        '<script src="/list"></script><script src="/form"></script>'
+        f"<script>{_SCRIPT}</script>"
+    )
 
     who = (
         f"signed in as <strong>{user_id}</strong>"
@@ -91,12 +79,11 @@ def GET(request):
 <link rel="stylesheet" href="/style">
 </head>
 <body>
-<div class="wrap narrow">
-<header class="app"><h1>Articles</h1><div class="who">{who}</div></header>
-{capture}
-<div id="items" class="stack"><p class="hint">loading&hellip;</p></div>
+<div class="wrap">
+<header class="app"><h1><a href="/">DBBASIC</a></h1><div class="who">{who}</div></header>
+{body}
 </div>
-<script>{owner_snippet}{_SCRIPT}</script>
+{script}
 <script src="/nav"></script>
 </body>
 </html>"""
