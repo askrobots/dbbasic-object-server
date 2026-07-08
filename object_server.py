@@ -3447,6 +3447,12 @@ def _admin_capabilities_payload() -> dict[str, Any]:
             "enabled": _env_enabled(PACKAGE_RESTORE_ENABLED_ENV),
             "env": PACKAGE_RESTORE_ENABLED_ENV,
         },
+        "packages": {
+            "available": True,
+            "can_install": _env_enabled(PACKAGE_INSTALLS_ENABLED_ENV),
+            "can_restore": _env_enabled(PACKAGE_RESTORE_ENABLED_ENV),
+            "install_env": PACKAGE_INSTALLS_ENABLED_ENV,
+        },
         "backups": {
             "available": True,
             "can_create": True,
