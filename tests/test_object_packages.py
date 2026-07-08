@@ -4,8 +4,11 @@ from pathlib import Path
 import pytest
 
 import object_execution
+import object_package_baselines
 import object_packages
+import object_reconciles
 import object_records
+import object_schemas
 import object_state
 import python_object_runtime
 
@@ -19,6 +22,81 @@ def write_package(root, package_id, payload, files=()):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
     return package_dir
+
+
+def update_package(root, package_id, payload, files=()):
+    """Overwrite an already-written package's manifest and files (a "new version")."""
+    package_dir = root / package_id
+    (package_dir / object_packages.MANIFEST_FILE).write_text(json.dumps(payload))
+    for relative_path, content in files:
+        path = package_dir / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+    return package_dir
+
+
+def _reconcile_manifest(version):
+    return {
+        "id": "hello-world",
+        "name": "Hello World",
+        "version": version,
+        "objects": [{"id": "hello_world", "path": "objects/hello/world.py"}],
+        "schemas": [{"collection": "contacts", "path": "schemas/contacts.json"}],
+    }
+
+
+def _install_reconcile_fixture(tmp_path, *, edit_object=False, edit_schema=False):
+    """Install hello-world v0.1.0, optionally customize the live object/schema."""
+    packages_root = tmp_path / "packages"
+    data_dir = tmp_path / "data"
+    object_root = tmp_path / "objects"
+    object_root.mkdir()
+
+    write_package(
+        packages_root,
+        "hello-world",
+        _reconcile_manifest("0.1.0"),
+        files=(
+            ("objects/hello/world.py", "def GET(request): return {'v': 1}\n"),
+            (
+                "schemas/contacts.json",
+                json.dumps({"name": "contacts", "fields": [{"name": "id", "type": "text"}]}),
+            ),
+        ),
+    )
+    object_packages.install_package(
+        "hello-world",
+        root=packages_root,
+        base_dir=data_dir,
+        object_roots=[object_root],
+    )
+
+    if edit_object:
+        (object_root / "hello" / "world.py").write_text("def GET(request): return {'v': 'customized'}\n")
+    if edit_schema:
+        object_schemas.replace_schema(
+            "contacts",
+            {
+                "name": "contacts",
+                "fields": [
+                    {"name": "id", "type": "text"},
+                    {"name": "x_priority", "type": "text"},
+                ],
+            },
+            base_dir=data_dir,
+        )
+
+    return packages_root, data_dir, object_root
+
+
+def _bump_reconcile_package(packages_root, *, version, object_code=None, schema_fields=None):
+    package_dir = packages_root / "hello-world"
+    files = []
+    if object_code is not None:
+        files.append(("objects/hello/world.py", object_code))
+    if schema_fields is not None:
+        files.append(("schemas/contacts.json", json.dumps({"name": "contacts", "fields": schema_fields})))
+    update_package(packages_root, "hello-world", _reconcile_manifest(version), files=files)
 
 
 def manifest(package_id="crm-starter", **overrides):
@@ -327,6 +405,12 @@ def test_install_package_refuses_existing_objects_without_replace(tmp_path):
 
 
 def test_install_package_replaces_objects_when_allowed(tmp_path):
+    # The pre-existing file here was never installed by this package (no
+    # baseline recorded for it), so the reconcile engine has no basis to call
+    # it "pristine" and would park it as a conflict rather than guess. This
+    # is the "replaces when allowed" path re-armed under Phase 2: allow_replace
+    # clears the create/replace blocker, and force is the explicit "discard
+    # whatever is there" signal (see docs/upgrade-and-customization.md Rule 1).
     packages_root = tmp_path / "packages"
     object_root = tmp_path / "objects"
     (object_root / "hello").mkdir(parents=True)
@@ -346,12 +430,51 @@ def test_install_package_replaces_objects_when_allowed(tmp_path):
     result = object_packages.install_package(
         "hello-world",
         root=packages_root,
+        base_dir=tmp_path / "data",
+        object_roots=[object_root],
+        allow_replace=True,
+        force=True,
+    )
+
+    assert result["objects"][0]["action"] == "replace"
+    assert result["objects"][0]["status"] == "forced"
+    assert (object_root / "hello" / "world.py").read_text() == "def GET(request): return {'new': True}\n"
+
+
+def test_install_package_parks_conflict_when_replace_has_no_baseline(tmp_path):
+    # Same setup as above, but WITHOUT force: an untracked existing file plus
+    # differing shipped content is a conflict, not a blind overwrite. The
+    # install still succeeds; the live file is left untouched and a
+    # pending-reconcile record is created instead.
+    packages_root = tmp_path / "packages"
+    object_root = tmp_path / "objects"
+    (object_root / "hello").mkdir(parents=True)
+    (object_root / "hello" / "world.py").write_text("def GET(request): return {'old': True}\n")
+    write_package(
+        packages_root,
+        "hello-world",
+        {
+            "id": "hello-world",
+            "name": "Hello World",
+            "version": "0.1.0",
+            "objects": [{"id": "hello_world", "path": "objects/hello/world.py"}],
+        },
+        files=(("objects/hello/world.py", "def GET(request): return {'new': True}\n"),),
+    )
+
+    result = object_packages.install_package(
+        "hello-world",
+        root=packages_root,
+        base_dir=tmp_path / "data",
         object_roots=[object_root],
         allow_replace=True,
     )
 
     assert result["objects"][0]["action"] == "replace"
-    assert (object_root / "hello" / "world.py").read_text() == "def GET(request): return {'new': True}\n"
+    assert result["objects"][0]["status"] == "conflict"
+    assert "reconcile_id" in result["objects"][0]
+    assert result["reconciles"] == [result["objects"][0]["reconcile_id"]]
+    assert (object_root / "hello" / "world.py").read_text() == "def GET(request): return {'old': True}\n"
 
 
 def test_install_package_runs_before_write_hook_after_validation(tmp_path):
@@ -619,3 +742,309 @@ def test_package_manifest_rejects_unsafe_paths_and_ids(tmp_path):
 def test_missing_package_raises(tmp_path):
     with pytest.raises(object_packages.PackageNotFoundError):
         object_packages.get_package("missing", root=tmp_path / "packages")
+
+
+# --- Phase 2: reconcile-on-upgrade decision table ---------------------------
+#
+# See docs/upgrade-and-customization.md (Rule 1). Each test below exercises
+# one row of the three-way-compare table for objects (and, at the end,
+# schemas): pristine vs customized, shipped unchanged vs shipped changed.
+
+
+def test_reconcile_fresh_install_status_written(tmp_path):
+    packages_root = tmp_path / "packages"
+    data_dir = tmp_path / "data"
+    object_root = tmp_path / "objects"
+    object_root.mkdir()
+    write_package(
+        packages_root,
+        "hello-world",
+        _reconcile_manifest("0.1.0"),
+        files=(
+            ("objects/hello/world.py", "def GET(request): return {'v': 1}\n"),
+            (
+                "schemas/contacts.json",
+                json.dumps({"name": "contacts", "fields": [{"name": "id", "type": "text"}]}),
+            ),
+        ),
+    )
+
+    result = object_packages.install_package(
+        "hello-world",
+        root=packages_root,
+        base_dir=data_dir,
+        object_roots=[object_root],
+    )
+
+    assert result["objects"][0]["status"] == "written"
+    assert result["schemas"][0]["status"] == "written"
+    assert result["reconciles"] == []
+
+
+def test_reconcile_unchanged_reinstall_is_noop(tmp_path):
+    packages_root, data_dir, object_root = _install_reconcile_fixture(tmp_path)
+
+    result = object_packages.install_package(
+        "hello-world",
+        root=packages_root,
+        base_dir=data_dir,
+        object_roots=[object_root],
+        allow_replace=True,
+    )
+
+    assert result["objects"][0]["status"] == "unchanged"
+    assert result["schemas"][0]["status"] == "unchanged"
+    assert result["reconciles"] == []
+    assert (object_root / "hello" / "world.py").read_text() == "def GET(request): return {'v': 1}\n"
+
+
+def test_reconcile_pristine_fast_forwards_on_upgrade(tmp_path):
+    packages_root, data_dir, object_root = _install_reconcile_fixture(tmp_path, edit_object=False)
+    _bump_reconcile_package(
+        packages_root,
+        version="0.2.0",
+        object_code="def GET(request): return {'v': 2}\n",
+    )
+
+    result = object_packages.install_package(
+        "hello-world",
+        root=packages_root,
+        base_dir=data_dir,
+        object_roots=[object_root],
+        allow_replace=True,
+    )
+
+    assert result["objects"][0]["status"] == "updated"
+    assert result["reconciles"] == []
+    assert (object_root / "hello" / "world.py").read_text() == "def GET(request): return {'v': 2}\n"
+
+    baseline = object_package_baselines.load_baseline("hello-world", base_dir=data_dir)
+    assert baseline["version"] == "0.2.0"
+    assert baseline["objects"]["hello_world"] == object_package_baselines.sha256_text(
+        "def GET(request): return {'v': 2}\n"
+    )
+
+
+def test_reconcile_customized_and_shipped_unchanged_keeps_customization(tmp_path):
+    packages_root, data_dir, object_root = _install_reconcile_fixture(tmp_path, edit_object=True)
+
+    result = object_packages.install_package(
+        "hello-world",
+        root=packages_root,
+        base_dir=data_dir,
+        object_roots=[object_root],
+        allow_replace=True,
+    )
+
+    assert result["objects"][0]["status"] == "kept"
+    assert result["reconciles"] == []
+    assert (
+        object_root / "hello" / "world.py"
+    ).read_text() == "def GET(request): return {'v': 'customized'}\n"
+
+
+def test_reconcile_customized_and_shipped_changed_parks_conflict(tmp_path):
+    packages_root, data_dir, object_root = _install_reconcile_fixture(tmp_path, edit_object=True)
+    _bump_reconcile_package(
+        packages_root,
+        version="0.2.0",
+        object_code="def GET(request): return {'v': 2}\n",
+    )
+
+    result = object_packages.install_package(
+        "hello-world",
+        root=packages_root,
+        base_dir=data_dir,
+        object_roots=[object_root],
+        allow_replace=True,
+    )
+
+    assert result["objects"][0]["status"] == "conflict"
+    assert "reconcile_id" in result["objects"][0]
+    assert result["reconciles"] == [result["objects"][0]["reconcile_id"]]
+    # The install itself never raises: the conflict is parked, not blocking.
+    assert (
+        object_root / "hello" / "world.py"
+    ).read_text() == "def GET(request): return {'v': 'customized'}\n"
+
+    reconcile = object_reconciles.get_reconcile(result["objects"][0]["reconcile_id"], base_dir=data_dir)
+    assert reconcile["status"] == "pending"
+    assert reconcile["package"] == "hello-world"
+    assert reconcile["target_version"] == "0.2.0"
+    assert reconcile["baseline_version"] == "0.1.0"
+    assert reconcile["artifact"] == {"kind": "object", "id": "hello_world"}
+    assert reconcile["mine"] == "def GET(request): return {'v': 'customized'}\n"
+    assert reconcile["theirs"] == "def GET(request): return {'v': 2}\n"
+
+
+def test_reconcile_force_overwrites_conflict(tmp_path):
+    packages_root, data_dir, object_root = _install_reconcile_fixture(tmp_path, edit_object=True)
+    _bump_reconcile_package(
+        packages_root,
+        version="0.2.0",
+        object_code="def GET(request): return {'v': 2}\n",
+    )
+
+    result = object_packages.install_package(
+        "hello-world",
+        root=packages_root,
+        base_dir=data_dir,
+        object_roots=[object_root],
+        allow_replace=True,
+        force=True,
+    )
+
+    assert result["objects"][0]["status"] == "forced"
+    assert result["reconciles"] == []
+    assert (object_root / "hello" / "world.py").read_text() == "def GET(request): return {'v': 2}\n"
+
+    baseline = object_package_baselines.load_baseline("hello-world", base_dir=data_dir)
+    assert baseline["objects"]["hello_world"] == object_package_baselines.sha256_text(
+        "def GET(request): return {'v': 2}\n"
+    )
+
+
+def test_reconcile_resolve_take_theirs_writes_live_and_baseline(tmp_path):
+    packages_root, data_dir, object_root = _install_reconcile_fixture(tmp_path, edit_object=True)
+    _bump_reconcile_package(
+        packages_root,
+        version="0.2.0",
+        object_code="def GET(request): return {'v': 2}\n",
+    )
+    result = object_packages.install_package(
+        "hello-world",
+        root=packages_root,
+        base_dir=data_dir,
+        object_roots=[object_root],
+        allow_replace=True,
+    )
+    reconcile_id = result["objects"][0]["reconcile_id"]
+
+    resolved = object_reconciles.resolve_reconcile(
+        reconcile_id,
+        "take_theirs",
+        base_dir=data_dir,
+        object_roots=[object_root],
+        resolved_at="2026-07-08T00:00:00Z",
+    )
+
+    assert resolved["status"] == "resolved"
+    assert resolved["resolution"] == {"choice": "take_theirs", "resolved_at": "2026-07-08T00:00:00Z"}
+    assert (object_root / "hello" / "world.py").read_text() == "def GET(request): return {'v': 2}\n"
+
+    status = object_packages.package_status(
+        "hello-world", root=packages_root, base_dir=data_dir, object_roots=[object_root]
+    )
+    assert status["pending_reconciles"] == 0
+    object_artifact = next(a for a in status["artifacts"] if a["kind"] == "object")
+    assert object_artifact["state"] == "pristine"
+
+
+def test_reconcile_resolve_keep_mine_preserves_live_and_updates_baseline(tmp_path):
+    packages_root, data_dir, object_root = _install_reconcile_fixture(tmp_path, edit_object=True)
+    _bump_reconcile_package(
+        packages_root,
+        version="0.2.0",
+        object_code="def GET(request): return {'v': 2}\n",
+    )
+    result = object_packages.install_package(
+        "hello-world",
+        root=packages_root,
+        base_dir=data_dir,
+        object_roots=[object_root],
+        allow_replace=True,
+    )
+    reconcile_id = result["objects"][0]["reconcile_id"]
+
+    resolved = object_reconciles.resolve_reconcile(
+        reconcile_id,
+        "keep_mine",
+        base_dir=data_dir,
+        object_roots=[object_root],
+        resolved_at="2026-07-08T00:00:00Z",
+    )
+
+    assert resolved["status"] == "resolved"
+    assert resolved["resolution"]["choice"] == "keep_mine"
+    # Live content is untouched — the operator's customization survives.
+    assert (
+        object_root / "hello" / "world.py"
+    ).read_text() == "def GET(request): return {'v': 'customized'}\n"
+
+    status = object_packages.package_status(
+        "hello-world", root=packages_root, base_dir=data_dir, object_roots=[object_root]
+    )
+    assert status["pending_reconciles"] == 0
+    # Baseline now reads sha_theirs, so live (still "mine") reads customized
+    # against the new upstream baseline — the operator's choice is durable.
+    object_artifact = next(a for a in status["artifacts"] if a["kind"] == "object")
+    assert object_artifact["state"] == "customized"
+
+
+def test_reconcile_schema_conflict_and_resolve(tmp_path):
+    packages_root, data_dir, object_root = _install_reconcile_fixture(tmp_path, edit_schema=True)
+    _bump_reconcile_package(
+        packages_root,
+        version="0.2.0",
+        schema_fields=[
+            {"name": "id", "type": "text"},
+            {"name": "email", "type": "text"},
+        ],
+    )
+
+    result = object_packages.install_package(
+        "hello-world",
+        root=packages_root,
+        base_dir=data_dir,
+        object_roots=[object_root],
+        allow_replace=True,
+    )
+
+    assert result["schemas"][0]["status"] == "conflict"
+    reconcile_id = result["schemas"][0]["reconcile_id"]
+    assert result["reconciles"] == [reconcile_id]
+
+    live_before = object_schemas.get_schema("contacts", base_dir=data_dir, roots=[object_root])
+    assert live_before["field_count"] == 2
+    assert {f["name"] for f in live_before["fields"]} == {"id", "x_priority"}
+
+    resolved = object_reconciles.resolve_reconcile(
+        reconcile_id,
+        "take_theirs",
+        base_dir=data_dir,
+        object_roots=[object_root],
+        resolved_at="2026-07-08T00:00:00Z",
+    )
+    assert resolved["status"] == "resolved"
+
+    live_after = object_schemas.get_schema("contacts", base_dir=data_dir, roots=[object_root])
+    assert {f["name"] for f in live_after["fields"]} == {"id", "email"}
+
+    status = object_packages.package_status(
+        "hello-world", root=packages_root, base_dir=data_dir, object_roots=[object_root]
+    )
+    schema_artifact = next(a for a in status["artifacts"] if a["kind"] == "schema")
+    assert schema_artifact["state"] == "pristine"
+    assert status["pending_reconciles"] == 0
+
+
+def test_reconcile_package_status_counts_pending_reconciles(tmp_path):
+    packages_root, data_dir, object_root = _install_reconcile_fixture(tmp_path, edit_object=True)
+    _bump_reconcile_package(
+        packages_root,
+        version="0.2.0",
+        object_code="def GET(request): return {'v': 2}\n",
+    )
+
+    object_packages.install_package(
+        "hello-world",
+        root=packages_root,
+        base_dir=data_dir,
+        object_roots=[object_root],
+        allow_replace=True,
+    )
+
+    status = object_packages.package_status(
+        "hello-world", root=packages_root, base_dir=data_dir, object_roots=[object_root]
+    )
+    assert status["pending_reconciles"] == 1

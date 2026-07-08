@@ -19,6 +19,7 @@ import object_collections
 import object_package_baselines
 import object_permission_store
 import object_permissions
+import object_reconciles
 import object_schemas
 import object_source
 from object_namespace import get_object_roots, object_id_from_path, resolve_object_id, validate_object_id
@@ -146,9 +147,23 @@ def install_package(
     base_dir: Path | str = DEFAULT_DATA_DIR,
     object_roots: Iterable[Path] | None = None,
     allow_replace: bool = False,
+    force: bool = False,
     before_write: Callable[[Mapping[str, Any]], Mapping[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
-    """Install a package using the conservative public write contract."""
+    """Install a package using the conservative public write contract.
+
+    On an upgrade (an object/schema that already exists), writes are no
+    longer blind: each artifact is three-way compared against its recorded
+    baseline (see object_package_baselines) and its live content. Pristine
+    artifacts fast-forward, customized-but-unchanged artifacts are kept, and
+    genuine conflicts are parked as pending-reconcile records (never
+    overwritten) unless force=True. See docs/upgrade-and-customization.md
+    (Rule 1: Reconcile, Don't Replace).
+    """
+    # force implies allow_replace: forcing only makes sense when you may
+    # touch existing artifacts, so the replace-without-allow_replace blocker
+    # still applies unless force is also set.
+    allow_replace = allow_replace or force
     roots = list(object_roots) if object_roots is not None else get_object_roots()
     if not roots:
         raise PackageInstallError("Package installs require at least one object root")
@@ -210,25 +225,127 @@ def install_package(
 
     restore_point = before_write(plan) if before_write is not None else None
 
+    existing_baseline = object_package_baselines.load_baseline(package_id, base_dir=base) or {}
+    base_objects = existing_baseline.get("objects") or {}
+    base_schemas = existing_baseline.get("schemas") or {}
+    baseline_version = existing_baseline.get("version")
+
+    reconciles: list[str] = []
+    new_baseline_objects: dict[str, str] = {}
+    new_baseline_schemas: dict[str, str] = {}
+
     installed_objects = []
     for planned, destination, destination_root, content in object_writes:
-        _write_file_atomic_bytes(destination, content)
+        object_id = planned["id"]
+        extra: dict[str, Any] = {}
+
+        if planned["action"] == "create":
+            _write_file_atomic_bytes(destination, content)
+            status = "written"
+            new_baseline_objects[object_id] = object_package_baselines.sha256_text(content.decode("utf-8"))
+        else:
+            new_text = content.decode("utf-8")
+            new_sha = object_package_baselines.sha256_text(new_text)
+            live_text = object_source.get_object_source(object_id, roots)
+            live_sha = object_package_baselines.sha256_text(live_text)
+            old_sha = base_objects.get(object_id)
+
+            if live_sha == new_sha:
+                status = "unchanged"
+                new_baseline_objects[object_id] = new_sha
+            elif old_sha is not None and live_sha == old_sha:
+                _write_file_atomic_bytes(destination, content)
+                status = "updated"
+                new_baseline_objects[object_id] = new_sha
+            elif old_sha is not None and new_sha == old_sha:
+                status = "kept"
+                new_baseline_objects[object_id] = old_sha
+            elif force:
+                _write_file_atomic_bytes(destination, content)
+                status = "forced"
+                new_baseline_objects[object_id] = new_sha
+            else:
+                rec = object_reconciles.create_reconcile(
+                    package=package_id,
+                    target_version=package["version"],
+                    baseline_version=baseline_version,
+                    artifact={"kind": "object", "id": object_id},
+                    mine=live_text,
+                    theirs=new_text,
+                    base_sha=old_sha,
+                    base_dir=base,
+                )
+                reconciles.append(rec["id"])
+                status = "conflict"
+                extra["reconcile_id"] = rec["id"]
+                new_baseline_objects[object_id] = old_sha if old_sha is not None else live_sha
+
         installed_objects.append(
             {
                 **planned,
-                "status": "written",
+                "status": status,
                 "destination": _relative_display_path(destination, destination_root),
+                **extra,
             }
         )
 
     installed_schemas = []
     for entry, planned, normalized in schema_writes:
-        object_schemas.replace_schema(entry["collection"], normalized, base_dir=base)
+        collection = entry["collection"]
+        new_sha = object_package_baselines.canonical_schema_hash(normalized)
+        extra: dict[str, Any] = {}
+
+        live = None
+        if planned["action"] == "replace":
+            try:
+                live = object_schemas.get_schema(collection, base_dir=base, roots=roots)
+            except object_schemas.SchemaNotFoundError:
+                live = None
+
+        if live is None:
+            object_schemas.replace_schema(collection, normalized, base_dir=base)
+            status = "written"
+            new_baseline_schemas[collection] = new_sha
+        else:
+            live_sha = object_package_baselines.canonical_schema_hash(live)
+            old_sha = base_schemas.get(collection)
+
+            if live_sha == new_sha:
+                status = "unchanged"
+                new_baseline_schemas[collection] = new_sha
+            elif old_sha is not None and live_sha == old_sha:
+                object_schemas.replace_schema(collection, normalized, base_dir=base)
+                status = "updated"
+                new_baseline_schemas[collection] = new_sha
+            elif old_sha is not None and new_sha == old_sha:
+                status = "kept"
+                new_baseline_schemas[collection] = old_sha
+            elif force:
+                object_schemas.replace_schema(collection, normalized, base_dir=base)
+                status = "forced"
+                new_baseline_schemas[collection] = new_sha
+            else:
+                rec = object_reconciles.create_reconcile(
+                    package=package_id,
+                    target_version=package["version"],
+                    baseline_version=baseline_version,
+                    artifact={"kind": "schema", "collection": collection},
+                    mine=json.dumps(live, indent=2, sort_keys=True),
+                    theirs=json.dumps(normalized, indent=2, sort_keys=True),
+                    base_sha=old_sha,
+                    base_dir=base,
+                )
+                reconciles.append(rec["id"])
+                status = "conflict"
+                extra["reconcile_id"] = rec["id"]
+                new_baseline_schemas[collection] = old_sha if old_sha is not None else live_sha
+
         installed_schemas.append(
             {
                 **planned,
-                "status": "written",
-                "destination": f"schemas/{entry['collection']}.json",
+                "status": status,
+                "destination": f"schemas/{collection}.json",
+                **extra,
             }
         )
 
@@ -268,21 +385,11 @@ def install_package(
             }
         )
 
-    baseline_objects = {}
-    for planned, destination, destination_root, content in object_writes:
-        baseline_objects[planned["id"]] = object_package_baselines.sha256_text(
-            object_source.get_object_source(planned["id"], roots)
-        )
-    baseline_schemas = {}
-    for entry, planned, normalized in schema_writes:
-        baseline_schemas[entry["collection"]] = object_package_baselines.canonical_schema_hash(
-            object_schemas.get_schema(entry["collection"], base_dir=base, roots=roots)
-        )
     object_package_baselines.record_baseline(
         package_id,
         version=package["version"],
-        objects=baseline_objects,
-        schemas=baseline_schemas,
+        objects=new_baseline_objects,
+        schemas=new_baseline_schemas,
         base_dir=base,
     )
 
@@ -297,6 +404,7 @@ def install_package(
         "permissions": installed_permissions,
         "seed": installed_seed,
         "migrations": plan["migrations"],
+        "reconciles": reconciles,
         "warnings": [],
     }
     if restore_point is not None:
@@ -317,6 +425,7 @@ def package_status(
 
     package = _load_package(package_id, _package_dir(package_id, root))
     summary = _package_summary(package)
+    summary["pending_reconciles"] = object_reconciles.count_pending(base_dir=base, package=package_id)
 
     baseline = object_package_baselines.load_baseline(package_id, base_dir=base)
     if baseline is None:

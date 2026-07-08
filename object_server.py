@@ -55,6 +55,7 @@ import object_permission_status
 import object_permissions
 import object_packages
 import object_rate_limit
+import object_reconciles
 import object_record_changes
 import object_records
 import object_schema_versions
@@ -707,6 +708,20 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
         if path.startswith(admin_files_prefix):
             object_id = path.removeprefix(admin_files_prefix)
             await _handle_admin_object_files(send, method, object_id, query, body, headers)
+            return
+
+        if path == http_api_contract.ADMIN_RECONCILES_PATH:
+            await _handle_admin_reconciles(send, method, query, headers)
+            return
+
+        admin_reconciles_prefix = f"{http_api_contract.ADMIN_RECONCILES_PATH}/"
+        if path.startswith(admin_reconciles_prefix):
+            reconcile_tail = path.removeprefix(admin_reconciles_prefix)
+            if reconcile_tail.endswith("/resolve"):
+                reconcile_id = reconcile_tail.removesuffix("/resolve")
+                await _handle_admin_reconcile_resolve(send, method, reconcile_id, body, headers)
+            else:
+                await _handle_admin_reconcile(send, method, reconcile_tail, headers)
             return
 
         if path == http_api_contract.ADMIN_OBJECTS_PATH:
@@ -2707,6 +2722,140 @@ async def _handle_admin_object_file_write(
         payload["change"] = change
 
     await _send_json(send, payload, status=status_code)
+
+
+async def _handle_admin_reconciles(
+    send,
+    method: str,
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Reconcile listing requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    reconciles = object_reconciles.list_reconciles(
+        base_dir=_data_dir(),
+        status=_optional_query_text(query, "status"),
+        package=_optional_query_text(query, "package"),
+    )
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "reconciles": reconciles,
+            "count": len(reconciles),
+        },
+    )
+
+
+async def _handle_admin_reconcile(
+    send,
+    method: str,
+    reconcile_id: str,
+    headers: dict[str, str],
+) -> None:
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Reconcile detail requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    if not object_reconciles.validate_reconcile_id(reconcile_id):
+        await _send_json(send, {"status": "error", "error": f"Invalid reconcile id: {reconcile_id}"}, status=400)
+        return
+
+    reconcile = object_reconciles.get_reconcile(reconcile_id, base_dir=_data_dir())
+    if reconcile is None:
+        await _send_json(send, {"status": "error", "error": f"Reconcile not found: {reconcile_id}"}, status=404)
+        return
+
+    await _send_json(send, {"status": "ok", "reconcile": reconcile})
+
+
+async def _handle_admin_reconcile_resolve(
+    send,
+    method: str,
+    reconcile_id: str,
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    if method != "POST":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Reconcile resolution requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    # Resolving "take theirs" can write to live object source, so it needs the
+    # same gate as any other source write, in addition to the admin gate above.
+    gate_error = _source_write_gate_error(headers)
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    if not object_reconciles.validate_reconcile_id(reconcile_id):
+        await _send_json(send, {"status": "error", "error": f"Invalid reconcile id: {reconcile_id}"}, status=400)
+        return
+
+    try:
+        payload = _parse_json_body(body)
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    choice = payload.get("choice")
+    if not isinstance(choice, str) or choice not in object_reconciles.RECONCILE_CHOICES:
+        await _send_json(
+            send,
+            {
+                "status": "error",
+                "error": "Request JSON field 'choice' must be one of: "
+                + ", ".join(object_reconciles.RECONCILE_CHOICES),
+            },
+            status=400,
+        )
+        return
+
+    try:
+        reconcile = object_reconciles.resolve_reconcile(
+            reconcile_id,
+            choice,
+            base_dir=_data_dir(),
+            object_roots=get_object_roots(),
+            resolved_at=_utc_timestamp(),
+        )
+    except object_source.ObjectSourceNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+    except (InvalidObjectIdError, object_schemas.InvalidSchemaNameError, ValueError) as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    await _send_json(send, {"status": "ok", "reconcile": reconcile})
 
 
 async def _handle_admin_collections(

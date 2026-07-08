@@ -63,7 +63,39 @@ def record_baseline(
         "objects": dict(objects),
         "schemas": dict(schemas),
     }
-    path = baseline_path(package_id, base_dir=base_dir)
+    _write_baseline(baseline, baseline_path(package_id, base_dir=base_dir))
+    return baseline
+
+
+def update_artifact(
+    package_id: str,
+    *,
+    kind: str,
+    key: str,
+    sha: str,
+    version: str,
+    base_dir: Path | str = DEFAULT_DATA_DIR,
+) -> dict[str, Any]:
+    """Stamp a single artifact's baseline hash (used by reconcile resolution)."""
+    baseline = load_baseline(package_id, base_dir=base_dir) or {
+        "package": package_id,
+        "version": version,
+        "installed_at": None,
+        "objects": {},
+        "schemas": {},
+    }
+    section = "objects" if kind == "object" else "schemas"
+    baseline.setdefault("objects", {})
+    baseline.setdefault("schemas", {})
+    baseline[section][key] = sha
+    baseline["version"] = version
+    baseline["package"] = package_id
+
+    _write_baseline(baseline, baseline_path(package_id, base_dir=base_dir))
+    return baseline
+
+
+def _write_baseline(baseline: Mapping[str, Any], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     fd, tmp_name = tempfile.mkstemp(
@@ -80,5 +112,3 @@ def record_baseline(
             Path(tmp_name).unlink()
         except FileNotFoundError:
             pass
-
-    return baseline
