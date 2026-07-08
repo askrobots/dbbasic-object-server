@@ -1,7 +1,7 @@
 {
   "name": "links",
   "title": "Links",
-  "version": 1,
+  "version": 2,
   "description": "Saved links and bookmarks.",
   "fields": [
     {
@@ -19,13 +19,30 @@
       "type": "text",
       "required": true,
       "label": "URL",
+      "placeholder": "https://",
       "validation": {"min_length": 1, "max_length": 2000, "pattern": "^https?://\\S+$"}
+    },
+    {
+      "name": "description",
+      "type": "textarea",
+      "label": "Description"
     },
     {
       "name": "tags",
       "type": "text",
       "label": "Tags",
-      "help": "Comma-separated tag names"
+      "help": "Separate tags with commas (e.g. reference, docs, tutorial)"
+    },
+    {
+      "name": "notes",
+      "type": "textarea",
+      "label": "Notes"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Added",
+      "read_only": true
     },
     {
       "name": "owner_id",
@@ -34,13 +51,13 @@
     }
   ],
   "forms": {
-    "default": {"fields": ["title", "url", "tags"]}
+    "default": {"fields": ["title", "url", "description", "tags", "notes"]}
   },
   "views": {
-    "list_mode": "table",
+    "list_mode": "cards",
     "list_fields": ["title", "url", "tags"]
   },
   "search": {
-    "fields": ["title", "url", "tags"]
+    "fields": ["title", "url", "description", "tags", "notes"]
   }
 }

@@ -214,6 +214,40 @@ td.muted, .muted { color: var(--muted); }
 
 footer.app { margin-top: 2.5rem; color: var(--muted); font-size: 0.78rem; }
 
+/* Page head + breadcrumb */
+.breadcrumb { color: var(--muted); font-size: 0.85rem; margin-bottom: 0.6rem; }
+.breadcrumb a { color: var(--accent-strong); }
+.pagehead { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+.pagehead h1 { margin: 0; font-size: 1.5rem; flex: 1; }
+
+/* Rich list rows (the shared window.dbbasicList renderer) */
+.listrow { display: flex; gap: 0.8rem; align-items: flex-start; background: var(--panel);
+           border: 1px solid var(--line); border-radius: var(--radius-md);
+           padding: 0.85rem 1rem; margin-bottom: 0.6rem; }
+.listrow .av { width: 2rem; height: 2rem; flex: none; border-radius: var(--radius-sm);
+               background: var(--panel-2); color: var(--muted); display: flex; align-items: center;
+               justify-content: center; font-weight: 600; font-size: 0.85rem; text-transform: uppercase; }
+.listrow .body { flex: 1; min-width: 0; }
+.listrow .rowtitle { font-weight: 600; word-break: break-word; }
+.listrow .rowtitle a { color: var(--accent-strong); }
+.listrow .rowsub { color: var(--muted); font-size: 0.82rem; word-break: break-all; margin-top: 0.1rem; }
+.listrow .rowmeta { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; margin-top: 0.45rem; }
+.listrow .rowmeta .when { color: var(--muted); font-size: 0.75rem; }
+.pill { border: 1px solid var(--line); background: var(--panel-2); color: var(--muted);
+        border-radius: 999px; padding: 0.05rem 0.55rem; font-size: 0.72rem; white-space: nowrap; }
+.listrow .rowactions { display: flex; gap: 0.3rem; flex: none; }
+.rowbtn { border: 1px solid var(--line); background: var(--panel-2); color: var(--muted);
+          border-radius: var(--radius-sm); padding: 0.25rem 0.5rem; font: inherit; cursor: pointer; line-height: 1; }
+.rowbtn:hover { border-color: var(--accent); color: var(--text); }
+.rowbtn.danger:hover { border-color: var(--danger); color: var(--danger); }
+
+/* Generated form (window.dbbasicForm) */
+.genform { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md);
+           padding: var(--pad); }
+.formactions { display: flex; gap: 0.6rem; align-items: center; margin-top: 0.5rem; }
+.switch { display: flex; align-items: center; gap: 0.5rem; color: var(--muted); font-size: 0.9rem; }
+.switch input { width: auto; }
+
 /* App shell / navigation bar (injected by /nav) */
 body.has-appbar { padding-top: 3rem; }
 .appbar { position: fixed; top: 0; left: 0; right: 0; height: 3rem; display: flex; align-items: center;

@@ -22,6 +22,14 @@
     {
       "id": "site_markdown",
       "path": "objects/site/markdown.py"
+    },
+    {
+      "id": "site_form",
+      "path": "objects/site/form.py"
+    },
+    {
+      "id": "site_list",
+      "path": "objects/site/list.py"
     }
   ],
   "schemas": [],

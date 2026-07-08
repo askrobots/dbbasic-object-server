@@ -260,3 +260,29 @@ def test_manual_schema_rejects_invalid_field_name(tmp_path):
 
     with pytest.raises(ValueError, match="invalid name"):
         object_schemas.get_schema("invoices", base_dir=data_dir, roots=[])
+
+
+def test_public_schema_meta_endpoint_returns_structure(tmp_path, monkeypatch):
+    import object_server
+    from test_object_server import request, write_records
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "links", "id\ttitle\turl\n")
+    schema_file = data_dir / "schemas" / "links.json"
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text(json.dumps({
+        "fields": [{"name": "id"}, {"name": "title", "required": True}, {"name": "url"}],
+        "forms": {"default": {"fields": ["title", "url"]}},
+        "views": {"list_mode": "cards"},
+        "search": {"fields": ["title"]},
+    }))
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(data_dir))
+    # public — no auth needed (structure, not data)
+    status, _, payload = request("/api/schema/links")
+    assert status == 200
+    schema = payload["schema"]
+    assert [f["name"] for f in schema["fields"]] == ["id", "title", "url"]
+    assert schema["forms"]["default"]["fields"] == ["title", "url"]
+    assert schema["views"]["list_mode"] == "cards"
+    # unknown collection -> 404-ish (derived empty schema still returns; bad name -> 400)
+    status, _, _ = request("/api/schema/bad!name")
+    assert status == 400

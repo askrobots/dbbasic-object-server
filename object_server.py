@@ -585,6 +585,11 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
             await _handle_ai_chat(send, method, body, headers)
             return
 
+        schema_meta_prefix = f"{http_api_contract.SCHEMA_META_PATH}/"
+        if path.startswith(schema_meta_prefix):
+            await _handle_schema_meta(send, method, path.removeprefix(schema_meta_prefix))
+            return
+
         if path == http_api_contract.USER_FILES_PATH:
             await _handle_user_file_upload(send, method, body, headers)
             return
@@ -7095,6 +7100,31 @@ async def _handle_schema_get(
     headers: dict[str, str],
 ) -> None:
     await _handle_schema(send, method, schema, {}, b"", headers)
+
+
+async def _handle_schema_meta(send, method: str, collection: str) -> None:
+    """Public schema metadata for building UIs (form/list generators).
+
+    Returns the *structure* only — field types, labels, enums, relations,
+    validation, forms, views, search — never data. Records stay
+    permission-gated; knowing a collection's field shape is not a leak, and
+    it lets any surface (web, anonymous public pages, agents) render itself
+    from the schema.
+    """
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+    try:
+        schema = object_schemas.get_schema(collection, base_dir=_data_dir())
+    except object_schemas.InvalidSchemaNameError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except (LookupError, ValueError):
+        await _send_json(send, {"status": "error", "error": "Schema not found"}, status=404)
+        return
+
+    meta = {key: schema.get(key) for key in ("name", "title", "fields", "forms", "views", "search")}
+    await _send_json(send, {"status": "ok", "schema": meta})
 
 
 async def _handle_schema(

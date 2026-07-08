@@ -1,70 +1,30 @@
-"""Links page: the visitor's own bookmarks as a table, with quick add and search."""
+"""Links page — built from metadata, not markup.
 
-# Page-unique layout only; everything else comes from the shared /style sheet.
-_STYLE = """
-form.capture { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md);
-               padding: var(--pad); display: grid; gap: var(--gap); margin-bottom: var(--gap);
-               grid-template-columns: 1fr 1fr auto; }
-form.capture .error { grid-column: 1 / -1; }
-input.search { margin-bottom: var(--gap); }
-td.tags { color: var(--muted); white-space: nowrap; }
+The form and the list both come from the schema via the shared generators
+(/form -> window.dbbasicForm, /list -> window.dbbasicList). This page is
+just the chrome: a breadcrumb, an Add button, a search/sort toolbar, and
+two mount points. Add or edit opens the schema-driven form; the list
+auto-refreshes over the websocket. No hand-written fields or rows.
 """
 
 _SCRIPT = """
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
-  (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
-
-function render(records) {
-  const rows = records.map((l) =>
-    `<tr><td><a href="${esc(l.url)}" rel="noopener noreferrer">${esc(l.title)}</a></td>` +
-    `<td>${esc(l.url)}</td><td class="tags">${esc(l.tags)}</td></tr>`);
-  document.getElementById("rows").innerHTML =
-    rows.join("") || '<tr><td colspan="3">No links yet.</td></tr>';
-}
-
-async function load() {
-  const res = await fetch("/collections/links/records?limit=200",
-                          {credentials: "same-origin", headers: {accept: "application/json"}});
-  const body = await res.json();
-  render((body.records || []).slice().reverse());
-}
-
-document.getElementById("search-box").addEventListener("input", async (event) => {
-  const query = event.target.value.trim();
-  if (!query) { load(); return; }
-  const res = await fetch(`/api/search?q=${encodeURIComponent(query)}&collections=links&limit=50`,
-                          {credentials: "same-origin", headers: {accept: "application/json"}});
-  if (!res.ok) return;
-  const body = await res.json();
-  render((body.results || {}).links || []);
+const panel = document.getElementById("formpanel");
+const list = window.dbbasicList("links", {
+  mount: "#list", search: "#search", sort: "#sort", owner: OWNER_ID,
+  title: (r) => r.title, href: (r) => r.url,
+  subtitle: (r) => r.description || r.url, tags: (r) => r.tags,
+  created: (r) => r.created_at, onEdit: (r) => openForm(r),
 });
-
-document.getElementById("capture-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const fields = event.target.elements;
-  const record = {id: crypto.randomUUID(), title: fields["title"].value.trim(),
-                  url: fields["url"].value.trim(), tags: fields["tags"].value.trim(),
-                  owner_id: OWNER_ID};
-  const res = await fetch("/collections/links/records", {
-    method: "POST", credentials: "same-origin",
-    headers: {"content-type": "application/json", accept: "application/json"},
-    body: JSON.stringify(record),
+function openForm(record) {
+  document.getElementById("formtitle").textContent = record ? "Edit Link" : "Add Link";
+  panel.style.display = "block";
+  window.dbbasicForm("links", {
+    mount: "#formmount", record: record, owner: OWNER_ID,
+    onSaved: () => { panel.style.display = "none"; list.reload(); },
+    onCancel: () => { panel.style.display = "none"; },
   });
-  const body = await res.json();
-  document.getElementById("form-error").textContent = res.ok ? "" : (body.error || "Save failed");
-  if (res.ok) { event.target.reset(); load(); }
-});
-load();
-
-// Realtime: auto-refresh when this collection changes (another tab, user, or agent).
-(function () {
-  let _lt = null;
-  const reload = () => { clearTimeout(_lt); _lt = setTimeout(load, 150); };
-  (function wait() {
-    if (window.dbbasicSubscribe) window.dbbasicSubscribe("links", reload);
-    else setTimeout(wait, 300);
-  })();
-})();
+}
+document.getElementById("add").addEventListener("click", () => openForm(null));
 """
 
 
@@ -78,20 +38,23 @@ def GET(request):
         script = ""
     else:
         body = """
-<form class="capture" id="capture-form">
-<input name="title" placeholder="Title" required maxlength="200">
-<input name="url" placeholder="https://" required maxlength="2000">
-<input name="tags" placeholder="tags, comma, separated" style="grid-column: 1 / 3">
-<button type="submit" class="btn primary" style="grid-column: 3; grid-row: 1">Add Link</button>
-<div class="error" id="form-error"></div>
-</form>
-<input class="search" id="search-box" placeholder="Search links&hellip;" autocomplete="off">
-<table>
-<thead><tr><th>Title</th><th>URL</th><th>Tags</th></tr></thead>
-<tbody id="rows"><tr><td colspan="3">loading&hellip;</td></tr></tbody>
-</table>
+<div class="breadcrumb"><a href="/">Home</a> / Links</div>
+<div class="pagehead"><h1>Links</h1><button class="btn primary" id="add">+ Add Link</button></div>
+<div id="formpanel" style="display:none; margin-bottom:1rem">
+  <h2 id="formtitle" style="font-size:1rem; margin:0 0 0.5rem">Add Link</h2>
+  <div id="formmount"></div>
+</div>
+<div class="toolbar">
+  <input class="search grow" id="search" placeholder="Search links&hellip;" autocomplete="off">
+  <select id="sort"><option value="newest">Newest</option><option value="oldest">Oldest</option></select>
+</div>
+<div id="list"><div class="state">loading&hellip;</div></div>
 """
-        script = f"<script>const OWNER_ID = {user_id!r};{_SCRIPT}</script>"
+        script = (
+            f"<script>const OWNER_ID = {user_id!r};</script>"
+            '<script src="/list"></script><script src="/form"></script>'
+            f"<script>{_SCRIPT}</script>"
+        )
 
     who = (
         f"signed in as <strong>{user_id}</strong>"
@@ -105,11 +68,10 @@ def GET(request):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Links</title>
 <link rel="stylesheet" href="/style">
-<style>{_STYLE}</style>
 </head>
 <body>
 <div class="wrap">
-<header class="app"><h1>Links</h1><div class="who">{who}</div></header>
+<header class="app"><h1><a href="/">DBBASIC</a></h1><div class="who">{who}</div></header>
 {body}
 </div>
 {script}
