@@ -75,6 +75,12 @@ code, versioned and rolled back through the normal schema history.
   {"validation": {"min_length": 3, "max_length": 80, "pattern": "^[a-z-]+$", "min": 0, "max": 100}}
   ```
 
+  `pattern` is **full-matched** against the whole value (`re.fullmatch`),
+  not searched — so it must describe the entire field, not a prefix. A URL
+  check is `^https?://\S+$`, not `^https?://` (that would only match the
+  literal scheme and reject every real URL). The `^`/`$` anchors are
+  therefore redundant but fine to keep for readability.
+
 ## Schema Root Keys
 
 Presentation metadata lives beside the fields and versions with them —

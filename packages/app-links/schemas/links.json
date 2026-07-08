@@ -19,7 +19,7 @@
       "type": "text",
       "required": true,
       "label": "URL",
-      "validation": {"min_length": 1, "max_length": 2000, "pattern": "^https?://"}
+      "validation": {"min_length": 1, "max_length": 2000, "pattern": "^https?://\\S+$"}
     },
     {
       "name": "tags",
