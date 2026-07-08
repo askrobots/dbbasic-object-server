@@ -13,7 +13,7 @@ import os
 import re
 import threading
 from contextlib import contextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -146,6 +146,7 @@ def create_collection_record(
         raise InvalidRecordIdError(f"Invalid record id: {record_id}")
     submitted_fields = frozenset(clean)
     clean = _apply_schema_defaults(collection, clean, base_dir=base_dir, roots=roots)
+    clean = _apply_auto_created_at(collection, clean, submitted_fields, base_dir=base_dir, roots=roots)
     _validate_record_against_schema(
         collection,
         clean,
@@ -456,6 +457,41 @@ def _normalize_record_payload(payload: dict[str, Any], *, require_id: bool) -> d
         raise InvalidRecordPayloadError("Record payload must include an id")
 
     return clean
+
+
+def _apply_auto_created_at(
+    collection: str,
+    record: dict[str, str],
+    submitted_fields: frozenset[str],
+    *,
+    base_dir: Path | str,
+    roots: Iterable[Path] | None,
+) -> dict[str, str]:
+    """Server-set ``created_at`` on create when the schema declares it.
+
+    A schema field named ``created_at`` (date/datetime) is filled with the
+    current UTC time on create, unless the client supplied it. Because the
+    server fills it (not the client), it can be ``read_only`` — clients can
+    neither omit it nor spoof it — which is what lets generated lists show
+    a trustworthy relative timestamp.
+    """
+    if "created_at" in submitted_fields:
+        return record
+    for field in _schema_fields(collection, base_dir=base_dir, roots=roots):
+        if field.get("name") != "created_at":
+            continue
+        field_type = str(field.get("type") or "").lower()
+        now = datetime.now(timezone.utc)
+        if field_type == "date":
+            value = now.date().isoformat()
+        elif field_type in {"datetime", "timestamp"}:
+            value = now.isoformat().replace("+00:00", "Z")
+        else:
+            return record
+        clean = dict(record)
+        clean["created_at"] = value
+        return clean
+    return record
 
 
 def _apply_schema_defaults(

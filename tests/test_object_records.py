@@ -538,3 +538,31 @@ def test_relation_accepts_string_shorthand_and_rejects_bad_shapes(tmp_path):
         object_records.create_collection_record(
             "tasks", {"id": "t2", "project_id": "p1"}, base_dir=tmp_path
         )
+
+
+def test_created_at_is_server_set_on_create(tmp_path):
+    data_dir = tmp_path / "data"
+    write_schema(
+        data_dir,
+        "links",
+        [
+            {"name": "id"},
+            {"name": "title", "required": True},
+            {"name": "created_at", "type": "datetime", "read_only": True},
+        ],
+    )
+    write_records(data_dir, "links", "id\ttitle\tcreated_at\n")
+
+    # client omits created_at -> server fills it, read_only is not violated
+    rec = object_records.create_collection_record(
+        "links", {"id": "l1", "title": "x"}, base_dir=data_dir, roots=[]
+    )
+    assert rec["created_at"].endswith("Z") and "T" in rec["created_at"]
+
+    # client cannot spoof a read_only created_at
+    import pytest
+    with pytest.raises(object_records.InvalidRecordPayloadError, match="read-only"):
+        object_records.create_collection_record(
+            "links", {"id": "l2", "title": "y", "created_at": "2000-01-01T00:00:00Z"},
+            base_dir=data_dir, roots=[],
+        )

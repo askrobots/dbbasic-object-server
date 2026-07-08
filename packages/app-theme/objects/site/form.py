@@ -117,7 +117,6 @@ _JS = r"""
       } else {
         rec.id = crypto.randomUUID();
         if (opts.owner !== undefined) rec.owner_id = opts.owner;
-        rec.created_at = new Date().toISOString();
         [ok2, body2] = await api("POST", "/collections/" + collection + "/records", rec);
       }
       const fe = form.querySelector("[data-formerror]");
