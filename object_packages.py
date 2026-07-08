@@ -16,9 +16,11 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
 import object_collections
+import object_package_baselines
 import object_permission_store
 import object_permissions
 import object_schemas
+import object_source
 from object_namespace import get_object_roots, object_id_from_path, resolve_object_id, validate_object_id
 from object_versions import DEFAULT_DATA_DIR
 
@@ -266,6 +268,24 @@ def install_package(
             }
         )
 
+    baseline_objects = {}
+    for planned, destination, destination_root, content in object_writes:
+        baseline_objects[planned["id"]] = object_package_baselines.sha256_text(
+            object_source.get_object_source(planned["id"], roots)
+        )
+    baseline_schemas = {}
+    for entry, planned, normalized in schema_writes:
+        baseline_schemas[entry["collection"]] = object_package_baselines.canonical_schema_hash(
+            object_schemas.get_schema(entry["collection"], base_dir=base, roots=roots)
+        )
+    object_package_baselines.record_baseline(
+        package_id,
+        version=package["version"],
+        objects=baseline_objects,
+        schemas=baseline_schemas,
+        base_dir=base,
+    )
+
     result = {
         "package": plan["package"],
         "mode": "install",
@@ -282,6 +302,63 @@ def install_package(
     if restore_point is not None:
         result["restore_point"] = dict(restore_point)
     return result
+
+
+def package_status(
+    package_id: str,
+    *,
+    root: Path | str = PACKAGES_DIR,
+    base_dir: Path | str = DEFAULT_DATA_DIR,
+    object_roots: Iterable[Path] | None = None,
+) -> dict[str, Any]:
+    """Return install/customization status for a package's baselined artifacts."""
+    roots = list(object_roots) if object_roots is not None else get_object_roots()
+    base = Path(base_dir)
+
+    package = _load_package(package_id, _package_dir(package_id, root))
+    summary = _package_summary(package)
+
+    baseline = object_package_baselines.load_baseline(package_id, base_dir=base)
+    if baseline is None:
+        summary["installed"] = False
+        summary["customized"] = False
+        summary["artifacts"] = []
+        return summary
+
+    artifacts: list[dict[str, Any]] = []
+    any_customized = False
+
+    for object_id, base_sha in (baseline.get("objects") or {}).items():
+        try:
+            live = object_source.get_object_source(object_id, roots)
+        except (FileNotFoundError, LookupError, OSError, ValueError, object_source.ObjectSourceError):
+            state = "removed"
+        else:
+            state = "pristine" if object_package_baselines.sha256_text(live) == base_sha else "customized"
+        if state == "customized":
+            any_customized = True
+        artifacts.append({"kind": "object", "id": object_id, "state": state})
+
+    for collection, base_sha in (baseline.get("schemas") or {}).items():
+        try:
+            live = object_schemas.get_schema(collection, base_dir=base, roots=roots)
+        except (object_schemas.SchemaNotFoundError, LookupError, OSError, ValueError):
+            state = "removed"
+        else:
+            state = (
+                "pristine"
+                if object_package_baselines.canonical_schema_hash(live) == base_sha
+                else "customized"
+            )
+        if state == "customized":
+            any_customized = True
+        artifacts.append({"kind": "schema", "collection": collection, "state": state})
+
+    summary["installed"] = True
+    summary["installed_version"] = baseline.get("version")
+    summary["customized"] = any_customized
+    summary["artifacts"] = artifacts
+    return summary
 
 
 def _package_dir(package_id: str, root: Path | str) -> Path:

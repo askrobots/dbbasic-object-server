@@ -33,6 +33,7 @@ RUNTIME_DATA_DIRS = (
     "schema_versions",
     "record_changes",
     "package_changes",
+    "package_baselines",
     "file_changes",
     "files",
     "schemas",

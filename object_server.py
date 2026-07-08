@@ -3935,6 +3935,9 @@ async def _handle_package(
                     package_id,
                     root=_packages_dir(),
                 ),
+                "provenance": object_packages.package_status(
+                    package_id, root=_packages_dir(), base_dir=_data_dir()
+                ),
             }
     except object_packages.InvalidPackageIdError as exc:
         await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
