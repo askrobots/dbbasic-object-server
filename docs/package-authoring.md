@@ -66,8 +66,19 @@ Installs are deliberately conservative:
   objects require `allow_replace`.
 - `schemas` entries are validated and written under `data/schemas/`. Existing
   schemas require `allow_replace`.
-- `seed` TSV is written only when the target collection records file does not
-  already exist — seed never overwrites live data.
+- `seed` TSV is **install-once**: it is written only when the target
+  collection has no records file yet. On a reinstall or upgrade of a package
+  whose collection already holds data, seeding is skipped (reported as
+  `status: "skipped"`, `action: "skip"`) — it never overwrites live data, and
+  it never blocks the install. This is what makes an in-place upgrade safe:
+  reinstall with `allow_replace` to ship new object code, a migrated schema,
+  and re-merged permissions while every existing record is preserved. Live
+  records live outside the package, in `data/collections/<name>/records.tsv`
+  keyed by collection, so an upgrade has no reason to touch them. (Evolving a
+  schema across an upgrade — backfilling a newly added field on old rows — is
+  the separate `migrations` story below, not yet implemented; adding a
+  read-only/server-set field like `created_at` is safe because old rows simply
+  read as empty for it.)
 - `permissions` entries MERGE: each fragment file is
   `{"rules": [ ... ]}` using the same rule shape as the policy document
   (`effect`, `principal`, `actions`, optional `collection`/`object_id`,

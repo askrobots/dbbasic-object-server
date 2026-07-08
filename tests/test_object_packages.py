@@ -104,7 +104,7 @@ def test_dry_run_reports_create_replace_merge_apply_and_missing_files(tmp_path):
     assert plan["objects"][0]["action"] == "replace"
     assert plan["schemas"][0]["action"] == "replace"
     assert plan["permissions"][0]["action"] == "merge"
-    assert plan["seed"][0]["action"] == "merge"
+    assert plan["seed"][0]["action"] == "skip"
     assert plan["migrations"][0]["action"] == "skip"
     assert plan["warnings"] == ["Missing package migration file: migrations/001_init.py"]
 
@@ -536,7 +536,11 @@ def test_install_package_rejects_invalid_permission_fragment(tmp_path):
     assert "permission rule is invalid" in str(exc.value)
 
 
-def test_install_package_refuses_existing_seed_data(tmp_path):
+def test_install_package_preserves_existing_seed_on_upgrade(tmp_path):
+    # Seed is install-once. Upgrading a package whose collection already holds
+    # records must neither block the install nor clobber the data: the records
+    # survive and seeding is skipped. This is the "upgrade the app, keep the
+    # data" contract — data lives outside the package, in the server data dir.
     packages_root = tmp_path / "packages"
     data_dir = tmp_path / "data"
     (data_dir / "collections" / "contacts").mkdir(parents=True)
@@ -553,10 +557,17 @@ def test_install_package_refuses_existing_seed_data(tmp_path):
         files=(("seed/contacts.tsv", "id\tname\nc2\tBob\n"),),
     )
 
-    with pytest.raises(object_packages.PackageInstallError, match="Seed data already exists"):
-        object_packages.install_package("seeded", root=packages_root, base_dir=data_dir)
+    result = object_packages.install_package(
+        "seeded", root=packages_root, base_dir=data_dir, allow_replace=True
+    )
 
-    assert (data_dir / "collections" / "contacts" / "records.tsv").read_text() == "id\tname\nc1\tAlice\n"
+    seed_entry = result["seed"][0]
+    assert seed_entry["status"] == "skipped"
+    assert seed_entry["installed"] is True
+    # Live records are untouched; the package's seed row (Bob) was not written.
+    assert (
+        data_dir / "collections" / "contacts" / "records.tsv"
+    ).read_text() == "id\tname\nc1\tAlice\n"
 
 
 def test_install_package_validates_schema_before_writing_objects(tmp_path):

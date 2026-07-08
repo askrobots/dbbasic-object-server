@@ -232,6 +232,19 @@ def install_package(
 
     installed_seed = []
     for entry, planned, destination, content in seed_writes:
+        # Seed is install-once. If the collection already holds records, an
+        # upgrade must preserve them, so skip the seed write rather than
+        # clobber live data. Fresh installs (no records.tsv yet) still seed.
+        if planned.get("installed"):
+            installed_seed.append(
+                {
+                    **planned,
+                    "status": "skipped",
+                    "reason": "collection already has data; seed preserved",
+                    "destination": f"collections/{entry['collection']}/records.tsv",
+                }
+            )
+            continue
         _write_file_atomic_bytes(destination, content)
         installed_seed.append(
             {
@@ -516,7 +529,9 @@ def _seed_change(
         "collection": entry["collection"],
         "path": entry["path"],
         "exists": file_status["exists"],
-        "action": "merge" if installed else "create",
+        # Seed is install-once: on an upgrade where the collection already has
+        # records, seeding is skipped so live data is preserved (not merged).
+        "action": "skip" if installed else "create",
         "installed": installed,
     }
 
@@ -702,9 +717,11 @@ def _install_blockers(
                     f"Schema already exists; set allow_replace=true: {entry['collection']}"
                 )
 
-    for entry in plan["seed"]:
-        if entry["installed"]:
-            blockers.append(f"Seed data already exists and will not be overwritten: {entry['collection']}")
+    # Existing seed data is NOT a blocker: seed is install-once, so an upgrade
+    # of an already-installed package skips seeding and preserves live records
+    # (see the seed apply step). This is what makes "upgrade the app, keep the
+    # data" work — the package ships code + schema + a seed template, while the
+    # records live outside the package in the server's data dir.
 
     return blockers
 
