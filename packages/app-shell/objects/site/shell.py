@@ -28,6 +28,18 @@ _STYLE = """
 form#prompt { display: flex; gap: 0.5rem; border-top: 1px solid var(--line);
               padding-top: 0.75rem; }
 form#prompt input { flex: 1; font-family: var(--font-mono); }
+/* Rendered-markdown AI output (theme-tokened) */
+.entry .out.md { white-space: normal; }
+.entry .out.md p { margin: 0.35rem 0; }
+.entry .out.md a { color: var(--accent-strong); text-decoration: underline; }
+.entry .out.md strong { color: var(--text); font-weight: 700; }
+.entry .out.md code { background: var(--panel-2); color: var(--accent-strong);
+                      padding: 1px 5px; border-radius: 3px; font-size: 0.9em; }
+.entry .out.md pre { background: var(--panel-2); padding: 0.6rem 0.8rem;
+                     border-radius: var(--radius-sm); overflow-x: auto; margin: 0.4rem 0; }
+.entry .out.md pre code { background: none; padding: 0; }
+.entry .out.md ul, .entry .out.md ol { padding-left: 1.4rem; margin: 0.3rem 0; }
+.entry .out.md h1, .entry .out.md h2, .entry .out.md h3 { font-size: 1em; margin: 0.4rem 0 0.2rem; }
 """
 
 _HELP = (
@@ -60,10 +72,24 @@ function entry(input) {
   return div.querySelector(".out");
 }
 
-function finish(out, text, {err = false, tools = null} = {}) {
+// Render markdown (bold, code, lists, links) the way q9's terminal did, using
+// marked.js when present. Escape FIRST so AI output can never inject HTML.
+function renderMarkdown(text) {
+  const safe = esc(text);
+  if (typeof marked !== "undefined") {
+    marked.setOptions({breaks: true, gfm: true});
+    return marked.parse(safe).replace(new RegExp("<a ", "g"),
+      '<a target="_blank" rel="noopener" ');
+  }
+  return safe.replace(new RegExp("(https?://[^ <]+)", "g"),
+    '<a href="$1" target="_blank" rel="noopener">$1</a>');
+}
+
+function finish(out, text, {err = false, tools = null, markdown = false} = {}) {
   out.classList.remove("pending");
   out.classList.toggle("err", err);
-  out.textContent = text;
+  if (markdown) { out.classList.add("md"); out.innerHTML = renderMarkdown(text); }
+  else { out.textContent = text; }
   if (tools && tools.length) {
     const info = document.createElement("div");
     info.className = "tools";
@@ -202,7 +228,8 @@ async function run(input) {
      system: "You are the shell of this user's object server. Answer in plain terminal text " +
              "with no markdown formatting. Be concise. Use your tools when the question is " +
              "about the user's records."});
-  finish(out, ok ? body.reply : body.error, {err: !ok, tools: ok ? body.tool_calls : null});
+  finish(out, ok ? body.reply : body.error,
+         {err: !ok, tools: ok ? body.tool_calls : null, markdown: ok});
   if (ok) {
     aiHistory.push({role: "user", content: input});
     aiHistory.push({role: "assistant", content: body.reply});
@@ -263,6 +290,7 @@ def GET(request):
 <header class="app"><h1>Shell</h1><div class="who">{who}</div></header>
 {body}
 </div>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 {script}
 <script src="/nav"></script>
 </body>
