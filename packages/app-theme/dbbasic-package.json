@@ -10,6 +10,10 @@
     {
       "id": "site_style",
       "path": "objects/site/style.py"
+    },
+    {
+      "id": "site_appearance",
+      "path": "objects/site/appearance.py"
     }
   ],
   "schemas": [],

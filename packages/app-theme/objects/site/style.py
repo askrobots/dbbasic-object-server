@@ -233,11 +233,16 @@ def _css():
 
 def GET(request):
     if request.get("info"):
+        previews = {
+            name: {key: theme.get(key, "") for key in ("bg", "panel", "accent", "text")}
+            for name, theme in THEMES.items()
+        }
         body = json.dumps(
             {
                 "status": "ok",
                 "active": _active(),
                 "available": sorted(THEMES),
+                "previews": previews,
                 "tokens": _tokens(),
                 "custom": bool(_custom()),
             }
