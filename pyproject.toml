@@ -44,6 +44,9 @@ test = [
 ]
 server = [
     "uvicorn>=0.30.0",
+    # Websocket protocol implementation uvicorn needs to accept /ws upgrades
+    # for realtime push. Without it uvicorn rejects websocket connections.
+    "websockets>=12.0",
 ]
 
 [project.urls]
