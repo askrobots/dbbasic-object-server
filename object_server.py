@@ -59,6 +59,7 @@ import object_record_changes
 import object_records
 import object_schema_versions
 import object_ai
+import object_backup_index
 import object_realtime
 import object_schemas
 import object_search
@@ -677,6 +678,20 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
 
         if path == http_api_contract.ADMIN_OPS_PATH:
             await _handle_admin_ops(send, method, query, headers)
+            return
+
+        if path == http_api_contract.ADMIN_BACKUPS_PATH:
+            await _handle_admin_backups(send, method, headers)
+            return
+
+        admin_backups_prefix = f"{http_api_contract.ADMIN_BACKUPS_PATH}/"
+        if path.startswith(admin_backups_prefix):
+            tail = path.removeprefix(admin_backups_prefix)
+            if tail.endswith("/download"):
+                backup_id = tail.removesuffix("/download")
+                await _handle_admin_backup_download(send, method, backup_id, headers)
+                return
+            await _send_json(send, {"status": "error", "error": "Not found"}, status=404)
             return
 
         if path == http_api_contract.ADMIN_FILES_PATH:
@@ -3277,6 +3292,13 @@ def _admin_capabilities_payload() -> dict[str, Any]:
         "package_restore": {
             "enabled": _env_enabled(PACKAGE_RESTORE_ENABLED_ENV),
             "env": PACKAGE_RESTORE_ENABLED_ENV,
+        },
+        "backups": {
+            "available": True,
+            "can_create": True,
+            "can_download": True,
+            "can_restore": False,
+            **_backup_schedule_payload(),
         },
         "permission_enforcement": {
             "enabled": _permission_enforcement_enabled(),
@@ -7635,6 +7657,113 @@ async def _handle_admin_ops(
             "events": events,
             "count": len(events),
         },
+    )
+
+
+BACKUP_SCHEDULE_ENV = "DBBASIC_BACKUP_SCHEDULE"
+
+
+def _backup_schedule_payload() -> dict[str, Any]:
+    """Automatic backups are a config option; report whether one is set.
+
+    Scheduled runs are driven by an external timer (systemd/cron) calling
+    `object_backup.py create`; DBBASIC_BACKUP_SCHEDULE records the operator's
+    intent so clients can show it. On-demand create/download always work.
+    """
+    schedule = os.environ.get(BACKUP_SCHEDULE_ENV, "").strip()
+    return {"scheduled": bool(schedule), "schedule": schedule or None, "env": BACKUP_SCHEDULE_ENV}
+
+
+async def _handle_admin_backups(
+    send,
+    method: str,
+    headers: dict[str, str],
+) -> None:
+    """List runtime backups (GET) or create one on demand (POST). Admin only."""
+    gate_error = _admin_token_gate_error(headers, f"Backups require {ADMIN_TOKEN_ENV}.")
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    if method == "GET":
+        try:
+            backups = object_backup_index.list_backups(data_dir=_data_dir())
+        except (OSError, ValueError) as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=500)
+            return
+        await _send_json(
+            send,
+            {
+                "status": "ok",
+                "backups": backups,
+                "count": len(backups),
+                "schedule": _backup_schedule_payload(),
+            },
+        )
+        return
+
+    if method == "POST":
+        try:
+            backup = object_backup_index.create_backup(data_dir=_data_dir())
+        except object_backup.BackupError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=500)
+            return
+        except OSError as exc:
+            await _send_json(
+                send, {"status": "error", "error": f"Could not create backup: {exc}"}, status=500
+            )
+            return
+        _append_ops_auth_event(event="backup_created", identifier=_record_change_actor(headers),
+                               label=str(backup.get("id")))
+        await _send_json(send, {"status": "ok", "backup": backup}, status=201)
+        return
+
+    await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+
+
+async def _handle_admin_backup_download(
+    send,
+    method: str,
+    backup_id: str,
+    headers: dict[str, str],
+) -> None:
+    """Stream one backup archive. Admin only — it contains all runtime data."""
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(headers, f"Backups require {ADMIN_TOKEN_ENV}.")
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    try:
+        path = object_backup_index.backup_path(backup_id, data_dir=_data_dir())
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    if not path.is_file():
+        await _send_json(send, {"status": "error", "error": "Backup not found"}, status=404)
+        return
+
+    try:
+        content = path.read_bytes()
+    except OSError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=500)
+        return
+
+    _append_ops_auth_event(event="backup_downloaded", identifier=_record_change_actor(headers),
+                           label=backup_id)
+    await _send_bytes(
+        send,
+        content,
+        content_type="application/gzip",
+        extra_headers=[
+            (b"content-disposition", f'attachment; filename="{backup_id}"'.encode("latin-1", "replace")),
+            (b"x-content-type-options", b"nosniff"),
+        ],
     )
 
 
