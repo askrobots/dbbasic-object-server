@@ -81,8 +81,12 @@ function renderMarkdown(text) {
     return marked.parse(safe).replace(new RegExp("<a ", "g"),
       '<a target="_blank" rel="noopener" ');
   }
-  return safe.replace(new RegExp("(https?://[^ <]+)", "g"),
-    '<a href="$1" target="_blank" rel="noopener">$1</a>');
+  return safe
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\\*\\*([^*\\n]+)\\*\\*/g, "<strong>$1</strong>")
+    .replace(/(https?:\\/\\/[^ <]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>')
+    .replace(/^\\s*[-*] (.+)$/gm, "\\u2022 $1")
+    .replace(/\\n/g, "<br>");
 }
 
 function finish(out, text, {err = false, tools = null, markdown = false} = {}) {
@@ -127,7 +131,7 @@ async function loadHistory() {
   const body = await res.json();
   for (const row of (body.records || []).slice(-30)) {
     const out = entry(row.input);
-    finish(out, row.output || "");
+    finish(out, row.output || "", {markdown: row.kind === "ai"});
     if (row.kind === "ai" && row.output) {
       aiHistory.push({role: "user", content: row.input});
       aiHistory.push({role: "assistant", content: row.output});
