@@ -46,6 +46,16 @@ if (form) form.addEventListener("submit", async (event) => {
   if (res.ok) { window.location = `/articles/${record.id}`; }
 });
 load();
+
+// Realtime: auto-refresh when this collection changes (another tab, user, or agent).
+(function () {
+  let _lt = null;
+  const reload = () => { clearTimeout(_lt); _lt = setTimeout(load, 150); };
+  (function wait() {
+    if (window.dbbasicSubscribe) window.dbbasicSubscribe("articles", reload);
+    else setTimeout(wait, 300);
+  })();
+})();
 """
 
 

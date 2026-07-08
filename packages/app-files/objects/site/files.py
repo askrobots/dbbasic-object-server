@@ -75,6 +75,16 @@ document.getElementById("rows").addEventListener("click", async (event) => {
   load();
 });
 load();
+
+// Realtime: auto-refresh when this collection changes (another tab, user, or agent).
+(function () {
+  let _lt = null;
+  const reload = () => { clearTimeout(_lt); _lt = setTimeout(load, 150); };
+  (function wait() {
+    if (window.dbbasicSubscribe) window.dbbasicSubscribe("files", reload);
+    else setTimeout(wait, 300);
+  })();
+})();
 """
 
 
