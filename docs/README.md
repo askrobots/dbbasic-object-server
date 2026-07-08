@@ -51,6 +51,10 @@ flowchart TD
 - `shell-and-ai.md` - the talk-to-everything terminal: per-user AI
   provider keys, model choice, MCP tool subsets, conversation resume,
   and building live objects by asking ("coding without coding").
+- `design-system.md` - the semantic-contract design system: token roles,
+  themes as data and as packages (base/paper/terminal), the stylesheet
+  served as the `site_style` object at `/style`, and why semantics beat a
+  widget-prescriptive ui_schema.
 - `capability-objects.md` - objects that shell out to system tools
   (ffmpeg, tesseract/OCR, ImageMagick, PDF text): the subprocess
   execution model, worked examples, the trust boundary, and how they

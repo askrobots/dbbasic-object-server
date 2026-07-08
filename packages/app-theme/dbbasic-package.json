@@ -1,0 +1,23 @@
+{
+  "id": "app-theme",
+  "name": "Theme",
+  "version": "0.1.0",
+  "description": "The design system as one themeable stylesheet object at /style. Pages link to it; a theme is a set of token values, so switching or installing a theme reskins the whole instance live. Ships the base (warm-dark), paper (light), and terminal themes.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "objects": [
+    {
+      "id": "site_style",
+      "path": "objects/site/style.py"
+    }
+  ],
+  "schemas": [],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [],
+  "migrations": []
+}
