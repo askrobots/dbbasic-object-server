@@ -72,28 +72,16 @@ function entry(input) {
   return div.querySelector(".out");
 }
 
-// Render markdown (bold, code, lists, links) the way q9's terminal did, using
-// marked.js when present. Escape FIRST so AI output can never inject HTML.
-function renderMarkdown(text) {
-  const safe = esc(text);
-  if (typeof marked !== "undefined") {
-    marked.setOptions({breaks: true, gfm: true});
-    return marked.parse(safe).replace(new RegExp("<a ", "g"),
-      '<a target="_blank" rel="noopener" ');
-  }
-  return safe
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
-    .replace(/\\*\\*([^*\\n]+)\\*\\*/g, "<strong>$1</strong>")
-    .replace(/(https?:\\/\\/[^ <]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>')
-    .replace(/^\\s*[-*] (.+)$/gm, "\\u2022 $1")
-    .replace(/\\n/g, "<br>");
-}
-
 function finish(out, text, {err = false, tools = null, markdown = false} = {}) {
   out.classList.remove("pending");
   out.classList.toggle("err", err);
-  if (markdown) { out.classList.add("md"); out.innerHTML = renderMarkdown(text); }
-  else { out.textContent = text; }
+  // Markdown rendering is the shared /markdown utility (window.dbbasicMarkdown),
+  // defined once. If it is unavailable, degrade to escaped plain text — never a
+  // second markdown implementation.
+  if (markdown) {
+    out.classList.add("md");
+    out.innerHTML = window.dbbasicMarkdown ? window.dbbasicMarkdown(text) : esc(text);
+  } else { out.textContent = text; }
   if (tools && tools.length) {
     const info = document.createElement("div");
     info.className = "tools";
@@ -294,7 +282,7 @@ def GET(request):
 <header class="app"><h1>Shell</h1><div class="who">{who}</div></header>
 {body}
 </div>
-<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="/markdown"></script>
 {script}
 <script src="/nav"></script>
 </body>

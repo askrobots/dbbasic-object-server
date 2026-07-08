@@ -18,6 +18,10 @@
     {
       "id": "site_nav",
       "path": "objects/site/nav.py"
+    },
+    {
+      "id": "site_markdown",
+      "path": "objects/site/markdown.py"
     }
   ],
   "schemas": [],
