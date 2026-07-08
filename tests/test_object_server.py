@@ -8756,22 +8756,34 @@ def test_unknown_path_returns_json_404():
     assert payload == {"status": "error", "error": "Not found"}
 
 
-def test_websocket_scope_closes_until_realtime_contract_is_added():
+def test_websocket_rejects_unknown_path(monkeypatch):
+    # Realtime lives only at /ws; any other websocket path is closed without accept.
+    enable_admin_token(monkeypatch)
+
     async def run():
         messages = []
+        sent_connect = False
 
         async def receive():
-            return {"type": "websocket.connect"}
+            nonlocal sent_connect
+            if not sent_connect:
+                sent_connect = True
+                return {"type": "websocket.connect"}
+            return {"type": "websocket.disconnect"}
 
         async def send(message):
             messages.append(message)
 
-        await object_server.app({"type": "websocket", "path": "/ws/basics_counter"}, receive, send)
+        await object_server.app(
+            {"type": "websocket", "path": "/ws/basics_counter", "headers": []},
+            receive,
+            send,
+        )
         return messages
 
     messages = asyncio.run(run())
-
-    assert messages == [{"type": "websocket.close", "code": 1003}]
+    assert not any(m["type"] == "websocket.accept" for m in messages)
+    assert messages[-1]["type"] == "websocket.close"
 
 
 def test_lifespan_startup_and_shutdown_complete():

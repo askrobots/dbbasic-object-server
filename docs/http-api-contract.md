@@ -1446,6 +1446,49 @@ without a stored key for the model's service get a pointed 400. Timeout
 per provider round: `DBBASIC_AI_TIMEOUT_SECONDS` (default 60); default
 model: `DBBASIC_AI_DEFAULT_MODEL`.
 
+## Realtime Push (Websocket)
+
+Clients get live record-change signals over a websocket at `/ws`, so open
+pages auto-update the instant something changes — no polling. The durable
+event log (see the runtime contract) remains as the poll-based fallback.
+
+```
+WebSocket  wss://your-host/ws
+```
+
+Connect with your session (the `dbbasic_session` cookie is sent
+automatically; a bearer/admin token also works). Anonymous connections
+are closed. Then speak a tiny JSON protocol:
+
+```json
+// client -> server
+{"action": "subscribe",   "collections": ["notifications", "notes"]}
+{"action": "unsubscribe", "collections": ["notes"]}
+{"action": "ping"}
+
+// server -> client
+{"type": "welcome",    "user": "dan"}
+{"type": "subscribed", "collections": ["notifications", "notes"]}
+{"type": "record", "collection": "notes", "record_id": "…", "action": "created"}
+{"type": "pong"}
+```
+
+The `record` message is a **signal, not data** — only the collection,
+record id, and action travel, never the record body. The client refetches
+through the normal permission-enforced API. Two guarantees follow the same
+rules as reads: you can only `subscribe` to a collection you may read, and
+with enforcement on you only receive events for records your row filters
+would let you see (a private note's change is never signalled to another
+user). Requires `DBBASIC_ENABLE_REALTIME` (default on); the reverse proxy
+must forward websocket upgrades (Caddy does by default). Single-process
+deployment assumption applies — see
+[asgi-realtime-direction](asgi-realtime-direction.md).
+
+The shared nav (`/nav`) already uses this: the notification bell
+subscribes to `notifications` and updates live, with a 20s poll as
+backup. Pages can follow their own collection via
+`window.dbbasicSubscribe(collection, handler)`.
+
 ## Global Search
 
 Records can be searched across every collection whose schema declares

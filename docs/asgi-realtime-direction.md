@@ -111,32 +111,41 @@ The first public ASGI layer is now small and runnable. It includes:
 - metadata endpoints
 - temporary admin-token gate for object listing and introspection reads
 
-The next server work is:
+Role, object, and row-level permissions, resource limits, and
+backup/restore checks all shipped. The websocket event stream is now
+implemented too (see below).
 
-- role, object, and row-level permissions
-- resource limits around object execution
-- backup/restore checks
-- WebSocket or SSE object event streams
+## Realtime: implemented
 
-Realtime should arrive as an object-level event system, not as a decorative
-feature. A useful first room model is:
+Realtime arrived as an event system, not a decorative feature, and it
+reuses the durable event log rather than inventing a parallel path:
 
-```text
-/ws/objects/{object_id}
-```
+- **Durable log (source of truth).** Every record write already publishes
+  `collection.record.created/updated/deleted` to `object_events`, which is
+  persisted, capped, and pollable with a cursor. This is the reliable,
+  cross-restart, cross-worker path.
+- **Live overlay (`/ws`).** An in-process pub/sub hub (`object_realtime`)
+  pushes those same events to connected websockets the instant they
+  happen. See the [HTTP API contract](http-api-contract.md#realtime-push-websocket)
+  for the connect + subscribe protocol.
 
-Events should be boring JSON:
+Events are boring JSON signals — collection, record id, action — never the
+record body, so a push can never leak a field. Delivery obeys the
+permission engine: you can only subscribe to a collection you may read, and
+with enforcement on you only receive events for records your row filters
+would show you. The client refetches through the normal enforced API.
 
-```json
-{
-  "type": "object.source.updated",
-  "object_id": "basics_counter",
-  "version_id": 2
-}
-```
+**Single-process assumption.** The live hub lives in one process; with one
+uvicorn worker every write and every socket share the event loop, so
+push is immediate and consistent. Across multiple workers each has its own
+hub, and clients fall back to polling the durable log — which is why the
+durable log, not the socket, is the source of truth. Keep the public v1
+single-worker (or add a shared broker before scaling workers) so live push
+stays whole; either way correctness never depends on the socket.
 
-That gives Scroll and other clients a way to update immediately when source,
-state, logs, versions, or execution status changes.
+An object-scoped room model (`/ws/objects/{object_id}` for source/state/log
+changes) is a natural next addition on the same hub, using the existing
+source/state/version change events.
 
 ## Design Rule
 

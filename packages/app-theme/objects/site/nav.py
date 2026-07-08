@@ -125,7 +125,34 @@ _JS = r"""
     const res = await api("/collections/notifications/records?limit=50");
     if (res.ok) { const b = await res.json(); renderNotes(b.records || []); }
   }
-  window.dbbasicRenderNotes = renderNotes;  // websocket hook point
+  window.dbbasicRenderNotes = renderNotes;
+
+  // Realtime: live push over a websocket, with the 20s poll as fallback.
+  const subs = {};            // collection -> [handlers]
+  let ws = null, retry = 1000;
+  function subscribe(collection, handler) {
+    (subs[collection] = subs[collection] || []).push(handler);
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ action: "subscribe", collections: [collection] }));
+  }
+  window.dbbasicSubscribe = subscribe;   // pages can follow their own collection
+  function connectRealtime() {
+    try {
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      ws = new WebSocket(proto + "://" + location.host + "/ws");
+    } catch (e) { return; }
+    ws.onopen = () => {
+      retry = 1000;
+      const cols = Object.keys(subs);
+      if (cols.length) ws.send(JSON.stringify({ action: "subscribe", collections: cols }));
+    };
+    ws.onmessage = (ev) => {
+      let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+      if (m.type === "record" && subs[m.collection]) subs[m.collection].forEach((h) => h(m));
+    };
+    ws.onclose = () => { ws = null; setTimeout(connectRealtime, retry); retry = Math.min(retry * 2, 30000); };
+    ws.onerror = () => { try { ws.close(); } catch (e) {} };
+  }
+
   bell.addEventListener("click", () => {
     const open = notesMenu.classList.contains("open"); closeAll();
     if (!open) { place(notesMenu, bell, true); notesMenu.classList.add("open"); }
@@ -151,7 +178,9 @@ _JS = r"""
         location.href = "/";
       });
       refreshNotes();
-      setInterval(refreshNotes, 20000);
+      setInterval(refreshNotes, 20000);        // fallback poll
+      subscribe("notifications", refreshNotes); // live push updates the bell instantly
+      connectRealtime();
     } else {
       userBtn.textContent = "Sign in";
       userBtn.onclick = () => { location.href = "/login?next=" + encodeURIComponent(location.pathname); };

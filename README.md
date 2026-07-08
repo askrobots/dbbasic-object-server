@@ -296,6 +296,7 @@ Current endpoints:
 - `POST /logout`
 - `POST /api/mcp`
 - `GET /api/search`
+- `WebSocket /ws` (realtime record-change push)
 - `POST /api/ai/chat`
 - `POST /api/files`
 - `GET /api/files/{file_id}`

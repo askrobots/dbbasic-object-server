@@ -93,11 +93,12 @@ to its siblings. Adding a nav item is one edit to one object; every app
 gets it. If you find yourself pasting nav markup into a page, stop: add it
 to `site_nav`.
 
-The bell polls today, but it calls `window.dbbasicRenderNotes(records)` —
-a hook a realtime push message will drive so the count updates the instant
-something happens, across open pages. Auto-update on events is the thing
-the old dashboard/Channels stacks never did cleanly, and it is the top
-platform build (see [status](status.md)).
+The bell is **live**: it subscribes to the `notifications` collection over
+the `/ws` websocket and updates the instant something happens, with a 20s
+poll as backup. Pages can follow their own collection the same way via
+`window.dbbasicSubscribe(collection, handler)`. Auto-update on events is
+the thing the old dashboard/Channels stacks never did cleanly — see the
+[realtime contract](http-api-contract.md#realtime-push-websocket).
 
 ## Themes are data — and packages
 

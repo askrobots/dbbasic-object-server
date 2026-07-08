@@ -7,6 +7,7 @@ while the production auth and mutation paths are extracted.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import base64
 import binascii
 import hashlib
@@ -58,6 +59,7 @@ import object_record_changes
 import object_records
 import object_schema_versions
 import object_ai
+import object_realtime
 import object_schemas
 import object_search
 import object_service_keys
@@ -141,6 +143,12 @@ RECORD_EVENT_TYPES = {
     "delete": "collection.record.deleted",
 }
 ADMIN_CHANGE_KINDS = frozenset({"source", "file", "record", "package"})
+
+REALTIME_ENABLED_ENV = "DBBASIC_ENABLE_REALTIME"
+REALTIME_QUEUE_MAX_ENV = "DBBASIC_REALTIME_QUEUE_MAX"
+WEBSOCKET_PATH = "/ws"
+MAX_WS_SUBSCRIPTIONS = 64
+_realtime_hub = object_realtime.RealtimeHub()
 
 _runtime = PythonObjectRuntime()
 
@@ -301,7 +309,7 @@ async def app(scope: dict[str, Any], receive, send) -> None:
         return
 
     if scope["type"] == "websocket":
-        await send({"type": "websocket.close", "code": 1003})
+        await _handle_websocket(scope, receive, send)
         return
 
     if scope["type"] != "http":
@@ -341,6 +349,181 @@ async def app(scope: dict[str, Any], receive, send) -> None:
         object_correlation.reset_current_correlation_id(correlation_token)
         duration_ms = (time.perf_counter() - started_at) * 1000
         _metrics.record_request(method, path, status_code, duration_ms)
+
+
+def _realtime_enabled() -> bool:
+    value = os.environ.get(REALTIME_ENABLED_ENV)
+    if value is None:
+        return True
+    return value.strip().lower() in TRUE_VALUES
+
+
+def _realtime_queue_max() -> int:
+    return _env_int(REALTIME_QUEUE_MAX_ENV, object_realtime.DEFAULT_QUEUE_MAX)
+
+
+async def _handle_websocket(scope: dict[str, Any], receive, send) -> None:
+    """Live push transport: authenticated, permission-filtered record events.
+
+    A client connects to /ws with its session (cookie or bearer),
+    subscribes to collections it is allowed to read, and receives a small
+    signal ({type: record, collection, record_id, action}) whenever a
+    matching record it can see changes — never the record body, so no
+    surface can leak fields. The client refetches through the normal
+    permission-enforced API. The durable event log stays as the poll-based
+    fallback for missed events and multi-worker deployments.
+    """
+    headers = _parse_headers(scope.get("headers", []))
+
+    # Consume the connect frame first so we can accept or reject cleanly.
+    connect = await receive()
+    if connect.get("type") != "websocket.connect":
+        return
+
+    if not _realtime_enabled() or scope.get("path") != WEBSOCKET_PATH:
+        await send({"type": "websocket.close", "code": 1008})
+        return
+
+    subject = _permission_subject(headers)
+    if subject.user_id is None and "admin" not in subject.roles:
+        await send({"type": "websocket.close", "code": 1008})
+        return
+
+    await send({"type": "websocket.accept"})
+    queue: "asyncio.Queue[dict[str, Any]]" = asyncio.Queue(maxsize=_realtime_queue_max())
+    subscriber = object_realtime.Subscriber(subject=subject, queue=queue)
+    _realtime_hub.add(subscriber)
+    await _ws_send(send, {"type": "welcome", "user": subject.user_id})
+
+    reader = asyncio.ensure_future(_ws_reader(receive, send, subscriber))
+    writer = asyncio.ensure_future(_ws_writer(send, queue))
+    try:
+        done, pending = await asyncio.wait(
+            {reader, writer}, return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in pending:
+            task.cancel()
+        for task in done:
+            with contextlib.suppress(Exception):
+                task.result()
+    finally:
+        _realtime_hub.remove(subscriber)
+        with contextlib.suppress(Exception):
+            await send({"type": "websocket.close"})
+
+
+async def _ws_reader(receive, send, subscriber) -> None:
+    while True:
+        message = await receive()
+        kind = message.get("type")
+        if kind == "websocket.disconnect":
+            return
+        if kind != "websocket.receive":
+            continue
+        text = message.get("text")
+        if not text:
+            continue
+        try:
+            data = json.loads(text)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        action = data.get("action")
+        if action == "subscribe":
+            for collection in _ws_clean_collections(data.get("collections")):
+                if len(subscriber.collections) >= MAX_WS_SUBSCRIPTIONS:
+                    break
+                if _ws_can_subscribe(subscriber.subject, collection):
+                    subscriber.collections.add(collection)
+            await _ws_send(
+                send, {"type": "subscribed", "collections": sorted(subscriber.collections)}
+            )
+        elif action == "unsubscribe":
+            for collection in _ws_clean_collections(data.get("collections")):
+                subscriber.collections.discard(collection)
+            await _ws_send(
+                send, {"type": "subscribed", "collections": sorted(subscriber.collections)}
+            )
+        elif action == "ping":
+            await _ws_send(send, {"type": "pong"})
+
+
+async def _ws_writer(send, queue) -> None:
+    while True:
+        event = await queue.get()
+        await _ws_send(send, event)
+
+
+async def _ws_send(send, payload: dict[str, Any]) -> None:
+    await send({"type": "websocket.send", "text": json.dumps(payload, default=str)})
+
+
+def _ws_clean_collections(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        if isinstance(item, str) and object_collections.validate_collection_name(item):
+            out.append(item)
+        if len(out) >= MAX_WS_SUBSCRIPTIONS:
+            break
+    return out
+
+
+def _ws_can_subscribe(subject, collection: str) -> bool:
+    """A subject may follow a collection only if it may read it."""
+    if not _permission_checks_enabled() or not _permission_enforcement_enabled():
+        return True
+    try:
+        policy = object_permission_store.load_policy(_data_dir())
+    except ValueError:
+        return False
+    decision = object_permissions.check_permission(
+        subject, object_permissions.READ, policy=policy, collection=collection
+    )
+    return decision.allowed
+
+
+def _realtime_publish(collection: str, record_id: str, action: str, record) -> None:
+    """Push a record-change signal to permitted live subscribers.
+
+    Runs the same read decision as a GET: with enforcement on, a
+    subscriber only hears about a record its row filter would let it see.
+    Only the id and action travel — never the record body.
+    """
+    if not _realtime_enabled() or not collection:
+        return
+    subscribers = _realtime_hub.wanting(collection)
+    if not subscribers:
+        return
+
+    enforced = _permission_checks_enabled() and _permission_enforcement_enabled()
+    policy = None
+    if enforced:
+        try:
+            policy = object_permission_store.load_policy(_data_dir())
+        except ValueError:
+            return  # cannot filter safely -> do not push
+
+    event = {
+        "type": "record",
+        "collection": collection,
+        "record_id": record_id,
+        "action": action,
+    }
+    for subscriber in subscribers:
+        if enforced and record is not None:
+            decision = object_permissions.check_permission(
+                subscriber.subject,
+                object_permissions.READ,
+                policy=policy,
+                collection=collection,
+                record=record,
+            )
+            if not decision.allowed:
+                continue
+        subscriber.deliver(dict(event))
 
 
 async def _handle_http(scope: dict[str, Any], receive, send) -> None:
@@ -6402,7 +6585,7 @@ async def _handle_collection_record_create(
         )
         return
 
-    _publish_record_change_event(change)
+    _publish_record_change_event(change, record=record)
 
     await _send_json(
         send,
@@ -6639,7 +6822,7 @@ async def _handle_collection_record_update(
         )
         return
 
-    _publish_record_change_event(change)
+    _publish_record_change_event(change, record=record)
 
     await _send_json(
         send,
@@ -6738,7 +6921,7 @@ async def _handle_collection_record_delete(
         )
         return
 
-    _publish_record_change_event(change)
+    _publish_record_change_event(change, record=record)
 
     await _send_json(
         send,
@@ -8628,12 +8811,21 @@ def _record_change_actor(headers: dict[str, str]) -> str:
     return "api"
 
 
-def _publish_record_change_event(change: dict[str, Any]) -> dict[str, Any] | None:
-    if not _record_events_enabled():
+def _publish_record_change_event(
+    change: dict[str, Any], record: dict[str, Any] | None = None
+) -> dict[str, Any] | None:
+    action = str(change.get("action", ""))
+    event_type = RECORD_EVENT_TYPES.get(action)
+    if event_type is None:
         return None
 
-    event_type = RECORD_EVENT_TYPES.get(str(change.get("action", "")))
-    if event_type is None:
+    collection = str(change.get("collection") or "")
+    record_id = str(change.get("record_id") or "")
+
+    # Live push overlay (independent of the durable log's on/off flag).
+    _realtime_publish(collection, record_id, action, record)
+
+    if not _record_events_enabled():
         return None
 
     payload = {

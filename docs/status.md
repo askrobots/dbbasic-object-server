@@ -115,31 +115,33 @@ untrusted public users.
   `DBBASIC_ENABLE_SESSION_ADMIN_GATES=true`
 - CPU and memory isolation for untrusted object code
 - Fully managed event delivery/admin control API
-- Realtime push (websockets/SSE) — polling works today; push is the next
-  platform slice
 - A background-job runtime (long media transcodes, PDF text extraction,
   thumbnails, scheduled AI work wait on it)
 - Cluster correctness claims
 
 ## Next Work
 
-The application suite is ported (see `app-packages.md`) and the single-VM
-installer and quickstart exist (`scripts/install.sh`, `quickstart.md`).
-The remaining work is platform capability, in rough priority order:
+The application suite is ported (see `app-packages.md`), the single-VM
+installer and quickstart exist (`scripts/install.sh`, `quickstart.md`),
+and realtime push over websockets is live (`/ws`, permission-filtered —
+see `http-api-contract.md` and `asgi-realtime-direction.md`; the nav's
+notification bell already updates on push). The remaining work is platform
+capability, in rough priority order:
 
-1. Realtime push over websockets (uvicorn already speaks the ASGI
-   websocket protocol): authenticated connect, permission-checked
-   subscriptions to record-change/ops/feed streams, and push on writes.
-   Turns today's polling surfaces (dashboard, shell, coordination feed,
-   notifications) into live streams.
+1. Extend realtime to more surfaces: object source/state/version rooms
+   (`/ws/objects/{id}`) for the dashboard, and list auto-refresh in the
+   app pages via `window.dbbasicSubscribe`. A shared broker before scaling
+   past one uvicorn worker.
 2. Write-level project sharing (`$writable_projects`) and a per-family
    "builder role" so agents and collaborators can be scoped below admin.
 3. A background-job runtime: submit → job record → worker object → result
    record + notification. Unlocks long media work, PDF extraction,
    thumbnails, and scheduled AI summarization.
-4. Add CPU/memory isolation and a better worker boundary for untrusted code.
-5. Self-service signup and password reset flows.
-6. The remaining q9 apps that need infrastructure: messaging/email
+4. The generative renderer (schema → dense list with row actions, filters,
+   relative timestamps); needs a `created_at` field added to schemas.
+5. Add CPU/memory isolation and a better worker boundary for untrusted code.
+6. Self-service signup and password reset flows.
+7. The remaining q9 apps that need infrastructure: messaging/email
    (mail server), finance/catalog (large but no infra blocker), billing.
 
 ## Release Rule
