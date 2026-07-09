@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 import object_execution
+import object_namespace
 import object_package_baselines
 import object_packages
 import object_reconciles
@@ -1048,3 +1049,127 @@ def test_reconcile_package_status_counts_pending_reconciles(tmp_path):
         "hello-world", root=packages_root, base_dir=data_dir, object_roots=[object_root]
     )
     assert status["pending_reconciles"] == 1
+
+
+# --- Phase 3: override objects (conflict-free customization, Rule 2) --------
+#
+# See docs/upgrade-and-customization.md (Rule 2). An override shadows a
+# package object by id without touching the package copy, so install/
+# reconcile logic (which always targets get_base_object_roots()) never sees
+# a conflict for an overridden object, and the package copy stays
+# upgradeable.
+
+
+def test_package_status_reports_overridden_flag(tmp_path, monkeypatch):
+    packages_root = tmp_path / "packages"
+    data_dir = tmp_path / "data"
+    object_root = tmp_path / "objects"
+    object_root.mkdir()
+    override_root = tmp_path / "overrides"
+    monkeypatch.delenv("DBBASIC_OVERRIDES_DIR", raising=False)
+    write_package(
+        packages_root,
+        "hello-world",
+        _reconcile_manifest("0.1.0"),
+        files=(
+            ("objects/hello/world.py", "def GET(request): return {'v': 1}\n"),
+            (
+                "schemas/contacts.json",
+                json.dumps({"name": "contacts", "fields": [{"name": "id", "type": "text"}]}),
+            ),
+        ),
+    )
+    object_packages.install_package(
+        "hello-world", root=packages_root, base_dir=data_dir, object_roots=[object_root]
+    )
+
+    status_before = object_packages.package_status(
+        "hello-world", root=packages_root, base_dir=data_dir, object_roots=[object_root]
+    )
+    object_artifact = next(a for a in status_before["artifacts"] if a["kind"] == "object")
+    assert object_artifact["overridden"] is False
+
+    monkeypatch.setenv("DBBASIC_OVERRIDES_DIR", str(override_root))
+    override_file = override_root / "hello" / "world.py"
+    override_file.parent.mkdir(parents=True)
+    override_file.write_text("def GET(request): return {'v': 'overridden'}\n")
+
+    status_after = object_packages.package_status(
+        "hello-world", root=packages_root, base_dir=data_dir, object_roots=[object_root]
+    )
+    object_artifact_after = next(a for a in status_after["artifacts"] if a["kind"] == "object")
+    assert object_artifact_after["overridden"] is True
+    # pristine/customized state is computed from the base-root copy only —
+    # the override never influences it.
+    assert object_artifact_after["state"] == "pristine"
+
+
+def test_upgrade_fast_forwards_base_copy_without_conflict_when_overridden(tmp_path, monkeypatch):
+    packages_root = tmp_path / "packages"
+    data_dir = tmp_path / "data"
+    object_root = tmp_path / "objects"
+    override_root = tmp_path / "overrides"
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(object_root))
+    monkeypatch.delenv("DBBASIC_OVERRIDES_DIR", raising=False)
+
+    write_package(
+        packages_root,
+        "hello-world",
+        _reconcile_manifest("0.1.0"),
+        files=(
+            ("objects/hello/world.py", "def GET(request): return {'v': 1}\n"),
+            (
+                "schemas/contacts.json",
+                json.dumps({"name": "contacts", "fields": [{"name": "id", "type": "text"}]}),
+            ),
+        ),
+    )
+
+    object_packages.install_package(
+        "hello-world",
+        root=packages_root,
+        base_dir=data_dir,
+        object_roots=object_namespace.get_base_object_roots(),
+    )
+
+    # Enable overrides and customize hello_world via an override. The
+    # package copy under object_root is never touched by this.
+    monkeypatch.setenv("DBBASIC_OVERRIDES_DIR", str(override_root))
+    override_file = object_namespace.override_path("hello_world")
+    override_file.parent.mkdir(parents=True)
+    override_file.write_text("def GET(request): return {'v': 'overridden'}\n")
+    assert object_namespace.resolve_object_id("hello_world") == override_file
+
+    # Ship an upgrade with different shipped object content.
+    _bump_reconcile_package(
+        packages_root,
+        version="0.2.0",
+        object_code="def GET(request): return {'v': 2}\n",
+    )
+
+    result = object_packages.install_package(
+        "hello-world",
+        root=packages_root,
+        base_dir=data_dir,
+        object_roots=object_namespace.get_base_object_roots(),
+        allow_replace=True,
+    )
+
+    # The base/package copy fast-forwards cleanly: no conflict, because the
+    # base copy (not the override) was pristine going into the upgrade.
+    assert result["objects"][0]["status"] == "updated"
+    assert result["reconciles"] == []
+    assert (object_root / "hello" / "world.py").read_text() == "def GET(request): return {'v': 2}\n"
+
+    # The override is completely untouched by the upgrade.
+    assert override_file.read_text() == "def GET(request): return {'v': 'overridden'}\n"
+
+    status = object_packages.package_status(
+        "hello-world",
+        root=packages_root,
+        base_dir=data_dir,
+        object_roots=object_namespace.get_base_object_roots(),
+    )
+    object_artifact = next(a for a in status["artifacts"] if a["kind"] == "object")
+    assert object_artifact["state"] == "pristine"
+    assert object_artifact["overridden"] is True

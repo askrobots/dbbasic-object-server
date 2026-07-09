@@ -2668,6 +2668,221 @@ def test_admin_object_execute_rejects_non_post_method(tmp_path, monkeypatch):
     assert payload == {"status": "error", "error": "Method not allowed"}
 
 
+# --- Phase 3: override objects (conflict-free customization, Rule 2) --------
+
+
+def test_admin_status_reports_overrides_capability_disabled_by_default(tmp_path, monkeypatch):
+    monkeypatch.delenv("DBBASIC_OVERRIDES_DIR", raising=False)
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/admin/status", headers=auth_headers())
+
+    assert status == 200
+    assert payload["capabilities"]["overrides"] == {
+        "enabled": False,
+        "env": "DBBASIC_OVERRIDES_DIR",
+    }
+
+
+def test_admin_status_reports_overrides_capability_when_enabled(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_OVERRIDES_DIR", str(tmp_path / "overrides"))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/admin/status", headers=auth_headers())
+
+    assert status == 200
+    assert payload["capabilities"]["overrides"] == {
+        "enabled": True,
+        "env": "DBBASIC_OVERRIDES_DIR",
+    }
+
+
+def test_admin_object_override_post_requires_overrides_enabled(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")
+    monkeypatch.delenv("DBBASIC_OVERRIDES_DIR", raising=False)
+    enable_source_writes(monkeypatch, root, data_dir)
+
+    status, _, payload = request(
+        "/admin/objects/basics_counter/override",
+        method="POST",
+        headers=auth_headers(),
+    )
+
+    assert status == 400
+    assert "DBBASIC_OVERRIDES_DIR" in payload["error"]
+
+
+def test_admin_object_override_post_requires_source_write_gate(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("DBBASIC_OVERRIDES_DIR", str(tmp_path / "overrides"))
+    enable_admin_token(monkeypatch)
+    # Note: DBBASIC_ENABLE_SOURCE_WRITES is intentionally left unset.
+
+    status, _, payload = request(
+        "/admin/objects/basics_counter/override",
+        method="POST",
+        headers=auth_headers(),
+    )
+
+    assert status == 403
+    assert "Source writes are disabled" in payload["error"]
+
+
+def test_admin_object_override_post_copies_package_source_then_conflicts_on_repeat(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    override_root = tmp_path / "overrides"
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {'v': 1}\n")
+    monkeypatch.setenv("DBBASIC_OVERRIDES_DIR", str(override_root))
+    enable_source_writes(monkeypatch, root, data_dir)
+
+    status, _, payload = request(
+        "/admin/objects/basics_counter/override",
+        method="POST",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["object_id"] == "basics_counter"
+    assert payload["created"] is True
+    override_file = override_root / "basics" / "counter.py"
+    assert override_file.is_file()
+    assert override_file.read_text() == "def GET(request):\n    return {'v': 1}\n"
+    # The package copy is untouched.
+    assert (root / "basics" / "counter.py").read_text() == "def GET(request):\n    return {'v': 1}\n"
+
+    repeat_status, _, repeat_payload = request(
+        "/admin/objects/basics_counter/override",
+        method="POST",
+        headers=auth_headers(),
+    )
+
+    assert repeat_status == 409
+    assert "already exists" in repeat_payload["error"]
+
+
+def test_admin_object_override_post_returns_404_for_missing_package_object(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    root.mkdir()
+    monkeypatch.setenv("DBBASIC_OVERRIDES_DIR", str(tmp_path / "overrides"))
+    enable_source_writes(monkeypatch, root, data_dir)
+
+    status, _, payload = request(
+        "/admin/objects/basics_counter/override",
+        method="POST",
+        headers=auth_headers(),
+    )
+
+    assert status == 404
+
+
+def test_admin_object_override_delete_removes_file_and_falls_back_to_package(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    override_root = tmp_path / "overrides"
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {'v': 1}\n")
+    write_source(override_root / "basics" / "counter.py", "def GET(request):\n    return {'v': 'overridden'}\n")
+    monkeypatch.setenv("DBBASIC_OVERRIDES_DIR", str(override_root))
+    enable_source_writes(monkeypatch, root, data_dir)
+
+    status, _, payload = request(
+        "/admin/objects/basics_counter/override",
+        method="DELETE",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload == {"status": "ok", "object_id": "basics_counter", "removed": True}
+    assert not (override_root / "basics" / "counter.py").exists()
+
+    # After removal, source reads resolve back to the package copy.
+    source_status, _, source_payload = request(
+        "/admin/objects/basics_counter",
+        query_string="source=true",
+        headers=auth_headers(),
+    )
+    assert source_status == 200
+    assert source_payload["source"] == "def GET(request):\n    return {'v': 1}\n"
+
+
+def test_admin_object_override_delete_returns_404_when_no_override(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {}\n")
+    monkeypatch.setenv("DBBASIC_OVERRIDES_DIR", str(tmp_path / "overrides"))
+    enable_source_writes(monkeypatch, root, data_dir)
+
+    status, _, payload = request(
+        "/admin/objects/basics_counter/override",
+        method="DELETE",
+        headers=auth_headers(),
+    )
+
+    assert status == 404
+
+
+def test_admin_object_override_rejects_invalid_object_id(tmp_path, monkeypatch):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("DBBASIC_OVERRIDES_DIR", str(tmp_path / "overrides"))
+    enable_source_writes(monkeypatch, root, data_dir)
+
+    status, _, payload = request(
+        "/admin/objects/bad%2Fid/override",
+        method="POST",
+        headers=auth_headers(),
+    )
+
+    assert status == 400
+
+
+def test_admin_object_override_creates_execution_override_while_package_stays_pristine(
+    tmp_path, monkeypatch
+):
+    root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    override_root = tmp_path / "overrides"
+    write_source(root / "basics" / "counter.py", "def GET(request):\n    return {'v': 'package'}\n")
+    monkeypatch.setenv("DBBASIC_OVERRIDES_DIR", str(override_root))
+    enable_source_writes(monkeypatch, root, data_dir)
+
+    create_status, _, _ = request(
+        "/admin/objects/basics_counter/override",
+        method="POST",
+        headers=auth_headers(),
+    )
+    assert create_status == 200
+
+    # Editing via the normal source-write path now edits the override, not
+    # the package copy, because resolution is override-first once an
+    # override file exists.
+    update_status, _, _ = request(
+        "/objects/basics_counter",
+        method="PUT",
+        query_string="source=true",
+        body=json.dumps(
+            {"code": "def GET(request):\n    return {'v': 'edited-override'}\n"}
+        ).encode(),
+        headers=auth_headers(),
+    )
+    assert update_status == 200
+
+    exec_status, _, exec_payload = request("/objects/basics_counter")
+    assert exec_status == 200
+    assert exec_payload == {"v": "edited-override"}
+
+    # The package copy on disk was never touched by the override edit.
+    assert (root / "basics" / "counter.py").read_text() == "def GET(request):\n    return {'v': 'package'}\n"
+
+
 def test_admin_collection_alias_exposes_read_only_collection_surfaces(tmp_path, monkeypatch):
     root = tmp_path / "objects"
     data_dir = tmp_path / "data"

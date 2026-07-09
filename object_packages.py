@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
 import object_collections
+import object_namespace
 import object_package_baselines
 import object_permission_store
 import object_permissions
@@ -446,7 +447,14 @@ def package_status(
             state = "pristine" if object_package_baselines.sha256_text(live) == base_sha else "customized"
         if state == "customized":
             any_customized = True
-        artifacts.append({"kind": "object", "id": object_id, "state": state})
+        artifacts.append(
+            {
+                "kind": "object",
+                "id": object_id,
+                "state": state,
+                "overridden": object_namespace.has_override(object_id),
+            }
+        )
 
     for collection, base_sha in (baseline.get("schemas") or {}).items():
         try:

@@ -124,7 +124,9 @@ def test_package_status_marks_edited_object_customized(tmp_path):
 
     assert status["customized"] is True
     object_artifacts = [a for a in status["artifacts"] if a["kind"] == "object"]
-    assert object_artifacts == [{"kind": "object", "id": "hello_world", "state": "customized"}]
+    assert object_artifacts == [
+        {"kind": "object", "id": "hello_world", "state": "customized", "overridden": False}
+    ]
     schema_artifacts = [a for a in status["artifacts"] if a["kind"] == "schema"]
     assert schema_artifacts == [{"kind": "schema", "collection": "contacts", "state": "pristine"}]
 

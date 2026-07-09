@@ -15,6 +15,7 @@ from typing import Iterable, Literal
 
 DEFAULT_OBJECTS_DIR = "objects"
 OBJECTS_DIR_ENV = "DBBASIC_OBJECTS_DIR"
+OVERRIDES_DIR_ENV = "DBBASIC_OVERRIDES_DIR"
 
 _OBJECT_ID_RE = re.compile(r"^[A-Za-z0-9_]{1,64}$")
 _USER_OBJECT_RE = re.compile(r"^u_(\d+)_([A-Za-z][A-Za-z0-9_]{0,49})$")
@@ -27,15 +28,45 @@ class ObjectSource:
     object_id: str
     path: Path
     relative_path: Path
-    kind: Literal["system", "user"]
+    kind: Literal["system", "user", "override"]
 
 
-def get_object_roots() -> list[Path]:
-    """Return object source roots in lookup order."""
+def get_base_object_roots() -> list[Path]:
+    """Return the package/system object roots (never the override root).
+
+    This is the root packages install into and reconcile against. It is
+    identical to the pre-override-support get_object_roots() body, so
+    install/baseline/reconcile logic always operates on the pristine,
+    upgradeable copy regardless of whether overrides are enabled.
+    """
     configured = os.environ.get(OBJECTS_DIR_ENV)
     if configured:
         return [Path(configured)]
     return [Path(DEFAULT_OBJECTS_DIR)]
+
+
+def get_override_root() -> Path | None:
+    """Return the override root when DBBASIC_OVERRIDES_DIR is set, else None.
+
+    Overrides are strictly opt-in: when the env var is unset or empty, this
+    returns None and every override-aware code path behaves exactly as it
+    did before overrides existed.
+    """
+    configured = os.environ.get(OVERRIDES_DIR_ENV)
+    if configured:
+        return Path(configured)
+    return None
+
+
+def get_object_roots() -> list[Path]:
+    """Return object source roots in lookup order (override first, then base).
+
+    When DBBASIC_OVERRIDES_DIR is unset this returns exactly
+    get_base_object_roots() — a single-element list identical to the
+    pre-override behavior of this function.
+    """
+    override = get_override_root()
+    return ([override] if override is not None else []) + get_base_object_roots()
 
 
 def validate_object_id(object_id: str) -> bool:
@@ -59,6 +90,42 @@ def parse_user_object_id(object_id: str) -> tuple[int, str] | None:
 def is_user_object_id(object_id: str) -> bool:
     """Return True when an object ID belongs to a user namespace."""
     return parse_user_object_id(object_id) is not None
+
+
+def override_relative_path(object_id: str) -> Path | None:
+    """Return the canonical override-root-relative path for an object ID.
+
+    Mirrors the first candidate form used by _candidate_system_paths.
+    Overrides only exist for system/package objects; user object IDs (and
+    any other invalid ID) are not supported and return None.
+    """
+    if not validate_object_id(object_id) or is_user_object_id(object_id):
+        return None
+    if "_" in object_id:
+        category, name = object_id.split("_", 1)
+        return Path(category) / f"{name}.py"
+    return Path(f"{object_id}.py")
+
+
+def override_path(object_id: str) -> Path | None:
+    """Return the absolute override path for an object ID, or None.
+
+    None is returned when overrides are not enabled (no override root
+    configured) or when the object ID is not a valid override target.
+    """
+    root = get_override_root()
+    if root is None:
+        return None
+    relative = override_relative_path(object_id)
+    if relative is None:
+        return None
+    return root / relative
+
+
+def has_override(object_id: str) -> bool:
+    """Return True when an override file exists for this object ID."""
+    path = override_path(object_id)
+    return path is not None and path.is_file()
 
 
 def resolve_object_id(object_id: str, roots: Iterable[Path] | None = None) -> Path | None:
@@ -130,11 +197,14 @@ def object_id_from_path(path: Path | str, root: Path | str) -> str:
 def iter_object_sources(roots: Iterable[Path] | None = None) -> list[ObjectSource]:
     """List object source files from configured roots in deterministic order."""
     search_roots = list(roots) if roots is not None else get_object_roots()
+    override_root = get_override_root()
     sources: list[ObjectSource] = []
 
     for root in search_roots:
         if not root.exists() or not root.is_dir():
             continue
+
+        is_override_root = override_root is not None and _same_root(root, override_root)
 
         for path in sorted(root.rglob("*.py"), key=lambda p: p.relative_to(root).as_posix()):
             try:
@@ -143,7 +213,13 @@ def iter_object_sources(roots: Iterable[Path] | None = None) -> list[ObjectSourc
             except ValueError:
                 continue
 
-            kind: Literal["system", "user"] = "user" if rel.parts[0] == "users" else "system"
+            kind: Literal["system", "user", "override"]
+            if rel.parts[0] == "users":
+                kind = "user"
+            elif is_override_root:
+                kind = "override"
+            else:
+                kind = "system"
             sources.append(
                 ObjectSource(
                     object_id=object_id,
@@ -154,6 +230,10 @@ def iter_object_sources(roots: Iterable[Path] | None = None) -> list[ObjectSourc
             )
 
     return sources
+
+
+def _same_root(a: Path, b: Path) -> bool:
+    return a.resolve(strict=False) == b.resolve(strict=False)
 
 
 def _candidate_system_paths(object_id: str, roots: Iterable[Path]) -> list[Path]:

@@ -17,6 +17,7 @@ import json
 import mimetypes
 import os
 import shutil
+import tempfile
 import threading
 import time
 import urllib.error
@@ -71,8 +72,11 @@ import object_source
 import object_source_changes
 import object_state
 import object_versions
+import object_namespace
 from object_namespace import (
+    get_base_object_roots,
     get_object_roots,
+    get_override_root,
     iter_object_sources,
     parse_user_object_id,
     resolve_object_id,
@@ -734,6 +738,11 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
             if object_tail.endswith("/execute"):
                 object_id = object_tail.removesuffix("/execute")
                 await _handle_admin_object_execute(send, method, object_id, body, headers)
+                return
+
+            if object_tail.endswith("/override"):
+                object_id = object_tail.removesuffix("/override")
+                await _handle_admin_object_override(send, method, object_id, headers)
                 return
 
             object_id = object_tail
@@ -2516,6 +2525,133 @@ async def _handle_admin_object_execute(
     )
 
 
+async def _handle_admin_object_override(
+    send,
+    method: str,
+    object_id: str,
+    headers: dict[str, str],
+) -> None:
+    """Create or remove an override that shadows a package object by id.
+
+    Overrides are the conflict-free customization path (Rule 2 in
+    docs/upgrade-and-customization.md): creating an override here copies the
+    *current package* source into the override root so execution and source
+    reads/writes resolve to the override from now on, while install/upgrade
+    logic keeps operating on the pristine package copy (see
+    get_base_object_roots()). This endpoint requires DBBASIC_OVERRIDES_DIR to
+    be configured; when it is unset the whole override subsystem is inert.
+    """
+    if method not in ("POST", "DELETE"):
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    # Creating/removing an override mutates what a source read/write and
+    # execution resolve to, so it is gated exactly like a direct source
+    # write (admin token + DBBASIC_ENABLE_SOURCE_WRITES).
+    gate_error = _source_write_gate_error(headers)
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    if not validate_object_id(object_id):
+        await _send_json(send, {"status": "error", "error": f"Invalid object id: {object_id}"}, status=400)
+        return
+
+    if get_override_root() is None:
+        await _send_json(
+            send,
+            {
+                "status": "error",
+                "error": f"Overrides are not enabled; set {object_namespace.OVERRIDES_DIR_ENV}",
+            },
+            status=400,
+        )
+        return
+
+    dest = object_namespace.override_path(object_id)
+    if dest is None:
+        await _send_json(
+            send,
+            {"status": "error", "error": f"Object id does not support overrides: {object_id}"},
+            status=400,
+        )
+        return
+
+    if method == "POST":
+        try:
+            source = object_source.get_object_source(object_id, get_base_object_roots())
+        except InvalidObjectIdError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        except object_source.ObjectSourceNotFoundError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+            return
+
+        if dest.exists():
+            await _send_json(
+                send,
+                {"status": "error", "error": f"Override already exists: {object_id}"},
+                status=409,
+            )
+            return
+
+        _write_bytes_atomic(dest, source.encode("utf-8"))
+        await _send_json(
+            send,
+            {
+                "status": "ok",
+                "object_id": object_id,
+                "override_path": str(dest),
+                "created": True,
+            },
+        )
+        return
+
+    # DELETE: remove the override so resolution falls back to the package copy.
+    if not dest.is_file():
+        await _send_json(
+            send,
+            {"status": "error", "error": f"No override exists: {object_id}"},
+            status=404,
+        )
+        return
+
+    dest.unlink()
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "object_id": object_id,
+            "removed": True,
+        },
+    )
+
+
+def _write_bytes_atomic(path: Path, content: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_name = ""
+    try:
+        with tempfile.NamedTemporaryFile(
+            "wb",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as tmp:
+            tmp_name = tmp.name
+            tmp.write(content)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        os.replace(tmp_name, path)
+    finally:
+        if tmp_name:
+            try:
+                Path(tmp_name).unlink()
+            except FileNotFoundError:
+                pass
+
+
 async def _handle_admin_files(
     send,
     method: str,
@@ -2845,7 +2981,7 @@ async def _handle_admin_reconcile_resolve(
             reconcile_id,
             choice,
             base_dir=_data_dir(),
-            object_roots=get_object_roots(),
+            object_roots=get_base_object_roots(),
             resolved_at=_utc_timestamp(),
         )
     except object_source.ObjectSourceNotFoundError as exc:
@@ -3446,6 +3582,10 @@ def _admin_capabilities_payload() -> dict[str, Any]:
         "package_restore": {
             "enabled": _env_enabled(PACKAGE_RESTORE_ENABLED_ENV),
             "env": PACKAGE_RESTORE_ENABLED_ENV,
+        },
+        "overrides": {
+            "enabled": get_override_root() is not None,
+            "env": object_namespace.OVERRIDES_DIR_ENV,
         },
         "packages": {
             "available": True,
@@ -4091,7 +4231,10 @@ async def _handle_package(
                     root=_packages_dir(),
                 ),
                 "provenance": object_packages.package_status(
-                    package_id, root=_packages_dir(), base_dir=_data_dir()
+                    package_id,
+                    root=_packages_dir(),
+                    base_dir=_data_dir(),
+                    object_roots=get_base_object_roots(),
                 ),
             }
     except object_packages.InvalidPackageIdError as exc:
@@ -4182,6 +4325,7 @@ async def _handle_package_install(
             package_id,
             root=_packages_dir(),
             base_dir=_data_dir(),
+            object_roots=get_base_object_roots(),
             allow_replace=allow_replace,
             before_write=create_restore_point,
         )
