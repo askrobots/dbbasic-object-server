@@ -1,0 +1,62 @@
+name: Docker
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  docker:
+    name: Build, run, and health-check the Docker Compose deployment
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Create .env from .env.example
+        # No .env is committed (it's git-ignored) -- this mirrors the
+        # quickstart in docs/docker-deployment.md, which tells a real
+        # operator to `cp .env.example .env` before their first
+        # `docker compose up`. Also exercises that .env.example itself is a
+        # valid, loadable env file.
+        run: cp .env.example .env
+
+      - name: Build and start the stack
+        # Matches docs/docker-deployment.md's quickstart
+        # (`docker compose up --build`) plus `-d` so this step returns
+        # immediately instead of tailing logs forever in CI.
+        run: docker compose up -d --build
+
+      - name: Wait for the container to become healthy
+        run: |
+          for i in $(seq 1 30); do
+            status="$(docker inspect --format='{{.State.Health.Status}}' "$(docker compose ps -q object-server)" 2>/dev/null || echo "starting")"
+            echo "attempt $i: health status = ${status}"
+            if [ "${status}" = "healthy" ]; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Container never became healthy within the time budget." >&2
+          exit 1
+
+      - name: Check /health responds successfully
+        run: curl -fsS http://localhost:8001/health
+
+      - name: Verify the first-boot admin token banner was logged
+        # scripts/docker-entrypoint.sh generates DBBASIC_ADMIN_TOKEN and
+        # prints this banner only when no token is set -- .env.example
+        # leaves DBBASIC_ADMIN_TOKEN unset, so this proves the entrypoint's
+        # first-boot logic actually ran, not just that it parses.
+        run: |
+          docker compose logs object-server | grep -F "DBBASIC: generated a new admin token on first boot."
+
+      - name: Show container logs
+        if: always()
+        run: docker compose logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
