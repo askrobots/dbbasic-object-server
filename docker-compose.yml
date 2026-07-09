@@ -1,0 +1,67 @@
+# DBBASIC Object Server — Docker Compose deployment.
+#
+# This is a second deployment path alongside the bare-VM systemd installer
+# (scripts/install.sh, docs/single-vm-deployment.md). See
+# docs/docker-deployment.md for the full walkthrough, including Coolify.
+#
+# The image built from ../Dockerfile is stateless: server code and the
+# packages/ manifests ship inside it. All runtime state -- object source,
+# TSV records, logs, versions, identity, permissions, the generated admin
+# token -- lives on the two named volumes below, mounted at the same paths
+# the Dockerfile sets as DBBASIC_OBJECTS_DIR / DBBASIC_DATA_DIR. That split
+# is the entire point of this deployment shape: rebuilding and redeploying
+# the image (a server *code* change) never touches the volumes, while live
+# object/schema/package edits made through the admin HTTP API land on the
+# volumes and take effect immediately, independent of the image lifecycle.
+#
+# TLS and domain routing are intentionally NOT part of this file. Coolify
+# (or your own reverse proxy) terminates TLS and routes a public hostname to
+# this container's published port, the same way Caddy sits in front of, not
+# inside, the systemd unit in docs/single-vm-deployment.md.
+
+services:
+  object-server:
+    build: .
+    image: dbbasic-object-server
+    restart: unless-stopped
+    env_file:
+      # Git-ignored (see .gitignore). Copy .env.example to .env and fill in
+      # real values -- never commit .env itself.
+      - .env
+    volumes:
+      - objects:/data/objects
+      - data:/data/state
+    ports:
+      # host:container -- change the host side if 8001 is already taken.
+      - "8001:8001"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8001/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  # OPTIONAL -- object_daemon.py runs the scheduler/queue/event background
+  # worker (see object_daemon.py, docs/runtime-contract.md). It is real,
+  # working code, but it is not wired into the bare-VM systemd installer
+  # either (see scripts/install.sh) -- nothing else in this repo depends on
+  # it running today. Uncomment only if you are using scheduled tasks, queue
+  # messages, or webhook event delivery and want them processed in the
+  # background. It shares the same volumes as object-server so it sees the
+  # same object source and runtime data.
+  #
+  # object-daemon:
+  #   build: .
+  #   image: dbbasic-object-server
+  #   restart: unless-stopped
+  #   env_file:
+  #     - .env
+  #   volumes:
+  #     - objects:/data/objects
+  #     - data:/data/state
+  #   entrypoint: ["scripts/docker-entrypoint.sh"]
+  #   command: ["python", "object_daemon.py"]
+
+volumes:
+  objects:
+  data:

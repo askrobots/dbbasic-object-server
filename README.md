@@ -596,9 +596,24 @@ object-first storage/schema loop,
 `docs/asgi-realtime-direction.md` for the ASGI/realtime direction, and
 `docs/rest-and-object-messages.md` for the resource/message split. See
 `docs/single-vm-deployment.md` for the first conservative staging deployment
-shape.
+shape, and `docs/docker-deployment.md` for the container-based alternative.
 
 Read `SECURITY.md` and `CONTRIBUTING.md` before copying code or documentation from private prototypes into this repository.
+
+## Deployment
+
+The first deployment path is the bare-VM installer in
+[`docs/single-vm-deployment.md`](docs/single-vm-deployment.md): one small VM,
+systemd, and a local reverse proxy.
+
+A second path packages the same server as a container image, with
+`Dockerfile` and `docker-compose.yml` at the repository root, for running
+under plain Docker Compose or deploying with [Coolify](https://coolify.io/).
+Runtime state (object source, records, logs, versions, identity) lives on
+persistent volumes outside the image, so image rebuilds stay separate from
+live object edits made through the admin HTTP API. See
+[`docs/docker-deployment.md`](docs/docker-deployment.md) for the quickstart,
+the Coolify-specific steps, and the first-boot admin token story.
 
 ## Status
 

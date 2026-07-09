@@ -1,0 +1,29 @@
+# Keep the image lean and keep local runtime state out of image layers.
+#
+# `data/` and `objects/` are the same git-ignored, server-local runtime
+# state called out in .gitignore (identity, credentials, sessions, records,
+# logs, versions, backups) -- Docker COPY does not respect .gitignore, so
+# they are excluded here explicitly. They must never end up baked into an
+# image; they belong on the persistent volumes described in
+# docs/docker-deployment.md.
+data/
+objects/
+
+.git/
+.github/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+.DS_Store
+.env
+
+tests/
+docs/
