@@ -38,6 +38,17 @@ _JS = r"""
     const sortEl = cfg.sort ? qs(cfg.sort) : null;
     let all = [];
 
+    // Page hooks: cfg.slots[name] (per page) + window.dbbasicSlots (cross-page,
+    // operator-registered). Both return HTML; the generator injects it at the
+    // named hook. No-op when neither is present.
+    function slotHtml(name, ctx) {
+      let out = "";
+      const local = cfg.slots && cfg.slots[name];
+      if (local) { try { const h = local(ctx); if (h) out += h; } catch (e) {} }
+      if (window.dbbasicSlots) out += window.dbbasicSlots.render(collection, name, ctx);
+      return out;
+    }
+
     function row(r) {
       const title = (cfg.title ? cfg.title(r) : (r.title || r.name || r.id)) || "(untitled)";
       const av = String(title).trim().charAt(0) || "?";
@@ -57,14 +68,18 @@ _JS = r"""
         + '<div class="rowtitle">' + titleHtml + '</div>'
         + (sub ? '<div class="rowsub">' + esc(sub) + '</div>' : "")
         + '<div class="rowmeta">' + (created ? '<span class="when">' + esc(relDate(created)) + '</span>' : "")
-        + pills(tags) + '</div></div><div class="rowactions">' + acts + '</div></div>';
+        + pills(tags) + '</div></div><div class="rowactions">' + acts
+        + slotHtml("row_actions", r) + '</div></div>';
     }
     function sortList(list) {
       const s = list.slice().sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
       return (sortEl && sortEl.value === "oldest") ? s : s.reverse();
     }
     function render(list) {
-      mount.innerHTML = sortList(list).map(row).join("") || '<div class="state">Nothing yet.</div>';
+      const rows = sortList(list).map(row).join("");
+      const ctx = {collection: collection, count: list.length};
+      const body = rows || slotHtml("empty", ctx) || '<div class="state">Nothing yet.</div>';
+      mount.innerHTML = slotHtml("before_list", ctx) + body + slotHtml("after_list", ctx);
     }
     async function load() {
       const res = await fetch("/collections/" + collection + "/records?limit=500",

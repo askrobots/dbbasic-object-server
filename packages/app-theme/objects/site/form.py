@@ -74,6 +74,15 @@ _JS = r"""
       || (schema.fields || []).map((f) => f.name);
     const ordered = order.map((n) => byName[n]).filter((f) => f && !skip(f));
 
+    const slotHtml = (name, ctx) => {
+      let out = "";
+      const local = opts.slots && opts.slots[name];
+      if (local) { try { const h = local(ctx); if (h) out += h; } catch (e) {} }
+      if (window.dbbasicSlots) out += window.dbbasicSlots.render(collection, name, ctx);
+      return out;
+    };
+    const slotCtx = {collection: collection, record: record};
+
     const rows = [];
     for (const f of ordered) {
       const ctrl = await control(f, record ? record[f.name] : f.default);
@@ -85,7 +94,8 @@ _JS = r"""
           (f.help ? '<div class="help">' + esc(f.help) + '</div>' : "") +
           '<div class="err" data-for="' + esc(f.name) + '"></div></div>');
     }
-    mount.innerHTML = '<form class="genform stack">' + rows.join("") +
+    mount.innerHTML = '<form class="genform stack">' +
+      slotHtml("before_fields", slotCtx) + rows.join("") + slotHtml("after_fields", slotCtx) +
       '<div class="formactions"><button type="submit" class="btn primary">' +
       (record ? "Save Changes" : (opts.submitLabel || "Save")) + '</button>' +
       (opts.onCancel ? '<button type="button" class="btn" data-cancel>Cancel</button>' : "") +
