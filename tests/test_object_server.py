@@ -10,6 +10,7 @@ import object_credentials
 import object_execution
 import object_events
 import object_file_changes
+import object_handlers
 import object_ids
 import object_logs
 import object_package_changes
@@ -3735,6 +3736,114 @@ def test_collection_record_create_rejects_duplicate_and_invalid_payload(tmp_path
         "status": "error",
         "error": "Record field value must be scalar or null: name",
     }
+
+
+EVENT_HANDLER_SOURCE = (
+    'HANDLES = ["notes.record.created"]\n\n'
+    "import json\n\n\n"
+    "def EVENT(request):\n"
+    "    _state_manager.set('last_event', json.dumps(request))\n"
+    "    return {'status': 'ok'}\n"
+)
+
+
+def test_collection_record_create_dispatches_event_handlers_when_enabled(tmp_path, monkeypatch):
+    objects_root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    schema_file = data_dir / "schemas" / "notes.json"
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text(json.dumps({"fields": [{"name": "id"}]}))
+    write_source(objects_root / "notes" / "handler.py", EVENT_HANDLER_SOURCE)
+
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(objects_root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_handlers.HANDLERS_ENABLED_ENV, "true")
+    enable_admin_token(monkeypatch)
+    object_handlers.invalidate()
+
+    create_status, _, create_payload = request(
+        "/collections/notes/records",
+        method="POST",
+        body=json.dumps({"id": "n1"}).encode("utf-8"),
+        headers=auth_headers(),
+    )
+
+    assert create_status == 201
+    assert create_payload["record"]["id"] == "n1"
+
+    state = object_state.ObjectStateManager("notes_handler", base_dir=str(data_dir))
+    fired = json.loads(state.get("last_event"))
+    assert fired == {
+        "event": "notes.record.created",
+        "collection": "notes",
+        "record_id": "n1",
+        "action": "create",
+    }
+
+    object_handlers.invalidate()
+
+
+def test_collection_record_create_skips_event_handlers_when_disabled(tmp_path, monkeypatch):
+    objects_root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    schema_file = data_dir / "schemas" / "notes.json"
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text(json.dumps({"fields": [{"name": "id"}]}))
+    write_source(objects_root / "notes" / "handler.py", EVENT_HANDLER_SOURCE)
+
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(objects_root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.delenv(object_handlers.HANDLERS_ENABLED_ENV, raising=False)
+    enable_admin_token(monkeypatch)
+    object_handlers.invalidate()
+
+    create_status, _, create_payload = request(
+        "/collections/notes/records",
+        method="POST",
+        body=json.dumps({"id": "n1"}).encode("utf-8"),
+        headers=auth_headers(),
+    )
+
+    # Backward-compat: with the env unset, dispatch is a no-op and the
+    # record write itself is unaffected.
+    assert create_status == 201
+    assert create_payload["record"]["id"] == "n1"
+
+    state = object_state.ObjectStateManager("notes_handler", base_dir=str(data_dir))
+    assert state.get("last_event") is None
+
+    object_handlers.invalidate()
+
+
+def test_collection_record_create_survives_raising_event_handler(tmp_path, monkeypatch):
+    objects_root = tmp_path / "objects"
+    data_dir = tmp_path / "data"
+    schema_file = data_dir / "schemas" / "notes.json"
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text(json.dumps({"fields": [{"name": "id"}]}))
+    write_source(
+        objects_root / "notes" / "handler.py",
+        'HANDLES = ["notes.record.created"]\n\n\ndef EVENT(request):\n    raise RuntimeError("boom")\n',
+    )
+
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(objects_root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_handlers.HANDLERS_ENABLED_ENV, "true")
+    enable_admin_token(monkeypatch)
+    object_handlers.invalidate()
+
+    create_status, _, create_payload = request(
+        "/collections/notes/records",
+        method="POST",
+        body=json.dumps({"id": "n1"}).encode("utf-8"),
+        headers=auth_headers(),
+    )
+
+    # A handler raising must never break or roll back the triggering write.
+    assert create_status == 201
+    assert create_payload["record"]["id"] == "n1"
+
+    object_handlers.invalidate()
 
 
 def test_collection_record_update_and_delete_require_admin_token_by_default(tmp_path, monkeypatch):

@@ -42,6 +42,7 @@ import object_execution
 import object_field_permissions
 import object_file_changes
 import object_files
+import object_handlers
 import object_identity
 import object_ids
 import object_logs
@@ -3630,6 +3631,10 @@ def _admin_capabilities_payload() -> dict[str, Any]:
             "keep_count": _event_keep_count(),
             "keep_seconds": _event_keep_seconds(),
         },
+        "event_handlers": {
+            "enabled": object_handlers.handlers_enabled(),
+            "env": object_handlers.HANDLERS_ENABLED_ENV,
+        },
         "identity": {
             "trusted_headers_enabled": _env_enabled(PERMISSION_TRUST_HEADERS_ENV),
             "require_known_identity_users": _env_enabled(REQUIRE_KNOWN_IDENTITY_USERS_ENV),
@@ -5756,6 +5761,8 @@ async def _handle_object_rollback_post(
         await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
         return
 
+    object_handlers.invalidate()
+
     await _send_json(
         send,
         {
@@ -5841,6 +5848,8 @@ async def _handle_object_source_put(
     except object_source.ObjectSourceNotFoundError as exc:
         await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
         return
+
+    object_handlers.invalidate()
 
     methods, method_warnings = object_source.source_method_report(code)
     await _send_json(
@@ -5997,6 +6006,8 @@ async def _handle_objects_post(send, body: bytes, headers: dict[str, str]) -> No
     except object_source.ObjectSourceExistsError as exc:
         await _send_json(send, {"status": "error", "error": str(exc)}, status=409)
         return
+
+    object_handlers.invalidate()
 
     _append_source_change_log(
         object_id,
@@ -9513,6 +9524,12 @@ def _publish_record_change_event(
     # Live push overlay (independent of the durable log's on/off flag).
     _realtime_publish(collection, record_id, action, record)
 
+    # HANDLES-declared event handler objects (Phase 5a; see
+    # docs/event-hooks-decisions.md). Post-commit, best-effort, gated off by
+    # default: fully guarded internally so it can never raise into the
+    # write path.
+    _dispatch_event_handlers(collection, record_id, action, record)
+
     if not _record_events_enabled():
         return None
 
@@ -9538,6 +9555,71 @@ def _publish_record_change_event(
         )
     except (OSError, ValueError):
         return None
+
+
+def _dispatch_event_handlers(
+    collection: str, record_id: str, action: str, record: dict[str, Any] | None
+) -> None:
+    """Fire HANDLES-declared handler objects for a committed record write.
+
+    Post-commit, best-effort, system-objects-only (Phase 5a; see
+    docs/event-hooks-decisions.md). One bad handler can never affect the
+    write or any other handler: every failure mode here is caught and
+    logged, never raised. Dispatch is synchronous in-process for v1; async
+    dispatch is a future optimization.
+    """
+    try:
+        if not object_handlers.handlers_enabled():
+            return
+
+        event = object_handlers.event_name(collection, action)
+        if event is None:
+            return
+
+        if object_handlers.current_depth() >= object_handlers.MAX_DISPATCH_DEPTH:
+            try:
+                object_logs.append_object_log(
+                    "object_handlers",
+                    "WARNING",
+                    f"Event dispatch depth limit reached for {event}; skipping handlers",
+                    base_dir=_data_dir(),
+                )
+            except Exception:
+                pass
+            return
+
+        handler_ids = object_handlers.get_handlers(event, get_object_roots())
+        if not handler_ids:
+            return
+
+        # Signal-shaped payload, same posture as /ws: no full record body by
+        # default. A handler that needs the record fetches it via the
+        # record API using collection/record_id.
+        event_payload = {
+            "event": event,
+            "collection": collection,
+            "record_id": record_id,
+            "action": action,
+        }
+
+        for handler_id in handler_ids:
+            try:
+                with object_handlers.dispatch_guard():
+                    request = object_execution.ObjectExecutionRequest(
+                        object_id=handler_id,
+                        method="EVENT",
+                        payload=event_payload,
+                        correlation_id=object_correlation.current_correlation_id(),
+                    )
+                    result = object_execution.execute_object(_runtime, request)
+                    _append_execution_log(result)
+                    if not result.ok:
+                        _append_ops_execution_error(handler_id, "EVENT", result, {})
+            except Exception:
+                # One bad handler must never affect the write or its peers.
+                continue
+    except Exception:
+        return
 
 
 def _record_events_enabled() -> bool:
