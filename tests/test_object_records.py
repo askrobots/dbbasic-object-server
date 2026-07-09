@@ -1,3 +1,4 @@
+import csv
 import json
 from pathlib import Path
 from uuid import UUID
@@ -566,3 +567,225 @@ def test_created_at_is_server_set_on_create(tmp_path):
             "links", {"id": "l2", "title": "y", "created_at": "2000-01-01T00:00:00Z"},
             base_dir=data_dir, roots=[],
         )
+
+
+# --- Phase 4b: the `extra` extension field (docs/upgrade-and-customization.md Rule 3) ---
+
+
+def test_backward_compat_no_store_extra_fields_means_no_extra_column(tmp_path):
+    """A collection with no store:extra fields and no submitted `extra` key
+    must behave byte-identically to before the `extra` feature existed: no
+    `extra` column ever appears on disk."""
+    data_dir = tmp_path / "data"
+    write_schema(
+        data_dir,
+        "contacts",
+        [{"name": "id"}, {"name": "name", "required": True}, {"name": "email"}],
+    )
+
+    created = object_records.create_collection_record(
+        "contacts",
+        {"id": "c1", "name": "Ada", "email": "ada@example.com"},
+        base_dir=data_dir,
+        roots=[],
+    )
+    assert created == {"id": "c1", "name": "Ada", "email": "ada@example.com"}
+
+    updated = object_records.update_collection_record(
+        "contacts", "c1", {"email": "ada@example.org"}, base_dir=data_dir, roots=[]
+    )
+    assert updated == {"id": "c1", "name": "Ada", "email": "ada@example.org"}
+
+    fetched = object_records.get_collection_record("contacts", "c1", base_dir=data_dir, roots=[])
+    assert fetched == updated
+
+    listed = object_records.list_collection_records("contacts", base_dir=data_dir, roots=[])["records"]
+    assert listed == [updated]
+
+    tsv_text = (data_dir / "collections" / "contacts" / "records.tsv").read_text()
+    assert tsv_text == "id\tname\temail\nc1\tAda\tada@example.org\n"
+    assert "extra" not in tsv_text.splitlines()[0].split("\t")
+
+
+def test_store_extra_view_field_is_stored_in_extra_column_not_own_column(tmp_path):
+    data_dir = tmp_path / "data"
+    write_schema(
+        data_dir,
+        "notes",
+        [
+            {"name": "id"},
+            {"name": "title", "required": True},
+            {"name": "x_mood", "type": "text", "store": "extra"},
+        ],
+    )
+
+    record = object_records.create_collection_record(
+        "notes",
+        {"id": "n1", "title": "Hi", "x_mood": "curious"},
+        base_dir=data_dir,
+        roots=[],
+    )
+
+    assert record["title"] == "Hi"
+    assert record["x_mood"] == "curious"
+
+    path = data_dir / "collections" / "notes" / "records.tsv"
+    with path.open(newline="") as handle:
+        rows = list(csv.reader(handle, delimiter="\t"))
+    header = rows[0]
+    assert "extra" in header
+    assert "x_mood" not in header
+
+    extra_cell = rows[1][header.index("extra")]
+    assert json.loads(extra_cell) == {"x_mood": "curious"}
+
+    fetched = object_records.get_collection_record("notes", "n1", base_dir=data_dir, roots=[])
+    assert fetched["x_mood"] == "curious"
+    assert json.loads(fetched["extra"]) == {"x_mood": "curious"}
+
+    listed = object_records.list_collection_records("notes", base_dir=data_dir, roots=[])["records"]
+    assert listed[0]["x_mood"] == "curious"
+
+
+def test_store_extra_view_field_still_validates(tmp_path):
+    data_dir = tmp_path / "data"
+    write_schema(
+        data_dir,
+        "notes",
+        [
+            {"name": "id"},
+            {"name": "title", "required": True},
+            {
+                "name": "x_mood",
+                "type": "enum",
+                "enum": ["happy", "curious", "grumpy"],
+                "required": True,
+                "store": "extra",
+            },
+        ],
+    )
+
+    with pytest.raises(object_records.InvalidRecordPayloadError, match="x_mood' is required"):
+        object_records.create_collection_record(
+            "notes", {"id": "n1", "title": "Hi"}, base_dir=data_dir, roots=[]
+        )
+
+    with pytest.raises(object_records.InvalidRecordPayloadError, match="x_mood' must be one of"):
+        object_records.create_collection_record(
+            "notes",
+            {"id": "n1", "title": "Hi", "x_mood": "furious"},
+            base_dir=data_dir,
+            roots=[],
+        )
+
+    record = object_records.create_collection_record(
+        "notes",
+        {"id": "n1", "title": "Hi", "x_mood": "curious"},
+        base_dir=data_dir,
+        roots=[],
+    )
+    assert record["x_mood"] == "curious"
+
+
+def test_partial_update_preserves_untouched_extra_keys(tmp_path):
+    data_dir = tmp_path / "data"
+    write_schema(
+        data_dir,
+        "notes",
+        [
+            {"name": "id"},
+            {"name": "title"},
+            {"name": "x_mood", "type": "text", "store": "extra"},
+        ],
+    )
+
+    created = object_records.create_collection_record(
+        "notes",
+        {"id": "n1", "title": "Hi", "x_mood": "curious", "extra": {"note": "hi"}},
+        base_dir=data_dir,
+        roots=[],
+    )
+    assert created["x_mood"] == "curious"
+    assert json.loads(created["extra"]) == {"x_mood": "curious", "note": "hi"}
+
+    # Updating only `title` must not wipe x_mood or the undeclared `note` key.
+    after_title = object_records.update_collection_record(
+        "notes", "n1", {"title": "Hello"}, base_dir=data_dir, roots=[]
+    )
+    assert after_title["title"] == "Hello"
+    assert after_title["x_mood"] == "curious"
+    assert json.loads(after_title["extra"]) == {"x_mood": "curious", "note": "hi"}
+
+    # Updating only x_mood must not wipe `note`, and must not touch title.
+    after_mood = object_records.update_collection_record(
+        "notes", "n1", {"x_mood": "grumpy"}, base_dir=data_dir, roots=[]
+    )
+    assert after_mood["title"] == "Hello"
+    assert after_mood["x_mood"] == "grumpy"
+    assert json.loads(after_mood["extra"]) == {"x_mood": "grumpy", "note": "hi"}
+
+    fetched = object_records.get_collection_record("notes", "n1", base_dir=data_dir, roots=[])
+    assert fetched["x_mood"] == "grumpy"
+    assert json.loads(fetched["extra"]) == {"x_mood": "grumpy", "note": "hi"}
+
+
+def test_raw_extra_passthrough_accepts_dict_and_json_string(tmp_path):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "widgets", "id\tname\n")
+
+    from_dict = object_records.create_collection_record(
+        "widgets",
+        {"id": "w1", "name": "Gadget", "extra": {"a": "1"}},
+        base_dir=data_dir,
+        roots=[],
+    )
+    assert json.loads(from_dict["extra"]) == {"a": "1"}
+
+    from_string = object_records.create_collection_record(
+        "widgets",
+        {"id": "w2", "name": "Gizmo", "extra": json.dumps({"a": "1"})},
+        base_dir=data_dir,
+        roots=[],
+    )
+    assert json.loads(from_string["extra"]) == {"a": "1"}
+
+    fetched = object_records.get_collection_record("widgets", "w1", base_dir=data_dir, roots=[])
+    assert json.loads(fetched["extra"]) == {"a": "1"}
+
+
+@pytest.mark.parametrize("bad_extra", [["a", "1"], "[1, 2]", "not json", 5, True])
+def test_invalid_extra_payload_is_rejected(tmp_path, bad_extra):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "widgets", "id\tname\n")
+
+    with pytest.raises(object_records.InvalidRecordPayloadError, match="extra"):
+        object_records.create_collection_record(
+            "widgets",
+            {"id": "w1", "name": "Gadget", "extra": bad_extra},
+            base_dir=data_dir,
+            roots=[],
+        )
+
+
+def test_delete_collection_record_unaffected_by_extra(tmp_path):
+    data_dir = tmp_path / "data"
+    write_schema(
+        data_dir,
+        "notes",
+        [
+            {"name": "id"},
+            {"name": "title"},
+            {"name": "x_mood", "type": "text", "store": "extra"},
+        ],
+    )
+    object_records.create_collection_record(
+        "notes",
+        {"id": "n1", "title": "Hi", "x_mood": "curious"},
+        base_dir=data_dir,
+        roots=[],
+    )
+
+    removed = object_records.delete_collection_record("notes", "n1", base_dir=data_dir, roots=[])
+    assert removed["id"] == "n1"
+
+    assert object_records.list_collection_records("notes", base_dir=data_dir, roots=[])["records"] == []

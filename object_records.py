@@ -8,6 +8,7 @@ tables and forms at. Records live in
 from __future__ import annotations
 
 import csv
+import json
 import math
 import os
 import re
@@ -26,6 +27,7 @@ COLLECTIONS_DIR = "collections"
 RECORDS_FILE = "records.tsv"
 DEFAULT_RECORD_LIMIT = 100
 MAX_RECORD_LIMIT = 1000
+EXTRA_FIELD = "extra"
 
 _RECORD_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 _INTEGER_TYPES = {"int", "integer"}
@@ -87,7 +89,9 @@ def read_collection_records(
 ) -> list[dict[str, str]]:
     """Return all records for one known collection."""
     _ensure_collection_known(collection, base_dir=base_dir, roots=roots)
-    return _read_collection_records(collection, base_dir=base_dir)
+    records = _read_collection_records(collection, base_dir=base_dir)
+    extra_names = _extra_field_names(collection, base_dir=base_dir, roots=roots)
+    return [_surface_extra(record, extra_names=extra_names) for record in records]
 
 
 def collection_records_payload(
@@ -124,9 +128,10 @@ def get_collection_record(
     if not validate_record_id(record_id):
         raise InvalidRecordIdError(f"Invalid record id: {record_id}")
 
+    extra_names = _extra_field_names(collection, base_dir=base_dir, roots=roots)
     for record in _read_collection_records(collection, base_dir=base_dir):
         if record.get("id") == record_id:
-            return record
+            return _surface_extra(record, extra_names=extra_names)
 
     raise RecordNotFoundError(f"Record not found: {collection}/{record_id}")
 
@@ -140,6 +145,7 @@ def create_collection_record(
 ) -> dict[str, str]:
     """Append one record to a collection TSV and return the stored row."""
     _ensure_collection_known(collection, base_dir=base_dir, roots=roots)
+    extra_names = _extra_field_names(collection, base_dir=base_dir, roots=roots)
     clean = _normalize_record_payload(record, require_id=True)
     record_id = clean["id"]
     if not validate_record_id(record_id):
@@ -155,6 +161,7 @@ def create_collection_record(
         roots=roots,
     )
     clean = _canonicalize_schema_values(collection, clean, base_dir=base_dir, roots=roots)
+    clean = _route_extra(clean, existing_blob={}, extra_names=extra_names)
 
     path = collection_records_file(collection, base_dir=base_dir)
     with _records_file_lock(path):
@@ -165,7 +172,7 @@ def create_collection_record(
         merged_fields = _merge_fields(fields, clean)
         records.append(clean)
         _write_collection_records(collection, path, merged_fields, records)
-        return _project_record(clean, merged_fields)
+        return _surface_extra(_project_record(clean, merged_fields), extra_names=extra_names)
 
 
 def update_collection_record(
@@ -180,6 +187,7 @@ def update_collection_record(
     _ensure_collection_known(collection, base_dir=base_dir, roots=roots)
     if not validate_record_id(record_id):
         raise InvalidRecordIdError(f"Invalid record id: {record_id}")
+    extra_names = _extra_field_names(collection, base_dir=base_dir, roots=roots)
 
     clean = _normalize_record_payload(changes, require_id=False)
     if "id" in clean and clean["id"] != record_id:
@@ -189,8 +197,11 @@ def update_collection_record(
     path = collection_records_file(collection, base_dir=base_dir)
     with _records_file_lock(path):
         records, fields = _read_records_and_fields(collection, path)
-        for index, existing in enumerate(records):
-            if existing.get("id") == record_id:
+        for index, raw_existing in enumerate(records):
+            if raw_existing.get("id") == record_id:
+                existing_blob = _parse_extra_blob(raw_existing.get(EXTRA_FIELD))
+                existing = _surface_extra(dict(raw_existing), extra_names=extra_names)
+
                 updated = dict(existing)
                 updated.update(clean)
                 updated["id"] = record_id
@@ -211,10 +222,11 @@ def update_collection_record(
                 updated = _canonicalize_schema_values(
                     collection, updated, base_dir=base_dir, roots=roots
                 )
+                updated = _route_extra(updated, existing_blob=existing_blob, extra_names=extra_names)
                 merged_fields = _merge_fields(fields, updated)
                 records[index] = updated
                 _write_collection_records(collection, path, merged_fields, records)
-                return _project_record(updated, merged_fields)
+                return _surface_extra(_project_record(updated, merged_fields), extra_names=extra_names)
 
     raise RecordNotFoundError(f"Record not found: {collection}/{record_id}")
 
@@ -442,6 +454,9 @@ def _normalize_record_payload(payload: dict[str, Any], *, require_id: bool) -> d
             raise InvalidRecordPayloadError(f"Record field name has whitespace: {key!r}")
         if "\t" in key or "\n" in key or "\r" in key:
             raise InvalidRecordPayloadError(f"Record field name is not TSV-safe: {key!r}")
+        if key == EXTRA_FIELD:
+            clean[key] = _normalize_extra_value(value)
+            continue
         if value is None:
             clean[key] = ""
         elif isinstance(value, (str, int, float, bool)):
@@ -457,6 +472,30 @@ def _normalize_record_payload(payload: dict[str, Any], *, require_id: bool) -> d
         raise InvalidRecordPayloadError("Record payload must include an id")
 
     return clean
+
+
+def _normalize_extra_value(value: Any) -> str:
+    """Return a TSV-safe JSON-object string for the ``extra`` field.
+
+    Unlike other record fields (scalar or null only), ``extra`` may be
+    submitted as a dict (serialized here) or as a JSON string that must
+    already parse to an object. Anything else is rejected.
+    """
+    if isinstance(value, dict):
+        return json.dumps(value, sort_keys=True)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError) as exc:
+            raise InvalidRecordPayloadError(
+                "Record field 'extra' must be a JSON object"
+            ) from exc
+        if not isinstance(parsed, dict):
+            raise InvalidRecordPayloadError("Record field 'extra' must be a JSON object")
+        return value
+    raise InvalidRecordPayloadError(
+        "Record field 'extra' must be an object or a JSON object string"
+    )
 
 
 def _apply_auto_created_at(
@@ -850,6 +889,75 @@ def _rule_float(value: Any, field_name: str, rule_name: str) -> float:
             f"Record field '{field_name}' validation {rule_name} must be finite"
         )
     return number
+
+
+def _extra_field_names(
+    collection: str,
+    *,
+    base_dir: Path | str,
+    roots: Iterable[Path] | None,
+) -> set[str]:
+    """Return the names of schema fields whose value lives inside ``extra``."""
+    fields = _schema_fields(collection, base_dir=base_dir, roots=roots)
+    return {field["name"] for field in fields if field.get("store") == EXTRA_FIELD}
+
+
+def _parse_extra_blob(value: str | None) -> dict[str, Any]:
+    """Parse an ``extra`` TSV cell into a dict, tolerating missing/invalid data."""
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _route_extra(
+    record: dict[str, str],
+    *,
+    existing_blob: dict[str, Any],
+    extra_names: set[str],
+) -> dict[str, str]:
+    """Fold ``extra`` and any ``store: extra`` view fields into one JSON blob.
+
+    Pure: builds on ``existing_blob`` (so a partial update never wipes
+    untouched blob keys), shallow-merges any client-submitted ``extra``
+    object into it, then pulls each declared view field out of the
+    top-level record and into the blob. The record keeps a single
+    ``extra`` TSV column holding the serialized blob (or no column at all
+    when the blob is empty), never the view field's own column.
+    """
+    blob = dict(existing_blob)
+    if EXTRA_FIELD in record:
+        blob.update(_parse_extra_blob(record.pop(EXTRA_FIELD)))
+    for name in extra_names:
+        if name in record:
+            blob[name] = record.pop(name)
+
+    if blob:
+        serialized = json.dumps(blob, sort_keys=True)
+        if "\t" in serialized or "\n" in serialized or "\r" in serialized:
+            raise InvalidRecordPayloadError("Record field 'extra' is not TSV-safe")
+        record[EXTRA_FIELD] = serialized
+    else:
+        record.pop(EXTRA_FIELD, None)
+    return record
+
+
+def _surface_extra(record: dict[str, str], *, extra_names: set[str]) -> dict[str, str]:
+    """Expose each declared ``store: extra`` view field at the top level.
+
+    Pure: ``record["extra"]`` is left as-is (still the raw JSON string) so
+    undeclared blob data stays reachable. A no-op when there are no view
+    fields and no ``extra`` column.
+    """
+    if not extra_names:
+        return record
+    blob = _parse_extra_blob(record.get(EXTRA_FIELD))
+    for name in extra_names:
+        record[name] = str(blob.get(name, ""))
+    return record
 
 
 def _merge_fields(existing_fields: list[str], record: dict[str, str]) -> list[str]:

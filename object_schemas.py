@@ -345,6 +345,7 @@ def _normalize_field(payload: Any, *, schema: str) -> dict[str, Any]:
         "permissions",
         "placeholder",
         "help",
+        "store",
     )
     for key in metadata_keys:
         if key in payload:

@@ -167,6 +167,40 @@ def test_get_schema_preserves_scroll_field_metadata(tmp_path):
     ]
 
 
+def test_get_schema_preserves_store_extra_field_attribute(tmp_path):
+    data_dir = tmp_path / "data"
+    write_schema(
+        data_dir,
+        "notes",
+        {
+            "fields": [
+                {"name": "title", "type": "text"},
+                {"name": "x_mood", "type": "text", "store": "extra"},
+            ]
+        },
+    )
+
+    schema = object_schemas.get_schema("notes", base_dir=data_dir, roots=[])
+
+    assert schema["fields"] == [
+        {"name": "title", "type": "text", "required": False},
+        {"name": "x_mood", "type": "text", "required": False, "store": "extra"},
+    ]
+
+    # normalize_schema round-trips the same attribute directly (no file I/O).
+    normalized = object_schemas.normalize_schema(
+        "notes",
+        {
+            "fields": [
+                {"name": "x_mood", "type": "text", "store": "extra"},
+            ]
+        },
+    )
+    assert normalized["fields"] == [
+        {"name": "x_mood", "type": "text", "required": False, "store": "extra"},
+    ]
+
+
 def test_replace_schema_writes_normalized_schema_atomically(tmp_path):
     data_dir = tmp_path / "data"
 
