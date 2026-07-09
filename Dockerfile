@@ -19,11 +19,12 @@ RUN useradd --system --create-home --home-dir /home/dbbasic --shell /usr/sbin/no
 
 WORKDIR /opt/dbbasic-object-server
 
-# Install the package (and its `server` extra: uvicorn + websockets, see
-# pyproject.toml) before copying the rest of the source so dependency layers
-# cache independently of ordinary code changes.
-COPY pyproject.toml README.md ./
-RUN python -m pip install --no-cache-dir --upgrade pip
+# Install the runtime dependencies (the `server` extra) in their own layer,
+# before the source is copied, so ordinary code changes do not re-download
+# them on every rebuild. Keep these pins in sync with pyproject.toml's
+# [project.optional-dependencies] server list.
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir "uvicorn>=0.30.0" "websockets>=12.0"
 
 COPY . .
 # .dockerignore keeps git history, tests, docs, caches, and any local

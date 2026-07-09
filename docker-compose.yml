@@ -26,8 +26,12 @@ services:
     restart: unless-stopped
     env_file:
       # Git-ignored (see .gitignore). Copy .env.example to .env and fill in
-      # real values -- never commit .env itself.
-      - .env
+      # real values -- never commit .env itself. Marked optional so a fresh
+      # clone can `docker compose up --build` with zero setup: without a
+      # .env the server starts with its conservative built-in defaults and
+      # the entrypoint generates a first-boot admin token.
+      - path: .env
+        required: false
     volumes:
       - objects:/data/objects
       - data:/data/state
