@@ -1,0 +1,27 @@
+{
+  "id": "app-settings",
+  "name": "Settings",
+  "version": "0.1.0",
+  "description": "user_prefs (per-user, owner-scoped settings) and feature_flags (instance-level toggles) per docs/upgrade-and-customization.md Rule 5. Effective flag value = user override (a user_prefs key of \"flag:<name>\") -> instance feature_flags value, resolved by GET /api/flags.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "objects": [],
+  "schemas": [
+    {
+      "collection": "user_prefs",
+      "path": "schemas/user_prefs.json"
+    },
+    {
+      "collection": "feature_flags",
+      "path": "schemas/feature_flags.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [],
+  "migrations": []
+}

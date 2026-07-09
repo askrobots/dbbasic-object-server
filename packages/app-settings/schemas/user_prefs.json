@@ -1,0 +1,37 @@
+{
+  "name": "user_prefs",
+  "title": "User Prefs",
+  "version": 1,
+  "description": "Per-user settings, owner-scoped: key/value pairs any app can read/write via GET/PUT /prefs.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "key",
+      "type": "text",
+      "required": true,
+      "label": "Key"
+    },
+    {
+      "name": "value",
+      "type": "text",
+      "label": "Value"
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["key", "value"]}
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["key", "value"]
+  },
+  "search": {
+    "fields": ["key"]
+  }
+}

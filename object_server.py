@@ -16,6 +16,7 @@ import html
 import json
 import mimetypes
 import os
+import re
 import shutil
 import tempfile
 import threading
@@ -593,6 +594,19 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
         schema_meta_prefix = f"{http_api_contract.SCHEMA_META_PATH}/"
         if path.startswith(schema_meta_prefix):
             await _handle_schema_meta(send, method, path.removeprefix(schema_meta_prefix))
+            return
+
+        if path == http_api_contract.FLAGS_PATH:
+            await _handle_flags(send, method, headers)
+            return
+
+        if path == http_api_contract.PREFS_PATH:
+            await _handle_prefs(send, method, headers)
+            return
+
+        prefs_prefix = http_api_contract.PREFS_PATH + "/"
+        if path.startswith(prefs_prefix):
+            await _handle_pref(send, method, path[len(prefs_prefix):], body, headers)
             return
 
         if path == http_api_contract.USER_FILES_PATH:
@@ -7427,6 +7441,219 @@ async def _handle_schema_meta(send, method: str, collection: str) -> None:
 
     meta = {key: schema.get(key) for key in ("name", "title", "fields", "forms", "views", "search")}
     await _send_json(send, {"status": "ok", "schema": meta})
+
+
+USER_PREFS_COLLECTION = "user_prefs"
+FEATURE_FLAGS_COLLECTION = "feature_flags"
+FLAG_PREF_PREFIX = "flag:"
+_PREF_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+
+
+def _valid_pref_key(key: str) -> bool:
+    """Route-safe key charset: no slashes, no whitespace, bounded length."""
+    return isinstance(key, str) and bool(_PREF_KEY_RE.fullmatch(key))
+
+
+def _read_user_prefs_or_empty() -> list[dict[str, str]]:
+    try:
+        return object_records.read_collection_records(
+            USER_PREFS_COLLECTION, base_dir=_data_dir(), roots=get_object_roots()
+        )
+    except (
+        object_collections.CollectionNotFoundError,
+        object_collections.InvalidCollectionNameError,
+        OSError,
+        ValueError,
+    ):
+        return []
+
+
+def _read_feature_flags_or_empty() -> list[dict[str, str]]:
+    try:
+        return object_records.read_collection_records(
+            FEATURE_FLAGS_COLLECTION, base_dir=_data_dir(), roots=get_object_roots()
+        )
+    except (
+        object_collections.CollectionNotFoundError,
+        object_collections.InvalidCollectionNameError,
+        OSError,
+        ValueError,
+    ):
+        return []
+
+
+def _user_prefs_map(user_id: str) -> dict[str, str]:
+    """Collapse one user's own user_prefs rows to a key -> value map."""
+    prefs: dict[str, str] = {}
+    for row in _read_user_prefs_or_empty():
+        if row.get("owner_id") == user_id and row.get("key"):
+            prefs[row["key"]] = row.get("value", "")
+    return prefs
+
+
+def _find_user_pref(user_id: str, key: str) -> dict[str, str] | None:
+    for row in _read_user_prefs_or_empty():
+        if row.get("owner_id") == user_id and row.get("key") == key:
+            return row
+    return None
+
+
+def _upsert_user_pref(user_id: str, key: str, value: str) -> dict[str, str]:
+    """Create or update the caller's own user_prefs row for ``key``.
+
+    ``user_id`` must come from the session-derived subject, never from
+    client input -- this is the only thing that keeps prefs owner-scoped.
+    """
+    existing = _find_user_pref(user_id, key)
+    if existing is not None:
+        return object_records.update_collection_record(
+            USER_PREFS_COLLECTION,
+            existing["id"],
+            {"value": value},
+            base_dir=_data_dir(),
+            roots=get_object_roots(),
+        )
+    return object_records.create_collection_record(
+        USER_PREFS_COLLECTION,
+        {
+            "id": object_ids.new_uuid4(),
+            "owner_id": user_id,
+            "key": key,
+            "value": value,
+        },
+        base_dir=_data_dir(),
+        roots=get_object_roots(),
+    )
+
+
+def _resolve_flags(user_id: str | None) -> dict[str, str]:
+    """Effective flag values: instance feature_flags overlaid by the
+    caller's own ``flag:<name>`` user_prefs entries.
+
+    Resolution order is user override -> instance value, per
+    docs/upgrade-and-customization.md Rule 5. Anonymous callers (user_id is
+    None) only ever see the instance-wide values.
+    """
+    flags: dict[str, str] = {}
+    for row in _read_feature_flags_or_empty():
+        flag = row.get("flag")
+        if flag:
+            flags[flag] = row.get("value", "")
+    if user_id is not None:
+        for row in _read_user_prefs_or_empty():
+            if row.get("owner_id") != user_id:
+                continue
+            key = row.get("key") or ""
+            if key.startswith(FLAG_PREF_PREFIX):
+                flags[key[len(FLAG_PREF_PREFIX):]] = row.get("value", "")
+    return flags
+
+
+async def _handle_prefs(send, method: str, headers: dict[str, str]) -> None:
+    """GET /prefs -> the caller's own user_prefs rows collapsed to a map.
+
+    Session-scoped by construction: the owner filter always comes from the
+    caller's own identity, so this never needs the general collection
+    permission engine. Anonymous callers get an empty map rather than a
+    401 -- reading your own (empty) preferences is harmless.
+    """
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+    subject = _permission_subject(headers)
+    prefs = _user_prefs_map(subject.user_id) if subject.user_id is not None else {}
+    await _send_json(send, {"status": "ok", "prefs": prefs})
+
+
+async def _handle_pref(
+    send,
+    method: str,
+    key: str,
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    """GET/PUT one preference for the caller, by key.
+
+    Never accepts owner_id/user_id from the client -- the row is always
+    looked up and written against the session-derived subject.
+    """
+    if method not in {"GET", "PUT"}:
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+    if not _valid_pref_key(key):
+        await _send_json(send, {"status": "error", "error": "Invalid preference key"}, status=400)
+        return
+
+    subject = _permission_subject(headers)
+
+    if method == "GET":
+        row = _find_user_pref(subject.user_id, key) if subject.user_id is not None else None
+        if row is None:
+            await _send_json(send, {"status": "error", "error": "Preference not found"}, status=404)
+            return
+        await _send_json(send, {"status": "ok", "key": key, "value": row.get("value", "")})
+        return
+
+    if subject.user_id is None:
+        await _send_json(
+            send,
+            {"status": "error", "error": "Setting preferences requires a signed-in session."},
+            status=401,
+        )
+        return
+
+    try:
+        payload = _parse_json_body(body)
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    value = payload.get("value")
+    if not isinstance(value, str):
+        await _send_json(
+            send,
+            {"status": "error", "error": "Request JSON field 'value' must be a string"},
+            status=400,
+        )
+        return
+
+    try:
+        _upsert_user_pref(subject.user_id, key, value)
+    except (
+        object_collections.InvalidCollectionNameError,
+        object_records.InvalidRecordIdError,
+        object_records.InvalidRecordPayloadError,
+        ValueError,
+    ) as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_collections.CollectionNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+    except OSError as exc:
+        await _send_json(
+            send,
+            {"status": "error", "error": f"Could not save preference: {exc}"},
+            status=500,
+        )
+        return
+
+    await _send_json(send, {"status": "ok", "key": key, "value": value})
+
+
+async def _handle_flags(send, method: str, headers: dict[str, str]) -> None:
+    """GET /api/flags -> effective feature flags for the caller.
+
+    Public/session-aware like /api/schema: works anonymously (instance
+    values only) and overlays the caller's own per-user overrides when
+    signed in.
+    """
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+    subject = _permission_subject(headers)
+    flags = _resolve_flags(subject.user_id)
+    await _send_json(send, {"status": "ok", "flags": flags})
 
 
 async def _handle_schema(

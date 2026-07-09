@@ -1,0 +1,19 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "user_prefs",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "signed-in users manage their own preferences"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["read"],
+      "collection": "feature_flags",
+      "reason": "signed-in users can read feature flags"
+    }
+  ]
+}

@@ -30,6 +30,10 @@
     {
       "id": "site_list",
       "path": "objects/site/list.py"
+    },
+    {
+      "id": "site_flags",
+      "path": "objects/site/flags.py"
     }
   ],
   "schemas": [],

@@ -77,6 +77,9 @@ SEARCH_PATH = "/api/search"
 AI_CHAT_PATH = "/api/ai/chat"
 USER_FILES_PATH = "/api/files"
 SCHEMA_META_PATH = "/api/schema"
+FLAGS_PATH = "/api/flags"
+PREFS_PATH = "/prefs"
+PREF_PATH = "/prefs/{key}"
 PERMISSIONS_POLICY_PATH = "/permissions/policy"
 PERMISSIONS_STATUS_PATH = "/permissions/status"
 PERMISSIONS_CHECK_PATH = "/permissions/check"
@@ -158,6 +161,9 @@ RESPONSE_FIELDS: dict[str, frozenset[str]] = {
     ),
     "permissions_check": frozenset({"status", "decision"}),
     "permissions_audit": frozenset({"status", "entries", "count"}),
+    "prefs": frozenset({"status", "prefs"}),
+    "pref": frozenset({"status", "key", "value"}),
+    "flags": frozenset({"status", "flags"}),
 }
 
 

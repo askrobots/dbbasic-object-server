@@ -1,0 +1,37 @@
+{
+  "name": "feature_flags",
+  "title": "Feature Flags",
+  "version": 1,
+  "description": "Instance-wide feature toggles. Per-user overrides live in user_prefs as a \"flag:<name>\" key; GET /api/flags resolves the effective value.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "flag",
+      "type": "text",
+      "required": true,
+      "label": "Flag"
+    },
+    {
+      "name": "value",
+      "type": "text",
+      "label": "Value"
+    },
+    {
+      "name": "description",
+      "type": "text",
+      "label": "Description"
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["flag", "value", "description"]}
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["flag", "value", "description"]
+  },
+  "search": {
+    "fields": ["flag", "description"]
+  }
+}
