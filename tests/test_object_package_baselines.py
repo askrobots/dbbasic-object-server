@@ -74,6 +74,7 @@ def test_record_and_load_baseline_roundtrip(tmp_path):
         "installed_at": None,
         "objects": {"hello_world": "abc123"},
         "schemas": {"contacts": "def456"},
+        "schema_bodies": {},
     }
 
     loaded = object_package_baselines.load_baseline("hello-world", base_dir=tmp_path)

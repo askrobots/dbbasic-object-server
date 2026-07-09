@@ -75,12 +75,15 @@ def _install_reconcile_fixture(tmp_path, *, edit_object=False, edit_schema=False
     if edit_object:
         (object_root / "hello" / "world.py").write_text("def GET(request): return {'v': 'customized'}\n")
     if edit_schema:
+        # Change "id"'s type (diverging from the shipped base) as well as
+        # adding a new field, so a later package change to "id" is a real
+        # field-level collision rather than a union-mergeable diff.
         object_schemas.replace_schema(
             "contacts",
             {
                 "name": "contacts",
                 "fields": [
-                    {"name": "id", "type": "text"},
+                    {"name": "id", "type": "number"},
                     {"name": "x_priority", "type": "text"},
                 ],
             },
@@ -983,7 +986,151 @@ def test_reconcile_resolve_keep_mine_preserves_live_and_updates_baseline(tmp_pat
 
 
 def test_reconcile_schema_conflict_and_resolve(tmp_path):
+    # Base ships id:text. The operator changes id's type to "number" *and*
+    # the upgrade changes id's type to "boolean": the same field diverged on
+    # both sides, so field-union merge cannot resolve it and it must still
+    # park as a conflict (the "email" addition alone would have merged).
     packages_root, data_dir, object_root = _install_reconcile_fixture(tmp_path, edit_schema=True)
+    _bump_reconcile_package(
+        packages_root,
+        version="0.2.0",
+        schema_fields=[
+            {"name": "id", "type": "boolean"},
+            {"name": "email", "type": "text"},
+        ],
+    )
+
+    result = object_packages.install_package(
+        "hello-world",
+        root=packages_root,
+        base_dir=data_dir,
+        object_roots=[object_root],
+        allow_replace=True,
+    )
+
+    assert result["schemas"][0]["status"] == "conflict"
+    assert result["schemas"][0]["collisions"] == ["id"]
+    reconcile_id = result["schemas"][0]["reconcile_id"]
+    assert result["reconciles"] == [reconcile_id]
+
+    live_before = object_schemas.get_schema("contacts", base_dir=data_dir, roots=[object_root])
+    assert live_before["field_count"] == 2
+    assert {f["name"] for f in live_before["fields"]} == {"id", "x_priority"}
+
+    reconcile_record = object_reconciles.get_reconcile(reconcile_id, base_dir=data_dir)
+    assert reconcile_record["collisions"] == ["id"]
+
+    resolved = object_reconciles.resolve_reconcile(
+        reconcile_id,
+        "take_theirs",
+        base_dir=data_dir,
+        object_roots=[object_root],
+        resolved_at="2026-07-08T00:00:00Z",
+    )
+    assert resolved["status"] == "resolved"
+
+    live_after = object_schemas.get_schema("contacts", base_dir=data_dir, roots=[object_root])
+    assert {f["name"] for f in live_after["fields"]} == {"id", "email"}
+
+    baseline_after = object_package_baselines.load_baseline("hello-world", base_dir=data_dir)
+    assert {f["name"] for f in baseline_after["schema_bodies"]["contacts"]["fields"]} == {"id", "email"}
+
+    status = object_packages.package_status(
+        "hello-world", root=packages_root, base_dir=data_dir, object_roots=[object_root]
+    )
+    schema_artifact = next(a for a in status["artifacts"] if a["kind"] == "schema")
+    assert schema_artifact["state"] == "pristine"
+    assert status["pending_reconciles"] == 0
+
+
+def test_reconcile_schema_merges_additive_changes_without_conflict(tmp_path):
+    # Phase 4a / Rule 3: schemas are additive, so an operator-added field and
+    # a package-added field on the same base should both survive an upgrade
+    # via field-union merge, with no reconcile parked.
+    packages_root = tmp_path / "packages"
+    data_dir = tmp_path / "data"
+    object_root = tmp_path / "objects"
+    object_root.mkdir()
+
+    write_package(
+        packages_root,
+        "hello-world",
+        _reconcile_manifest("0.1.0"),
+        files=(
+            ("objects/hello/world.py", "def GET(request): return {'v': 1}\n"),
+            (
+                "schemas/contacts.json",
+                json.dumps(
+                    {
+                        "name": "contacts",
+                        "fields": [
+                            {"name": "id", "type": "text"},
+                            {"name": "name", "type": "text"},
+                        ],
+                    }
+                ),
+            ),
+        ),
+    )
+    object_packages.install_package(
+        "hello-world", root=packages_root, base_dir=data_dir, object_roots=[object_root]
+    )
+
+    # Operator adds a local field directly to the live schema.
+    object_schemas.replace_schema(
+        "contacts",
+        {
+            "name": "contacts",
+            "fields": [
+                {"name": "id", "type": "text"},
+                {"name": "name", "type": "text"},
+                {"name": "x_priority", "type": "text"},
+            ],
+        },
+        base_dir=data_dir,
+    )
+
+    # Upgrade ships its own new field, on the same base.
+    _bump_reconcile_package(
+        packages_root,
+        version="0.2.0",
+        schema_fields=[
+            {"name": "id", "type": "text"},
+            {"name": "name", "type": "text"},
+            {"name": "status", "type": "text"},
+        ],
+    )
+
+    result = object_packages.install_package(
+        "hello-world",
+        root=packages_root,
+        base_dir=data_dir,
+        object_roots=[object_root],
+        allow_replace=True,
+    )
+
+    assert result["schemas"][0]["status"] == "merged"
+    assert "reconcile_id" not in result["schemas"][0]
+    assert result["reconciles"] == []
+
+    live = object_schemas.get_schema("contacts", base_dir=data_dir, roots=[object_root])
+    assert {f["name"] for f in live["fields"]} == {"id", "name", "x_priority", "status"}
+
+    baseline = object_package_baselines.load_baseline("hello-world", base_dir=data_dir)
+    assert {f["name"] for f in baseline["schema_bodies"]["contacts"]["fields"]} == {"id", "name", "status"}
+
+
+def test_reconcile_schema_without_baseline_body_falls_back_to_conflict(tmp_path):
+    # Backward-compat: a baseline recorded before this feature existed has no
+    # "schema_bodies" entry. A both-changed schema must still fall back to
+    # the old park-a-conflict behavior instead of crashing.
+    packages_root, data_dir, object_root = _install_reconcile_fixture(tmp_path, edit_schema=True)
+
+    baseline_file = object_package_baselines.baseline_path("hello-world", base_dir=data_dir)
+    baseline = json.loads(baseline_file.read_text())
+    del baseline["schema_bodies"]
+    baseline_file.write_text(json.dumps(baseline))
+
     _bump_reconcile_package(
         packages_root,
         version="0.2.0",
@@ -1002,31 +1149,47 @@ def test_reconcile_schema_conflict_and_resolve(tmp_path):
     )
 
     assert result["schemas"][0]["status"] == "conflict"
-    reconcile_id = result["schemas"][0]["reconcile_id"]
-    assert result["reconciles"] == [reconcile_id]
+    assert "reconcile_id" in result["schemas"][0]
+    live = object_schemas.get_schema("contacts", base_dir=data_dir, roots=[object_root])
+    assert {f["name"] for f in live["fields"]} == {"id", "x_priority"}
 
-    live_before = object_schemas.get_schema("contacts", base_dir=data_dir, roots=[object_root])
-    assert live_before["field_count"] == 2
-    assert {f["name"] for f in live_before["fields"]} == {"id", "x_priority"}
+
+def test_reconcile_schema_resolve_keep_mine_updates_baseline_schema_body(tmp_path):
+    packages_root, data_dir, object_root = _install_reconcile_fixture(tmp_path, edit_schema=True)
+    _bump_reconcile_package(
+        packages_root,
+        version="0.2.0",
+        schema_fields=[
+            {"name": "id", "type": "boolean"},
+            {"name": "email", "type": "text"},
+        ],
+    )
+
+    result = object_packages.install_package(
+        "hello-world",
+        root=packages_root,
+        base_dir=data_dir,
+        object_roots=[object_root],
+        allow_replace=True,
+    )
+    reconcile_id = result["schemas"][0]["reconcile_id"]
 
     resolved = object_reconciles.resolve_reconcile(
         reconcile_id,
-        "take_theirs",
+        "keep_mine",
         base_dir=data_dir,
         object_roots=[object_root],
-        resolved_at="2026-07-08T00:00:00Z",
     )
     assert resolved["status"] == "resolved"
 
-    live_after = object_schemas.get_schema("contacts", base_dir=data_dir, roots=[object_root])
-    assert {f["name"] for f in live_after["fields"]} == {"id", "email"}
+    # Live keeps the operator's version...
+    live = object_schemas.get_schema("contacts", base_dir=data_dir, roots=[object_root])
+    assert {f["name"] for f in live["fields"]} == {"id", "x_priority"}
 
-    status = object_packages.package_status(
-        "hello-world", root=packages_root, base_dir=data_dir, object_roots=[object_root]
-    )
-    schema_artifact = next(a for a in status["artifacts"] if a["kind"] == "schema")
-    assert schema_artifact["state"] == "pristine"
-    assert status["pending_reconciles"] == 0
+    # ...but the baseline body advances to the new upstream shape, so a
+    # future upgrade diffs against what was actually shipped.
+    baseline = object_package_baselines.load_baseline("hello-world", base_dir=data_dir)
+    assert {f["name"] for f in baseline["schema_bodies"]["contacts"]["fields"]} == {"id", "email"}
 
 
 def test_reconcile_package_status_counts_pending_reconciles(tmp_path):

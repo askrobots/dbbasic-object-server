@@ -119,6 +119,88 @@ def replace_schema(
     return normalized
 
 
+def merge_schema_fields(
+    base: Mapping[str, Any],
+    mine: Mapping[str, Any],
+    theirs: Mapping[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    """Three-way merge a schema's field list; return (merged_schema, collisions).
+
+    Schemas are additive (docs/upgrade-and-customization.md, Rule 3: Data
+    Fields That Survive Schema Upgrades): an operator-added field and a
+    package-added field should both survive an upgrade rather than forcing a
+    conflict just because *something* changed on both sides. `base` is the
+    schema as last recorded in the package baseline, `mine` is the live
+    (possibly customized) schema, and `theirs` is the newly shipped schema.
+
+    The result is `dict(theirs)` with `"fields"` replaced by the merged list.
+    Field order is theirs' order first, then any mine-only fields appended in
+    mine's order. `collisions` names fields that changed incompatibly on both
+    sides (same field, no shared ancestor value, and mine != theirs); those
+    fields keep the operator's version in `merged_schema`, pending a human
+    decision -- callers should treat any non-empty `collisions` as "do not
+    apply, park a conflict instead."
+
+    Pure function: no I/O, no validation of the inputs or output.
+    """
+    base_by = {field["name"]: field for field in (base or {}).get("fields", [])}
+    mine_by = {field["name"]: field for field in (mine or {}).get("fields", [])}
+    theirs_by = {field["name"]: field for field in (theirs or {}).get("fields", [])}
+
+    theirs_names = [field["name"] for field in (theirs or {}).get("fields", [])]
+    mine_names = [field["name"] for field in (mine or {}).get("fields", [])]
+    mine_only_names = [name for name in mine_names if name not in theirs_by]
+    ordered_names = theirs_names + mine_only_names
+
+    collisions: list[str] = []
+    merged_fields: list[dict[str, Any]] = []
+
+    for name in ordered_names:
+        b = base_by.get(name)
+        m = mine_by.get(name)
+        t = theirs_by.get(name)
+
+        if m is not None and t is not None:
+            if m == t:
+                merged_fields.append(m)
+            elif b is not None and m == b:
+                # Operator didn't touch it; package changed it.
+                merged_fields.append(t)
+            elif b is not None and t == b:
+                # Package didn't touch it; operator changed it.
+                merged_fields.append(m)
+            else:
+                # Both changed it (or there's no shared base to compare to):
+                # a genuine collision. Keep the operator's version pending
+                # a resolution, but flag it.
+                collisions.append(name)
+                merged_fields.append(m)
+        elif m is not None:
+            # Operator has it, package doesn't (never shipped it, or
+            # removed it). Additive-safe: never silently drop a field the
+            # operator kept.
+            merged_fields.append(m)
+        else:
+            # Package has it, operator doesn't.
+            if b is None:
+                # Newly added by the package.
+                merged_fields.append(t)
+            elif t == b:
+                # Operator removed it, package left it unchanged: respect
+                # the removal.
+                continue
+            else:
+                # Operator removed it, but the package changed it:
+                # collision -- surface it rather than silently resurrect
+                # a field the operator deliberately dropped.
+                collisions.append(name)
+                merged_fields.append(t)
+
+    merged = dict(theirs)
+    merged["fields"] = merged_fields
+    return merged, collisions
+
+
 def normalize_schema(
     schema: str,
     payload: Mapping[str, Any],

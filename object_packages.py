@@ -229,11 +229,13 @@ def install_package(
     existing_baseline = object_package_baselines.load_baseline(package_id, base_dir=base) or {}
     base_objects = existing_baseline.get("objects") or {}
     base_schemas = existing_baseline.get("schemas") or {}
+    base_schema_bodies = existing_baseline.get("schema_bodies") or {}
     baseline_version = existing_baseline.get("version")
 
     reconciles: list[str] = []
     new_baseline_objects: dict[str, str] = {}
     new_baseline_schemas: dict[str, str] = {}
+    new_baseline_schema_bodies: dict[str, Any] = {}
 
     installed_objects = []
     for planned, destination, destination_root, content in object_writes:
@@ -307,25 +309,63 @@ def install_package(
             object_schemas.replace_schema(collection, normalized, base_dir=base)
             status = "written"
             new_baseline_schemas[collection] = new_sha
+            new_baseline_schema_bodies[collection] = normalized
         else:
             live_sha = object_package_baselines.canonical_schema_hash(live)
             old_sha = base_schemas.get(collection)
+            base_body = base_schema_bodies.get(collection)
 
             if live_sha == new_sha:
                 status = "unchanged"
                 new_baseline_schemas[collection] = new_sha
+                new_baseline_schema_bodies[collection] = normalized
             elif old_sha is not None and live_sha == old_sha:
                 object_schemas.replace_schema(collection, normalized, base_dir=base)
                 status = "updated"
                 new_baseline_schemas[collection] = new_sha
+                new_baseline_schema_bodies[collection] = normalized
             elif old_sha is not None and new_sha == old_sha:
                 status = "kept"
                 new_baseline_schemas[collection] = old_sha
+                new_baseline_schema_bodies[collection] = normalized
             elif force:
                 object_schemas.replace_schema(collection, normalized, base_dir=base)
                 status = "forced"
                 new_baseline_schemas[collection] = new_sha
+                new_baseline_schema_bodies[collection] = normalized
+            elif base_body is not None:
+                # Customized AND shipped changed: try a field-union merge
+                # before parking a conflict (Rule 3: schemas are additive,
+                # so a same-named field changed on both sides is the only
+                # real conflict -- see docs/upgrade-and-customization.md).
+                merged, collisions = object_schemas.merge_schema_fields(base_body, live, normalized)
+                if not collisions:
+                    object_schemas.replace_schema(collection, merged, base_dir=base)
+                    status = "merged"
+                    new_baseline_schemas[collection] = new_sha
+                    new_baseline_schema_bodies[collection] = normalized
+                else:
+                    rec = object_reconciles.create_reconcile(
+                        package=package_id,
+                        target_version=package["version"],
+                        baseline_version=baseline_version,
+                        artifact={"kind": "schema", "collection": collection},
+                        mine=json.dumps(live, indent=2, sort_keys=True),
+                        theirs=json.dumps(normalized, indent=2, sort_keys=True),
+                        base_sha=old_sha,
+                        base_dir=base,
+                        collisions=collisions,
+                    )
+                    reconciles.append(rec["id"])
+                    status = "conflict"
+                    extra["reconcile_id"] = rec["id"]
+                    extra["collisions"] = collisions
+                    new_baseline_schemas[collection] = old_sha if old_sha is not None else live_sha
+                    new_baseline_schema_bodies[collection] = base_body
             else:
+                # No base schema body on record (baseline predates this
+                # feature, or was never stamped): fall back to parking a
+                # conflict, unchanged from prior behavior.
                 rec = object_reconciles.create_reconcile(
                     package=package_id,
                     target_version=package["version"],
@@ -340,6 +380,8 @@ def install_package(
                 status = "conflict"
                 extra["reconcile_id"] = rec["id"]
                 new_baseline_schemas[collection] = old_sha if old_sha is not None else live_sha
+                if base_body is not None:
+                    new_baseline_schema_bodies[collection] = base_body
 
         installed_schemas.append(
             {
@@ -391,6 +433,7 @@ def install_package(
         version=package["version"],
         objects=new_baseline_objects,
         schemas=new_baseline_schemas,
+        schema_bodies=new_baseline_schema_bodies,
         base_dir=base,
     )
 

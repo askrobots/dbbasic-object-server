@@ -63,9 +63,17 @@ def create_reconcile(
     theirs: str,
     base_sha: str | None,
     created_at: str | None = None,
+    collisions: list[str] | None = None,
     base_dir: Path | str = DEFAULT_DATA_DIR,
 ) -> dict[str, Any]:
-    """Park a conflict: build, atomic-write, and return a pending-reconcile record."""
+    """Park a conflict: build, atomic-write, and return a pending-reconcile record.
+
+    `collisions`, when given, names the specific fields (for a schema
+    artifact) that could not be auto-merged -- see
+    `object_schemas.merge_schema_fields` and
+    docs/upgrade-and-customization.md (Rule 3). It lets a reconcile inbox
+    show exactly what needs a human decision instead of the whole artifact.
+    """
     record = {
         "id": _new_id(),
         "package": package,
@@ -78,6 +86,7 @@ def create_reconcile(
         "base_sha": base_sha,
         "mine": mine,
         "theirs": theirs,
+        "collisions": list(collisions) if collisions else [],
     }
     _write_reconcile(record, reconcile_path(record["id"], base_dir=base_dir))
     return record
@@ -175,12 +184,14 @@ def resolve_reconcile(
             )
 
     key = artifact["id"] if kind == "object" else artifact["collection"]
+    schema_body = json.loads(record["theirs"]) if kind == "schema" else None
     object_package_baselines.update_artifact(
         record["package"],
         kind=kind,
         key=key,
         sha=sha_theirs,
         version=record["target_version"],
+        schema_body=schema_body,
         base_dir=base,
     )
 

@@ -52,16 +52,25 @@ def record_baseline(
     version: str,
     objects: Mapping[str, str],
     schemas: Mapping[str, str],
+    schema_bodies: Mapping[str, Any] | None = None,
     installed_at: str | None = None,
     base_dir: Path | str = DEFAULT_DATA_DIR,
 ) -> dict[str, Any]:
-    """Stamp a package's baseline (shipped object/schema hashes) and return it."""
+    """Stamp a package's baseline (shipped object/schema hashes) and return it.
+
+    `schema_bodies` additionally stores the normalized schema body (not just
+    its hash) per collection, so a later upgrade can three-way *merge* field
+    lists instead of only detecting a hash mismatch (see
+    docs/upgrade-and-customization.md, Rule 3: Data Fields That Survive
+    Schema Upgrades).
+    """
     baseline = {
         "package": package_id,
         "version": version,
         "installed_at": installed_at,
         "objects": dict(objects),
         "schemas": dict(schemas),
+        "schema_bodies": {k: v for k, v in (schema_bodies or {}).items()},
     }
     _write_baseline(baseline, baseline_path(package_id, base_dir=base_dir))
     return baseline
@@ -74,22 +83,33 @@ def update_artifact(
     key: str,
     sha: str,
     version: str,
+    schema_body: Mapping[str, Any] | None = None,
     base_dir: Path | str = DEFAULT_DATA_DIR,
 ) -> dict[str, Any]:
-    """Stamp a single artifact's baseline hash (used by reconcile resolution)."""
+    """Stamp a single artifact's baseline hash (used by reconcile resolution).
+
+    When `kind == "schema"` and `schema_body` is given, also stamps the
+    baseline's stored schema body for `key`, so future upgrades can merge
+    against it (see `record_baseline`).
+    """
     baseline = load_baseline(package_id, base_dir=base_dir) or {
         "package": package_id,
         "version": version,
         "installed_at": None,
         "objects": {},
         "schemas": {},
+        "schema_bodies": {},
     }
     section = "objects" if kind == "object" else "schemas"
     baseline.setdefault("objects", {})
     baseline.setdefault("schemas", {})
+    baseline.setdefault("schema_bodies", {})
     baseline[section][key] = sha
     baseline["version"] = version
     baseline["package"] = package_id
+
+    if kind == "schema" and schema_body is not None:
+        baseline["schema_bodies"][key] = schema_body
 
     _write_baseline(baseline, baseline_path(package_id, base_dir=base_dir))
     return baseline
