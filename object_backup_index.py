@@ -12,11 +12,16 @@ strictly admin-gated. Nothing here is public.
 
 from __future__ import annotations
 
+import csv
+import hashlib
+import io
+import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 import object_backup
+import object_collections
 
 MANUAL_LABEL = "manual"
 _ID_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]{0,255}\.tar\.gz$")
@@ -90,4 +95,131 @@ def _entry(path: Path) -> dict[str, object]:
         "size": stat.st_size,
         "kind": kind,
         "scope": scope,
+    }
+
+
+def _parse_tsv_by_id(raw: bytes | None) -> dict[str, dict[str, str]]:
+    """Parse a records.tsv payload into a dict keyed by the "id" column."""
+    if not raw:
+        return {}
+    text = raw.decode("utf-8")
+    reader = csv.DictReader(io.StringIO(text), delimiter="\t")
+    rows: dict[str, dict[str, str]] = {}
+    for row in reader:
+        record_id = row.get("id")
+        if record_id is None:
+            continue
+        rows[record_id] = dict(row)
+    return rows
+
+
+def _records_tsv_member(collection: str) -> str:
+    return f"data/collections/{collection}/records.tsv"
+
+
+def _live_records_tsv(collection: str, *, data_dir: Path | str | None) -> bytes | None:
+    path = object_backup._data_dir(data_dir) / "collections" / collection / "records.tsv"
+    if not path.is_file():
+        return None
+    return path.read_bytes()
+
+
+def _diff_records(
+    backup_rows: dict[str, dict[str, str]],
+    live_rows: dict[str, dict[str, str]],
+) -> dict[str, object]:
+    """Diff two id->row maps with the semantics "restoring makes live == backup"."""
+    added = sorted(set(backup_rows) - set(live_rows))
+    removed = sorted(set(live_rows) - set(backup_rows))
+    changed = []
+    unchanged = 0
+    for record_id in sorted(set(backup_rows) & set(live_rows)):
+        backup_row = backup_rows[record_id]
+        live_row = live_rows[record_id]
+        if backup_row == live_row:
+            unchanged += 1
+            continue
+        fields = sorted(
+            field
+            for field in set(backup_row) | set(live_row)
+            if backup_row.get(field) != live_row.get(field)
+        )
+        changed.append({"id": record_id, "fields": fields})
+
+    diff_hash = hashlib.sha256(
+        json.dumps({"added": added, "removed": removed, "changed": changed}, sort_keys=True).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+
+    return {
+        "diff_hash": diff_hash,
+        "added": added,
+        "removed": removed,
+        "changed": changed,
+        "unchanged": unchanged,
+    }
+
+
+def preview_collection(
+    backup_id: str,
+    collection: str,
+    *,
+    data_dir: Path | str | None = None,
+) -> dict[str, object]:
+    """Diff a collection's records between a backup and the live data dir.
+
+    The semantics are "if you restore, live becomes the backup's version":
+    added ids would reappear, removed ids would be dropped, changed ids
+    would have the listed fields overwritten.
+    """
+    if not object_collections.validate_collection_name(collection):
+        raise ValueError(f"Invalid collection name: {collection}")
+
+    archive_path = backup_path(backup_id, data_dir=data_dir)
+    member_name = _records_tsv_member(collection)
+    archived_raw = object_backup.read_backup_member(archive_path, member_name)
+    live_raw = _live_records_tsv(collection, data_dir=data_dir)
+
+    backup_rows = _parse_tsv_by_id(archived_raw)
+    live_rows = _parse_tsv_by_id(live_raw)
+    diff = _diff_records(backup_rows, live_rows)
+
+    return {
+        "target": {"kind": "collection", "name": collection},
+        "backup_id": backup_id,
+        "present_in_backup": archived_raw is not None,
+        "diff_hash": diff["diff_hash"],
+        "added": diff["added"],
+        "removed": diff["removed"],
+        "changed": diff["changed"],
+        "unchanged": diff["unchanged"],
+    }
+
+
+def preview_record(
+    backup_id: str,
+    collection: str,
+    record_id: str,
+    *,
+    data_dir: Path | str | None = None,
+) -> dict[str, object]:
+    """Return one record's backup vs. live presence, without diffing all rows."""
+    if not object_collections.validate_collection_name(collection):
+        raise ValueError(f"Invalid collection name: {collection}")
+
+    archive_path = backup_path(backup_id, data_dir=data_dir)
+    member_name = _records_tsv_member(collection)
+    archived_raw = object_backup.read_backup_member(archive_path, member_name)
+    live_raw = _live_records_tsv(collection, data_dir=data_dir)
+
+    backup_rows = _parse_tsv_by_id(archived_raw)
+    live_rows = _parse_tsv_by_id(live_raw)
+
+    return {
+        "collection": collection,
+        "id": record_id,
+        "record": backup_rows.get(record_id),
+        "present_in_backup": record_id in backup_rows,
+        "present_in_live": record_id in live_rows,
     }

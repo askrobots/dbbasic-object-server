@@ -15,7 +15,7 @@ import tarfile
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Sequence
 
 from object_namespace import DEFAULT_OBJECTS_DIR, OBJECTS_DIR_ENV
 from object_versions import DEFAULT_DATA_DIR
@@ -93,6 +93,8 @@ class RestoreSummary:
     overwritten: bool
     pruned_files: int = 0
     pruned_dirs: int = 0
+    scoped: bool = False
+    selected: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -237,6 +239,43 @@ def verify_runtime_backup(backup_path: Path | str) -> BackupVerification:
     )
 
 
+def read_backup_member(backup_path: Path | str, member_name: str) -> bytes | None:
+    """Return the bytes of one archive member, or None if it is not present.
+
+    ``member_name`` is expected to be an internal archive relpath produced by
+    server code (e.g. "data/collections/notes/records.tsv"), not raw user
+    input — but it is still validated defensively against traversal.
+    """
+    _safe_archive_path(member_name)
+    with tarfile.open(backup_path, "r:*") as archive:
+        try:
+            member = archive.getmember(member_name)
+        except KeyError:
+            return None
+        extracted = archive.extractfile(member)
+        if extracted is None:
+            return None
+        return extracted.read()
+
+
+def _normalize_select(select: Sequence[str]) -> list[str]:
+    normalized: list[str] = []
+    for raw in select:
+        cleaned = str(raw).strip("/")
+        if not (cleaned == "objects" or cleaned.startswith("objects/")
+                or cleaned == "data" or cleaned.startswith("data/")):
+            raise BackupRestoreError(f"invalid restore selector: {raw!r}")
+        normalized.append(cleaned)
+    return normalized
+
+
+def _member_selected(name: str, selectors: list[str]) -> bool:
+    for selector in selectors:
+        if name == selector or name.startswith(selector + "/"):
+            return True
+    return False
+
+
 def restore_runtime_backup(
     backup_path: Path | str,
     *,
@@ -244,10 +283,21 @@ def restore_runtime_backup(
     data_dir: Path | str,
     overwrite: bool = False,
     prune_extra: bool = False,
+    select: Sequence[str] | None = None,
 ) -> RestoreSummary:
-    """Restore a runtime backup into explicit object and data directories."""
+    """Restore a runtime backup into explicit object and data directories.
+
+    ``select``, when provided, scopes the restore to archive members whose
+    name equals one of the selectors or is nested under one (e.g.
+    "data/collections/notes"). Combining ``select`` with ``prune_extra`` is
+    refused — pruning is a whole-instance operation.
+    """
     if prune_extra and not overwrite:
         raise BackupRestoreError("prune_extra requires overwrite=True")
+    if select is not None and prune_extra:
+        raise BackupRestoreError("select cannot be combined with prune_extra")
+
+    selectors = _normalize_select(select) if select is not None else None
 
     backup = Path(backup_path)
     objects_path = Path(objects_dir)
@@ -256,11 +306,16 @@ def restore_runtime_backup(
     if not verification.ok:
         raise BackupRestoreError("; ".join(verification.errors))
 
+    selected_count = 0
     planned: list[tuple[tarfile.TarInfo, Path]] = []
     with tarfile.open(backup, "r:*") as archive:
         for member in archive.getmembers():
             if member.name == MANIFEST_NAME:
                 continue
+            if selectors is not None:
+                if not _member_selected(member.name, selectors):
+                    continue
+                selected_count += 1
             destination = _member_destination(member.name, objects_path, data_path)
             planned.append((member, destination))
             if member.isdir():
@@ -269,6 +324,11 @@ def restore_runtime_backup(
                 continue
             if destination.exists() and not overwrite:
                 raise BackupRestoreError(f"restore target already exists: {destination}")
+
+        if selectors is not None and selected_count == 0:
+            raise BackupRestoreError(
+                f"no files in the backup match the selection: {', '.join(selectors)}"
+            )
 
         pruned_files = 0
         pruned_dirs = 0
@@ -305,6 +365,8 @@ def restore_runtime_backup(
         overwritten=overwrite,
         pruned_files=pruned_files,
         pruned_dirs=pruned_dirs,
+        scoped=selectors is not None,
+        selected=selected_count,
     )
 
 
@@ -585,6 +647,9 @@ def main(argv: list[str] | None = None) -> int:
     restore.add_argument("--data-dir", type=Path, required=True)
     restore.add_argument("--overwrite", action="store_true")
     restore.add_argument("--prune-extra", action="store_true")
+    restore.add_argument("--collection", action="append", default=[])
+    restore.add_argument("--only", action="append", default=[])
+    restore.add_argument("--preview", action="store_true")
     restore.add_argument("--json", action="store_true")
 
     args = parser.parse_args(argv)
@@ -603,12 +668,39 @@ def main(argv: list[str] | None = None) -> int:
             _print_result(result.to_dict(), json_output=args.json)
             return 0 if result.ok else 1
         if args.command == "restore":
+            select = [f"data/collections/{name}" for name in args.collection] + list(args.only)
+            if args.preview:
+                if len(args.collection) != 1 or args.only:
+                    raise BackupRestoreError(
+                        "--preview requires exactly one --collection and no --only paths"
+                    )
+                import object_backup_index
+                import object_collections
+
+                collection = args.collection[0]
+                if not object_collections.validate_collection_name(collection):
+                    raise BackupRestoreError(f"invalid collection name: {collection!r}")
+                member_name = f"data/collections/{collection}/records.tsv"
+                archived_raw = read_backup_member(args.backup, member_name)
+                live_raw = object_backup_index._live_records_tsv(collection, data_dir=args.data_dir)
+                backup_rows = object_backup_index._parse_tsv_by_id(archived_raw)
+                live_rows = object_backup_index._parse_tsv_by_id(live_raw)
+                diff = object_backup_index._diff_records(backup_rows, live_rows)
+                result = {
+                    "target": {"kind": "collection", "name": collection},
+                    "backup_id": str(args.backup),
+                    "present_in_backup": archived_raw is not None,
+                    **diff,
+                }
+                _print_result(result, json_output=args.json)
+                return 0
             result = restore_runtime_backup(
                 args.backup,
                 objects_dir=args.objects_dir,
                 data_dir=args.data_dir,
                 overwrite=args.overwrite,
                 prune_extra=args.prune_extra,
+                select=select or None,
             )
             _print_result(result.to_dict(), json_output=args.json)
             return 0

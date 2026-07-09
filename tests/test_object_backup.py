@@ -361,6 +361,105 @@ def test_cli_create_verify_and_restore_json(tmp_path, capsys):
     assert restore_payload["files"] == 15
 
 
+def test_read_backup_member_returns_bytes_or_none(tmp_path):
+    objects_dir, data_dir = make_runtime_tree(tmp_path)
+    backup = tmp_path / "runtime.tar.gz"
+    object_backup.create_runtime_backup(backup, objects_dir=objects_dir, data_dir=data_dir)
+
+    payload = object_backup.read_backup_member(backup, "data/collections/contacts/records.tsv")
+    assert payload == b"id\tname\nc1\tAda\n"
+
+    assert object_backup.read_backup_member(backup, "data/collections/missing/records.tsv") is None
+
+
+def test_restore_runtime_backup_scoped_to_one_collection(tmp_path):
+    objects_dir, data_dir = make_runtime_tree(tmp_path)
+    write_file(data_dir / "collections" / "notes" / "records.tsv", "id\ttext\nn1\thello\n")
+    backup = tmp_path / "runtime.tar.gz"
+    object_backup.create_runtime_backup(backup, objects_dir=objects_dir, data_dir=data_dir)
+
+    restored_objects = tmp_path / "restored" / "objects"
+    restored_data = tmp_path / "restored" / "data"
+    summary = object_backup.restore_runtime_backup(
+        backup,
+        objects_dir=restored_objects,
+        data_dir=restored_data,
+        select=["data/collections/notes"],
+    )
+
+    assert summary.scoped is True
+    assert summary.selected == 2  # the "notes" directory member plus its records.tsv
+    assert (
+        restored_data / "collections" / "notes" / "records.tsv"
+    ).read_text() == "id\ttext\nn1\thello\n"
+    assert not (restored_data / "collections" / "contacts").exists()
+    assert not (restored_data / "state").exists()
+    assert not restored_objects.exists()
+
+
+def test_restore_runtime_backup_unscoped_summary_defaults(tmp_path):
+    objects_dir, data_dir = make_runtime_tree(tmp_path)
+    backup = tmp_path / "runtime.tar.gz"
+    object_backup.create_runtime_backup(backup, objects_dir=objects_dir, data_dir=data_dir)
+
+    summary = object_backup.restore_runtime_backup(
+        backup,
+        objects_dir=tmp_path / "restored" / "objects",
+        data_dir=tmp_path / "restored" / "data",
+    )
+
+    assert summary.scoped is False
+    assert summary.selected == 0
+
+
+def test_restore_runtime_backup_select_and_prune_extra_raises(tmp_path):
+    objects_dir, data_dir = make_runtime_tree(tmp_path)
+    backup = tmp_path / "runtime.tar.gz"
+    object_backup.create_runtime_backup(backup, objects_dir=objects_dir, data_dir=data_dir)
+
+    with pytest.raises(
+        object_backup.BackupRestoreError, match="select cannot be combined with prune_extra"
+    ):
+        object_backup.restore_runtime_backup(
+            backup,
+            objects_dir=tmp_path / "restored" / "objects",
+            data_dir=tmp_path / "restored" / "data",
+            overwrite=True,
+            prune_extra=True,
+            select=["data/collections/contacts"],
+        )
+
+
+def test_restore_runtime_backup_select_no_match_raises(tmp_path):
+    objects_dir, data_dir = make_runtime_tree(tmp_path)
+    backup = tmp_path / "runtime.tar.gz"
+    object_backup.create_runtime_backup(backup, objects_dir=objects_dir, data_dir=data_dir)
+
+    with pytest.raises(
+        object_backup.BackupRestoreError, match="no files in the backup match the selection"
+    ):
+        object_backup.restore_runtime_backup(
+            backup,
+            objects_dir=tmp_path / "restored" / "objects",
+            data_dir=tmp_path / "restored" / "data",
+            select=["data/collections/does-not-exist"],
+        )
+
+
+def test_restore_runtime_backup_select_rejects_bad_root(tmp_path):
+    objects_dir, data_dir = make_runtime_tree(tmp_path)
+    backup = tmp_path / "runtime.tar.gz"
+    object_backup.create_runtime_backup(backup, objects_dir=objects_dir, data_dir=data_dir)
+
+    with pytest.raises(object_backup.BackupRestoreError, match="invalid restore selector"):
+        object_backup.restore_runtime_backup(
+            backup,
+            objects_dir=tmp_path / "restored" / "objects",
+            data_dir=tmp_path / "restored" / "data",
+            select=["etc/passwd"],
+        )
+
+
 def _add_manifest(archive: tarfile.TarFile, *, files: int, bytes_count: int):
     manifest = {
         "format_version": object_backup.BACKUP_FORMAT_VERSION,

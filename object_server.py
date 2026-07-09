@@ -716,6 +716,14 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
                 backup_id = tail.removesuffix("/download")
                 await _handle_admin_backup_download(send, method, backup_id, headers)
                 return
+            if tail.endswith("/preview"):
+                backup_id = tail.removesuffix("/preview")
+                await _handle_admin_backup_preview(send, method, backup_id, query, headers)
+                return
+            if tail.endswith("/record"):
+                backup_id = tail.removesuffix("/record")
+                await _handle_admin_backup_record(send, method, backup_id, query, headers)
+                return
             await _send_json(send, {"status": "error", "error": "Not found"}, status=404)
             return
 
@@ -3612,6 +3620,7 @@ def _admin_capabilities_payload() -> dict[str, Any]:
             "available": True,
             "can_create": True,
             "can_download": True,
+            "can_preview": True,
             "can_restore": False,
             **_backup_schedule_payload(),
         },
@@ -8335,6 +8344,110 @@ async def _handle_admin_backup_download(
             (b"x-content-type-options", b"nosniff"),
         ],
     )
+
+
+async def _handle_admin_backup_preview(
+    send,
+    method: str,
+    backup_id: str,
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    """Preview what restoring part of a backup would change. Read-only, admin only."""
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(headers, f"Backups require {ADMIN_TOKEN_ENV}.")
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    try:
+        path = object_backup_index.backup_path(backup_id, data_dir=_data_dir())
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    if not path.is_file():
+        await _send_json(send, {"status": "error", "error": "Backup not found"}, status=404)
+        return
+
+    kind = _optional_query_text(query, "kind")
+    if kind != "collection":
+        await _send_json(
+            send, {"status": "error", "error": "unsupported preview kind"}, status=400
+        )
+        return
+
+    name = _optional_query_text(query, "name")
+    if not name:
+        await _send_json(
+            send, {"status": "error", "error": "Query parameter 'name' is required"}, status=400
+        )
+        return
+
+    try:
+        preview = object_backup_index.preview_collection(backup_id, name, data_dir=_data_dir())
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    await _send_json(send, {"status": "ok", "preview": preview})
+
+
+async def _handle_admin_backup_record(
+    send,
+    method: str,
+    backup_id: str,
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    """Pull one record's backup-vs-live status, without restoring. Admin only."""
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(headers, f"Backups require {ADMIN_TOKEN_ENV}.")
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    try:
+        path = object_backup_index.backup_path(backup_id, data_dir=_data_dir())
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    if not path.is_file():
+        await _send_json(send, {"status": "error", "error": "Backup not found"}, status=404)
+        return
+
+    collection = _optional_query_text(query, "collection")
+    if not collection:
+        await _send_json(
+            send,
+            {"status": "error", "error": "Query parameter 'collection' is required"},
+            status=400,
+        )
+        return
+
+    record_id = _optional_query_text(query, "id")
+    if not record_id:
+        await _send_json(
+            send, {"status": "error", "error": "Query parameter 'id' is required"}, status=400
+        )
+        return
+
+    try:
+        record = object_backup_index.preview_record(
+            backup_id, collection, record_id, data_dir=_data_dir()
+        )
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    await _send_json(send, {"status": "ok", "record": record})
 
 
 def _append_ops_execution_error(
