@@ -17,6 +17,11 @@ VM to a running server, a login, an HTTPS domain, and a first app in about
 thirty minutes with [`scripts/install.sh`](scripts/install.sh). New to the
 idea? Start with [why it is different](docs/why-dbbasic.md).
 
+**It runs its own homepage:** [dbbasic.com](https://dbbasic.com) is served in
+production by this server — one host on a multi-domain instance, its pages
+stored as records and rendered by a pair of page objects. Editing the site is
+a data change, not a deploy.
+
 This public codebase was assembled from a working prototype in small,
 reviewed, tested slices — each checked for private deployment details before
 release. That discipline continues as new capability lands.
@@ -614,6 +619,16 @@ persistent volumes outside the image, so image rebuilds stay separate from
 live object edits made through the admin HTTP API. See
 [`docs/docker-deployment.md`](docs/docker-deployment.md) for the quickstart,
 the Coolify-specific steps, and the first-boot admin token story.
+
+This is not hypothetical: [dbbasic.com](https://dbbasic.com), the project's
+own homepage, runs in production on a single instance of this server. The
+whole site is a `dbbasic_pages` collection (one record per page, pre-rendered
+HTML), two page objects that wrap records in the site chrome, a `site_hosts`
+record mapping the domain to its page namespace, and a reverse-proxy block
+serving static assets and download binaries from disk. It shares that
+instance with other hosts — the multi-domain routing described in
+[`docs/site-routing.md`](docs/site-routing.md) — and updating a page is a
+record write with an audit trail, not a redeploy.
 
 ## Status
 
