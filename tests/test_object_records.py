@@ -767,6 +767,143 @@ def test_invalid_extra_payload_is_rejected(tmp_path, bad_extra):
         )
 
 
+# --- Perf pass: records cache, id index, csv.reader-based parsing ---
+#
+# These tests describe behavior that must hold both BEFORE and AFTER the
+# caching/parsing change (there is no cache pre-change, so "a mutation
+# never leaks" and "external changes are always seen" hold trivially; the
+# point is that they must ALSO hold once a cache is introduced).
+
+
+def test_short_row_missing_fields_become_empty_string(tmp_path):
+    """A data row with fewer tab-separated values than the header (e.g. a
+    hand-edited or partially-written TSV) must fill the missing trailing
+    fields with "" -- this mirrors csv.DictReader's restval=None behavior,
+    which the surrounding code already converts to "" (see the
+    `value if value is not None else ""` normalization)."""
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\temail\tphone\nc1\tAda\n")
+
+    result = object_records.list_collection_records("contacts", base_dir=data_dir, roots=[])
+    assert result["records"] == [{"id": "c1", "name": "Ada", "email": "", "phone": ""}]
+
+    record = object_records.get_collection_record("contacts", "c1", base_dir=data_dir, roots=[])
+    assert record == {"id": "c1", "name": "Ada", "email": "", "phone": ""}
+
+
+def test_long_row_extra_fields_raise_matching_original_error(tmp_path):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\tLovelace\textra\n")
+
+    with pytest.raises(ValueError, match="extra fields on row 2"):
+        object_records.list_collection_records("contacts", base_dir=data_dir, roots=[])
+
+
+def test_quoted_value_containing_tab_round_trips(tmp_path):
+    """A field value containing a literal tab (and newline) is legitimate --
+    only field NAMES/ids are restricted, not values (see
+    _normalize_record_payload). csv.DictWriter's default QUOTE_MINIMAL
+    quotes such a value on write; the read path must undo that quoting
+    exactly, never naively split on tab."""
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "notes", "id\tbody\n")
+
+    tricky_value = "line one\tline two\nline three"
+    created = object_records.create_collection_record(
+        "notes",
+        {"id": "n1", "body": tricky_value},
+        base_dir=data_dir,
+        roots=[],
+    )
+    assert created["body"] == tricky_value
+
+    fetched = object_records.get_collection_record("notes", "n1", base_dir=data_dir, roots=[])
+    assert fetched["body"] == tricky_value
+
+    listed = object_records.list_collection_records("notes", base_dir=data_dir, roots=[])["records"]
+    assert listed[0]["body"] == tricky_value
+
+
+def test_get_collection_record_with_duplicate_ids_returns_first_match(tmp_path):
+    """Malformed/hand-edited data can contain a duplicate id. Any id index
+    used for O(1) lookup must replicate the original linear scan's
+    first-match-wins semantics exactly."""
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\nc1\tGrace\n")
+
+    record = object_records.get_collection_record("contacts", "c1", base_dir=data_dir, roots=[])
+    assert record == {"id": "c1", "name": "Ada"}
+
+
+def test_mutating_returned_record_does_not_corrupt_next_read(tmp_path):
+    """Every record dict/list handed back across the public API must be a
+    fresh copy: a caller mutating what it got back must never affect a
+    later, independent call. This is the aliasing guard for the records
+    cache -- cached objects must never be returned by reference."""
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\nc2\tGrace\n")
+
+    first = object_records.get_collection_record("contacts", "c1", base_dir=data_dir, roots=[])
+    first["name"] = "CORRUPTED"
+    first["new_field"] = "also corrupted"
+
+    second = object_records.get_collection_record("contacts", "c1", base_dir=data_dir, roots=[])
+    assert second == {"id": "c1", "name": "Ada"}
+
+    records = object_records.list_collection_records("contacts", base_dir=data_dir, roots=[])["records"]
+    records[0]["name"] = "ALSO CORRUPTED"
+
+    still_clean = object_records.get_collection_record("contacts", "c1", base_dir=data_dir, roots=[])
+    assert still_clean["name"] == "Ada"
+    still_listed = object_records.list_collection_records("contacts", base_dir=data_dir, roots=[])["records"]
+    assert still_listed[0]["name"] == "Ada"
+
+
+def test_cache_reflects_external_file_change(tmp_path):
+    """Another process (or the same process writing directly, bypassing the
+    API) can rewrite records.tsv on disk. The next API read must observe
+    the new content -- the stat-signature check the records cache relies
+    on for cross-process consistency."""
+    data_dir = tmp_path / "data"
+    path = write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+
+    warm = object_records.get_collection_record("contacts", "c1", base_dir=data_dir, roots=[])
+    assert warm["name"] == "Ada"
+
+    # Rewrite the file directly, outside the object_records API.
+    path.write_text("id\tname\nc1\tAda Lovelace\nc2\tGrace Hopper\n")
+
+    refreshed = object_records.get_collection_record("contacts", "c1", base_dir=data_dir, roots=[])
+    assert refreshed["name"] == "Ada Lovelace"
+
+    listed = object_records.list_collection_records("contacts", base_dir=data_dir, roots=[])["records"]
+    assert listed == [
+        {"id": "c1", "name": "Ada Lovelace"},
+        {"id": "c2", "name": "Grace Hopper"},
+    ]
+
+
+def test_update_after_cached_read_returns_fresh_data(tmp_path):
+    """A get/list right after a create/update must never return a value
+    that predates the write, whether or not an earlier read happened to
+    warm the cache first."""
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+
+    warm = object_records.get_collection_record("contacts", "c1", base_dir=data_dir, roots=[])
+    assert warm["name"] == "Ada"
+
+    object_records.update_collection_record(
+        "contacts", "c1", {"name": "Ada Lovelace"}, base_dir=data_dir, roots=[]
+    )
+
+    refreshed = object_records.get_collection_record("contacts", "c1", base_dir=data_dir, roots=[])
+    assert refreshed["name"] == "Ada Lovelace"
+
+    listed = object_records.list_collection_records("contacts", base_dir=data_dir, roots=[])["records"]
+    assert listed == [{"id": "c1", "name": "Ada Lovelace"}]
+
+
 def test_delete_collection_record_unaffected_by_extra(tmp_path):
     data_dir = tmp_path / "data"
     write_schema(

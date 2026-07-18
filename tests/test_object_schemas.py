@@ -296,6 +296,42 @@ def test_manual_schema_rejects_invalid_field_name(tmp_path):
         object_schemas.get_schema("invoices", base_dir=data_dir, roots=[])
 
 
+# --- Perf pass: schema cache ---
+
+
+def test_get_schema_cache_reflects_external_file_change(tmp_path):
+    """A schema file rewritten directly on disk (bypassing replace_schema)
+    must be visible on the next get_schema call -- the stat-signature check
+    the schema cache relies on."""
+    data_dir = tmp_path / "data"
+    write_schema(data_dir, "invoices", {"fields": [{"name": "id"}, {"name": "total"}]})
+
+    first = object_schemas.get_schema("invoices", base_dir=data_dir, roots=[])
+    assert [f["name"] for f in first["fields"]] == ["id", "total"]
+
+    write_schema(
+        data_dir,
+        "invoices",
+        {"fields": [{"name": "id"}, {"name": "total"}, {"name": "paid"}]},
+    )
+
+    second = object_schemas.get_schema("invoices", base_dir=data_dir, roots=[])
+    assert [f["name"] for f in second["fields"]] == ["id", "total", "paid"]
+
+
+def test_replace_schema_invalidates_cache_immediately(tmp_path):
+    data_dir = tmp_path / "data"
+    object_schemas.replace_schema("invoices", {"fields": [{"name": "id"}]}, base_dir=data_dir)
+    warm = object_schemas.get_schema("invoices", base_dir=data_dir, roots=[])
+    assert [f["name"] for f in warm["fields"]] == ["id"]
+
+    object_schemas.replace_schema(
+        "invoices", {"fields": [{"name": "id"}, {"name": "total"}]}, base_dir=data_dir
+    )
+    updated = object_schemas.get_schema("invoices", base_dir=data_dir, roots=[])
+    assert [f["name"] for f in updated["fields"]] == ["id", "total"]
+
+
 def test_public_schema_meta_endpoint_returns_structure(tmp_path, monkeypatch):
     import object_server
     from test_object_server import request, write_records

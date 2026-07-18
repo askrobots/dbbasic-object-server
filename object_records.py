@@ -30,6 +30,32 @@ MAX_RECORD_LIMIT = 1000
 EXTRA_FIELD = "extra"
 
 _RECORD_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+
+# Module-level cache for parsed records.tsv files, keyed by the resolved
+# file path. Value is (stat_signature, fields, records, id_index):
+#   - stat_signature = (st_mtime_ns, st_size, st_ino). Every write in this
+#     module goes through an atomic tempfile-then-replace, so a new inode
+#     backs the path after each write; including st_ino means a same-tick
+#     mtime collision (coarse clocks/filesystems) still isn't mistaken for
+#     "unchanged" as long as the replace produced a different inode, which
+#     is the common case for both our own writes and any other well-behaved
+#     writer using the same replace pattern.
+#   - fields/records mirror exactly what a fresh parse of that exact file
+#     content would produce (see _refresh_records_cache: written rows are
+#     projected to the full field set before caching, matching what
+#     csv.DictWriter/csv.reader would round-trip).
+#   - id_index maps record id -> index into `records`, first-occurrence-wins
+#     (matching the original linear scan's behavior on hand-edited files
+#     with duplicate ids).
+#
+# ALIASING SAFETY: the `records` list and its dicts stored here are shared,
+# mutable module state. Nothing in this module may mutate them in place.
+# Every function that hands a record or records list back across the
+# public API must copy first (see _read_collection_records,
+# _read_records_and_fields, get_collection_record). Internal callers that
+# need to build on cached data for a write (create/update/delete) already
+# go through _read_records_and_fields, which copies.
+_RECORDS_CACHE: dict[str, tuple[tuple[int, int, int], list[str], list[dict[str, str]], dict[str, int]]] = {}
 _INTEGER_TYPES = {"int", "integer"}
 _FLOAT_TYPES = {"float", "number", "currency"}
 _BOOLEAN_TYPES = {"bool", "boolean"}
@@ -129,11 +155,15 @@ def get_collection_record(
         raise InvalidRecordIdError(f"Invalid record id: {record_id}")
 
     extra_names = _extra_field_names(collection, base_dir=base_dir, roots=roots)
-    for record in _read_collection_records(collection, base_dir=base_dir):
-        if record.get("id") == record_id:
-            return _surface_extra(record, extra_names=extra_names)
+    path = collection_records_file(collection, base_dir=base_dir)
+    _, records, id_index = _cache_entry(collection, path)
+    index = id_index.get(record_id)
+    if index is None:
+        raise RecordNotFoundError(f"Record not found: {collection}/{record_id}")
 
-    raise RecordNotFoundError(f"Record not found: {collection}/{record_id}")
+    # Copy before handing it out: `records[index]` is the module cache's
+    # own dict, and _surface_extra mutates its argument in place.
+    return _surface_extra(dict(records[index]), extra_names=extra_names)
 
 
 def create_collection_record(
@@ -329,46 +359,124 @@ def _read_collection_records(
     base_dir: Path | str,
 ) -> list[dict[str, str]]:
     path = collection_records_file(collection, base_dir=base_dir)
-    if not path.exists():
-        return []
-    if not path.is_file():
-        raise ValueError(f"Collection records path is not a file: {collection}")
-
-    with path.open(newline="") as handle:
-        reader = csv.DictReader(handle, delimiter="\t")
-        _validate_header(collection, reader.fieldnames)
-        records = []
-        for row_number, row in enumerate(reader, start=2):
-            if None in row:
-                raise ValueError(
-                    f"Collection records file has extra fields on row {row_number}: {collection}"
-                )
-            records.append({key: value if value is not None else "" for key, value in row.items()})
-        return records
+    _, records, _ = _cache_entry(collection, path)
+    # Copy: `records` is the module cache's own list of its own dicts.
+    return [dict(record) for record in records]
 
 
 def _read_records_and_fields(
     collection: str,
     path: Path,
 ) -> tuple[list[dict[str, str]], list[str]]:
-    if not path.exists():
-        return [], ["id"]
+    fields, records, _ = _cache_entry(collection, path)
+    # Copy: callers (create/update/delete) mutate the list/dicts they get
+    # back before rewriting the file, and must never do that to the cache.
+    return [dict(record) for record in records], list(fields)
 
+
+def _stat_signature(path: Path) -> tuple[int, int, int] | None:
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size, st.st_ino)
+
+
+def _build_id_index(records: list[dict[str, str]]) -> dict[str, int]:
+    index: dict[str, int] = {}
+    for position, record in enumerate(records):
+        record_id = record.get("id")
+        if record_id and record_id not in index:
+            index[record_id] = position
+    return index
+
+
+def _cache_entry(
+    collection: str,
+    path: Path,
+) -> tuple[list[str], list[dict[str, str]], dict[str, int]]:
+    """Return (fields, records, id_index) for path's current content.
+
+    Serves from the module cache when the file's stat signature matches;
+    otherwise parses fresh and (when the file exists) stores the result for
+    next time. The returned fields/records/id_index are the CACHED objects
+    -- see the _RECORDS_CACHE docstring above. Callers within this module
+    must copy before handing anything back across the public API.
+    """
+    if not path.exists():
+        return ["id"], [], {}
     if not path.is_file():
         raise ValueError(f"Collection records path is not a file: {collection}")
 
+    cache_key = str(path.resolve(strict=False))
+    signature = _stat_signature(path)
+    if signature is not None:
+        cached = _RECORDS_CACHE.get(cache_key)
+        if cached is not None and cached[0] == signature:
+            return cached[1], cached[2], cached[3]
+
+    fields, records = _parse_records_file(collection, path)
+    id_index = _build_id_index(records)
+    if signature is not None:
+        _RECORDS_CACHE[cache_key] = (signature, fields, records, id_index)
+    return fields, records, id_index
+
+
+def _parse_records_file(collection: str, path: Path) -> tuple[list[str], list[dict[str, str]]]:
+    """Parse one records.tsv file into (fields, records).
+
+    Uses csv.reader rather than csv.DictReader: csv.reader is the same
+    C-accelerated tokenizer DictReader wraps, but skips DictReader's
+    per-row dict-construction overhead (zip + restkey/restval handling) in
+    favor of a direct index walk here. Using csv.reader (not a naive
+    line.split("\t")) is required for correctness, not just speed: a value
+    written by csv.DictWriter's default QUOTE_MINIMAL may legitimately
+    contain a quoted tab or embedded newline, and only real CSV/TSV parsing
+    reconstructs that value correctly.
+
+    Replicates csv.DictReader's exact semantics for header/short/long rows
+    and blank-line skipping -- see the block comment above _RECORDS_CACHE
+    and the tests in tests/test_object_records.py for the specific cases
+    this was checked against on the pre-change code.
+    """
     with path.open(newline="") as handle:
-        reader = csv.DictReader(handle, delimiter="\t")
-        _validate_header(collection, reader.fieldnames)
-        fields = list(reader.fieldnames or [])
-        records = []
-        for row_number, row in enumerate(reader, start=2):
-            if None in row:
+        reader = csv.reader(handle, delimiter="\t")
+        try:
+            header = next(reader)
+        except StopIteration:
+            header = None
+        _validate_header(collection, header)
+        fields = list(header)
+        field_count = len(fields)
+
+        records: list[dict[str, str]] = []
+        row_number = 1  # the header is row 1; DictReader's enumerate started data rows at 2
+        for row in reader:
+            # csv.DictReader's __next__ silently skips rows the underlying
+            # csv.reader returns as [] (blank physical lines) rather than
+            # emitting a record for them; replicate that here so row_number
+            # (used only in the error message below) still lines up with
+            # DictReader's numbering of *emitted* rows, not physical lines.
+            if not row:
+                continue
+            row_number += 1
+            if len(row) > field_count:
+                # Mirrors DictReader putting overflow values under the
+                # `None` restkey, which the pre-change code detected via
+                # `None in row`.
                 raise ValueError(
                     f"Collection records file has extra fields on row {row_number}: {collection}"
                 )
-            records.append({key: value if value is not None else "" for key, value in row.items()})
-        return records, fields
+            # Mirrors DictReader's restval=None for a short row, which the
+            # pre-change code then normalized to "" (`value if value is not
+            # None else ""`) -- do that normalization directly here.
+            record = {
+                fields[i]: (row[i] if i < len(row) else "")
+                for i in range(field_count)
+            }
+            records.append(record)
+
+    return fields, records
 
 
 def _write_collection_records(
@@ -398,6 +506,42 @@ def _write_collection_records(
     finally:
         if temp_path.exists():
             temp_path.unlink()
+
+    _refresh_records_cache(collection, path, fields, records)
+
+
+def _refresh_records_cache(
+    collection: str,
+    path: Path,
+    fields: list[str],
+    records: list[dict[str, str]],
+) -> None:
+    """Populate the module cache with the content just written to `path`.
+
+    Called immediately after the atomic replace above, under the caller's
+    _records_file_lock, so this process's view of the file is authoritative
+    right now. Storing the new content (rather than merely invalidating)
+    means the next read for this collection -- often the same request,
+    returning its own write -- skips re-parsing the file it just wrote.
+
+    If the post-write stat can't be trusted (the file vanished, or some
+    other OSError), skip caching entirely rather than caching something
+    stale or guessed: the next reader will just parse fresh, same as
+    before this change existed.
+    """
+    signature = _stat_signature(path)
+    if signature is None:
+        return
+
+    # Project every record to the full field set before caching, so a
+    # cache hit yields exactly what a fresh parse of this file would
+    # yield (same as what was just written: `_project_record` fills any
+    # field missing from a given record with "", matching how
+    # csv.DictWriter/extrasaction wrote that row).
+    cached_records = [_project_record(record, fields) for record in records]
+    id_index = _build_id_index(cached_records)
+    cache_key = str(path.resolve(strict=False))
+    _RECORDS_CACHE[cache_key] = (signature, list(fields), cached_records, id_index)
 
 
 @contextmanager

@@ -20,6 +20,19 @@ from object_versions import DEFAULT_DATA_DIR
 SCHEMAS_DIR = "schemas"
 _FIELD_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 
+# Module-level cache for parsed+normalized manual schemas, keyed by the
+# resolved schema file path. Value is ((mtime_ns, size), normalized_schema).
+# Every caller of get_schema/_load_manual_schema was audited (object_records,
+# object_field_permissions, object_packages, object_server, object_mcp
+# argument-building, and the test suite) and none of them mutate the
+# returned dict -- they only read from it (json.dumps for hashing, `.get`
+# for field lookups, dict/set comprehensions that copy). So cache hits
+# return the cached dict directly rather than paying for a defensive copy;
+# if a future caller starts mutating it, that would need revisiting.
+# Missing files are never cached (see _load_manual_schema): a schema being
+# created later must be picked up on the very next call.
+_SCHEMA_CACHE: dict[str, tuple[tuple[int, int], dict[str, Any]]] = {}
+
 
 class InvalidSchemaNameError(ValueError):
     """Raised when a schema name is not safe for routes or storage."""
@@ -115,6 +128,12 @@ def replace_schema(
                 Path(tmp_name).unlink()
             except FileNotFoundError:
                 pass
+
+    # Explicit invalidate rather than relying solely on the next read's stat
+    # mismatch: mtime_ns has nanosecond resolution on APFS/ext4, but some
+    # filesystems (and clocks) are coarser, so a write that lands in the
+    # same tick as the cached signature could otherwise look unchanged.
+    _SCHEMA_CACHE.pop(str(path.resolve(strict=False)), None)
 
     return normalized
 
@@ -233,12 +252,27 @@ def _load_manual_schema(schema: str, *, base_dir: Path) -> dict[str, Any] | None
     if not path.is_file():
         raise ValueError(f"Schema path is not a file: {schema}")
 
+    cache_key = str(path.resolve(strict=False))
+    try:
+        stat_result = path.stat()
+    except OSError:
+        stat_result = None
+
+    if stat_result is not None:
+        signature = (stat_result.st_mtime_ns, stat_result.st_size)
+        cached = _SCHEMA_CACHE.get(cache_key)
+        if cached is not None and cached[0] == signature:
+            return cached[1]
+
     try:
         payload = json.loads(path.read_text())
     except json.JSONDecodeError as exc:
         raise ValueError(f"Schema file contains invalid JSON: {schema}") from exc
 
-    return _normalize_schema(schema, payload, source="manual")
+    normalized = _normalize_schema(schema, payload, source="manual")
+    if stat_result is not None:
+        _SCHEMA_CACHE[cache_key] = (signature, normalized)
+    return normalized
 
 
 def _derived_schema(schema: str) -> dict[str, Any]:
