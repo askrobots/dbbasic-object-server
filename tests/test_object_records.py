@@ -926,3 +926,209 @@ def test_delete_collection_record_unaffected_by_extra(tmp_path):
     assert removed["id"] == "n1"
 
     assert object_records.list_collection_records("notes", base_dir=data_dir, roots=[])["records"] == []
+
+
+def _cache_key(collection: str, data_dir: Path) -> str:
+    path = object_records.collection_records_file(collection, base_dir=data_dir)
+    return str(path.resolve(strict=False))
+
+
+def test_records_cache_lru_evicts_least_recently_used(tmp_path, monkeypatch):
+    """With capacity 2, reading a third collection must evict the least
+    recently touched one (not necessarily the first-read one), and
+    re-reading the evicted collection must still return correct data via
+    the reparse path."""
+    monkeypatch.setenv("DBBASIC_RECORDS_CACHE_MAX_ENTRIES", "2")
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "coll_a", "id\tname\na1\tAda\n")
+    write_records(data_dir, "coll_b", "id\tname\nb1\tBob\n")
+    write_records(data_dir, "coll_c", "id\tname\nc1\tCleo\n")
+
+    object_records._RECORDS_CACHE.clear()
+    object_records.read_collection_records("coll_a", base_dir=data_dir, roots=[])
+    object_records.read_collection_records("coll_b", base_dir=data_dir, roots=[])
+    # coll_a is now the least-recently-used of {coll_a, coll_b}; reading
+    # coll_c should push the cache over capacity and evict coll_a.
+    object_records.read_collection_records("coll_c", base_dir=data_dir, roots=[])
+
+    keys = set(object_records._RECORDS_CACHE.keys())
+    assert keys == {_cache_key("coll_b", data_dir), _cache_key("coll_c", data_dir)}
+    assert _cache_key("coll_a", data_dir) not in object_records._RECORDS_CACHE
+
+    # Re-reading the evicted collection must still work correctly.
+    result = object_records.read_collection_records("coll_a", base_dir=data_dir, roots=[])
+    assert result == [{"id": "a1", "name": "Ada"}]
+    assert _cache_key("coll_a", data_dir) in object_records._RECORDS_CACHE
+
+
+def test_records_cache_lru_hit_refreshes_recency(tmp_path, monkeypatch):
+    """A cache HIT (not just a store) must count as use: touching coll_a
+    again before reading coll_c should save it from eviction."""
+    monkeypatch.setenv("DBBASIC_RECORDS_CACHE_MAX_ENTRIES", "2")
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "coll_a", "id\tname\na1\tAda\n")
+    write_records(data_dir, "coll_b", "id\tname\nb1\tBob\n")
+    write_records(data_dir, "coll_c", "id\tname\nc1\tCleo\n")
+
+    object_records._RECORDS_CACHE.clear()
+    object_records.read_collection_records("coll_a", base_dir=data_dir, roots=[])
+    object_records.read_collection_records("coll_b", base_dir=data_dir, roots=[])
+    # Touch coll_a again -- it is now the most-recently-used, so coll_b
+    # (untouched since its initial read) should be evicted instead.
+    object_records.read_collection_records("coll_a", base_dir=data_dir, roots=[])
+    object_records.read_collection_records("coll_c", base_dir=data_dir, roots=[])
+
+    keys = set(object_records._RECORDS_CACHE.keys())
+    assert keys == {_cache_key("coll_a", data_dir), _cache_key("coll_c", data_dir)}
+
+
+def test_records_cache_row_threshold_excludes_large_collections(tmp_path, monkeypatch):
+    """A collection parsing to more rows than DBBASIC_RECORDS_CACHE_MAX_ROWS
+    is returned correctly but never stored -- and must not evict a
+    small, hot collection just because it was read once."""
+    monkeypatch.setenv("DBBASIC_RECORDS_CACHE_MAX_ROWS", "10")
+    data_dir = tmp_path / "data"
+    small_rows = "".join(f"s{i}\tName{i}\n" for i in range(5))
+    write_records(data_dir, "small", "id\tname\n" + small_rows)
+    large_rows = "".join(f"l{i}\tName{i}\n" for i in range(20))
+    write_records(data_dir, "large", "id\tname\n" + large_rows)
+
+    object_records._RECORDS_CACHE.clear()
+
+    small_result = object_records.read_collection_records("small", base_dir=data_dir, roots=[])
+    assert len(small_result) == 5
+    assert _cache_key("small", data_dir) in object_records._RECORDS_CACHE
+
+    large_result = object_records.read_collection_records("large", base_dir=data_dir, roots=[])
+    assert len(large_result) == 20
+    assert large_result[0]["id"] == "l0"
+    assert large_result[-1]["id"] == "l19"
+
+    assert _cache_key("large", data_dir) not in object_records._RECORDS_CACHE
+    # The small collection's entry must have survived reading the large one.
+    assert _cache_key("small", data_dir) in object_records._RECORDS_CACHE
+
+
+def test_records_cache_row_threshold_reparses_correctly_every_time(tmp_path, monkeypatch):
+    """A collection over the row threshold is never cached, so repeated
+    reads (and a read after an update) must each reparse from disk and
+    return correct, current data -- not a stale first result."""
+    monkeypatch.setenv("DBBASIC_RECORDS_CACHE_MAX_ROWS", "10")
+    data_dir = tmp_path / "data"
+    large_rows = "".join(f"l{i}\tName{i}\n" for i in range(20))
+    write_records(data_dir, "large", "id\tname\n" + large_rows)
+
+    object_records._RECORDS_CACHE.clear()
+    first = object_records.get_collection_record("large", "l5", base_dir=data_dir, roots=[])
+    assert first["name"] == "Name5"
+    assert _cache_key("large", data_dir) not in object_records._RECORDS_CACHE
+
+    object_records.update_collection_record(
+        "large", "l5", {"name": "Updated"}, base_dir=data_dir, roots=[]
+    )
+    second = object_records.get_collection_record("large", "l5", base_dir=data_dir, roots=[])
+    assert second["name"] == "Updated"
+
+
+def test_list_collection_records_window_copy_and_boundaries(tmp_path):
+    """The pagination window copy path: correct slice, correct total/
+    has_more at both interior and edge offsets, and mutating a returned
+    record must not leak into the cache or a later independent call."""
+    data_dir = tmp_path / "data"
+    rows = "".join(f"r{i}\tName{i}\n" for i in range(10))
+    write_records(data_dir, "items", "id\tname\n" + rows)
+
+    # Warm the cache first.
+    object_records.read_collection_records("items", base_dir=data_dir, roots=[])
+
+    page = object_records.list_collection_records(
+        "items", base_dir=data_dir, roots=[], limit=3, offset=2
+    )
+    assert page["records"] == [
+        {"id": "r2", "name": "Name2"},
+        {"id": "r3", "name": "Name3"},
+        {"id": "r4", "name": "Name4"},
+    ]
+    assert page["total"] == 10
+    assert page["count"] == 3
+    assert page["has_more"] is True
+
+    # Aliasing guard: mutating a returned record must not affect a later,
+    # independent get/list call.
+    page["records"][0]["name"] = "CORRUPTED"
+    page["records"][0]["new_field"] = "also corrupted"
+    again = object_records.get_collection_record("items", "r2", base_dir=data_dir, roots=[])
+    assert again == {"id": "r2", "name": "Name2"}
+    relisted = object_records.list_collection_records(
+        "items", base_dir=data_dir, roots=[], limit=3, offset=2
+    )
+    assert relisted["records"][0] == {"id": "r2", "name": "Name2"}
+
+    # offset beyond the end of the collection.
+    empty_page = object_records.list_collection_records(
+        "items", base_dir=data_dir, roots=[], limit=5, offset=100
+    )
+    assert empty_page == {
+        "collection": "items",
+        "records": [],
+        "count": 0,
+        "total": 10,
+        "limit": 5,
+        "offset": 100,
+        "has_more": False,
+    }
+
+    # limit reaching past the end of the collection.
+    tail_page = object_records.list_collection_records(
+        "items", base_dir=data_dir, roots=[], limit=100, offset=8
+    )
+    assert [record["id"] for record in tail_page["records"]] == ["r8", "r9"]
+    assert tail_page["count"] == 2
+    assert tail_page["total"] == 10
+    assert tail_page["has_more"] is False
+
+
+def test_list_collection_records_warm_copies_bounded_by_window(tmp_path, monkeypatch):
+    """Perf guard for the pagination fix: a warm list with a small limit on
+    a large collection must copy only the window's records, not every row
+    in the collection. Verified precisely (not by timing, which is
+    unreliable on a network share) by shadowing the module's `dict` name
+    and counting calls made while servicing the list request."""
+    data_dir = tmp_path / "data"
+    path = data_dir / "collections" / "big" / "records.tsv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="") as handle:
+        handle.write("id\tname\n")
+        for i in range(50_000):
+            handle.write(f"r{i}\tName{i}\n")
+
+    # Warm the cache with an initial read, outside the counted region.
+    warm = object_records.read_collection_records("big", base_dir=data_dir, roots=[])
+    assert len(warm) == 50_000
+    cache_records = object_records._cached_records_ref("big", base_dir=data_dir)
+    assert len(cache_records) == 50_000
+
+    copy_calls: list[None] = []
+    real_dict = dict
+
+    def counting_dict(*args, **kwargs):
+        copy_calls.append(None)
+        return real_dict(*args, **kwargs)
+
+    monkeypatch.setattr(object_records, "dict", counting_dict, raising=False)
+
+    result = object_records.list_collection_records(
+        "big", base_dir=data_dir, roots=[], limit=10, offset=0
+    )
+
+    assert result["total"] == 50_000
+    assert result["count"] == 10
+    assert len(result["records"]) == 10
+    for i, record in enumerate(result["records"]):
+        assert record == {"id": f"r{i}", "name": f"Name{i}"}
+        # Each returned record is its own copy, never the cache's dict.
+        assert record is not cache_records[i]
+
+    # Exactly one dict() copy per windowed record -- not one per row in
+    # the 50k-row collection.
+    assert len(copy_calls) == 10

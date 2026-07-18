@@ -13,6 +13,7 @@ import math
 import os
 import re
 import threading
+from collections import OrderedDict
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -31,8 +32,38 @@ EXTRA_FIELD = "extra"
 
 _RECORD_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
+# Env knobs for the records cache below. Read at call time (not cached in a
+# module global) via _records_cache_max_entries()/_records_cache_max_rows()
+# so tests can monkeypatch os.environ and see the change take effect on the
+# next cache operation without reimporting the module.
+RECORDS_CACHE_MAX_ENTRIES_ENV = "DBBASIC_RECORDS_CACHE_MAX_ENTRIES"
+RECORDS_CACHE_MAX_ROWS_ENV = "DBBASIC_RECORDS_CACHE_MAX_ROWS"
+_DEFAULT_RECORDS_CACHE_MAX_ENTRIES = 64
+_DEFAULT_RECORDS_CACHE_MAX_ROWS = 500_000
+
 # Module-level cache for parsed records.tsv files, keyed by the resolved
-# file path. Value is (stat_signature, fields, records, id_index):
+# file path. An OrderedDict bounded to DBBASIC_RECORDS_CACHE_MAX_ENTRIES
+# entries (default 64): every cache hit calls move_to_end() so the dict
+# stays ordered oldest-to-newest by use, and storing a new entry evicts the
+# oldest (popitem(last=False)) once the dict exceeds capacity -- see
+# _store_records_cache. Without a bound, a long-running server that touches
+# many collections over its lifetime (e.g. a no-downtime game server) would
+# pin every collection it has ever parsed in RAM forever; the LRU keeps
+# only the most-recently-used entries resident.
+#
+# A second knob, DBBASIC_RECORDS_CACHE_MAX_ROWS (default 500_000), bounds
+# the cache by size rather than recency: a collection whose parse produces
+# more rows than this is still returned to its caller normally, but is
+# never stored in (or left in) the cache. Without this, reading one huge
+# collection once would occupy a full LRU slot and could evict many small,
+# hot collections just to make room for something that will likely never
+# be reused whole. _cache_entry and _refresh_records_cache both apply this
+# threshold before writing to _RECORDS_CACHE; _cache_entry additionally
+# drops any stale entry already cached for a path that has since grown
+# past the threshold, so an oversized collection never lingers there under
+# an old signature.
+#
+# Value is (stat_signature, fields, records, id_index):
 #   - stat_signature = (st_mtime_ns, st_size, st_ino). Every write in this
 #     module goes through an atomic tempfile-then-replace, so a new inode
 #     backs the path after each write; including st_ino means a same-tick
@@ -52,10 +83,45 @@ _RECORD_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 # mutable module state. Nothing in this module may mutate them in place.
 # Every function that hands a record or records list back across the
 # public API must copy first (see _read_collection_records,
-# _read_records_and_fields, get_collection_record). Internal callers that
-# need to build on cached data for a write (create/update/delete) already
-# go through _read_records_and_fields, which copies.
-_RECORDS_CACHE: dict[str, tuple[tuple[int, int, int], list[str], list[dict[str, str]], dict[str, int]]] = {}
+# _read_records_and_fields, get_collection_record, list_collection_records).
+# Internal callers that need to build on cached data for a write
+# (create/update/delete) already go through _read_records_and_fields, which
+# copies.
+#
+# CONCURRENCY (readers hold no lock; writers hold _records_file_lock only
+# around their own read-modify-write): a reader's path is stat -> dict.get
+# -> compare signature -> return (falling through to parse+store on a
+# miss). A writer's path builds a complete new (signature, fields, records,
+# id_index) tuple off to the side and installs it with a single dict
+# assignment (see _store_records_cache). That assignment is one atomic
+# store under the GIL, so a concurrent reader's dict.get() always observes
+# either the entry from before the write or the entry from after it in
+# full -- never a torn mix of old fields with new records, or similar.
+#
+# The only reachable skew is an old signature serving newer content: a
+# reader stats the file (capturing the OLD signature), a writer's replace()
+# lands, and only then does the reader open+parse the file via its own
+# fresh fd. Because replace() is atomic and that fd is opened after the
+# stat, the fd sees either the pre- or post-write content in full, never a
+# mix -- so if it lands on the post-write content, what the reader parses
+# is complete and correct, it's just paired with a signature it captured a
+# moment too early. That mismatch means this parse won't be stored under a
+# key matching what's already cached, so it simply fails every future
+# signature comparison and self-heals with one extra reparse next time
+# (typically immediately, since the writer's own _refresh_records_cache
+# call installs the current signature right after the write completes).
+# The reverse -- a new signature paired with old content -- is structurally
+# impossible: content is always read at or after the stat that produced
+# its signature, never before.
+#
+# Cross-process coherence relies on every writer in this codebase using the
+# same temp-file + atomic-rename pattern, so a fresh inode backs every
+# write (st_ino is part of the signature): this module's own
+# _write_collection_records (below), object_packages.py's package-install
+# writer (~line 1022, os.replace), and object_backup.py's restore writer
+# (~line 607, Path.replace) were all checked and write via a temp path
+# followed by an atomic replace, never an in-place open("w").
+_RECORDS_CACHE: "OrderedDict[str, tuple[tuple[int, int, int], list[str], list[dict[str, str]], dict[str, int]]]" = OrderedDict()
 _INTEGER_TYPES = {"int", "integer"}
 _FLOAT_TYPES = {"float", "number", "currency"}
 _BOOLEAN_TYPES = {"bool", "boolean"}
@@ -99,12 +165,32 @@ def list_collection_records(
     limit: int = DEFAULT_RECORD_LIMIT,
     offset: int = 0,
 ) -> dict[str, Any]:
-    """Return a paginated record list for one collection."""
+    """Return a paginated record list for one collection.
+
+    Copies only the window (records[offset:offset + limit]) rather than
+    the whole collection first: callers of a paginated list only ever
+    consume a small page, and copying every record before slicing it away
+    (the straightforward implementation) dominates cost on large
+    collections for a window that is thrown away 99% copied. `total` is
+    computed from the cache's own record count, not from the copied
+    window.
+    """
     _ensure_collection_known(collection, base_dir=base_dir, roots=roots)
     _validate_page(limit=limit, offset=offset)
 
-    records = read_collection_records(collection, base_dir=base_dir, roots=roots)
-    return collection_records_payload(collection, records, limit=limit, offset=offset)
+    records_ref = _cached_records_ref(collection, base_dir=base_dir)
+    total = len(records_ref)
+    extra_names = _extra_field_names(collection, base_dir=base_dir, roots=roots)
+    # Copy + surface only the window's records: entries in `records_ref`
+    # are the module cache's own dicts (see _RECORDS_CACHE ALIASING
+    # SAFETY above) and _surface_extra mutates its argument in place, so
+    # each must be copied before use -- but only the rows inside the
+    # window, never the rest of the collection.
+    window = [
+        _surface_extra(dict(record), extra_names=extra_names)
+        for record in records_ref[offset:offset + limit]
+    ]
+    return _build_records_payload(collection, window, total=total, limit=limit, offset=offset)
 
 
 def read_collection_records(
@@ -127,10 +213,28 @@ def collection_records_payload(
     limit: int = DEFAULT_RECORD_LIMIT,
     offset: int = 0,
 ) -> dict[str, Any]:
-    """Return the standard paginated record-list payload shape."""
+    """Return the standard paginated record-list payload shape.
+
+    Takes a full records list and slices the window out of it here --
+    unlike list_collection_records, which slices before copying. This
+    public entry point's contract is "you already have the full list";
+    callers (e.g. object_server's search/permission-filtered list paths)
+    rely on that.
+    """
     _validate_page(limit=limit, offset=offset)
     total = len(records)
     window = records[offset:offset + limit]
+    return _build_records_payload(collection, window, total=total, limit=limit, offset=offset)
+
+
+def _build_records_payload(
+    collection: str,
+    window: list[dict[str, str]],
+    *,
+    total: int,
+    limit: int,
+    offset: int,
+) -> dict[str, Any]:
     return {
         "collection": collection,
         "records": window,
@@ -353,13 +457,28 @@ def _ensure_collection_known(
     raise object_collections.CollectionNotFoundError(f"Collection not found: {collection}")
 
 
+def _cached_records_ref(
+    collection: str,
+    *,
+    base_dir: Path | str,
+) -> list[dict[str, str]]:
+    """Return the module cache's own records list for a collection.
+
+    Callers must not mutate the returned list or its dicts in place, and
+    must copy before handing anything derived from it back across the
+    public API -- see the _RECORDS_CACHE ALIASING SAFETY note above.
+    """
+    path = collection_records_file(collection, base_dir=base_dir)
+    _, records, _ = _cache_entry(collection, path)
+    return records
+
+
 def _read_collection_records(
     collection: str,
     *,
     base_dir: Path | str,
 ) -> list[dict[str, str]]:
-    path = collection_records_file(collection, base_dir=base_dir)
-    _, records, _ = _cache_entry(collection, path)
+    records = _cached_records_ref(collection, base_dir=base_dir)
     # Copy: `records` is the module cache's own list of its own dicts.
     return [dict(record) for record in records]
 
@@ -391,17 +510,60 @@ def _build_id_index(records: list[dict[str, str]]) -> dict[str, int]:
     return index
 
 
+def _env_int(name: str, default: int) -> int:
+    """Read an int env var, falling back to `default` when unset or unparseable."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _records_cache_max_entries() -> int:
+    return _env_int(RECORDS_CACHE_MAX_ENTRIES_ENV, _DEFAULT_RECORDS_CACHE_MAX_ENTRIES)
+
+
+def _records_cache_max_rows() -> int:
+    return _env_int(RECORDS_CACHE_MAX_ROWS_ENV, _DEFAULT_RECORDS_CACHE_MAX_ROWS)
+
+
+def _store_records_cache(
+    cache_key: str,
+    signature: tuple[int, int, int],
+    fields: list[str],
+    records: list[dict[str, str]],
+    id_index: dict[str, int],
+) -> None:
+    """Insert/refresh one entry as most-recently-used, then evict over capacity.
+
+    Eviction is pure LRU by entry count: once the dict exceeds
+    DBBASIC_RECORDS_CACHE_MAX_ENTRIES, the oldest (least-recently-used)
+    entries are dropped first via OrderedDict.popitem(last=False).
+    """
+    _RECORDS_CACHE[cache_key] = (signature, fields, records, id_index)
+    _RECORDS_CACHE.move_to_end(cache_key)
+    max_entries = _records_cache_max_entries()
+    while len(_RECORDS_CACHE) > max_entries:
+        _RECORDS_CACHE.popitem(last=False)
+
+
 def _cache_entry(
     collection: str,
     path: Path,
 ) -> tuple[list[str], list[dict[str, str]], dict[str, int]]:
     """Return (fields, records, id_index) for path's current content.
 
-    Serves from the module cache when the file's stat signature matches;
-    otherwise parses fresh and (when the file exists) stores the result for
-    next time. The returned fields/records/id_index are the CACHED objects
-    -- see the _RECORDS_CACHE docstring above. Callers within this module
-    must copy before handing anything back across the public API.
+    Serves from the module cache when the file's stat signature matches
+    (moving the entry to most-recently-used); otherwise parses fresh and,
+    when the file exists and its row count is within
+    DBBASIC_RECORDS_CACHE_MAX_ROWS, stores the result for next time (a
+    collection over that threshold is returned normally but left out of
+    the cache -- see the _RECORDS_CACHE block comment above). The returned
+    fields/records/id_index are the CACHED objects -- see the
+    _RECORDS_CACHE docstring above. Callers within this module must copy
+    before handing anything back across the public API.
     """
     if not path.exists():
         return ["id"], [], {}
@@ -413,12 +575,19 @@ def _cache_entry(
     if signature is not None:
         cached = _RECORDS_CACHE.get(cache_key)
         if cached is not None and cached[0] == signature:
+            _RECORDS_CACHE.move_to_end(cache_key)
             return cached[1], cached[2], cached[3]
 
     fields, records = _parse_records_file(collection, path)
     id_index = _build_id_index(records)
     if signature is not None:
-        _RECORDS_CACHE[cache_key] = (signature, fields, records, id_index)
+        if len(records) <= _records_cache_max_rows():
+            _store_records_cache(cache_key, signature, fields, records, id_index)
+        else:
+            # Too large to cache: don't pin it, and drop any stale entry
+            # left over from before this collection grew past the
+            # threshold, so it doesn't linger under an old signature.
+            _RECORDS_CACHE.pop(cache_key, None)
     return fields, records, id_index
 
 
@@ -528,9 +697,19 @@ def _refresh_records_cache(
     other OSError), skip caching entirely rather than caching something
     stale or guessed: the next reader will just parse fresh, same as
     before this change existed.
+
+    Honors the same DBBASIC_RECORDS_CACHE_MAX_ROWS threshold as
+    _cache_entry: a write that grows a collection past the threshold is
+    not cached (and any stale smaller-collection entry under this key is
+    dropped), so a single giant write can't occupy an LRU slot.
     """
     signature = _stat_signature(path)
     if signature is None:
+        return
+
+    cache_key = str(path.resolve(strict=False))
+    if len(records) > _records_cache_max_rows():
+        _RECORDS_CACHE.pop(cache_key, None)
         return
 
     # Project every record to the full field set before caching, so a
@@ -540,8 +719,7 @@ def _refresh_records_cache(
     # csv.DictWriter/extrasaction wrote that row).
     cached_records = [_project_record(record, fields) for record in records]
     id_index = _build_id_index(cached_records)
-    cache_key = str(path.resolve(strict=False))
-    _RECORDS_CACHE[cache_key] = (signature, list(fields), cached_records, id_index)
+    _store_records_cache(cache_key, signature, list(fields), cached_records, id_index)
 
 
 @contextmanager
