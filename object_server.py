@@ -74,6 +74,7 @@ import object_source
 import object_source_changes
 import object_state
 import object_versions
+import object_worker_pool
 import object_namespace
 from object_namespace import (
     get_base_object_roots,
@@ -308,6 +309,10 @@ class ConcurrencyLimiter:
 _request_limiter = ConcurrencyLimiter()
 _execution_limiter = ConcurrencyLimiter()
 _metrics = RequestMetrics()
+
+_worker_pool: object_worker_pool.WorkerPool | None = None
+_worker_pool_size_used: int = 0
+_worker_pool_lock = asyncio.Lock()
 
 
 async def app(scope: dict[str, Any], receive, send) -> None:
@@ -3644,6 +3649,11 @@ def _admin_capabilities_payload() -> dict[str, Any]:
             "enabled": object_handlers.handlers_enabled(),
             "env": object_handlers.HANDLERS_ENABLED_ENV,
         },
+        "worker_pool": {
+            "enabled": _worker_pool_size() > 0,
+            "size": _worker_pool_size(),
+            "env": object_worker_pool.WORKER_POOL_SIZE_ENV,
+        },
         "identity": {
             "trusted_headers_enabled": _env_enabled(PERMISSION_TRUST_HEADERS_ENV),
             "require_known_identity_users": _env_enabled(REQUIRE_KNOWN_IDENTITY_USERS_ENV),
@@ -5921,10 +5931,17 @@ async def _execute_object_method(
 
     try:
         if timeout_seconds > 0 and not _object_runs_in_process(object_id):
-            result = object_execution.execute_python_object_subprocess(
-                execution_request,
-                timeout_seconds=timeout_seconds,
-            )
+            pool = await _get_worker_pool()
+            if pool is not None:
+                result = await pool.execute(
+                    execution_request,
+                    timeout_seconds=timeout_seconds,
+                )
+            else:
+                result = object_execution.execute_python_object_subprocess(
+                    execution_request,
+                    timeout_seconds=timeout_seconds,
+                )
         else:
             result = object_execution.execute_object(_runtime, execution_request)
         _append_execution_log(result)
@@ -9921,6 +9938,59 @@ def _trusted_in_process_object_ids() -> frozenset[str]:
     return frozenset(part.strip() for part in value.split(",") if part.strip())
 
 
+def _worker_pool_size() -> int:
+    size = _env_int(object_worker_pool.WORKER_POOL_SIZE_ENV, 0)
+    return size if size > 0 else 0
+
+
+async def _get_worker_pool() -> object_worker_pool.WorkerPool | None:
+    """Return the shared warm-worker pool, lazily creating/resizing it.
+
+    Disabled (size <= 0) is the default: returns None and the caller falls
+    back to the existing spawn-per-request path. Reads the size fresh on
+    every call so tests (and, in principle, an operator) can flip the
+    feature by env var without a process restart; a pool already running at
+    a different size is shut down and replaced.
+    """
+    global _worker_pool, _worker_pool_size_used
+
+    size = _worker_pool_size()
+    if size <= 0:
+        if _worker_pool is not None:
+            async with _worker_pool_lock:
+                stale = _worker_pool
+                _worker_pool = None
+                _worker_pool_size_used = 0
+            if stale is not None:
+                await stale.shutdown()
+        return None
+
+    async with _worker_pool_lock:
+        if _worker_pool is None or _worker_pool_size_used != size:
+            stale = _worker_pool
+            _worker_pool = object_worker_pool.WorkerPool(size=size)
+            _worker_pool_size_used = size
+        else:
+            stale = None
+        pool = _worker_pool
+
+    if stale is not None:
+        await stale.shutdown()
+    return pool
+
+
+async def _shutdown_worker_pool() -> None:
+    global _worker_pool, _worker_pool_size_used
+
+    async with _worker_pool_lock:
+        pool = _worker_pool
+        _worker_pool = None
+        _worker_pool_size_used = 0
+
+    if pool is not None:
+        await pool.shutdown()
+
+
 def _rate_limit_dir() -> str:
     return os.path.join(_data_dir(), "ratelimit")
 
@@ -10203,6 +10273,7 @@ async def _handle_lifespan(receive, send) -> None:
         if message["type"] == "lifespan.startup":
             await send({"type": "lifespan.startup.complete"})
         elif message["type"] == "lifespan.shutdown":
+            await _shutdown_worker_pool()
             await send({"type": "lifespan.shutdown.complete"})
             return
 
