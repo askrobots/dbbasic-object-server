@@ -329,7 +329,19 @@ async function run(input) {
     {message: input, model: prefs.ai_model, tools, history: aiHistory.slice(-20),
      system: "You are the shell of this user's object server. Answer in plain terminal text " +
              "with no markdown formatting. Be concise. Use your tools when the question is " +
-             "about the user's records."});
+             "about the user's records. " +
+             "You can also MATERIALIZE PAGES: the views collection turns records into live " +
+             "pages. When the user asks for a page/dashboard/view (or an answer clearly worth " +
+             "keeping as one), create a views record: fields title, layout 'single', " +
+             "owner_id (the user), pinned 'false', is_public 'false', and blocks = a JSON " +
+             "string of a list of block objects. Block kinds: " +
+             "{kind:'count', collection, filters:{field:value}, label, warn_over?} | " +
+             "{kind:'list', collection, filters?, sort?:'newest'|'oldest', title?} | " +
+             "{kind:'form', collection, record_id?} | " +
+             "{kind:'detail', collection, record_id} | " +
+             "{kind:'markdown', text}. " +
+             "After creating it, tell the user the page is at /views/{id} (the record id). " +
+             "Prefer a count block above a list block for status-style pages."});
   finish(out, ok ? body.reply : body.error,
          {err: !ok, tools: ok ? body.tool_calls : null, markdown: ok});
   if (ok) {
