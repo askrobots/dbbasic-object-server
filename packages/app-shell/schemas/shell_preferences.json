@@ -1,7 +1,7 @@
 {
   "name": "shell_preferences",
   "title": "Shell Preferences",
-  "version": 1,
+  "version": 2,
   "description": "Per-user shell settings; the record id is the user id.",
   "fields": [
     {
@@ -20,13 +20,20 @@
       "label": "AI Tools",
       "default": "global_search,list_records,get_record,create_record",
       "help": "Comma-separated MCP tool names offered to the model"
+    },
+    {
+      "name": "voice_enabled",
+      "type": "boolean",
+      "label": "Voice",
+      "default": "false",
+      "help": "Speak AI replies aloud and enable the mic button (/voice toggles)"
     }
   ],
   "forms": {
-    "default": {"fields": ["ai_model", "tools"]}
+    "default": {"fields": ["ai_model", "tools", "voice_enabled"]}
   },
   "views": {
     "list_mode": "table",
-    "list_fields": ["ai_model", "tools"]
+    "list_fields": ["ai_model", "tools", "voice_enabled"]
   }
 }

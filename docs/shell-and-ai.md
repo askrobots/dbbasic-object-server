@@ -10,7 +10,7 @@ flowchart TD
     U["You type"] --> D{"prefix?"}
     D -->|"$ . ^"| REC["Create note / task / link<br/>(records API, your session)"]
     D -->|"~"| SRCH["GET /api/search"]
-    D -->|"/"| CMD["Built-ins: /help /key /model /tools"]
+    D -->|"/"| CMD["Built-ins: /help /key /model /tools /voice"]
     D -->|"anything else"| CHAT["POST /api/ai/chat"]
     CHAT --> PROV["AI provider<br/>(your stored key)"]
     PROV -->|"tool calls"| MCP["MCP tool subset<br/>dispatched with YOUR credentials"]
@@ -94,6 +94,52 @@ methods the code actually exposes, so the model can self-correct.
 Object writes ride the admin gate (an admin-role session today), and
 source writes require `DBBASIC_ENABLE_SOURCE_WRITES=true` — the same
 boundaries that govern humans.
+
+## Voice
+
+The shell doubles as a push-to-talk terminal. Both halves are browser-native
+where possible, server-assisted where the browser falls short:
+
+- **Speech in**: the mic button uses `window.SpeechRecognition` (or the
+  `webkit` prefix); interim words show live in the input, and the final
+  transcript submits through the same form-submit path a typed line does —
+  no separate send code. Neither Chrome nor Safari expose the API outside a
+  secure context (`https://` or `localhost`), and without it the button
+  simply stays hidden.
+- **Speech out**: with voice mode on, the shell POSTs each assistant reply
+  (markdown and code fences stripped first — only prose is spoken, never
+  tool-call noise) to `POST /api/tts` and plays the returned WAV. If that
+  endpoint is disabled, has no engine, or the request fails for any reason,
+  the browser's own `speechSynthesis.speak` says the line instead, so voice
+  mode never goes silent because of a server-side gap.
+
+`/voice`, `/voice on`, `/voice off` toggle it inline (mirrors `/model`); the
+setting persists on `shell_preferences.voice_enabled` and is honored on
+page load like `ai_model` and `tools`.
+
+### `POST /api/tts`
+
+```http
+POST /api/tts
+Authorization: Bearer <session-token>   (or the session cookie)
+
+{"text": "one note matches", "voice": "en-us"}
+```
+
+Response: `audio/wav` bytes, or the usual `{"status": "error", "error"}`
+JSON shape on failure. Requires `DBBASIC_ENABLE_TTS=true` (off by default)
+and a signed-in session — same posture as `/api/ai/chat`. `text` is capped
+at 800 characters (413 beyond that).
+
+The engine is discovered at call time, first match wins: `espeak-ng`,
+`espeak`, then macOS `say` (development convenience — `say` writes AIFF and
+the also-stock `afconvert` turns it into WAV; if `afconvert` isn't present
+the endpoint returns 501 rather than growing a bespoke audio pipeline). No
+engine on `PATH` at all is a 503 with a clear message. Successful audio is
+cached at `data/tts-cache/{sha256(engine|voice|text)}.wav` — a repeat of
+the same line is a cache read, not a re-synthesis. There's no eviction in
+v1; operators who want a bound should prune that directory on their own
+schedule.
 
 ## The Instant Commands
 

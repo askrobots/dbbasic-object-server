@@ -28,6 +28,10 @@ _STYLE = """
 form#prompt { display: flex; gap: 0.5rem; border-top: 1px solid var(--line);
               padding-top: 0.75rem; }
 form#prompt input { flex: 1; font-family: var(--font-mono); }
+#mic { font-family: var(--font-mono); font-size: 0.78rem; color: var(--muted);
+       background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-sm);
+       padding: 0 0.7rem; cursor: pointer; }
+#mic.listening { color: var(--danger); border-color: var(--danger); }
 /* Rendered-markdown AI output (theme-tokened) */
 .entry .out.md { white-space: normal; }
 .entry .out.md p { margin: 0.35rem 0; }
@@ -51,6 +55,7 @@ _HELP = (
     "/keys        which services have keys\\n"
     "/model x     set AI model (service:model)\\n"
     "/tools a,b   set AI tool subset\\n"
+    "/voice [on|off]   toggle spoken replies + mic input\\n"
     "/help        this text\\n"
     "anything else goes to the AI with your tools"
 )
@@ -60,8 +65,11 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 const log = document.getElementById("log");
 let prefs = {id: OWNER_ID, ai_model: "anthropic:claude-haiku-4-5",
-             tools: "global_search,list_records,get_record,create_record"};
+             tools: "global_search,list_records,get_record,create_record",
+             voice_enabled: "false"};
 let aiHistory = [];
+const TTS_MAX_CHARS = 800;
+const voiceOn = () => prefs.voice_enabled === "true";
 
 function entry(input) {
   const div = document.createElement("div");
@@ -89,6 +97,99 @@ function finish(out, text, {err = false, tools = null, markdown = false} = {}) {
     out.parentNode.insertBefore(info, out);
   }
   log.scrollTop = log.scrollHeight;
+}
+
+// Strip markdown down to sentences worth speaking: fenced/inline code and
+// tool noise never reach TTS, only the assistant's prose does.
+function stripForSpeech(text) {
+  return String(text ?? "")
+    .replace(/```[\\s\\S]*?```/g, " ")
+    .replace(/`[^`]*`/g, " ")
+    .replace(/!\\[[^\\]]*\\]\\([^)]*\\)/g, " ")
+    .replace(/\\[([^\\]]*)\\]\\([^)]*\\)/g, "$1")
+    .replace(/[*_#>~]/g, " ")
+    .replace(/\\s+/g, " ")
+    .trim()
+    .slice(0, TTS_MAX_CHARS);
+}
+
+let currentAudio = null;
+
+// Speak one assistant reply. Server TTS first (POST /api/tts, played as an
+// object URL); any failure -- flag off, no engine, network -- falls back to
+// the browser's own speechSynthesis so voice mode never just goes silent.
+async function speak(text) {
+  const spoken = stripForSpeech(text);
+  if (!spoken) return;
+  try {
+    const res = await fetch("/api/tts", {
+      method: "POST", credentials: "same-origin",
+      headers: {"content-type": "application/json", accept: "audio/wav"},
+      body: JSON.stringify({text: spoken}),
+    });
+    if (!res.ok) throw new Error("tts endpoint failed");
+    const url = URL.createObjectURL(await res.blob());
+    if (currentAudio) currentAudio.pause();
+    currentAudio = new Audio(url);
+    currentAudio.addEventListener("ended", () => URL.revokeObjectURL(url));
+    await currentAudio.play();
+  } catch (e) {
+    if (window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(new SpeechSynthesisUtterance(spoken));
+    }
+  }
+}
+
+// Push-to-talk mic. Absent the browser API the button stays hidden -- no
+// polyfills, no fallback recorder, voice input just isn't offered.
+const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recognizer = null;
+let listening = false;
+
+function stopListening() {
+  listening = false;
+  const mic = document.getElementById("mic");
+  if (mic) { mic.classList.remove("listening"); mic.textContent = "mic"; }
+  if (recognizer) { try { recognizer.stop(); } catch (e) { /* already stopped */ } }
+}
+
+function startListening() {
+  const input = document.querySelector('#prompt input[name="line"]');
+  if (!recognizer || listening || !input) return;
+  listening = true;
+  const mic = document.getElementById("mic");
+  if (mic) { mic.classList.add("listening"); mic.textContent = "listening"; }
+  input.value = "";
+  try { recognizer.start(); } catch (e) { stopListening(); }
+}
+
+function initMic() {
+  const mic = document.getElementById("mic");
+  if (!SpeechRecognitionCtor || !mic) return;
+  mic.hidden = false;
+  recognizer = new SpeechRecognitionCtor();
+  recognizer.continuous = false;
+  recognizer.interimResults = true;
+  recognizer.lang = "en-US";
+
+  recognizer.onresult = (event) => {
+    const input = document.querySelector('#prompt input[name="line"]');
+    if (!input) return;
+    let text = "";
+    for (let i = 0; i < event.results.length; i++) text += event.results[i][0].transcript;
+    input.value = text;
+    if (event.results[event.results.length - 1].isFinal) {
+      stopListening();
+      // Final transcript goes through the *existing* submit path unchanged.
+      const form = document.getElementById("prompt");
+      if (input.value.trim() && form.requestSubmit) form.requestSubmit();
+    }
+  };
+  recognizer.onerror = () => stopListening();
+  recognizer.onend = () => stopListening();
+
+  mic.addEventListener("click", () => (listening ? stopListening() : startListening()));
 }
 
 async function api(method, path, payload) {
@@ -209,6 +310,15 @@ async function run(input) {
       finish(out, `tools set to ${prefs.tools}`);
       return;
     }
+    if (cmd === "voice") {
+      const arg = (rest[0] || "").toLowerCase();
+      const next = arg === "on" ? "true" : arg === "off" ? "false" : voiceOn() ? "false" : "true";
+      await savePrefs({voice_enabled: next});
+      if (next !== "true" && currentAudio) currentAudio.pause();
+      if (next !== "true" && window.speechSynthesis) window.speechSynthesis.cancel();
+      finish(out, `voice ${next === "true" ? "on" : "off"}`);
+      return;
+    }
     if (cmd === "time") { finish(out, new Date().toString()); return; }
     finish(out, "unknown command; /help", {err: true});
     return;
@@ -225,6 +335,8 @@ async function run(input) {
   if (ok) {
     aiHistory.push({role: "user", content: input});
     aiHistory.push({role: "assistant", content: body.reply});
+    // Only the final assistant text is ever spoken -- never tool-call noise.
+    if (voiceOn()) speak(body.reply);
   }
   record(input, ok ? body.reply : body.error, "ai");
 }
@@ -237,6 +349,7 @@ document.getElementById("prompt").addEventListener("submit", (event) => {
   box.value = "";
   run(input);
 });
+initMic();
 loadPrefs();
 loadHistory();
 </script>
@@ -256,6 +369,7 @@ def GET(request):
 <div id="log"><div class="entry"><div class="out">type /help for commands, or just talk</div></div></div>
 <form id="prompt" autocomplete="off">
 <input name="line" placeholder="&gt;_" autofocus>
+<button type="button" id="mic" hidden aria-label="voice input">mic</button>
 </form>
 """
         script = (

@@ -68,6 +68,7 @@ import object_realtime
 import object_schemas
 import object_search
 import object_service_keys
+import object_tts
 import object_user_files
 import object_site_routes
 import object_source
@@ -595,6 +596,10 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
 
         if path == http_api_contract.AI_CHAT_PATH:
             await _handle_ai_chat(send, method, body, headers)
+            return
+
+        if path == http_api_contract.TTS_PATH:
+            await _handle_tts(send, method, body, headers)
             return
 
         schema_meta_prefix = f"{http_api_contract.SCHEMA_META_PATH}/"
@@ -6663,6 +6668,92 @@ def _env_float(name: str, default: float) -> float:
     except ValueError:
         return default
     return value if value > 0 else default
+
+
+TTS_ENABLED_ENV = "DBBASIC_ENABLE_TTS"
+TTS_MAX_CHARS = 800
+
+
+async def _handle_tts(
+    send,
+    method: str,
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    """Speak one line of text through whatever engine is installed.
+
+    Mirrors _handle_ai_chat's gating exactly: a feature flag first (off by
+    default), then a signed-in session, then the same cross-origin cookie
+    check every authenticated POST here uses. Successful audio is cached
+    to disk (object_tts.cache_path) so a repeated line costs one
+    synthesis, not one per request.
+    """
+    if method != "POST":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    if not _env_enabled(TTS_ENABLED_ENV):
+        await _send_json(
+            send,
+            {"status": "error", "error": f"TTS is disabled. Set {TTS_ENABLED_ENV}=true."},
+            status=403,
+        )
+        return
+
+    session = _current_identity_session(headers)
+    if session is None:
+        await _send_json(
+            send, {"status": "error", "error": "TTS requires a signed-in session."}, status=401
+        )
+        return
+
+    cookie_token = _session_cookie_token(headers)
+    if cookie_token and not _authorization_token(headers) and not _cookie_request_origin_allowed(headers):
+        await _send_json(
+            send,
+            {"status": "error", "error": "Cross-origin cookie writes are not allowed."},
+            status=403,
+        )
+        return
+
+    try:
+        payload = _parse_json_body(body)
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    text = payload.get("text")
+    if not isinstance(text, str) or not text.strip():
+        await _send_json(send, {"status": "error", "error": "text is required"}, status=400)
+        return
+    if len(text) > TTS_MAX_CHARS:
+        await _send_json(
+            send,
+            {"status": "error", "error": f"text exceeds {TTS_MAX_CHARS} characters"},
+            status=413,
+        )
+        return
+
+    voice = payload.get("voice")
+    if voice is not None and not isinstance(voice, str):
+        await _send_json(send, {"status": "error", "error": "voice must be a string"}, status=400)
+        return
+
+    try:
+        audio, _from_cache = await asyncio.to_thread(
+            object_tts.synthesize, text, voice, base_dir=_data_dir()
+        )
+    except object_tts.TTSEngineNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=503)
+        return
+    except object_tts.TTSNotSupportedError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=501)
+        return
+    except object_tts.TTSSynthesisError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=502)
+        return
+
+    await _send_bytes(send, audio, content_type="audio/wav")
 
 
 async def _handle_search(
