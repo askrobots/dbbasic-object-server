@@ -1,5 +1,6 @@
 import csv
 import json
+import random
 from pathlib import Path
 from uuid import UUID
 
@@ -7,6 +8,7 @@ import pytest
 
 import object_collections
 import object_records
+import object_schemas
 
 
 def write_source(path: Path, content: str = "def GET(request):\n    return {}\n") -> Path:
@@ -1132,3 +1134,470 @@ def test_list_collection_records_warm_copies_bounded_by_window(tmp_path, monkeyp
     # Exactly one dict() copy per windowed record -- not one per row in
     # the 50k-row collection.
     assert len(copy_calls) == 10
+
+
+# --- Append-only storage (docs/append-only-storage-design.md) ---
+
+
+def write_append_schema(data_dir: Path, collection: str, fields: list[dict] | None = None) -> Path:
+    """Like write_schema, but opts the collection into append storage."""
+    path = data_dir / "schemas" / f"{collection}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"fields": fields or [{"name": "id"}], "storage": "append"})
+    )
+    return path
+
+
+def test_op_field_is_rejected_in_user_payloads(tmp_path):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "widgets", "id\tname\n")
+
+    with pytest.raises(object_records.InvalidRecordPayloadError, match="reserved"):
+        object_records.create_collection_record(
+            "widgets", {"id": "w1", "name": "Gadget", "_op": "del"}, base_dir=data_dir, roots=[]
+        )
+
+
+def test_schema_field_named_op_is_rejected(tmp_path):
+    with pytest.raises(ValueError, match="reserved"):
+        object_schemas.normalize_schema("widgets", {"fields": [{"name": "_op"}]})
+
+
+def test_schema_storage_key_rejects_invalid_values(tmp_path):
+    with pytest.raises(ValueError, match="storage"):
+        object_schemas.normalize_schema("widgets", {"fields": [], "storage": "bogus"})
+
+
+def test_schema_storage_key_survives_normalization(tmp_path):
+    normalized = object_schemas.normalize_schema(
+        "widgets", {"fields": [{"name": "id"}], "storage": "append"}
+    )
+    assert normalized["storage"] == "append"
+
+    # Absent by default -- byte-identical to a schema that never mentions
+    # storage (see the classic-mode-untouched test below).
+    classic = object_schemas.normalize_schema("widgets", {"fields": [{"name": "id"}]})
+    assert "storage" not in classic
+
+
+def test_classic_mode_is_byte_identical_to_before_append_storage_existed(tmp_path):
+    """A collection with no `storage` key must write records.tsv exactly
+    as it always has -- no `_op` column, no folding, no torn-tail
+    tolerance. This is the opt-in guarantee: default/absent means
+    unchanged behavior."""
+    data_dir = tmp_path / "data"
+    write_schema(data_dir, "contacts", [{"name": "id"}, {"name": "name"}])
+
+    object_records.create_collection_record(
+        "contacts", {"id": "c1", "name": "Ada"}, base_dir=data_dir, roots=[]
+    )
+    object_records.create_collection_record(
+        "contacts", {"id": "c2", "name": "Grace"}, base_dir=data_dir, roots=[]
+    )
+    object_records.update_collection_record(
+        "contacts", "c1", {"name": "Ada Lovelace"}, base_dir=data_dir, roots=[]
+    )
+    object_records.delete_collection_record("contacts", "c2", base_dir=data_dir, roots=[])
+
+    path = data_dir / "collections" / "contacts" / "records.tsv"
+    assert path.read_text() == "id\tname\nc1\tAda Lovelace\n"
+    assert "_op" not in path.read_text().splitlines()[0].split("\t")
+
+
+def test_append_mode_create_update_delete_use_op_column(tmp_path):
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    path = data_dir / "collections" / "widgets" / "records.tsv"
+
+    object_records.create_collection_record(
+        "widgets", {"id": "w1", "name": "Alpha"}, base_dir=data_dir, roots=[]
+    )
+    object_records.create_collection_record(
+        "widgets", {"id": "w2", "name": "Beta"}, base_dir=data_dir, roots=[]
+    )
+    with path.open(newline="") as handle:
+        rows = list(csv.reader(handle, delimiter="\t"))
+    assert rows[0] == ["_op", "id", "name"]
+    assert rows[1] == ["", "w1", "Alpha"]
+    assert rows[2] == ["", "w2", "Beta"]
+
+    object_records.update_collection_record(
+        "widgets", "w1", {"name": "Alpha2"}, base_dir=data_dir, roots=[]
+    )
+    with path.open(newline="") as handle:
+        rows = list(csv.reader(handle, delimiter="\t"))
+    # update appends a superseding row rather than rewriting in place.
+    assert len(rows) == 4
+    assert rows[3] == ["", "w1", "Alpha2"]
+
+    removed = object_records.delete_collection_record("widgets", "w2", base_dir=data_dir, roots=[])
+    assert removed == {"id": "w2", "name": "Beta"}
+    with path.open(newline="") as handle:
+        rows = list(csv.reader(handle, delimiter="\t"))
+    # Tombstone visible in the raw file, pre-compaction: obvious in a cat.
+    assert rows[4] == ["del", "w2", ""]
+
+    with pytest.raises(object_records.RecordNotFoundError):
+        object_records.delete_collection_record("widgets", "w2", base_dir=data_dir, roots=[])
+
+    listing = object_records.list_collection_records("widgets", base_dir=data_dir, roots=[])["records"]
+    assert listing == [{"id": "w1", "name": "Alpha2"}]
+
+
+def test_append_mode_resurrection_after_delete(tmp_path):
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+
+    object_records.create_collection_record(
+        "widgets", {"id": "w1", "name": "one"}, base_dir=data_dir, roots=[]
+    )
+    object_records.delete_collection_record("widgets", "w1", base_dir=data_dir, roots=[])
+
+    with pytest.raises(object_records.RecordNotFoundError):
+        object_records.get_collection_record("widgets", "w1", base_dir=data_dir, roots=[])
+
+    resurrected = object_records.create_collection_record(
+        "widgets", {"id": "w1", "name": "reborn"}, base_dir=data_dir, roots=[]
+    )
+    assert resurrected == {"id": "w1", "name": "reborn"}
+    assert object_records.get_collection_record(
+        "widgets", "w1", base_dir=data_dir, roots=[]
+    ) == {"id": "w1", "name": "reborn"}
+
+
+def test_append_mode_transition_on_next_write_adds_op_column(tmp_path):
+    """Switching a classic collection to storage:append doesn't touch the
+    file until the collection's next write, which performs one final
+    classic-shaped rewrite that adds the `_op` header column (existing
+    rows get "")."""
+    data_dir = tmp_path / "data"
+    schema_path = write_schema(data_dir, "notes", [{"name": "id"}, {"name": "title"}])
+    object_records.create_collection_record(
+        "notes", {"id": "n1", "title": "one"}, base_dir=data_dir, roots=[]
+    )
+    object_records.create_collection_record(
+        "notes", {"id": "n2", "title": "two"}, base_dir=data_dir, roots=[]
+    )
+    path = data_dir / "collections" / "notes" / "records.tsv"
+    assert path.read_text() == "id\ttitle\nn1\tone\nn2\ttwo\n"
+
+    # Opt in -- the file on disk does not change yet, only the schema does.
+    schema_path.write_text(
+        json.dumps({"fields": [{"name": "id"}, {"name": "title"}], "storage": "append"})
+    )
+    assert path.read_text() == "id\ttitle\nn1\tone\nn2\ttwo\n"
+
+    updated = object_records.update_collection_record(
+        "notes", "n1", {"title": "one-updated"}, base_dir=data_dir, roots=[]
+    )
+    assert updated == {"id": "n1", "title": "one-updated"}
+
+    with path.open(newline="") as handle:
+        rows = list(csv.reader(handle, delimiter="\t"))
+    assert rows[0] == ["_op", "id", "title"]
+    assert rows[1] == ["", "n1", "one-updated"]
+    assert rows[2] == ["", "n2", "two"]
+    assert len(rows) == 3
+
+
+def test_append_mode_switch_back_compacts_to_classic_form(tmp_path):
+    """Removing storage:append causes the collection's next write to fold
+    current content and drop the `_op` column -- byte-compatible with a
+    classic file (docs/append-only-storage-design.md Migration and
+    Compatibility: "A compacted append-only file is byte-compatible with
+    a classic one")."""
+    data_dir = tmp_path / "data"
+    schema_path = write_append_schema(data_dir, "notes", [{"name": "id"}, {"name": "title"}])
+    object_records.create_collection_record(
+        "notes", {"id": "n1", "title": "one"}, base_dir=data_dir, roots=[]
+    )
+    object_records.update_collection_record(
+        "notes", "n1", {"title": "one-updated"}, base_dir=data_dir, roots=[]
+    )
+    object_records.create_collection_record(
+        "notes", {"id": "n2", "title": "two"}, base_dir=data_dir, roots=[]
+    )
+    path = data_dir / "collections" / "notes" / "records.tsv"
+    with path.open(newline="") as handle:
+        rows_before = list(csv.reader(handle, delimiter="\t"))
+    assert rows_before[0][0] == "_op"
+    assert len(rows_before) == 4  # header + 3 physical rows (1 superseded)
+
+    # Opt back out.
+    schema_path.write_text(
+        json.dumps({"fields": [{"name": "id"}, {"name": "title"}]})
+    )
+    object_records.update_collection_record(
+        "notes", "n2", {"title": "two-updated"}, base_dir=data_dir, roots=[]
+    )
+
+    assert path.read_text() == "id\ttitle\nn1\tone-updated\nn2\ttwo-updated\n"
+
+
+def test_append_mode_new_field_falls_back_to_full_rewrite_and_extends_header(tmp_path):
+    """Append cannot extend an existing physical header: a write that
+    introduces a field the current header doesn't have must fall back to
+    a full rewrite that folds current content and adds the column -- the
+    new value must not be lost."""
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    object_records.create_collection_record(
+        "widgets", {"id": "w1", "name": "Alpha"}, base_dir=data_dir, roots=[]
+    )
+    object_records.create_collection_record(
+        "widgets", {"id": "w2", "name": "Beta"}, base_dir=data_dir, roots=[]
+    )
+    path = data_dir / "collections" / "widgets" / "records.tsv"
+    with path.open(newline="") as handle:
+        header_before = next(csv.reader(handle, delimiter="\t"))
+    assert "color" not in header_before
+
+    updated = object_records.update_collection_record(
+        "widgets", "w1", {"color": "red"}, base_dir=data_dir, roots=[]
+    )
+    assert updated == {"id": "w1", "name": "Alpha", "color": "red"}
+
+    with path.open(newline="") as handle:
+        rows = list(csv.reader(handle, delimiter="\t"))
+    assert rows[0] == ["_op", "id", "name", "color"]
+    assert "color" in rows[0]
+
+    fetched = object_records.get_collection_record("widgets", "w1", base_dir=data_dir, roots=[])
+    assert fetched["color"] == "red"
+    listing = object_records.list_collection_records("widgets", base_dir=data_dir, roots=[])["records"]
+    assert {r["id"]: r["color"] for r in listing} == {"w1": "red", "w2": ""}
+
+
+def test_compact_collection_removes_superseded_and_tombstoned_rows(tmp_path):
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    object_records.create_collection_record(
+        "widgets", {"id": "w1", "name": "Alpha"}, base_dir=data_dir, roots=[]
+    )
+    object_records.create_collection_record(
+        "widgets", {"id": "w2", "name": "Beta"}, base_dir=data_dir, roots=[]
+    )
+    object_records.update_collection_record(
+        "widgets", "w1", {"name": "Alpha2"}, base_dir=data_dir, roots=[]
+    )
+    object_records.update_collection_record(
+        "widgets", "w1", {"name": "Alpha3"}, base_dir=data_dir, roots=[]
+    )
+    object_records.delete_collection_record("widgets", "w2", base_dir=data_dir, roots=[])
+
+    path = data_dir / "collections" / "widgets" / "records.tsv"
+    raw_before = path.read_text()
+    assert "del" in raw_before  # tombstone present pre-compaction
+
+    result = object_records.compact_collection("widgets", base_dir=data_dir, roots=[])
+    assert result["rows_before"] == 5
+    assert result["rows_after"] == 1
+    assert result["bytes_after"] < result["bytes_before"]
+
+    raw_after = path.read_text()
+    assert "del" not in raw_after
+    assert raw_after == "_op\tid\tname\n\tw1\tAlpha3\n"
+
+    # Data is unaffected by compaction.
+    listing = object_records.list_collection_records("widgets", base_dir=data_dir, roots=[])["records"]
+    assert listing == [{"id": "w1", "name": "Alpha3"}]
+
+
+def test_compact_collection_is_a_reported_no_op_for_classic_collections(tmp_path):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+
+    result = object_records.compact_collection("contacts", base_dir=data_dir, roots=[])
+    assert result == {"rows_before": 1, "rows_after": 1, "bytes_before": result["bytes_before"], "bytes_after": result["bytes_before"]}
+    assert (data_dir / "collections" / "contacts" / "records.tsv").read_text() == "id\tname\nc1\tAda\n"
+
+
+def test_append_mode_auto_compact_triggers_on_next_write_past_threshold(tmp_path, monkeypatch):
+    """When a cold parse observes physical rows past the (monkeypatched
+    small) threshold, with superseded+deleted rows outnumbering live
+    rows, it flags the collection -- but performs no write itself (reads
+    stay read-only). The collection's NEXT write then compacts instead of
+    appending."""
+    monkeypatch.setenv("DBBASIC_APPEND_COMPACT_MIN_ROWS", "5")
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "churn", [{"name": "id"}, {"name": "value"}])
+
+    object_records.create_collection_record(
+        "churn", {"id": "c1", "value": "v0"}, base_dir=data_dir, roots=[]
+    )
+    for i in range(10):
+        object_records.update_collection_record(
+            "churn", "c1", {"value": f"v{i}"}, base_dir=data_dir, roots=[]
+        )
+
+    path = data_dir / "collections" / "churn" / "records.tsv"
+    physical_rows_before = len(path.read_text().splitlines()) - 1
+    assert physical_rows_before > 5
+
+    cache_key = str(object_records.collection_records_file("churn", base_dir=data_dir).resolve())
+
+    # Force a cold parse (simulating cache eviction / a fresh process) --
+    # a pure read.
+    object_records._RECORDS_CACHE.clear()
+    before_stat = path.stat()
+    object_records.get_collection_record("churn", "c1", base_dir=data_dir, roots=[])
+    after_stat = path.stat()
+    assert before_stat.st_mtime_ns == after_stat.st_mtime_ns
+    assert before_stat.st_size == after_stat.st_size
+    assert cache_key in object_records._PENDING_COMPACTION
+
+    object_records.update_collection_record(
+        "churn", "c1", {"value": "final"}, base_dir=data_dir, roots=[]
+    )
+    physical_rows_after = len(path.read_text().splitlines()) - 1
+    assert physical_rows_after == 1
+    assert cache_key not in object_records._PENDING_COMPACTION
+
+    listing = object_records.list_collection_records("churn", base_dir=data_dir, roots=[])["records"]
+    assert listing == [{"id": "c1", "value": "final"}]
+
+
+def test_append_mode_torn_tail_is_ignored_and_self_heals(tmp_path):
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "logs", [{"name": "id"}, {"name": "value"}])
+    object_records.create_collection_record(
+        "logs", {"id": "l1", "value": "one"}, base_dir=data_dir, roots=[]
+    )
+    object_records.create_collection_record(
+        "logs", {"id": "l2", "value": "two"}, base_dir=data_dir, roots=[]
+    )
+    path = data_dir / "collections" / "logs" / "records.tsv"
+    full_text = path.read_text()
+
+    # Simulate a crash mid-write: chop off the last few bytes of the file,
+    # tearing the final row (no trailing newline).
+    path.write_text(full_text[:-4])
+    assert not path.read_text().endswith("\n")
+
+    object_records._RECORDS_CACHE.clear()
+    before_stat = path.stat()
+    listing = object_records.list_collection_records("logs", base_dir=data_dir, roots=[])["records"]
+    after_stat = path.stat()
+
+    # Read succeeds, ignoring the torn fragment -- and never writes.
+    assert listing == [{"id": "l1", "value": "one"}]
+    assert before_stat.st_mtime_ns == after_stat.st_mtime_ns
+    assert before_stat.st_size == after_stat.st_size
+
+    # The next write self-heals: the fragment is truncated away (not
+    # resurrected), and a fresh, well-formed row is appended after it.
+    object_records.create_collection_record(
+        "logs", {"id": "l3", "value": "three"}, base_dir=data_dir, roots=[]
+    )
+    assert path.read_text().endswith("\n")
+
+    # Subsequent reads are clean -- the fragment never reappears.
+    object_records._RECORDS_CACHE.clear()
+    listing_after_heal = object_records.list_collection_records(
+        "logs", base_dir=data_dir, roots=[]
+    )["records"]
+    assert listing_after_heal == [
+        {"id": "l1", "value": "one"},
+        {"id": "l3", "value": "three"},
+    ]
+
+
+def test_append_mode_cache_refreshes_on_same_inode_append(tmp_path):
+    """Unlike a classic full rewrite (always a fresh inode via atomic
+    replace), a fast append mutates the SAME inode in place. The cache
+    must still detect and correctly refresh on this change (only size/
+    mtime move) -- verified here by asserting the inode is unchanged
+    across the write while a subsequent cache-hit read returns fresh
+    data, not stale data from the pre-append signature."""
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    object_records.create_collection_record(
+        "widgets", {"id": "w1", "name": "Alpha"}, base_dir=data_dir, roots=[]
+    )
+    path = data_dir / "collections" / "widgets" / "records.tsv"
+    inode_before = path.stat().st_ino
+
+    object_records.update_collection_record(
+        "widgets", "w1", {"name": "Alpha2"}, base_dir=data_dir, roots=[]
+    )
+    inode_after = path.stat().st_ino
+    assert inode_after == inode_before  # same inode: a fast append, not a rewrite
+
+    # A cache HIT (no reparse) must still return the fresh value.
+    cache_key = str(path.resolve())
+    signature, _, cached_records, _ = object_records._RECORDS_CACHE[cache_key]
+    assert signature == object_records._stat_signature(path)
+    assert cached_records == [{"id": "w1", "name": "Alpha2"}]
+
+    fetched = object_records.get_collection_record("widgets", "w1", base_dir=data_dir, roots=[])
+    assert fetched == {"id": "w1", "name": "Alpha2"}
+
+
+def test_append_mode_equivalent_to_classic_mode_across_random_operations(tmp_path):
+    """THE EQUIVALENCE PROPERTY. An identical, seeded, randomized sequence
+    of create/update/delete/get/list operations run against a classic
+    collection and an append-mode collection (same schema otherwise) must
+    produce API-visible-identical results after EVERY single operation:
+    same returned records, same exception types, same list contents (see
+    _fold_append_rows for why order matches classic exactly), same
+    totals. Deterministic seed, no wall-clock dependence -- every value
+    written is derived from the loop counter, never wall-clock time.
+    """
+    classic_dir = tmp_path / "classic"
+    append_dir = tmp_path / "append"
+    write_schema(classic_dir, "items", [{"name": "id"}, {"name": "value"}])
+    write_append_schema(append_dir, "items", [{"name": "id"}, {"name": "value"}])
+
+    def apply(data_dir, kind, record_id, payload):
+        try:
+            if kind == "create":
+                return ("ok", object_records.create_collection_record(
+                    "items", {"id": record_id, "value": payload}, base_dir=data_dir, roots=[]
+                ))
+            if kind == "update":
+                return ("ok", object_records.update_collection_record(
+                    "items", record_id, {"value": payload}, base_dir=data_dir, roots=[]
+                ))
+            if kind == "delete":
+                return ("ok", object_records.delete_collection_record(
+                    "items", record_id, base_dir=data_dir, roots=[]
+                ))
+            if kind == "get":
+                return ("ok", object_records.get_collection_record(
+                    "items", record_id, base_dir=data_dir, roots=[]
+                ))
+            return ("ok", object_records.list_collection_records(
+                "items", base_dir=data_dir, roots=[]
+            ))
+        except Exception as exc:  # noqa: BLE001 -- comparing exception SHAPES across both runs
+            return ("error", type(exc), str(exc))
+
+    rng = random.Random(20260718)
+    id_pool = [f"e{i}" for i in range(12)]
+
+    for step in range(200):
+        kind = rng.choice(["create", "update", "delete", "get", "list"])
+        record_id = rng.choice(id_pool)
+        payload = f"v{step}"
+
+        classic_outcome = apply(classic_dir, kind, record_id, payload)
+        append_outcome = apply(append_dir, kind, record_id, payload)
+
+        assert classic_outcome == append_outcome, (
+            f"step {step} op={kind!r} id={record_id!r}: "
+            f"classic={classic_outcome!r} append={append_outcome!r}"
+        )
+
+    # Independent final-state cross-check, beyond the per-step comparisons.
+    classic_listing = object_records.list_collection_records("items", base_dir=classic_dir, roots=[])
+    append_listing = object_records.list_collection_records("items", base_dir=append_dir, roots=[])
+    assert classic_listing == append_listing
+
+    # And a full compaction on the append side must not change what it
+    # reports afterward, either.
+    object_records.compact_collection("items", base_dir=append_dir, roots=[])
+    append_listing_after_compact = object_records.list_collection_records(
+        "items", base_dir=append_dir, roots=[]
+    )
+    assert append_listing_after_compact == classic_listing

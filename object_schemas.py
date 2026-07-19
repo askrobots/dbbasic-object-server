@@ -20,6 +20,18 @@ from object_versions import DEFAULT_DATA_DIR
 SCHEMAS_DIR = "schemas"
 _FIELD_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 
+# Storage engine opt-in (docs/append-only-storage-design.md). A schema's
+# top-level "storage" key selects how object_records.py physically writes
+# a collection's records.tsv: "classic" (default, omitted key) rewrites the
+# whole file per write, unchanged from the original behavior; "append"
+# opts a collection into append-only writes with last-wins-by-id reads.
+# Only present in the normalized schema when the source payload set it, so
+# a schema that never mentions storage stays byte-identical to before this
+# feature existed (see the metadata-key handling in _normalize_schema).
+STORAGE_CLASSIC = "classic"
+STORAGE_APPEND = "append"
+VALID_STORAGE_MODES = frozenset({STORAGE_CLASSIC, STORAGE_APPEND})
+
 # Module-level cache for parsed+normalized manual schemas, keyed by the
 # resolved schema file path. Value is ((mtime_ns, size), normalized_schema).
 # Every caller of get_schema/_load_manual_schema was audited (object_records,
@@ -330,6 +342,13 @@ def _normalize_schema(
         "fields": fields,
         "field_count": len(fields),
     }
+    if "storage" in payload:
+        storage = payload.get("storage")
+        if storage not in VALID_STORAGE_MODES:
+            raise ValueError(
+                f"Schema storage must be one of {sorted(VALID_STORAGE_MODES)}: {schema}"
+            )
+        normalized["storage"] = storage
     metadata_keys = (
         "description",
         "permissions",
@@ -355,6 +374,12 @@ def _normalize_field(payload: Any, *, schema: str) -> dict[str, Any]:
     name = _optional_string(payload.get("name"))
     if name is None or not _FIELD_NAME_RE.fullmatch(name):
         raise ValueError(f"Schema field has invalid name: {schema}")
+    if name == "_op":
+        # Reserved for the append-only storage engine's internal op column
+        # (docs/append-only-storage-design.md) -- never a real schema
+        # field, so a schema field literally named "_op" can never collide
+        # with it once a collection opts into "storage": "append".
+        raise ValueError(f"Schema field name is reserved: {schema}._op")
 
     field: dict[str, Any] = {
         "name": name,

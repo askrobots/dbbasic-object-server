@@ -8,6 +8,7 @@ tables and forms at. Records live in
 from __future__ import annotations
 
 import csv
+import io
 import json
 import math
 import os
@@ -31,6 +32,22 @@ MAX_RECORD_LIMIT = 1000
 EXTRA_FIELD = "extra"
 
 _RECORD_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+
+# Append-only storage (docs/append-only-storage-design.md). `OP_FIELD` is
+# an INTERNAL, file-layer-only column: when present, it is always the
+# first column of the physical header, and it never appears in a schema,
+# an API response, or a record returned by any public function in this
+# module -- it is stripped during parse-fold and only ever written by the
+# append/rewrite helpers below. `OP_UPSERT` ("") marks a row that sets/
+# replaces a record; `OP_DELETE` ("del") marks a tombstone.
+OP_FIELD = "_op"
+OP_UPSERT = ""
+OP_DELETE = "del"
+
+# Threshold (physical row count) above which a collection becomes eligible
+# for auto-compaction: see _maybe_flag_auto_compact.
+APPEND_COMPACT_MIN_ROWS_ENV = "DBBASIC_APPEND_COMPACT_MIN_ROWS"
+_DEFAULT_APPEND_COMPACT_MIN_ROWS = 10_000
 
 # Env knobs for the records cache below. Read at call time (not cached in a
 # module global) via _records_cache_max_entries()/_records_cache_max_rows()
@@ -64,29 +81,54 @@ _DEFAULT_RECORDS_CACHE_MAX_ROWS = 500_000
 # an old signature.
 #
 # Value is (stat_signature, fields, records, id_index):
-#   - stat_signature = (st_mtime_ns, st_size, st_ino). Every write in this
-#     module goes through an atomic tempfile-then-replace, so a new inode
-#     backs the path after each write; including st_ino means a same-tick
-#     mtime collision (coarse clocks/filesystems) still isn't mistaken for
+#   - stat_signature = (st_mtime_ns, st_size, st_ino). A CLASSIC-mode write
+#     goes through an atomic tempfile-then-replace, so a new inode backs the
+#     path after each write; including st_ino means a same-tick mtime
+#     collision (coarse clocks/filesystems) still isn't mistaken for
 #     "unchanged" as long as the replace produced a different inode, which
 #     is the common case for both our own writes and any other well-behaved
 #     writer using the same replace pattern.
+#       APPEND-mode writes (docs/append-only-storage-design.md) are the
+#     deliberate exception: a fast append opens the SAME inode in "a" mode
+#     and writes one more line, so st_ino is unchanged and only st_mtime_ns
+#     / st_size move. That's still sufficient to invalidate a stale cache
+#     entry (the signature tuple as a whole changes), it just means "same
+#     inode" is no longer proof of "unchanged content" the way it was
+#     before this feature -- st_size growing is what a reader actually
+#     relies on to notice a completed append. A torn tail (a final physical
+#     line with no trailing newline, from a write interrupted mid-append)
+#     is never cached as data: the append-mode parser drops it, and the
+#     next append's self-heal (_repair_torn_tail) removes it from disk
+#     before adding a new line, so it can never resurface as a stale-but-
+#     plausible cached row either.
 #   - fields/records mirror exactly what a fresh parse of that exact file
 #     content would produce (see _refresh_records_cache: written rows are
 #     projected to the full field set before caching, matching what
-#     csv.DictWriter/csv.reader would round-trip).
+#     csv.DictWriter/csv.reader would round-trip). For an append-mode file
+#     this means the FOLDED (last-wins-by-id, tombstones removed, `_op`
+#     stripped) view -- see _parse_append_body/_fold_append_rows -- never
+#     the raw physical rows; everything below this cache (get, list,
+#     window-copy, extra-field surfacing) operates on folded records with
+#     zero changes, exactly as it does for a classic-mode file.
 #   - id_index maps record id -> index into `records`, first-occurrence-wins
 #     (matching the original linear scan's behavior on hand-edited files
-#     with duplicate ids).
+#     with duplicate ids). For append mode this is built from the already-
+#     deduplicated folded records, so in practice every live id maps to
+#     exactly one position.
 #
 # ALIASING SAFETY: the `records` list and its dicts stored here are shared,
 # mutable module state. Nothing in this module may mutate them in place.
 # Every function that hands a record or records list back across the
 # public API must copy first (see _read_collection_records,
-# _read_records_and_fields, get_collection_record, list_collection_records).
-# Internal callers that need to build on cached data for a write
-# (create/update/delete) already go through _read_records_and_fields, which
-# copies.
+# get_collection_record, list_collection_records). Internal callers that
+# need to build on cached data for a write (create/update/delete) read
+# `_cache_entry`'s tuple directly -- fine as long as they only ever READ
+# from `records_ref`/`id_index_ref` (e.g. an O(1) duplicate/lookup check)
+# or capture them in a closure that builds a fresh, independent copy on
+# demand (see each function's `build_folded_records`, and _persist_write's
+# `folded_records_fn`, which calls it only on a full-rewrite path -- never
+# on the fast-append path, which is what keeps a steady-state append O(1)
+# instead of paying an eager O(n) copy on every single write).
 #
 # CONCURRENCY (readers hold no lock; writers hold _records_file_lock only
 # around their own read-modify-write): a reader's path is stat -> dict.get
@@ -122,6 +164,14 @@ _DEFAULT_RECORDS_CACHE_MAX_ROWS = 500_000
 # (~line 607, Path.replace) were all checked and write via a temp path
 # followed by an atomic replace, never an in-place open("w").
 _RECORDS_CACHE: "OrderedDict[str, tuple[tuple[int, int, int], list[str], list[dict[str, str]], dict[str, int]]]" = OrderedDict()
+
+# Collections (by resolved records.tsv path) flagged during a parse/fold as
+# having enough superseded+deleted rows to be worth compacting -- see
+# _maybe_flag_auto_compact. Consulted (and cleared) by _persist_write on
+# that collection's NEXT write, which performs a compacting rewrite instead
+# of a plain append. Never acted on from a read path: setting membership
+# here is the only thing a read ever does, and it is not a disk write.
+_PENDING_COMPACTION: set[str] = set()
 _INTEGER_TYPES = {"int", "integer"}
 _FLOAT_TYPES = {"float", "number", "currency"}
 _BOOLEAN_TYPES = {"bool", "boolean"}
@@ -299,13 +349,44 @@ def create_collection_record(
 
     path = collection_records_file(collection, base_dir=base_dir)
     with _records_file_lock(path):
-        records, fields = _read_records_and_fields(collection, path)
-        if any(row.get("id") == record_id for row in records):
+        # Uncopied cache references (see the ALIASING SAFETY note on
+        # _RECORDS_CACHE): fine here because neither is mutated -- only
+        # read (the O(1) duplicate check) or captured in a closure that
+        # builds a fresh copy lazily, only if a full rewrite turns out to
+        # be needed (see _persist_write's folded_records_fn). Skipping an
+        # eager copy of every existing record is what keeps a fast-append
+        # create O(1) rather than O(n): an `any(row.get("id") == ... for
+        # row in records)` linear scan plus a full deep-copy of every
+        # existing record were, together, the dominant cost of a "fast"
+        # append in an earlier version of this function.
+        fields, records_ref, id_index_ref = _cache_entry(collection, path)
+        # Duplicate check against the folded record set: in append mode
+        # `id_index_ref` is built from the last-wins-by-id folded records
+        # (a deleted id is absent, so a create can reuse it --
+        # resurrection), same as classic mode's index, which never
+        # indexes a stale/removed row.
+        if record_id in id_index_ref:
             raise DuplicateRecordIdError(f"Record already exists: {collection}/{record_id}")
 
         merged_fields = _merge_fields(fields, clean)
-        records.append(clean)
-        _write_collection_records(collection, path, merged_fields, records)
+
+        def build_folded_records() -> list[dict[str, str]]:
+            records = [dict(existing) for existing in records_ref]
+            records.append(clean)
+            return records
+
+        _persist_write(
+            collection,
+            path,
+            base_dir=base_dir,
+            roots=roots,
+            prior_fields=fields,
+            merged_fields=merged_fields,
+            folded_records_fn=build_folded_records,
+            delta_row=clean,
+            delta_op=OP_UPSERT,
+            delta_id=record_id,
+        )
         return _surface_extra(_project_record(clean, merged_fields), extra_names=extra_names)
 
 
@@ -330,39 +411,62 @@ def update_collection_record(
 
     path = collection_records_file(collection, base_dir=base_dir)
     with _records_file_lock(path):
-        records, fields = _read_records_and_fields(collection, path)
-        for index, raw_existing in enumerate(records):
-            if raw_existing.get("id") == record_id:
-                existing_blob = _parse_extra_blob(raw_existing.get(EXTRA_FIELD))
-                existing = _surface_extra(dict(raw_existing), extra_names=extra_names)
+        # See the matching comment in create_collection_record: uncopied
+        # cache references, read-only here, used for an O(1) lookup and a
+        # lazily-built copy (only made if a full rewrite is actually
+        # needed). id_index_ref is first-occurrence-wins (_build_id_index),
+        # same as the linear scan this replaces, so this changes nothing
+        # about WHICH row a duplicate-id file resolves to.
+        fields, records_ref, id_index_ref = _cache_entry(collection, path)
+        index = id_index_ref.get(record_id)
+        if index is None:
+            raise RecordNotFoundError(f"Record not found: {collection}/{record_id}")
 
-                updated = dict(existing)
-                updated.update(clean)
-                updated["id"] = record_id
-                _validate_record_against_schema(
-                    collection,
-                    updated,
-                    submitted_fields=submitted_fields,
-                    base_dir=base_dir,
-                    roots=roots,
-                )
-                _validate_field_transitions(
-                    collection,
-                    existing,
-                    updated,
-                    base_dir=base_dir,
-                    roots=roots,
-                )
-                updated = _canonicalize_schema_values(
-                    collection, updated, base_dir=base_dir, roots=roots
-                )
-                updated = _route_extra(updated, existing_blob=existing_blob, extra_names=extra_names)
-                merged_fields = _merge_fields(fields, updated)
-                records[index] = updated
-                _write_collection_records(collection, path, merged_fields, records)
-                return _surface_extra(_project_record(updated, merged_fields), extra_names=extra_names)
+        raw_existing = records_ref[index]
+        existing_blob = _parse_extra_blob(raw_existing.get(EXTRA_FIELD))
+        existing = _surface_extra(dict(raw_existing), extra_names=extra_names)
 
-    raise RecordNotFoundError(f"Record not found: {collection}/{record_id}")
+        updated = dict(existing)
+        updated.update(clean)
+        updated["id"] = record_id
+        _validate_record_against_schema(
+            collection,
+            updated,
+            submitted_fields=submitted_fields,
+            base_dir=base_dir,
+            roots=roots,
+        )
+        _validate_field_transitions(
+            collection,
+            existing,
+            updated,
+            base_dir=base_dir,
+            roots=roots,
+        )
+        updated = _canonicalize_schema_values(
+            collection, updated, base_dir=base_dir, roots=roots
+        )
+        updated = _route_extra(updated, existing_blob=existing_blob, extra_names=extra_names)
+        merged_fields = _merge_fields(fields, updated)
+
+        def build_folded_records() -> list[dict[str, str]]:
+            records = [dict(existing_row) for existing_row in records_ref]
+            records[index] = updated
+            return records
+
+        _persist_write(
+            collection,
+            path,
+            base_dir=base_dir,
+            roots=roots,
+            prior_fields=fields,
+            merged_fields=merged_fields,
+            folded_records_fn=build_folded_records,
+            delta_row=updated,
+            delta_op=OP_UPSERT,
+            delta_id=record_id,
+        )
+        return _surface_extra(_project_record(updated, merged_fields), extra_names=extra_names)
 
 
 def delete_collection_record(
@@ -379,14 +483,94 @@ def delete_collection_record(
 
     path = collection_records_file(collection, base_dir=base_dir)
     with _records_file_lock(path):
-        records, fields = _read_records_and_fields(collection, path)
-        for index, existing in enumerate(records):
-            if existing.get("id") == record_id:
-                removed = records.pop(index)
-                _write_collection_records(collection, path, fields, records)
-                return _project_record(removed, fields)
+        # See the matching comment in create_collection_record.
+        fields, records_ref, id_index_ref = _cache_entry(collection, path)
+        index = id_index_ref.get(record_id)
+        if index is None:
+            raise RecordNotFoundError(f"Record not found: {collection}/{record_id}")
 
-    raise RecordNotFoundError(f"Record not found: {collection}/{record_id}")
+        removed = dict(records_ref[index])  # copy before handing back across the API
+
+        def build_folded_records() -> list[dict[str, str]]:
+            records = [dict(existing_row) for existing_row in records_ref]
+            records.pop(index)
+            return records
+
+        _persist_write(
+            collection,
+            path,
+            base_dir=base_dir,
+            roots=roots,
+            prior_fields=fields,
+            merged_fields=fields,
+            folded_records_fn=build_folded_records,
+            delta_row=None,
+            delta_op=OP_DELETE,
+            delta_id=record_id,
+        )
+        return _project_record(removed, fields)
+
+
+def compact_collection(
+    collection: str,
+    *,
+    base_dir: Path | str = DEFAULT_DATA_DIR,
+    roots: Iterable[Path] | None = None,
+) -> dict[str, Any]:
+    """Fold an append-mode collection's records file to its live rows only.
+
+    Rewrites atomically via the same _write_collection_records path a
+    plain write uses (temp file + replace), under the collection's file
+    lock, keeping the `_op` column (every row becomes an upsert). A manual
+    trigger for now -- no HTTP surface in this change (see
+    docs/append-only-storage-design.md Compaction: "run on a schedule or
+    when the superseded-row ratio passes a threshold — never inline in a
+    request"). Auto-compaction (_maybe_flag_auto_compact) causes a
+    collection's next ordinary write to perform this same rewrite instead
+    of a plain append; this function can also be called directly at any
+    time, including on a classic-mode or never-written collection, where
+    it is a correctly-reported no-op.
+
+    Returns {"rows_before", "rows_after", "bytes_before", "bytes_after"}
+    (row counts are physical rows on disk before/after; for a collection
+    not currently in append physical format, before == after).
+    """
+    _ensure_collection_known(collection, base_dir=base_dir, roots=roots)
+    path = collection_records_file(collection, base_dir=base_dir)
+
+    with _records_file_lock(path):
+        try:
+            bytes_before = path.stat().st_size
+        except OSError:
+            bytes_before = 0
+
+        physical_header = _physical_header(path)
+        if not physical_header or physical_header[0] != OP_FIELD:
+            rows_before = len(_read_collection_records(collection, base_dir=base_dir))
+            return {
+                "rows_before": rows_before,
+                "rows_after": rows_before,
+                "bytes_before": bytes_before,
+                "bytes_after": bytes_before,
+            }
+
+        with path.open(newline="") as handle:
+            text = handle.read()
+        folded_records, physical_row_count = _parse_append_body(collection, text, physical_header)
+        logical_fields = physical_header[1:]
+
+        _write_collection_records(
+            collection, path, physical_header, folded_records, cache_fields=logical_fields
+        )
+        _PENDING_COMPACTION.discard(str(path.resolve(strict=False)))
+
+        bytes_after = path.stat().st_size
+        return {
+            "rows_before": physical_row_count,
+            "rows_after": len(folded_records),
+            "bytes_before": bytes_before,
+            "bytes_after": bytes_after,
+        }
 
 
 def collection_records_file(collection: str, base_dir: Path | str = DEFAULT_DATA_DIR) -> Path:
@@ -481,16 +665,6 @@ def _read_collection_records(
     records = _cached_records_ref(collection, base_dir=base_dir)
     # Copy: `records` is the module cache's own list of its own dicts.
     return [dict(record) for record in records]
-
-
-def _read_records_and_fields(
-    collection: str,
-    path: Path,
-) -> tuple[list[dict[str, str]], list[str]]:
-    fields, records, _ = _cache_entry(collection, path)
-    # Copy: callers (create/update/delete) mutate the list/dicts they get
-    # back before rewriting the file, and must never do that to the cache.
-    return [dict(record) for record in records], list(fields)
 
 
 def _stat_signature(path: Path) -> tuple[int, int, int] | None:
@@ -603,10 +777,16 @@ def _parse_records_file(collection: str, path: Path) -> tuple[list[str], list[di
     contain a quoted tab or embedded newline, and only real CSV/TSV parsing
     reconstructs that value correctly.
 
-    Replicates csv.DictReader's exact semantics for header/short/long rows
-    and blank-line skipping -- see the block comment above _RECORDS_CACHE
-    and the tests in tests/test_object_records.py for the specific cases
-    this was checked against on the pre-change code.
+    Dispatches on the physical header (docs/append-only-storage-design.md):
+    a file whose first column is `_op` is in append-only physical format
+    and is parsed+folded by _parse_append_body; every other file is parsed
+    by the original classic-mode routine, unchanged. This dispatch is by
+    the FILE's own header, not the collection's current schema `storage`
+    setting -- a collection that just switched storage modes keeps reading
+    correctly until its next write physically transitions the file (see
+    _persist_write), and a collection that switched back to classic still
+    reads correctly (via the append path) until its next write compacts
+    the `_op` column away.
     """
     with path.open(newline="") as handle:
         reader = csv.reader(handle, delimiter="\t")
@@ -614,9 +794,36 @@ def _parse_records_file(collection: str, path: Path) -> tuple[list[str], list[di
             header = next(reader)
         except StopIteration:
             header = None
-        _validate_header(collection, header)
-        fields = list(header)
-        field_count = len(fields)
+    _validate_header(collection, header)
+    physical_fields = list(header)
+
+    if physical_fields and physical_fields[0] == OP_FIELD:
+        with path.open(newline="") as handle:
+            text = handle.read()
+        folded_records, physical_row_count = _parse_append_body(collection, text, physical_fields)
+        _maybe_flag_auto_compact(
+            path, physical_row_count=physical_row_count, live_row_count=len(folded_records)
+        )
+        return physical_fields[1:], folded_records
+
+    return physical_fields, _parse_classic_records(collection, path, physical_fields)
+
+
+def _parse_classic_records(
+    collection: str, path: Path, fields: list[str]
+) -> list[dict[str, str]]:
+    """Parse the data rows of a classic-mode (no `_op` column) file.
+
+    Replicates csv.DictReader's exact semantics for short/long rows and
+    blank-line skipping -- see the block comment above _RECORDS_CACHE and
+    the tests in tests/test_object_records.py for the specific cases this
+    was checked against on the pre-change code. Unchanged from before
+    append-only storage existed: a strict parse, no torn-tail tolerance.
+    """
+    field_count = len(fields)
+    with path.open(newline="") as handle:
+        reader = csv.reader(handle, delimiter="\t")
+        next(reader, None)  # header, already parsed/validated by the caller
 
         records: list[dict[str, str]] = []
         row_number = 1  # the header is row 1; DictReader's enumerate started data rows at 2
@@ -645,7 +852,152 @@ def _parse_records_file(collection: str, path: Path) -> tuple[list[str], list[di
             }
             records.append(record)
 
-    return fields, records
+    return records
+
+
+def _drop_torn_tail(text: str) -> str:
+    """Return `text` with any unterminated final physical line removed.
+
+    Append-mode writers only ever consider a row committed once it is
+    followed by "\\n" (see _append_records_rows / _repair_torn_tail): a
+    physical line at EOF that isn't followed by "\\n" represents a write
+    interrupted before it completed and must not be treated as data (the
+    classic log torn-tail rule -- docs/append-only-storage-design.md Crash
+    Safety). This is a plain text-level trim: it does not need to
+    understand CSV quoting, because a completed row's own writer always
+    terminates it with "\\n" regardless of what its quoted content
+    contains, so "does the file end with \\n" is a reliable, cheap signal
+    on its own.
+    """
+    if text == "" or text.endswith("\n"):
+        return text
+    cut = text.rfind("\n")
+    return text[: cut + 1] if cut >= 0 else ""
+
+
+def _parse_append_body(
+    collection: str, text: str, physical_fields: list[str]
+) -> tuple[list[dict[str, str]], int]:
+    """Parse+fold an append-mode file's body. Returns (folded_records, physical_row_count).
+
+    Torn-tail tolerant: a trailing unterminated line is dropped first
+    (_drop_torn_tail); a row that still fails to parse (e.g. a value with
+    an embedded newline whose closing quote never arrived, so its
+    apparent line boundary landed mid-field) stops consumption at that
+    point rather than raising -- everything after an unparseable point is,
+    by construction, either that same torn write or unreachable. This
+    differs from classic mode, which keeps raising on malformed content
+    (see _parse_classic_records): append mode's contract is specifically
+    that in-flight writes are tolerated, not silently-corrupt files.
+    """
+    field_count = len(physical_fields)
+    reader = csv.reader(io.StringIO(_drop_torn_tail(text)), delimiter="\t")
+    next(reader, None)  # header, already parsed/validated by the caller
+
+    physical_rows: list[dict[str, str]] = []
+    while True:
+        try:
+            row = next(reader)
+        except StopIteration:
+            break
+        except csv.Error:
+            break
+        if not row:
+            continue
+        if len(row) > field_count:
+            raise ValueError(
+                f"Collection records file has extra fields: {collection}"
+            )
+        record = {
+            physical_fields[i]: (row[i] if i < len(row) else "")
+            for i in range(field_count)
+        }
+        physical_rows.append(record)
+
+    return _fold_append_rows(physical_rows), len(physical_rows)
+
+
+def _fold_append_rows(physical_rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Fold physical append-mode rows into live records, last-wins per id.
+
+    An id's position in the returned list is where it was inserted since
+    it was last live: an upsert for an id already present updates it in
+    place (same position, matching classic mode's update-in-place); an
+    upsert for a not-currently-live id inserts at the current end
+    (matching classic mode's create-appends); a delete (`_op == "del"`)
+    removes the id's slot entirely (matching classic mode's delete
+    popping the row) -- so a later upsert for that same id is a fresh
+    insertion at the end, not a return to its old position. Built with an
+    OrderedDict so this falls out of normal dict semantics rather than
+    needing to be modeled by hand; this is what gives append mode the
+    same list order as classic mode for the same operation sequence (see
+    the equivalence tests in tests/test_object_records.py). `_op` is
+    stripped from every folded record.
+
+    Rows with a blank/missing id (only reachable via a hand-edited file --
+    every write path in this module requires a valid id) cannot be
+    last-wins folded against each other for lack of a key; each is kept as
+    its own entry and appended after the id-keyed records, which does not
+    preserve their original interleaving with id-keyed rows. This is a
+    documented limitation of a pre-existing edge case, not a behavior this
+    feature needs to support: normalize_record_payload never lets a create
+    omit its id, and update always operates on an already-valid id.
+    """
+    folded: "OrderedDict[str, dict[str, str]]" = OrderedDict()
+    blank_id_rows: list[dict[str, str]] = []
+    blank_counter = 0
+    for row in physical_rows:
+        op = row.get(OP_FIELD, OP_UPSERT)
+        record_id = row.get("id", "")
+        clean = {key: value for key, value in row.items() if key != OP_FIELD}
+        if not record_id:
+            if op == OP_DELETE:
+                continue
+            blank_id_rows.append((f"__blank__{blank_counter}", clean))
+            blank_counter += 1
+            continue
+        if op == OP_DELETE:
+            folded.pop(record_id, None)
+            continue
+        folded[record_id] = clean
+
+    return list(folded.values()) + [record for _, record in blank_id_rows]
+
+
+def _append_compact_min_rows() -> int:
+    return _env_int(APPEND_COMPACT_MIN_ROWS_ENV, _DEFAULT_APPEND_COMPACT_MIN_ROWS)
+
+
+def _maybe_flag_auto_compact(path: Path, *, physical_row_count: int, live_row_count: int) -> None:
+    """Flag a collection for compaction on its NEXT WRITE.
+
+    Never compacts here -- this runs from the read/parse path, and reads
+    must stay read-only (docs/append-only-storage-design.md Compaction).
+    Triggers when the physical file is at least DBBASIC_APPEND_COMPACT_
+    MIN_ROWS rows (so a small collection's ordinary churn never matters)
+    AND superseded-or-deleted rows outnumber live rows.
+    """
+    if physical_row_count <= _append_compact_min_rows():
+        return
+    stale_row_count = physical_row_count - live_row_count
+    if stale_row_count > live_row_count:
+        _PENDING_COMPACTION.add(str(path.resolve(strict=False)))
+
+
+def _physical_header(path: Path) -> list[str] | None:
+    """Return the raw on-disk header (leading `_op` included, if present).
+
+    None when the file doesn't exist or is empty. Cheap: reads only the
+    first physical line, not the whole file.
+    """
+    if not path.exists():
+        return None
+    with path.open(newline="") as handle:
+        reader = csv.reader(handle, delimiter="\t")
+        try:
+            return next(reader)
+        except StopIteration:
+            return None
 
 
 def _write_collection_records(
@@ -653,7 +1005,24 @@ def _write_collection_records(
     path: Path,
     fields: list[str],
     records: list[dict[str, str]],
+    *,
+    cache_fields: list[str] | None = None,
 ) -> None:
+    """Rewrite the whole records file atomically (temp file + replace).
+
+    `fields` is the PHYSICAL header to write -- for an append-mode full
+    rewrite (transition-in, compaction, or the new-field-fallback rewrite;
+    see _persist_write) this includes a leading `_op` column, which every
+    record in `records` implicitly projects to "" (upsert) since none of
+    them carry an `_op` key (docs/append-only-storage-design.md).
+    `cache_fields`, when given, is the LOGICAL field list (without `_op`)
+    to store in the module cache instead of `fields` -- callers writing an
+    append-format file must pass this, or `_op` would leak into the cache
+    and, from there, into API responses (get/list/create/update all
+    return cache-derived data). Classic-mode callers omit it and the
+    written `fields` doubles as the cache's fields, exactly as before this
+    parameter existed.
+    """
     if "id" not in fields:
         fields = ["id", *fields]
 
@@ -676,7 +1045,7 @@ def _write_collection_records(
         if temp_path.exists():
             temp_path.unlink()
 
-    _refresh_records_cache(collection, path, fields, records)
+    _refresh_records_cache(collection, path, cache_fields if cache_fields is not None else fields, records)
 
 
 def _refresh_records_cache(
@@ -720,6 +1089,268 @@ def _refresh_records_cache(
     cached_records = [_project_record(record, fields) for record in records]
     id_index = _build_id_index(cached_records)
     _store_records_cache(cache_key, signature, list(fields), cached_records, id_index)
+
+
+def _refresh_records_cache_after_append(
+    collection: str,
+    path: Path,
+    fields: list[str],
+    delta_op: str,
+    delta_id: str,
+    projected_row: dict[str, str],
+) -> bool:
+    """Incrementally update the cache after a fast append. Returns True if
+    it did (the caller then skips the full _refresh_records_cache rebuild).
+
+    The entire point of the fast-append path is O(1) disk work -- calling
+    the general _refresh_records_cache after every append would silently
+    reintroduce an O(n) cost per write, just moved from disk I/O to cache
+    bookkeeping (a full re-projection of every record plus a full
+    id_index rebuild). This instead derives the new cache entry from the
+    PRIOR entry plus this one delta:
+
+      - create (an id not already in the index): `old_records + [row]`
+        and `dict(old_id_index)` plus one new key -- still technically
+        O(n) (a fresh list/dict must be built; nothing cached is ever
+        mutated in place, see the ALIASING SAFETY note on
+        _RECORDS_CACHE), but as bulk C-level copies (list concat, dict
+        copy) rather than a Python-level per-record rebuild.
+      - update (an id already in the index -- always at the SAME
+        position, since _fold_append_rows updates in place): `list(
+        old_records)` with one element replaced; the id_index is REUSED
+        UNCHANGED (no copy at all), since no id's position moved.
+      - delete: a genuine O(n) Python-level index rebuild (removing a
+        position means every later position shifts down by one) -- the
+        one case this doesn't make cheap. Deletes are the rare case for
+        the append-shaped workloads this feature targets (game-server
+        state, impression logs, price history), so this is an accepted,
+        documented trade rather than a gap.
+
+    Falls back (returns False) when there is no usable prior entry to
+    build on -- cold cache, evicted, over the row-count cache threshold,
+    or (defensively) a fields mismatch -- and the caller does a normal
+    full _refresh_records_cache rebuild instead.
+    """
+    signature = _stat_signature(path)
+    if signature is None:
+        return True  # nothing to cache either way; nothing left to do
+
+    cache_key = str(path.resolve(strict=False))
+    prior = _RECORDS_CACHE.get(cache_key)
+    if prior is None or prior[1] != fields:
+        return False
+
+    _, _prior_fields, old_records, old_id_index = prior
+    if len(old_records) > _records_cache_max_rows():
+        _RECORDS_CACHE.pop(cache_key, None)
+        return True
+
+    if delta_op == OP_DELETE:
+        idx = old_id_index.get(delta_id)
+        if idx is None:
+            return False
+        new_records = old_records[:idx] + old_records[idx + 1:]
+        new_id_index = {
+            key: (value if value < idx else value - 1)
+            for key, value in old_id_index.items()
+            if key != delta_id
+        }
+    else:
+        idx = old_id_index.get(delta_id)
+        if idx is not None:
+            new_records = list(old_records)
+            new_records[idx] = projected_row
+            new_id_index = old_id_index
+        else:
+            new_records = old_records + [projected_row]
+            new_id_index = dict(old_id_index)
+            new_id_index[delta_id] = len(old_records)
+
+    if len(new_records) > _records_cache_max_rows():
+        _RECORDS_CACHE.pop(cache_key, None)
+        return True
+
+    _store_records_cache(cache_key, signature, list(fields), new_records, new_id_index)
+    return True
+
+
+def _repair_torn_tail(path: Path) -> None:
+    """Ensure `path` ends with a complete row before an append lands.
+
+    A write interrupted mid-row leaves a fragment after the last real
+    "\\n". Merely appending a "\\n" after that fragment would make the
+    byte stream *look* terminated while leaving the fragment's bytes in
+    place as ordinary (wrong) data -- a later parse could then misread it
+    as a legitimately short row and resurrect it. Instead, this finds the
+    newline ending the last COMPLETE row and truncates everything after
+    it, so the fragment can never resurface. After this call the file
+    always ends with "\\n" (or is empty), so the append that follows never
+    has to think about the torn-tail case itself.
+
+    Scans backward from EOF in growing chunks (most torn fragments are a
+    single short row, so this is normally one small read) rather than
+    reading the whole file, since this runs on every append in append
+    mode and must stay cheap even on a huge collection.
+    """
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return
+    if size == 0:
+        return
+
+    with path.open("rb+") as handle:
+        handle.seek(size - 1)
+        if handle.read(1) == b"\n":
+            return
+
+        window = 8192
+        read_from = size
+        while read_from > 0:
+            read_from = max(0, read_from - window)
+            handle.seek(read_from)
+            chunk = handle.read(size - read_from)
+            idx = chunk.rfind(b"\n")
+            if idx >= 0:
+                handle.truncate(read_from + idx + 1)
+                return
+            window *= 2
+        handle.truncate(0)
+
+
+def _append_records_rows(
+    path: Path,
+    physical_fields: list[str],
+    rows: list[dict[str, str]],
+) -> None:
+    """Append one or more pre-built physical rows to an append-format file.
+
+    Each row in `rows` must already carry an `_op` key (OP_UPSERT or
+    OP_DELETE). Self-heals a torn tail first (_repair_torn_tail) so the
+    new row(s) always land as clean, complete physical lines, then writes
+    via csv.writer (not DictWriter -- rows are already fully projected)
+    on a text-mode "a" handle, flushing once at the end. Same dialect as
+    _write_collection_records: tab-delimited, "\\n" line terminator,
+    QUOTE_MINIMAL.
+    """
+    _repair_torn_tail(path)
+    with path.open("a", newline="") as handle:
+        writer = csv.writer(
+            handle, delimiter="\t", lineterminator="\n", quoting=csv.QUOTE_MINIMAL
+        )
+        for row in rows:
+            projected = _project_record(row, physical_fields)
+            writer.writerow([projected[field] for field in physical_fields])
+        handle.flush()
+
+
+def _collection_storage_mode(
+    collection: str,
+    *,
+    base_dir: Path | str,
+    roots: Iterable[Path] | None,
+) -> str:
+    """Return a collection's storage mode from its schema's `storage` key.
+
+    Defaults to classic when the schema has no `storage` key, is derived
+    (no manual schema file), or doesn't exist yet -- see
+    object_schemas.normalize_schema, which validates the key at schema-
+    write time, so any value reaching here is already known-good, but this
+    stays defensive rather than trusting that unconditionally.
+    """
+    try:
+        schema = object_schemas.get_schema(collection, base_dir=base_dir, roots=roots)
+    except object_schemas.SchemaNotFoundError:
+        return object_schemas.STORAGE_CLASSIC
+    mode = schema.get("storage", object_schemas.STORAGE_CLASSIC)
+    return mode if mode in object_schemas.VALID_STORAGE_MODES else object_schemas.STORAGE_CLASSIC
+
+
+def _persist_write(
+    collection: str,
+    path: Path,
+    *,
+    base_dir: Path | str,
+    roots: Iterable[Path] | None,
+    prior_fields: list[str],
+    merged_fields: list[str],
+    folded_records_fn,
+    delta_row: dict[str, str] | None,
+    delta_op: str,
+    delta_id: str,
+) -> None:
+    """Persist one create/update/delete, choosing the write strategy.
+
+    `folded_records_fn` is a zero-argument callable that builds the FULL
+    folded record set after this op (a fresh, safe-to-mutate copy -- see
+    the callers in create/update/delete_collection_record). It is called
+    LAZILY, only on a full-rewrite path, and never on the fast-append
+    path: the whole point of a fast append is O(1) work, and building
+    that full copy is an O(n) cost callers can otherwise skip entirely
+    (see _refresh_records_cache_after_append, which updates the cache
+    from its own prior entry plus this one delta instead). `delta_row`/
+    `delta_op`/`delta_id` describe just this one op's row, used only by
+    the fast-append path. Chooses among (see
+    docs/append-only-storage-design.md and the Decisions this module's
+    implementation is bound by):
+
+      - FAST APPEND: storage is "append", the file is already physically
+        in append format, this write doesn't introduce a field the
+        current header lacks, and no auto-compaction is pending for this
+        collection -- append one row, then refresh the cache the same way
+        a full rewrite would (store the folded content + new signature).
+      - TRANSITION-IN: storage is "append" but the file isn't (yet) in
+        append format (including a brand new collection) -- one full
+        rewrite that adds the `_op` header column, applying this op in
+        the same pass.
+      - NEW-FIELD FALLBACK / AUTO-COMPACT: storage is "append", the file
+        is already append-format, but this write needs a header column
+        the file doesn't have yet, or a prior read flagged this
+        collection for compaction -- a full rewrite that folds current
+        content, applies this op, and (in the new-field case) extends the
+        header. Still `_op`-columned.
+      - COMPACT-TO-CLASSIC: storage is "classic" but the file is still
+        physically in append format (opt-out just happened) -- one full
+        rewrite that folds current content, applies this op, and drops
+        the `_op` column.
+      - CLASSIC: storage is "classic" and the file already is (or never
+        was anything but) classic format -- the original full-rewrite
+        behavior, completely unchanged.
+    """
+    desired_mode = _collection_storage_mode(collection, base_dir=base_dir, roots=roots)
+    physical_header = _physical_header(path)
+    file_is_append_physical = bool(physical_header) and physical_header[0] == OP_FIELD
+    cache_key = str(path.resolve(strict=False))
+    new_field_introduced = merged_fields != prior_fields
+    pending_compaction = cache_key in _PENDING_COMPACTION
+
+    if (
+        desired_mode == object_schemas.STORAGE_APPEND
+        and file_is_append_physical
+        and not new_field_introduced
+        and not pending_compaction
+    ):
+        physical_fields = [OP_FIELD, *merged_fields]
+        row = dict(delta_row) if delta_row is not None else {}
+        row["id"] = delta_id
+        row[OP_FIELD] = delta_op
+        _append_records_rows(path, physical_fields, [row])
+        projected_row = _project_record(row, merged_fields)
+        if not _refresh_records_cache_after_append(
+            collection, path, merged_fields, delta_op, delta_id, projected_row
+        ):
+            _refresh_records_cache(collection, path, merged_fields, folded_records_fn())
+        return
+
+    _PENDING_COMPACTION.discard(cache_key)
+    folded_records = folded_records_fn()
+    if desired_mode == object_schemas.STORAGE_APPEND:
+        physical_fields = [OP_FIELD, *merged_fields]
+        _write_collection_records(
+            collection, path, physical_fields, folded_records, cache_fields=merged_fields
+        )
+    else:
+        _write_collection_records(collection, path, merged_fields, folded_records)
 
 
 @contextmanager
@@ -776,6 +1407,10 @@ def _normalize_record_payload(payload: dict[str, Any], *, require_id: bool) -> d
             raise InvalidRecordPayloadError(f"Record field name has whitespace: {key!r}")
         if "\t" in key or "\n" in key or "\r" in key:
             raise InvalidRecordPayloadError(f"Record field name is not TSV-safe: {key!r}")
+        if key == OP_FIELD:
+            raise InvalidRecordPayloadError(
+                f"Record field name is reserved for internal storage use: {key!r}"
+            )
         if key == EXTRA_FIELD:
             clean[key] = _normalize_extra_value(value)
             continue
