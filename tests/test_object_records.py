@@ -1601,3 +1601,411 @@ def test_append_mode_equivalent_to_classic_mode_across_random_operations(tmp_pat
         "items", base_dir=append_dir, roots=[]
     )
     assert append_listing_after_compact == classic_listing
+
+
+# ---------------------------------------------------------------------------
+# id -> byte-offset sidecar (docs/append-only-storage-design.md item 4).
+#
+# Every test below forces DBBASIC_RECORDS_CACHE_MAX_ROWS to 0 so that
+# _RECORDS_CACHE never stores an entry for these (tiny, real-world-normal-
+# sized) test collections -- i.e. every point op is a cache MISS, which is
+# exactly the condition _fast_record_lookup uses to try the sidecar. This
+# is what lets a handful of records exercise the same code path a real
+# over-threshold, million-row collection would use, without the tests
+# needing to actually write a million rows.
+# ---------------------------------------------------------------------------
+
+
+def test_oidx_sidecar_builds_lazily_and_serves_point_ops(tmp_path, monkeypatch):
+    """No sidecar file exists until the first point op against an already
+    append-physical file with a cold cache; from then on, get/create's
+    duplicate check/update/delete all resolve correctly through it."""
+    monkeypatch.setenv("DBBASIC_RECORDS_CACHE_MAX_ROWS", "0")
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    path = data_dir / "collections" / "widgets" / "records.tsv"
+    oidx_path = object_records._oidx_path(path)
+
+    assert not oidx_path.exists()
+    object_records.create_collection_record(
+        "widgets", {"id": "w1", "name": "Alpha"}, base_dir=data_dir, roots=[]
+    )
+    # This first write is a TRANSITION-IN full rewrite (the file only
+    # just became append-physical) -- nothing has read through the
+    # sidecar yet, so it still doesn't exist.
+    assert not oidx_path.exists()
+
+    object_records.create_collection_record(
+        "widgets", {"id": "w2", "name": "Beta"}, base_dir=data_dir, roots=[]
+    )
+    # This create's duplicate check is the first point op against an
+    # already append-physical file with a cold cache -- it must have
+    # built the sidecar.
+    assert oidx_path.exists()
+
+    with pytest.raises(object_records.DuplicateRecordIdError):
+        object_records.create_collection_record(
+            "widgets", {"id": "w1", "name": "Gamma"}, base_dir=data_dir, roots=[]
+        )
+
+    assert object_records.get_collection_record(
+        "widgets", "w2", base_dir=data_dir, roots=[]
+    ) == {"id": "w2", "name": "Beta"}
+
+    updated = object_records.update_collection_record(
+        "widgets", "w1", {"name": "Alpha2"}, base_dir=data_dir, roots=[]
+    )
+    assert updated == {"id": "w1", "name": "Alpha2"}
+    assert object_records.get_collection_record(
+        "widgets", "w1", base_dir=data_dir, roots=[]
+    ) == {"id": "w1", "name": "Alpha2"}
+
+    removed = object_records.delete_collection_record(
+        "widgets", "w2", base_dir=data_dir, roots=[]
+    )
+    assert removed == {"id": "w2", "name": "Beta"}
+    with pytest.raises(object_records.RecordNotFoundError):
+        object_records.get_collection_record("widgets", "w2", base_dir=data_dir, roots=[])
+
+    listing = object_records.list_collection_records(
+        "widgets", base_dir=data_dir, roots=[]
+    )["records"]
+    assert listing == [{"id": "w1", "name": "Alpha2"}]
+
+
+def test_oidx_sidecar_catches_up_when_behind(tmp_path, monkeypatch):
+    """A sidecar whose body is missing its last few lines (simulating a
+    crash between a data append and its matching idx append, or another
+    writer that didn't maintain the sidecar at all) is caught up by
+    scanning only the uncovered tail of records.tsv, not rebuilt from
+    scratch."""
+    monkeypatch.setenv("DBBASIC_RECORDS_CACHE_MAX_ROWS", "0")
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    path = data_dir / "collections" / "widgets" / "records.tsv"
+    oidx_path = object_records._oidx_path(path)
+
+    for i in range(5):
+        object_records.create_collection_record(
+            "widgets", {"id": f"w{i}", "name": f"n{i}"}, base_dir=data_dir, roots=[]
+        )
+    object_records._OIDX_CACHE.clear()
+    object_records.get_collection_record("widgets", "w0", base_dir=data_dir, roots=[])
+    assert oidx_path.exists()
+
+    lines = oidx_path.read_text().splitlines(keepends=True)
+    assert len(lines) == 6  # header + 5 data lines
+    oidx_path.write_text("".join(lines[:-2]))
+    object_records._OIDX_CACHE.clear()
+
+    fetched4 = object_records.get_collection_record("widgets", "w4", base_dir=data_dir, roots=[])
+    assert fetched4 == {"id": "w4", "name": "n4"}
+    fetched0 = object_records.get_collection_record("widgets", "w0", base_dir=data_dir, roots=[])
+    assert fetched0 == {"id": "w0", "name": "n0"}
+
+    id_offsets, coherent = object_records._load_oidx(path)
+    assert coherent
+    assert set(id_offsets) == {"w0", "w1", "w2", "w3", "w4"}
+    assert len(oidx_path.read_text().splitlines()) == 6
+
+
+def test_oidx_sidecar_rebuilds_on_stale_ino_header(tmp_path, monkeypatch):
+    """A sidecar whose header ino doesn't match the data file's current
+    inode (e.g. left over from before a compaction) must never be
+    trusted -- _load_oidx rebuilds from scratch instead."""
+    monkeypatch.setenv("DBBASIC_RECORDS_CACHE_MAX_ROWS", "0")
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    path = data_dir / "collections" / "widgets" / "records.tsv"
+    oidx_path = object_records._oidx_path(path)
+
+    object_records.create_collection_record(
+        "widgets", {"id": "w1", "name": "Alpha"}, base_dir=data_dir, roots=[]
+    )
+
+    # Hand-write a sidecar with a bogus header ino and a body entry for
+    # an id that was never actually written -- if the mismatch weren't
+    # detected, this would leak straight into the answer.
+    oidx_path.write_text("oidx1\t999999999\n0\t20\t\tbogus\n")
+    object_records._OIDX_CACHE.clear()
+
+    id_offsets, coherent = object_records._load_oidx(path)
+    assert coherent
+    assert "bogus" not in id_offsets
+    assert "w1" in id_offsets
+    assert object_records.get_collection_record(
+        "widgets", "w1", base_dir=data_dir, roots=[]
+    ) == {"id": "w1", "name": "Alpha"}
+
+
+def test_oidx_sidecar_rebuilds_on_corrupt_sidecar_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_RECORDS_CACHE_MAX_ROWS", "0")
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    path = data_dir / "collections" / "widgets" / "records.tsv"
+    oidx_path = object_records._oidx_path(path)
+
+    object_records.create_collection_record(
+        "widgets", {"id": "w1", "name": "Alpha"}, base_dir=data_dir, roots=[]
+    )
+    object_records.get_collection_record("widgets", "w1", base_dir=data_dir, roots=[])
+    assert oidx_path.exists()
+
+    oidx_path.write_text("not even close to a valid sidecar\n\x00garbage\tmore\tfields\there\n")
+    object_records._OIDX_CACHE.clear()
+
+    # Never raises -- self-heals via a rebuild, and the API call still
+    # returns the correct record.
+    fetched = object_records.get_collection_record("widgets", "w1", base_dir=data_dir, roots=[])
+    assert fetched == {"id": "w1", "name": "Alpha"}
+    id_offsets, coherent = object_records._load_oidx(path)
+    assert coherent
+    assert set(id_offsets) == {"w1"}
+
+
+def test_oidx_sidecar_rebuilds_when_file_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_RECORDS_CACHE_MAX_ROWS", "0")
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    path = data_dir / "collections" / "widgets" / "records.tsv"
+    oidx_path = object_records._oidx_path(path)
+
+    object_records.create_collection_record(
+        "widgets", {"id": "w1", "name": "Alpha"}, base_dir=data_dir, roots=[]
+    )
+    object_records.get_collection_record("widgets", "w1", base_dir=data_dir, roots=[])
+    assert oidx_path.exists()
+
+    oidx_path.unlink()
+    object_records._OIDX_CACHE.clear()
+
+    fetched = object_records.get_collection_record("widgets", "w1", base_dir=data_dir, roots=[])
+    assert fetched == {"id": "w1", "name": "Alpha"}
+    assert oidx_path.exists()
+
+
+def test_oidx_sidecar_rebuilds_after_compaction_changes_inode(tmp_path, monkeypatch):
+    """Compaction rewrites records.tsv atomically (new inode) and
+    explicitly discards the sidecar (docs/append-only-storage-design.md:
+    "delete or rebuild sidecar after the rewrite") -- a subsequent point
+    op rebuilds correctly against the compacted content."""
+    monkeypatch.setenv("DBBASIC_RECORDS_CACHE_MAX_ROWS", "0")
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    path = data_dir / "collections" / "widgets" / "records.tsv"
+    oidx_path = object_records._oidx_path(path)
+
+    object_records.create_collection_record(
+        "widgets", {"id": "w1", "name": "Alpha"}, base_dir=data_dir, roots=[]
+    )
+    object_records.update_collection_record(
+        "widgets", "w1", {"name": "Alpha2"}, base_dir=data_dir, roots=[]
+    )
+    object_records.get_collection_record("widgets", "w1", base_dir=data_dir, roots=[])
+    assert oidx_path.exists()
+    ino_before = path.stat().st_ino
+
+    object_records.compact_collection("widgets", base_dir=data_dir, roots=[])
+    assert not oidx_path.exists()
+    assert path.stat().st_ino != ino_before
+
+    fetched = object_records.get_collection_record("widgets", "w1", base_dir=data_dir, roots=[])
+    assert fetched == {"id": "w1", "name": "Alpha2"}
+    assert oidx_path.exists()
+
+
+def test_oidx_sidecar_torn_idx_tail_is_dropped(tmp_path, monkeypatch):
+    """A torn sidecar line (no trailing newline on its own final physical
+    line, from a crash mid idx-write) is dropped, not resurrected as a
+    bogus entry -- the catch-up scan of records.tsv resupplies the
+    correct data for whatever the torn line was trying to record."""
+    monkeypatch.setenv("DBBASIC_RECORDS_CACHE_MAX_ROWS", "0")
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    path = data_dir / "collections" / "widgets" / "records.tsv"
+    oidx_path = object_records._oidx_path(path)
+
+    object_records.create_collection_record(
+        "widgets", {"id": "w1", "name": "Alpha"}, base_dir=data_dir, roots=[]
+    )
+    object_records.create_collection_record(
+        "widgets", {"id": "w2", "name": "Beta"}, base_dir=data_dir, roots=[]
+    )
+    object_records.get_collection_record("widgets", "w1", base_dir=data_dir, roots=[])
+    assert oidx_path.exists()
+
+    text = oidx_path.read_text()
+    assert text.endswith("\n")
+    oidx_path.write_text(text[:-4])
+    assert not oidx_path.read_text().endswith("\n")
+
+    object_records._OIDX_CACHE.clear()
+    id_offsets, coherent = object_records._load_oidx(path)
+    assert coherent
+    assert set(id_offsets) == {"w1", "w2"}
+    assert object_records.get_collection_record(
+        "widgets", "w2", base_dir=data_dir, roots=[]
+    ) == {"id": "w2", "name": "Beta"}
+
+
+def test_oidx_sidecar_survives_torn_data_tail_repair(tmp_path, monkeypatch):
+    """A crash mid-write can leave records.tsv itself with a torn final
+    row. The next append self-heals it (_repair_torn_tail truncates the
+    fragment away before appending), which can leave a previously-built
+    sidecar's covered_bytes pointing past the (now shorter, then
+    re-grown) file -- _load_oidx must detect and rebuild rather than
+    trust stale offsets, at every step of that sequence."""
+    monkeypatch.setenv("DBBASIC_RECORDS_CACHE_MAX_ROWS", "0")
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    object_records.create_collection_record(
+        "widgets", {"id": "w1", "name": "Alpha"}, base_dir=data_dir, roots=[]
+    )
+    object_records.create_collection_record(
+        "widgets", {"id": "w2", "name": "Beta"}, base_dir=data_dir, roots=[]
+    )
+    path = data_dir / "collections" / "widgets" / "records.tsv"
+    oidx_path = object_records._oidx_path(path)
+    object_records.get_collection_record("widgets", "w1", base_dir=data_dir, roots=[])
+    assert oidx_path.exists()
+
+    full_text = path.read_text()
+    path.write_text(full_text[:-3])
+    assert not path.read_text().endswith("\n")
+
+    object_records._OIDX_CACHE.clear()
+    listing = object_records.list_collection_records("widgets", base_dir=data_dir, roots=[])["records"]
+    assert listing == [{"id": "w1", "name": "Alpha"}]
+
+    object_records._OIDX_CACHE.clear()
+    created = object_records.create_collection_record(
+        "widgets", {"id": "w3", "name": "Gamma"}, base_dir=data_dir, roots=[]
+    )
+    assert created == {"id": "w3", "name": "Gamma"}
+    assert path.read_text().endswith("\n")
+
+    object_records._OIDX_CACHE.clear()
+    assert object_records.get_collection_record(
+        "widgets", "w3", base_dir=data_dir, roots=[]
+    ) == {"id": "w3", "name": "Gamma"}
+    listing_after = object_records.list_collection_records(
+        "widgets", base_dir=data_dir, roots=[]
+    )["records"]
+    assert listing_after == [{"id": "w1", "name": "Alpha"}, {"id": "w3", "name": "Gamma"}]
+
+
+def test_oidx_sidecar_resurrection_after_delete(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_RECORDS_CACHE_MAX_ROWS", "0")
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    path = data_dir / "collections" / "widgets" / "records.tsv"
+    oidx_path = object_records._oidx_path(path)
+
+    object_records.create_collection_record(
+        "widgets", {"id": "w1", "name": "Alpha"}, base_dir=data_dir, roots=[]
+    )
+    object_records.create_collection_record(
+        "widgets", {"id": "w2", "name": "Beta"}, base_dir=data_dir, roots=[]
+    )
+    assert oidx_path.exists()  # built by w2's duplicate check
+
+    object_records.delete_collection_record("widgets", "w1", base_dir=data_dir, roots=[])
+    with pytest.raises(object_records.RecordNotFoundError):
+        object_records.get_collection_record("widgets", "w1", base_dir=data_dir, roots=[])
+
+    # Resurrect: creating "w1" again must succeed (not raise Duplicate),
+    # resolved via the sidecar's absence-is-authoritative answer.
+    resurrected = object_records.create_collection_record(
+        "widgets", {"id": "w1", "name": "Gamma"}, base_dir=data_dir, roots=[]
+    )
+    assert resurrected == {"id": "w1", "name": "Gamma"}
+    assert object_records.get_collection_record(
+        "widgets", "w1", base_dir=data_dir, roots=[]
+    ) == {"id": "w1", "name": "Gamma"}
+
+
+def test_classic_mode_never_creates_oidx_sidecar(tmp_path, monkeypatch):
+    """A classic-mode collection's records.tsv is never `_op`-columned,
+    so _fast_record_lookup's sidecar branch is never reached -- confirm
+    no `.records.oidx` ever appears, across create/update/delete/get/list,
+    even with the cache forced cold on every single op."""
+    monkeypatch.setenv("DBBASIC_RECORDS_CACHE_MAX_ROWS", "0")
+    data_dir = tmp_path / "data"
+    write_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    path = data_dir / "collections" / "widgets" / "records.tsv"
+    oidx_path = object_records._oidx_path(path)
+
+    for i in range(5):
+        object_records.create_collection_record(
+            "widgets", {"id": f"w{i}", "name": f"n{i}"}, base_dir=data_dir, roots=[]
+        )
+    for i in range(5):
+        object_records.update_collection_record(
+            "widgets", f"w{i}", {"name": f"n{i}-updated"}, base_dir=data_dir, roots=[]
+        )
+    object_records.delete_collection_record("widgets", "w0", base_dir=data_dir, roots=[])
+    for i in range(1, 5):
+        object_records.get_collection_record("widgets", f"w{i}", base_dir=data_dir, roots=[])
+    object_records.list_collection_records("widgets", base_dir=data_dir, roots=[])
+
+    assert not oidx_path.exists()
+    assert str(path.resolve()) not in object_records._OIDX_CACHE
+
+
+def test_append_mode_equivalent_to_classic_mode_with_sidecar_forced(tmp_path, monkeypatch):
+    """Same equivalence property as
+    test_append_mode_equivalent_to_classic_mode_across_random_operations,
+    but with DBBASIC_RECORDS_CACHE_MAX_ROWS forced to 0 so every single
+    op on both sides is a _RECORDS_CACHE miss -- meaning every append-side
+    create/update/delete/get resolves through the id->offset sidecar
+    (build, catch-up, or its full-rewrite fallback) for the entire 200-op
+    sequence, never the warm-cache fast path."""
+    monkeypatch.setenv("DBBASIC_RECORDS_CACHE_MAX_ROWS", "0")
+    classic_dir = tmp_path / "classic"
+    append_dir = tmp_path / "append"
+    write_schema(classic_dir, "items", [{"name": "id"}, {"name": "value"}])
+    write_append_schema(append_dir, "items", [{"name": "id"}, {"name": "value"}])
+
+    def apply(data_dir, kind, record_id, payload):
+        try:
+            if kind == "create":
+                return ("ok", object_records.create_collection_record(
+                    "items", {"id": record_id, "value": payload}, base_dir=data_dir, roots=[]
+                ))
+            if kind == "update":
+                return ("ok", object_records.update_collection_record(
+                    "items", record_id, {"value": payload}, base_dir=data_dir, roots=[]
+                ))
+            if kind == "delete":
+                return ("ok", object_records.delete_collection_record(
+                    "items", record_id, base_dir=data_dir, roots=[]
+                ))
+            if kind == "get":
+                return ("ok", object_records.get_collection_record(
+                    "items", record_id, base_dir=data_dir, roots=[]
+                ))
+            return ("ok", object_records.list_collection_records(
+                "items", base_dir=data_dir, roots=[]
+            ))
+        except Exception as exc:  # noqa: BLE001 -- comparing exception SHAPES across both runs
+            return ("error", type(exc), str(exc))
+
+    rng = random.Random(20260718)
+    id_pool = [f"e{i}" for i in range(12)]
+
+    for step in range(200):
+        kind = rng.choice(["create", "update", "delete", "get", "list"])
+        record_id = rng.choice(id_pool)
+        payload = f"v{step}"
+
+        classic_outcome = apply(classic_dir, kind, record_id, payload)
+        append_outcome = apply(append_dir, kind, record_id, payload)
+
+        assert classic_outcome == append_outcome, (
+            f"step {step} op={kind!r} id={record_id!r}: "
+            f"classic={classic_outcome!r} append={append_outcome!r}"
+        )
+
+    classic_listing = object_records.list_collection_records("items", base_dir=classic_dir, roots=[])
+    append_listing = object_records.list_collection_records("items", base_dir=append_dir, roots=[])
+    assert classic_listing == append_listing

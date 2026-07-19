@@ -63,10 +63,19 @@ mode keep full temp+rename atomicity.
 ### Current limits (honest)
 
 - Collections larger than `DBBASIC_RECORDS_CACHE_MAX_ROWS` (default
-  500k) fall out of the in-process cache, so append-mode writes above
-  that size pay a full fold-parse per write (~2.7s at 1M) until the
-  planned id→offset sidecar lands (design doc, item 4). At or below the
-  threshold, writes are milliseconds.
+  500k) fall out of the in-process cache. Point operations (create's
+  duplicate check, get, update, delete) no longer pay a full fold-parse
+  above that size: an id→offset sidecar (design doc, item 4;
+  `.records.oidx` next to `records.tsv`, derived and disposable) answers
+  them by seek instead (measured: create/update ~1ms, get ~0.3ms at 1M
+  rows, versus ~2.8s for a full fold-parse before the sidecar existed).
+  The sidecar builds lazily on first use past the threshold (one
+  sequential scan, ~2s at 1M rows) and self-heals from any inconsistency
+  by rebuilding. **List and read-all-records stay unchanged** above the
+  threshold: they still fold the whole file, since ordering and
+  windowing need the full picture -- a secondary sidecar for that is
+  future work (design doc, item 5). At or below the threshold, nothing
+  changed: the in-process cache still serves everything, sidecar or not.
 - Cold reads of an append file cost ~1.6x a classic parse (fold
   overhead). Compaction restores parity.
 - Backup **preview/diff** does not yet interpret `_op`: for append-mode

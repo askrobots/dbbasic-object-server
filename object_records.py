@@ -49,6 +49,35 @@ OP_DELETE = "del"
 APPEND_COMPACT_MIN_ROWS_ENV = "DBBASIC_APPEND_COMPACT_MIN_ROWS"
 _DEFAULT_APPEND_COMPACT_MIN_ROWS = 10_000
 
+# id -> byte-offset sidecar (docs/append-only-storage-design.md item 4).
+# Lives next to records.tsv as a dotfile so it is invisible to every glob
+# this codebase uses to enumerate a collection's real content
+# (iter_record_collections' `*/records.tsv` glob, object_collections' same
+# pattern) and to backup (object_backup._should_skip drops any path with a
+# dotfile part) -- both were checked, not just assumed. Format (text,
+# greppable, torn-tail-tolerant like the data file itself):
+#   line 1 (header): "oidx1\t<data_ino>" -- the records.tsv inode this
+#     sidecar describes. No byte count lives in the header (a header
+#     rewrite-in-place would itself need the same torn-tail care as a data
+#     row, for no real benefit): "how much of the file is indexed" is
+#     instead DERIVED from the body, as the row_end_offset of the last
+#     complete data line -- see _load_oidx_body.
+#   subsequent lines: "<row_start_offset>\t<row_end_offset>\t<op>\t<id>",
+#     one per indexed PHYSICAL row of records.tsv (op "" or "del", exactly
+#     like OP_UPSERT/OP_DELETE). No CSV quoting is used or needed here:
+#     unlike a record's own field values, `id` is restricted to
+#     _RECORD_ID_RE (no tabs/newlines possible) and the offsets/op are
+#     plain digits/literals, so a bare tab-split is always unambiguous.
+# The sidecar is 100% disposable and NEVER required for correctness: any
+# reader unable to make sense of it (missing, corrupt, inode mismatch,
+# torn tail beyond what a catch-up scan can resolve) rebuilds it with one
+# sequential scan of records.tsv rather than raising -- see _load_oidx.
+OIDX_FILE = ".records.oidx"
+OIDX_HEADER_TAG = "oidx1"
+
+OIDX_CACHE_MAX_ENTRIES_ENV = "DBBASIC_OIDX_CACHE_MAX_ENTRIES"
+_DEFAULT_OIDX_CACHE_MAX_ENTRIES = 2
+
 # Env knobs for the records cache below. Read at call time (not cached in a
 # module global) via _records_cache_max_entries()/_records_cache_max_rows()
 # so tests can monkeypatch os.environ and see the change take effect on the
@@ -164,6 +193,28 @@ _DEFAULT_RECORDS_CACHE_MAX_ROWS = 500_000
 # (~line 607, Path.replace) were all checked and write via a temp path
 # followed by an atomic replace, never an in-place open("w").
 _RECORDS_CACHE: "OrderedDict[str, tuple[tuple[int, int, int], list[str], list[dict[str, str]], dict[str, int]]]" = OrderedDict()
+
+# In-memory mirror of the on-disk id->offset sidecar (see OIDX_FILE above),
+# keyed by resolved records.tsv path. Value is (data_ino, covered_bytes,
+# id->row_start_offset): `covered_bytes` is how much of the file (from
+# byte 0) this dict accounts for -- see _load_oidx, the sole reader AND
+# writer of this dict. A DELIBERATELY SEPARATE, much smaller LRU than
+# _RECORDS_CACHE (default 2 entries, not 64): the two caches serve
+# opposite size regimes -- _RECORDS_CACHE holds fully-parsed records and
+# is capped by ROW COUNT (never stores anything over
+# DBBASIC_RECORDS_CACHE_MAX_ROWS), while this sidecar is only ever
+# consulted for collections ABOVE that same threshold (see
+# _fast_record_lookup: it's tried only on a _RECORDS_CACHE miss), so an
+# entry here is exactly the case _RECORDS_CACHE refuses to hold. A plain
+# {id: int} dict is far lighter per row than a full record dict, but at
+# millions of rows it is still tens of MB (roughly 80-120MB at 1M ids per
+# the design doc) -- sharing _RECORDS_CACHE's 64-entry budget would let a
+# few huge collections' sidecars alone occupy gigabytes. Bounded instead
+# by DBBASIC_OIDX_CACHE_MAX_ENTRIES (default 2): a server touching more
+# than a couple of huge append collections concurrently pays a reload
+# (still just a sidecar-body read, not a records.tsv fold) rather than
+# holding every one of them resident forever.
+_OIDX_CACHE: "OrderedDict[str, tuple[int, int, dict[str, int]]]" = OrderedDict()
 
 # Collections (by resolved records.tsv path) flagged during a parse/fold as
 # having enough superseded+deleted rows to be worth compacting -- see
@@ -310,14 +361,17 @@ def get_collection_record(
 
     extra_names = _extra_field_names(collection, base_dir=base_dir, roots=roots)
     path = collection_records_file(collection, base_dir=base_dir)
-    _, records, id_index = _cache_entry(collection, path)
-    index = id_index.get(record_id)
-    if index is None:
+    # _fast_record_lookup tries the warm cache, then (append mode, over
+    # the cache's row threshold) the id->offset sidecar, before falling
+    # back to a full fold -- see its docstring. `existing_row`, when
+    # returned, is always already a fresh, independent copy.
+    _, exists, existing_row, _, _ = _fast_record_lookup(
+        collection, path, record_id, need_row=True
+    )
+    if not exists:
         raise RecordNotFoundError(f"Record not found: {collection}/{record_id}")
 
-    # Copy before handing it out: `records[index]` is the module cache's
-    # own dict, and _surface_extra mutates its argument in place.
-    return _surface_extra(dict(records[index]), extra_names=extra_names)
+    return _surface_extra(existing_row, extra_names=extra_names)
 
 
 def create_collection_record(
@@ -349,29 +403,49 @@ def create_collection_record(
 
     path = collection_records_file(collection, base_dir=base_dir)
     with _records_file_lock(path):
-        # Uncopied cache references (see the ALIASING SAFETY note on
-        # _RECORDS_CACHE): fine here because neither is mutated -- only
-        # read (the O(1) duplicate check) or captured in a closure that
-        # builds a fresh copy lazily, only if a full rewrite turns out to
-        # be needed (see _persist_write's folded_records_fn). Skipping an
-        # eager copy of every existing record is what keeps a fast-append
-        # create O(1) rather than O(n): an `any(row.get("id") == ... for
-        # row in records)` linear scan plus a full deep-copy of every
-        # existing record were, together, the dominant cost of a "fast"
-        # append in an earlier version of this function.
-        fields, records_ref, id_index_ref = _cache_entry(collection, path)
-        # Duplicate check against the folded record set: in append mode
-        # `id_index_ref` is built from the last-wins-by-id folded records
-        # (a deleted id is absent, so a create can reuse it --
-        # resurrection), same as classic mode's index, which never
+        # _fast_record_lookup resolves the duplicate check via the
+        # cheapest source available: warm cache, then (append mode, over
+        # threshold) the id->offset sidecar -- neither of which needs a
+        # full fold or a copy of every existing record. `records_ref`/
+        # `id_index_ref` are the module cache's own uncopied objects when
+        # sourced from the cache (or a forced full fold below) -- fine to
+        # read (the O(1) duplicate check already happened above) or
+        # capture in a closure that builds a fresh copy lazily, only if a
+        # full rewrite turns out to be needed (see _persist_write's
+        # folded_records_fn). Skipping an eager copy of every existing
+        # record is what keeps a fast-append create O(1) rather than
+        # O(n): an `any(row.get("id") == ... for row in records)` linear
+        # scan plus a full deep-copy of every existing record were,
+        # together, the dominant cost of a "fast" append in an earlier
+        # version of this function -- and, before the sidecar, the O(n)
+        # fold itself was the dominant cost above the cache's row
+        # threshold.
+        #
+        # In append mode, "exists" reflects the last-wins-by-id folded
+        # view either way (a deleted id is absent, so a create can reuse
+        # it -- resurrection), same as classic mode's index, which never
         # indexes a stale/removed row.
-        if record_id in id_index_ref:
+        fields, exists, _, records_ref, id_index_ref = _fast_record_lookup(
+            collection, path, record_id, need_row=False
+        )
+        if exists:
             raise DuplicateRecordIdError(f"Record already exists: {collection}/{record_id}")
 
         merged_fields = _merge_fields(fields, clean)
 
         def build_folded_records() -> list[dict[str, str]]:
-            records = [dict(existing) for existing in records_ref]
+            if records_ref is not None:
+                records = [dict(existing) for existing in records_ref]
+            else:
+                # Sidecar-sourced lookup: no full record list was ever
+                # built. Only reached on a rare full-rewrite path (new
+                # field / pending auto-compaction / mode transition), so
+                # paying one full fold here -- unavoidable, a full
+                # rewrite needs the complete record set -- doesn't
+                # regress the fast steady-state append this whole path
+                # exists to keep O(1).
+                _, full_records, _ = _cache_entry(collection, path)
+                records = [dict(existing) for existing in full_records]
             records.append(clean)
             return records
 
@@ -411,20 +485,23 @@ def update_collection_record(
 
     path = collection_records_file(collection, base_dir=base_dir)
     with _records_file_lock(path):
-        # See the matching comment in create_collection_record: uncopied
-        # cache references, read-only here, used for an O(1) lookup and a
-        # lazily-built copy (only made if a full rewrite is actually
-        # needed). id_index_ref is first-occurrence-wins (_build_id_index),
-        # same as the linear scan this replaces, so this changes nothing
-        # about WHICH row a duplicate-id file resolves to.
-        fields, records_ref, id_index_ref = _cache_entry(collection, path)
-        index = id_index_ref.get(record_id)
-        if index is None:
+        # See the matching comment in create_collection_record: this
+        # resolves via warm cache, then (append mode, over threshold) the
+        # id->offset sidecar, before a full fold -- see
+        # _fast_record_lookup. `existing_row` is always already a fresh,
+        # independent copy. When sourced from the cache (or a forced full
+        # fold below), id_index_ref is first-occurrence-wins
+        # (_build_id_index), same as the linear scan this replaces, so
+        # this changes nothing about WHICH row a duplicate-id file
+        # resolves to.
+        fields, exists, existing_row, records_ref, id_index_ref = _fast_record_lookup(
+            collection, path, record_id, need_row=True
+        )
+        if not exists:
             raise RecordNotFoundError(f"Record not found: {collection}/{record_id}")
 
-        raw_existing = records_ref[index]
-        existing_blob = _parse_extra_blob(raw_existing.get(EXTRA_FIELD))
-        existing = _surface_extra(dict(raw_existing), extra_names=extra_names)
+        existing_blob = _parse_extra_blob(existing_row.get(EXTRA_FIELD))
+        existing = _surface_extra(existing_row, extra_names=extra_names)
 
         updated = dict(existing)
         updated.update(clean)
@@ -450,8 +527,15 @@ def update_collection_record(
         merged_fields = _merge_fields(fields, updated)
 
         def build_folded_records() -> list[dict[str, str]]:
-            records = [dict(existing_row) for existing_row in records_ref]
-            records[index] = updated
+            if records_ref is not None:
+                records = [dict(existing_row) for existing_row in records_ref]
+                records[id_index_ref[record_id]] = updated
+            else:
+                # Sidecar-sourced lookup -- see the matching comment in
+                # create_collection_record's build_folded_records.
+                _, full_records, full_id_index = _cache_entry(collection, path)
+                records = [dict(existing_row) for existing_row in full_records]
+                records[full_id_index[record_id]] = updated
             return records
 
         _persist_write(
@@ -484,16 +568,26 @@ def delete_collection_record(
     path = collection_records_file(collection, base_dir=base_dir)
     with _records_file_lock(path):
         # See the matching comment in create_collection_record.
-        fields, records_ref, id_index_ref = _cache_entry(collection, path)
-        index = id_index_ref.get(record_id)
-        if index is None:
+        # `existing_row` is already a fresh, independent copy -- safe to
+        # hand back across the API as-is.
+        fields, exists, existing_row, records_ref, id_index_ref = _fast_record_lookup(
+            collection, path, record_id, need_row=True
+        )
+        if not exists:
             raise RecordNotFoundError(f"Record not found: {collection}/{record_id}")
 
-        removed = dict(records_ref[index])  # copy before handing back across the API
+        removed = existing_row
 
         def build_folded_records() -> list[dict[str, str]]:
-            records = [dict(existing_row) for existing_row in records_ref]
-            records.pop(index)
+            if records_ref is not None:
+                records = [dict(existing_row) for existing_row in records_ref]
+                records.pop(id_index_ref[record_id])
+            else:
+                # Sidecar-sourced lookup -- see the matching comment in
+                # create_collection_record's build_folded_records.
+                _, full_records, full_id_index = _cache_entry(collection, path)
+                records = [dict(existing_row) for existing_row in full_records]
+                records.pop(full_id_index[record_id])
             return records
 
         _persist_write(
@@ -563,6 +657,7 @@ def compact_collection(
             collection, path, physical_header, folded_records, cache_fields=logical_fields
         )
         _PENDING_COMPACTION.discard(str(path.resolve(strict=False)))
+        _discard_oidx(path)
 
         bytes_after = path.stat().st_size
         return {
@@ -703,6 +798,10 @@ def _records_cache_max_rows() -> int:
     return _env_int(RECORDS_CACHE_MAX_ROWS_ENV, _DEFAULT_RECORDS_CACHE_MAX_ROWS)
 
 
+def _oidx_cache_max_entries() -> int:
+    return _env_int(OIDX_CACHE_MAX_ENTRIES_ENV, _DEFAULT_OIDX_CACHE_MAX_ENTRIES)
+
+
 def _store_records_cache(
     cache_key: str,
     signature: tuple[int, int, int],
@@ -723,6 +822,34 @@ def _store_records_cache(
         _RECORDS_CACHE.popitem(last=False)
 
 
+def _peek_records_cache(
+    path: Path,
+) -> tuple[list[str], list[dict[str, str]], dict[str, int]] | None:
+    """Return a warm _RECORDS_CACHE hit for `path`, or None on any miss.
+
+    Never parses: this is the "is there already a fully-folded view of
+    this file sitting in memory" check used to decide, in
+    _fast_record_lookup, whether a point op can skip both a full fold AND
+    the sidecar (cache hit -- the common case for any collection at or
+    under DBBASIC_RECORDS_CACHE_MAX_ROWS once warm) or must try the
+    cheaper-than-a-fold sidecar path next (a miss -- cold cache, an
+    evicted LRU entry, or a collection that has never fit under the row
+    threshold and so is never stored here at all; see _cache_entry, this
+    function's parsing counterpart, which _fast_record_lookup and every
+    non-fast-path caller fall back to when neither a cache hit nor the
+    sidecar can answer).
+    """
+    cache_key = str(path.resolve(strict=False))
+    signature = _stat_signature(path)
+    if signature is None:
+        return None
+    cached = _RECORDS_CACHE.get(cache_key)
+    if cached is not None and cached[0] == signature:
+        _RECORDS_CACHE.move_to_end(cache_key)
+        return cached[1], cached[2], cached[3]
+    return None
+
+
 def _cache_entry(
     collection: str,
     path: Path,
@@ -738,20 +865,27 @@ def _cache_entry(
     fields/records/id_index are the CACHED objects -- see the
     _RECORDS_CACHE docstring above. Callers within this module must copy
     before handing anything back across the public API.
+
+    This is the O(n) fold path: a full parse of the whole file whenever
+    there's no warm cache hit. _fast_record_lookup (get/create/update/
+    delete's shared point-op resolver) tries _peek_records_cache and then
+    the id->offset sidecar FIRST specifically to avoid paying this on
+    every write to a collection too large to fit in _RECORDS_CACHE; this
+    function remains the correctness fallback for everything else (list,
+    read_collection_records, a cold/small collection's first touch, and
+    any point op the sidecar can't answer authoritatively).
     """
     if not path.exists():
         return ["id"], [], {}
     if not path.is_file():
         raise ValueError(f"Collection records path is not a file: {collection}")
 
+    peeked = _peek_records_cache(path)
+    if peeked is not None:
+        return peeked
+
     cache_key = str(path.resolve(strict=False))
     signature = _stat_signature(path)
-    if signature is not None:
-        cached = _RECORDS_CACHE.get(cache_key)
-        if cached is not None and cached[0] == signature:
-            _RECORDS_CACHE.move_to_end(cache_key)
-            return cached[1], cached[2], cached[3]
-
     fields, records = _parse_records_file(collection, path)
     id_index = _build_id_index(records)
     if signature is not None:
@@ -1126,10 +1260,18 @@ def _refresh_records_cache_after_append(
         state, impression logs, price history), so this is an accepted,
         documented trade rather than a gap.
 
-    Falls back (returns False) when there is no usable prior entry to
-    build on -- cold cache, evicted, over the row-count cache threshold,
-    or (defensively) a fields mismatch -- and the caller does a normal
-    full _refresh_records_cache rebuild instead.
+    Returns False when there is no usable prior entry to build on -- cold
+    cache, evicted, over the row-count cache threshold, or (defensively)
+    a fields mismatch. The caller (_persist_write's fast-append branch)
+    does NOT force a full rebuild in that case (an earlier version of
+    this code did, via folded_records_fn() + _refresh_records_cache --
+    exactly the O(n)-per-write cost the id->offset sidecar, docs/append-
+    only-storage-design.md item 4, exists to eliminate for a collection
+    too large to be a "usable prior entry" in the first place). A False
+    return simply leaves _RECORDS_CACHE as it was: the next reader either
+    hits the sidecar (if the file is append-physical and over threshold)
+    or pays one full fold on a genuine cold/small-collection miss, same
+    as any other cache miss elsewhere in this module.
     """
     signature = _stat_signature(path)
     if signature is None:
@@ -1222,7 +1364,7 @@ def _append_records_rows(
     path: Path,
     physical_fields: list[str],
     rows: list[dict[str, str]],
-) -> None:
+) -> list[tuple[int, int]]:
     """Append one or more pre-built physical rows to an append-format file.
 
     Each row in `rows` must already carry an `_op` key (OP_UPSERT or
@@ -1232,16 +1374,618 @@ def _append_records_rows(
     on a text-mode "a" handle, flushing once at the end. Same dialect as
     _write_collection_records: tab-delimited, "\\n" line terminator,
     QUOTE_MINIMAL.
+
+    Returns the (row_start_offset, row_end_offset) byte span written for
+    each row, in order -- _persist_write hands these straight to the id
+    sidecar (_update_oidx_after_append) so it never has to re-derive them
+    with a separate stat or scan. `handle.tell()` on a text-mode stream is
+    only reliably a byte offset when nothing has been read from it in
+    this session (reading with a stateful decoder can return an opaque
+    cookie instead); a pure sequential-write "a" session like this one
+    never reads, so it's exact here -- verified empirically (UTF-8,
+    non-ASCII content, mid-stream tell() calls all matched the file's
+    actual byte length).
     """
     _repair_torn_tail(path)
+    offsets: list[tuple[int, int]] = []
     with path.open("a", newline="") as handle:
         writer = csv.writer(
             handle, delimiter="\t", lineterminator="\n", quoting=csv.QUOTE_MINIMAL
         )
         for row in rows:
+            start = handle.tell()
             projected = _project_record(row, physical_fields)
             writer.writerow([projected[field] for field in physical_fields])
+            offsets.append((start, handle.tell()))
         handle.flush()
+    return offsets
+
+
+# ---------------------------------------------------------------------------
+# id -> byte-offset sidecar (docs/append-only-storage-design.md item 4).
+#
+# SCOPE: every function below is reached only from append-physical code
+# paths -- _fast_record_lookup only looks past a _peek_records_cache miss
+# into the sidecar when `_physical_header(path)[0] == OP_FIELD`, and
+# _persist_write/_write_collection_records only call _update_oidx_after_
+# append/_discard_oidx on the append-mode branches. A collection that has
+# never been append-mode (no schema ever set "storage": "append") never
+# executes a line past that header check: its _physical_header is a plain
+# ["id", ...] with no leading `_op`, so the guard is false every time.
+# ---------------------------------------------------------------------------
+
+
+def _oidx_path(records_path: Path) -> Path:
+    return records_path.with_name(OIDX_FILE)
+
+
+def _store_oidx_cache(
+    cache_key: str,
+    data_ino: int,
+    covered_bytes: int,
+    id_offsets: dict[str, int],
+) -> None:
+    _OIDX_CACHE[cache_key] = (data_ino, covered_bytes, id_offsets)
+    _OIDX_CACHE.move_to_end(cache_key)
+    max_entries = _oidx_cache_max_entries()
+    while len(_OIDX_CACHE) > max_entries:
+        _OIDX_CACHE.popitem(last=False)
+
+
+def _records_header_length(path: Path) -> int:
+    """Byte length of records.tsv's own physical header line (newline
+    included), or 0 if the file is empty/missing. Reads only the first
+    physical line -- cheap regardless of file size."""
+    try:
+        with path.open("rb") as handle:
+            return len(handle.readline())
+    except OSError:
+        return 0
+
+
+def _scan_append_rows_for_offsets(
+    path: Path,
+    physical_fields: list[str],
+    start_byte: int,
+) -> tuple[list[tuple[int, int, str, str]], int, int]:
+    """Scan records.tsv from `start_byte` to EOF for complete physical
+    rows, returning (entries, covered_bytes, row_count).
+
+    `entries` is one (row_start, row_end, op, id) per row found with a
+    non-empty id (blank-id rows -- reachable only via a hand-edited file,
+    see _fold_append_rows -- can't be looked up by id, so are simply never
+    indexed, though they DO count towards `row_count`, matching
+    _parse_append_body's physical_row_count exactly); `covered_bytes` is
+    the byte offset up to which scanning is authoritative (>= start_byte,
+    equal to it when nothing new/complete was found). `start_byte` must
+    land exactly on a row boundary -- every offset this module ever hands
+    back here (a prior scan's covered_bytes, or the records-header
+    length) always does, since it is always either 0 or a previous
+    row_end.
+
+    Torn-tail tolerant exactly like _parse_append_body: a trailing
+    unterminated physical line is dropped first (_drop_torn_tail), and a
+    row that still fails to parse (or reports more fields than the header
+    -- a real corruption, not a torn write) stops consumption at that
+    point rather than raising. This function must NEVER raise: it is the
+    sidecar's own scan, and the sidecar is never allowed to be less
+    tolerant than the reader it exists to speed up (any row it can't
+    make sense of just isn't indexed yet -- the caller's `coherent` flag,
+    derived from comparing covered_bytes to the file's actual size,
+    reports that honestly rather than guessing).
+
+    Byte offsets are computed by decoding `path`'s bytes from `start_byte`
+    once, then, after each row csv.reader consumes, converting the
+    now-consumed prefix of that decoded text back to its exact byte
+    length (`str.encode` on the newly consumed slice only, not the whole
+    prefix each time, so total work stays O(scanned bytes) instead of
+    O(scanned bytes squared)). `start_byte` itself is always a byte
+    offset immediately after a "\\n", which is a single ASCII byte and
+    therefore never a UTF-8 continuation byte -- so slicing raw bytes from
+    there and decoding is always safe.
+    """
+    try:
+        with path.open("rb") as handle:
+            handle.seek(start_byte)
+            raw = handle.read()
+    except OSError:
+        return [], start_byte, 0
+    if not raw:
+        return [], start_byte, 0
+
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return [], start_byte, 0
+    text = _drop_torn_tail(text)
+    if not text:
+        return [], start_byte, 0
+
+    field_count = len(physical_fields)
+    stream = io.StringIO(text)
+    reader = csv.reader(stream, delimiter="\t")
+    entries: list[tuple[int, int, str, str]] = []
+    row_count = 0
+    prev_char = 0
+    byte_cursor = start_byte
+    while True:
+        try:
+            row = next(reader)
+        except StopIteration:
+            break
+        except csv.Error:
+            break
+        cur_char = stream.tell()
+        row_bytes = len(text[prev_char:cur_char].encode("utf-8"))
+        prev_char = cur_char
+        row_start = byte_cursor
+        row_end = byte_cursor + row_bytes
+        byte_cursor = row_end
+        if not row:
+            continue
+        if len(row) > field_count:
+            break
+        record = {
+            physical_fields[i]: (row[i] if i < len(row) else "")
+            for i in range(field_count)
+        }
+        row_count += 1
+        record_id = record.get("id", "")
+        if not record_id:
+            continue
+        op = record.get(OP_FIELD, OP_UPSERT)
+        entries.append((row_start, row_end, op, record_id))
+
+    return entries, byte_cursor, row_count
+
+
+def _fold_oidx_entries(
+    entries: list[tuple[int, int, str, str]],
+    *,
+    base: dict[str, int] | None = None,
+) -> dict[str, int]:
+    """Fold sidecar entries last-wins into {id: row_start_offset},
+    dropping deleted ids -- the same rule _fold_append_rows applies to
+    full rows, applied here to bare offsets.
+
+    Mutates and returns `base` directly when given, rather than copying
+    it first: every call site's `base` is either freshly built moments
+    earlier with nothing else referencing it (_load_oidx_body's return),
+    or is _OIDX_CACHE's own entry being brought up to date in a catch-up
+    that is about to replace that same cache slot anyway (see the
+    matching note on _update_oidx_after_append for why this dict is safe
+    to mutate in place: it's never exposed outside this module). A copy
+    here would be a one-time-per-catch-up cost rather than a per-write
+    one, so it's lower-stakes than the bug that note describes -- but
+    there's no reason to pay even that when nothing needs the old
+    version preserved.
+    """
+    result = base if base is not None else {}
+    for row_start, _row_end, op, record_id in entries:
+        if op == OP_DELETE:
+            result.pop(record_id, None)
+        else:
+            result[record_id] = row_start
+    return result
+
+
+def _write_oidx_file(
+    oidx_path: Path, data_ino: int, entries: list[tuple[int, int, str, str]]
+) -> None:
+    """Write a fresh sidecar from scratch (REBUILD), atomically (temp file
+    + replace) so a concurrent reader never observes a half-written file
+    mid-rebuild -- unlike the steady-state append path
+    (_append_oidx_lines), which is cheap specifically because it skips
+    this."""
+    oidx_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = oidx_path.with_name(f".{oidx_path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        with temp_path.open("w", newline="") as handle:
+            handle.write(f"{OIDX_HEADER_TAG}\t{data_ino}\n")
+            handle.writelines(
+                f"{row_start}\t{row_end}\t{op}\t{record_id}\n"
+                for row_start, row_end, op, record_id in entries
+            )
+        temp_path.replace(oidx_path)
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
+
+
+def _append_oidx_lines(
+    oidx_path: Path, data_ino: int, entries: list[tuple[int, int, str, str]]
+) -> None:
+    """Append idx lines to an existing sidecar whose header ino the
+    caller has already confirmed matches `data_ino`. Self-heals a torn
+    idx tail first (same helper the data file uses -- the format needs no
+    CSV awareness to repair: an idx line can never contain a literal tab
+    or newline inside a field, since ids are restricted to _RECORD_ID_RE
+    and offsets/op are plain digits/literals, so "does the file end with
+    \\n" is exactly as reliable a completeness signal here as it is for
+    records.tsv)."""
+    if not entries:
+        return
+    _repair_torn_tail(oidx_path)
+    with oidx_path.open("a", newline="") as handle:
+        handle.writelines(
+            f"{row_start}\t{row_end}\t{op}\t{record_id}\n"
+            for row_start, row_end, op, record_id in entries
+        )
+        handle.flush()
+
+
+def _read_oidx_header(oidx_path: Path) -> int | None:
+    """Return the data_ino recorded in the sidecar's header line, or None
+    when the file is missing, empty, or its header doesn't parse (all
+    treated identically by the caller: rebuild)."""
+    try:
+        with oidx_path.open("r", newline="") as handle:
+            first_line = handle.readline()
+    except OSError:
+        return None
+    parts = first_line.rstrip("\n").split("\t")
+    if len(parts) != 2 or parts[0] != OIDX_HEADER_TAG:
+        return None
+    try:
+        return int(parts[1])
+    except ValueError:
+        return None
+
+
+def _load_oidx_body(oidx_path: Path) -> tuple[dict[str, int], int | None] | None:
+    """Parse a sidecar's data lines (everything after the header) into
+    ({id: offset}, covered_bytes). Returns None when the file can't be
+    trusted at all (missing, or a data line doesn't have exactly the 4
+    expected columns / non-integer offsets -- genuine corruption, not a
+    torn write, so this doesn't try to salvage a prefix: the caller
+    rebuilds instead of guessing).
+
+    covered_bytes is None when there are no data lines yet (a header-only
+    sidecar, e.g. right after this collection's very first indexed
+    write): the caller supplies the real baseline in that case
+    (_records_header_length), since a brand-new sidecar covers exactly
+    the data file's own header bytes, not zero.
+
+    A torn last line (the file doesn't end with "\\n") is dropped, same
+    rule as everywhere else: an idx line, like a data row, is only
+    trustworthy once its own newline lands.
+    """
+    try:
+        text = oidx_path.read_text()
+    except OSError:
+        return None
+    lines = text.split("\n")
+    if not lines or not lines[0].startswith(f"{OIDX_HEADER_TAG}\t"):
+        return None
+
+    body_lines = lines[1:]
+    if body_lines and body_lines[-1] == "":
+        body_lines = body_lines[:-1]  # file ends with \n -- drop the trailing empty split
+    elif body_lines:
+        body_lines = body_lines[:-1]  # torn last line -- drop it, unindexed
+
+    result: dict[str, int] = {}
+    covered_bytes: int | None = None
+    for line in body_lines:
+        if not line:
+            continue
+        parts = line.split("\t")
+        if len(parts) != 4:
+            return None
+        try:
+            row_start = int(parts[0])
+            row_end = int(parts[1])
+        except ValueError:
+            return None
+        op, record_id = parts[2], parts[3]
+        if op == OP_DELETE:
+            result.pop(record_id, None)
+        else:
+            result[record_id] = row_start
+        covered_bytes = row_end
+
+    return result, covered_bytes
+
+
+def _oidx_get_row(
+    path: Path, physical_fields: list[str], offset: int
+) -> dict[str, str] | None:
+    """Seek to `offset` in records.tsv and parse exactly the one physical
+    row starting there, returning the LOGICAL record (id + fields, `_op`
+    stripped) -- or None if the row can't be read/parsed cleanly, which
+    the caller treats as "sidecar inconclusive, fall back to a full
+    fold" rather than as "record missing"."""
+    try:
+        with path.open("rb") as handle:
+            handle.seek(offset)
+            raw_line = handle.readline()
+    except OSError:
+        return None
+    if not raw_line.endswith(b"\n"):
+        return None
+    try:
+        text_line = raw_line.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    try:
+        row = next(csv.reader(io.StringIO(text_line), delimiter="\t"))
+    except (StopIteration, csv.Error):
+        return None
+    field_count = len(physical_fields)
+    if not row or len(row) > field_count:
+        return None
+    record = {
+        physical_fields[i]: (row[i] if i < len(row) else "")
+        for i in range(field_count)
+    }
+    return {key: value for key, value in record.items() if key != OP_FIELD}
+
+
+def _load_oidx(path: Path) -> tuple[dict[str, int], bool]:
+    """Return ({id: row_start_offset}, coherent) for `path`'s CURRENT
+    append-mode content, using and maintaining the on-disk sidecar plus
+    the small in-memory _OIDX_CACHE LRU.
+
+    `coherent` is True exactly when the returned dict accounts for every
+    byte of the file as observed by this call's own stat -- i.e. it is
+    safe to treat "id not in the dict" as proof the id doesn't currently
+    exist. False means only a best-effort snapshot could be produced
+    (normally: a torn tail at EOF from a write that crashed before
+    self-healing) and callers must not treat an absence -- or, to be
+    conservative, even a presence -- as authoritative; see
+    _fast_record_lookup, the only caller, which falls all the way back to
+    a full fold whenever this is False.
+
+    100% best-effort and NEVER raises: any inconsistency (missing sidecar,
+    corrupt sidecar, inode mismatch, a data file that shrank under a
+    stable inode -- e.g. a torn-tail repair truncation) triggers a
+    rebuild (one sequential scan of records.tsv) rather than propagating
+    an error, per docs/append-only-storage-design.md: the sidecar is
+    "never required for correctness."
+    """
+    try:
+        st = path.stat()
+    except OSError:
+        return {}, False
+    data_ino = st.st_ino
+    data_size = st.st_size
+    cache_key = str(path.resolve(strict=False))
+
+    cached = _OIDX_CACHE.get(cache_key)
+    if cached is not None:
+        cached_ino, cached_covered, cached_dict = cached
+        if cached_ino == data_ino and cached_covered <= data_size:
+            if cached_covered == data_size:
+                _OIDX_CACHE.move_to_end(cache_key)
+                return cached_dict, True
+            physical_fields = _physical_header(path)
+            if physical_fields and physical_fields[0] == OP_FIELD:
+                entries, new_covered, _row_count = _scan_append_rows_for_offsets(
+                    path, physical_fields, cached_covered
+                )
+                new_dict = _fold_oidx_entries(entries, base=cached_dict)
+                _append_oidx_lines(_oidx_path(path), data_ino, entries)
+                _store_oidx_cache(cache_key, data_ino, new_covered, new_dict)
+                return new_dict, new_covered == data_size
+        # ino mismatch, or the file shrank under a stable inode: this
+        # in-memory snapshot can't be trusted as a base -- drop it and
+        # fall through to the on-disk / rebuild path below.
+        _OIDX_CACHE.pop(cache_key, None)
+
+    physical_fields = _physical_header(path)
+    if not physical_fields or physical_fields[0] != OP_FIELD:
+        return {}, False
+
+    oidx_path = _oidx_path(path)
+    header_ino = _read_oidx_header(oidx_path)
+    if header_ino == data_ino:
+        loaded = _load_oidx_body(oidx_path)
+        if loaded is not None:
+            body_dict, body_covered = loaded
+            covered = body_covered if body_covered is not None else _records_header_length(path)
+            if covered <= data_size:
+                if covered < data_size:
+                    entries, covered, _row_count = _scan_append_rows_for_offsets(
+                        path, physical_fields, covered
+                    )
+                    body_dict = _fold_oidx_entries(entries, base=body_dict)
+                    _append_oidx_lines(oidx_path, data_ino, entries)
+                _store_oidx_cache(cache_key, data_ino, covered, body_dict)
+                return body_dict, covered == data_size
+            # covered > data_size: the data file shrank under a stable
+            # ino -- fall through to a full rebuild rather than trust a
+            # sidecar that claims to know about bytes no longer there.
+
+    # REBUILD: a full sequential scan of records.tsv from its own header,
+    # functionally equivalent to the classic full-fold parse this branch
+    # replaces for an over-threshold collection -- so, like that parse
+    # (_parse_records_file -> _maybe_flag_auto_compact), it's also the
+    # right place to (re-)evaluate auto-compaction. Incremental catch-up
+    # above deliberately does NOT re-flag: this is a documented, narrower
+    # trigger window than the pre-sidecar behavior (every full fold used
+    # to re-check on every cold read) -- a collection gets an accurate
+    # check whenever its sidecar needs rebuilding (first use past the
+    # cache threshold, or any time compaction/a mode switch/corruption
+    # invalidates it) but not on every subsequent catch-up scan. Flagging
+    # on every catch-up too would need a persisted running physical-row
+    # count in the sidecar itself; not worth the format complexity for a
+    # threshold heuristic that self-corrects the next time a rebuild does
+    # happen.
+    header_bytes = _records_header_length(path)
+    entries, covered, row_count = _scan_append_rows_for_offsets(path, physical_fields, header_bytes)
+    fresh_dict = _fold_oidx_entries(entries)
+    _write_oidx_file(oidx_path, data_ino, entries)
+    _store_oidx_cache(cache_key, data_ino, covered, fresh_dict)
+    if covered == data_size:
+        _maybe_flag_auto_compact(path, physical_row_count=row_count, live_row_count=len(fresh_dict))
+    return fresh_dict, covered == data_size
+
+
+def _discard_oidx(path: Path) -> None:
+    """Drop any sidecar tracking (in-memory and on-disk) for `path` --
+    called after a full rewrite of an append-physical file (compaction, a
+    mode-transition rewrite in either direction, or the new-field
+    fallback rewrite): the rewrite gives the file a new inode via
+    temp+rename, which would make any existing sidecar's header ino stale
+    even without this (the next _load_oidx would detect the mismatch and
+    rebuild on its own) -- this just does it eagerly so a compacted or
+    mode-switched collection's directory doesn't carry a permanently
+    orphaned `.records.oidx` around
+    (docs/append-only-storage-design.md Sidecars: "delete or rebuild
+    sidecar after the rewrite"). Never called for a collection with no
+    append-mode history -- see the SCOPE note above this section -- so a
+    purely classic collection's write path never reaches here. Best-
+    effort: an unlink failure is not a correctness problem, so this never
+    raises.
+    """
+    cache_key = str(path.resolve(strict=False))
+    _OIDX_CACHE.pop(cache_key, None)
+    try:
+        _oidx_path(path).unlink()
+    except OSError:
+        pass
+
+
+def _update_oidx_after_append(
+    path: Path,
+    rows: list[dict[str, str]],
+    offsets: list[tuple[int, int]],
+) -> None:
+    """Keep the sidecar in sync with a fast append, in O(1): appends
+    matching idx line(s) to the on-disk sidecar and updates the in-memory
+    _OIDX_CACHE entry -- but ONLY when that entry is already warm for
+    this path. When it isn't, this does nothing at all: a write must
+    never pay to build or maintain a sidecar nobody is currently reading
+    through (see _load_oidx, which lazily builds/catches-up on the next
+    point op that actually needs it -- "Sidecar builds lazily on first
+    over-threshold op").
+
+    `offsets` are exactly what _append_records_rows just returned for
+    `rows` (same order, same length) -- no re-derivation (stat or scan)
+    needed to keep this O(1) regardless of collection size.
+
+    Mutates `cached_dict` IN PLACE rather than copying it first, UNLIKE
+    _refresh_records_cache_after_append's equivalent step for
+    _RECORDS_CACHE (which always copies, even on its "fast" path -- see
+    that function's docstring). That copy is safe there because
+    _RECORDS_CACHE's records/id_index are handed across the public API
+    (get/list return values, directly or via one more copy) and so must
+    never be mutated out from under an earlier caller -- and it's AFFORD-
+    ABLE there because _RECORDS_CACHE only ever holds collections at or
+    under DBBASIC_RECORDS_CACHE_MAX_ROWS. Neither holds for this dict: it
+    is never exposed outside this module (every public entry point that
+    might have sourced data from it -- get/create/update/delete via
+    _fast_record_lookup -- only ever calls dict.get() on it and returns a
+    freshly-parsed ROW, never the dict itself), and it exists specifically
+    FOR collections too large for a copy to be the cheap operation it is
+    for _RECORDS_CACHE (a 1M-entry dict copy alone was measured to add
+    ~35-40ms to every single write here -- see the sidecar benchmark
+    report -- reintroducing real per-write cost in exactly the size
+    regime this feature exists to make O(1) again). A concurrent
+    lock-free reader's dict.get() racing this mutation is benign under
+    the GIL (each op is atomic; a race can only return a value from
+    just-before or just-after the write, never corrupt memory or raise)
+    -- the same class of eventual-consistency already documented and
+    accepted for _RECORDS_CACHE's own CONCURRENCY note above.
+    """
+    cache_key = str(path.resolve(strict=False))
+    cached = _OIDX_CACHE.get(cache_key)
+    if cached is None:
+        return
+    cached_ino, cached_covered, cached_dict = cached
+    if cached_covered != offsets[0][0]:
+        # The cached view doesn't start exactly where this append starts
+        # (should not happen -- writes are serialized under the caller's
+        # file lock and this cache is only ever advanced by this same
+        # process's own writes/reads) -- rather than risk recording wrong
+        # offsets, drop it; the next _load_oidx call resyncs or rebuilds.
+        _OIDX_CACHE.pop(cache_key, None)
+        return
+
+    entries: list[tuple[int, int, str, str]] = []
+    for row, (start, end) in zip(rows, offsets, strict=True):
+        op = row.get(OP_FIELD, OP_UPSERT)
+        record_id = row.get("id", "")
+        entries.append((start, end, op, record_id))
+        if op == OP_DELETE:
+            cached_dict.pop(record_id, None)
+        else:
+            cached_dict[record_id] = start
+
+    _append_oidx_lines(_oidx_path(path), cached_ino, entries)
+    _store_oidx_cache(cache_key, cached_ino, offsets[-1][1], cached_dict)
+
+
+def _fast_record_lookup(
+    collection: str,
+    path: Path,
+    record_id: str,
+    *,
+    need_row: bool,
+) -> tuple[
+    list[str],
+    bool,
+    dict[str, str] | None,
+    list[dict[str, str]] | None,
+    dict[str, int] | None,
+]:
+    """Resolve (fields, exists, existing_row, records_ref, id_index_ref)
+    for one record id -- the shared point-op resolver behind get/create/
+    update/delete, in increasing order of cost:
+
+      1. A warm _RECORDS_CACHE hit (_peek_records_cache) -- the ordinary
+         fast path for any collection at or under
+         DBBASIC_RECORDS_CACHE_MAX_ROWS once touched once. records_ref/
+         id_index_ref are the module cache's own objects (never mutate --
+         see the _RECORDS_CACHE ALIASING SAFETY note).
+      2. On a miss, if the file is append-physical: the id->offset
+         sidecar (_load_oidx). Answers in O(1) without ever folding the
+         file -- this is the whole point of the sidecar (docs/append-
+         only-storage-design.md item 4): a collection too large for
+         _RECORDS_CACHE no longer pays an O(n) fold on every write.
+         Trusted only when _load_oidx reports `coherent` -- otherwise
+         (a torn tail at EOF from an unfinished write) this falls all the
+         way through to step 3 rather than risk a wrong answer.
+         records_ref/id_index_ref are None in this case: the fast-append
+         write path this enables never needs the full record list (see
+         _persist_write's folded_records_fn, which forces its own full
+         fold via _cache_entry lazily, only if a rare full-rewrite path
+         is chosen instead of a fast append).
+      3. _cache_entry -- the original full fold, unchanged, used for
+         classic-mode files, a genuinely cold/small collection's first
+         touch, and any sidecar-inconclusive case above.
+
+    fields is always the LOGICAL field list (no `_op`). `existing_row`,
+    when requested via need_row and the id exists, is always a fresh,
+    independent copy safe to hand across the public API or mutate.
+    """
+    cached = _peek_records_cache(path)
+    if cached is not None:
+        fields, records_ref, id_index_ref = cached
+        index = id_index_ref.get(record_id)
+        existing_row = dict(records_ref[index]) if (need_row and index is not None) else None
+        return fields, index is not None, existing_row, records_ref, id_index_ref
+
+    physical_header = _physical_header(path)
+    if physical_header and physical_header[0] == OP_FIELD:
+        id_offsets, coherent = _load_oidx(path)
+        if coherent:
+            offset = id_offsets.get(record_id)
+            if offset is None:
+                return physical_header[1:], False, None, None, None
+            if not need_row:
+                return physical_header[1:], True, None, None, None
+            row = _oidx_get_row(path, physical_header, offset)
+            if row is not None:
+                return physical_header[1:], True, row, None, None
+            # Row unreadable at its recorded offset despite a coherent
+            # sidecar -- shouldn't happen; be conservative and fall
+            # through to the authoritative full fold below.
+
+    fields, records_ref, id_index_ref = _cache_entry(collection, path)
+    index = id_index_ref.get(record_id)
+    existing_row = dict(records_ref[index]) if (need_row and index is not None) else None
+    return fields, index is not None, existing_row, records_ref, id_index_ref
 
 
 def _collection_storage_mode(
@@ -1297,8 +2041,18 @@ def _persist_write(
       - FAST APPEND: storage is "append", the file is already physically
         in append format, this write doesn't introduce a field the
         current header lacks, and no auto-compaction is pending for this
-        collection -- append one row, then refresh the cache the same way
-        a full rewrite would (store the folded content + new signature).
+        collection -- append one row, then update whichever of
+        _RECORDS_CACHE / the id->offset sidecar (docs/append-only-
+        storage-design.md item 4) is already warm for this path, in O(1),
+        via _refresh_records_cache_after_append / _update_oidx_after_
+        append. Neither is FORCED warm here: a collection too large for
+        _RECORDS_CACHE (the case the sidecar exists for) is left
+        uncached by design, and a sidecar nobody has read through yet is
+        left unbuilt (see _update_oidx_after_append) -- either would mean
+        paying the exact O(n) fold-per-write cost this branch exists to
+        avoid, just moved from "on every write" to "on every write that
+        happens to miss the cache," which is most of them for a
+        write-hot, over-threshold collection.
       - TRANSITION-IN: storage is "append" but the file isn't (yet) in
         append format (including a brand new collection) -- one full
         rewrite that adds the `_op` header column, applying this op in
@@ -1334,16 +2088,26 @@ def _persist_write(
         row = dict(delta_row) if delta_row is not None else {}
         row["id"] = delta_id
         row[OP_FIELD] = delta_op
-        _append_records_rows(path, physical_fields, [row])
+        offsets = _append_records_rows(path, physical_fields, [row])
         projected_row = _project_record(row, merged_fields)
-        if not _refresh_records_cache_after_append(
+        _refresh_records_cache_after_append(
             collection, path, merged_fields, delta_op, delta_id, projected_row
-        ):
-            _refresh_records_cache(collection, path, merged_fields, folded_records_fn())
+        )
+        _update_oidx_after_append(path, [row], offsets)
         return
 
-    _PENDING_COMPACTION.discard(cache_key)
+    if file_is_append_physical:
+        _discard_oidx(path)
+    # folded_records_fn() is called BEFORE the discard below (not after,
+    # as it may look more natural) because, on the sidecar-sourced lookup
+    # path, it can itself force a fresh full fold (_cache_entry ->
+    # _parse_records_file), which re-evaluates and can re-set auto-compact
+    # flagging for this same cache_key from the PRE-write content. This
+    # write is about to make that stale regardless of what it flagged
+    # (append: compacting; classic/transition: rewriting from scratch
+    # either way), so the discard must be the last word.
     folded_records = folded_records_fn()
+    _PENDING_COMPACTION.discard(cache_key)
     if desired_mode == object_schemas.STORAGE_APPEND:
         physical_fields = [OP_FIELD, *merged_fields]
         _write_collection_records(
