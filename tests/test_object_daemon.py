@@ -735,3 +735,24 @@ def test_process_stale_transitions_honors_interval_marker(tmp_path, monkeypatch)
     assert second is None
     current = object_records.get_collection_record("tasks", "t2", base_dir=data_dir)
     assert current["status"] == "waiting_on_client"  # untouched
+
+
+def test_daemon_entrypoint_is_runnable_without_optional_runtime():
+    """The daemon's main() must start on a bare install: no
+    dbbasic_object_core, no croniter -- the storage passes (compaction,
+    auto-transitions, cleanups) are stdlib and must not be held hostage by
+    an optional runtime import. --help exercises the full import path and
+    argparse wiring without entering the loop. (This exact failure shipped:
+    main() hard-imported the optional runtime and had never been run.)"""
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "object_daemon.py", "--help"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        cwd=Path(__file__).resolve().parent.parent,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Object Primitive Daemon" in result.stdout

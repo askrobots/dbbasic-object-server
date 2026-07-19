@@ -362,9 +362,9 @@ def process_events(runtime: ObjectRuntime):
 
 # --- Rate Limit Cleanup ---
 
-def cleanup_ratelimit(max_age=120):
+def cleanup_ratelimit(max_age=120, *, base_dir: Path | str = "data"):
     """Delete rate limit files older than max_age seconds."""
-    ratelimit_dir = Path('data/ratelimit')
+    ratelimit_dir = Path(base_dir) / 'ratelimit'
     if not ratelimit_dir.exists():
         return
 
@@ -866,12 +866,22 @@ def shutdown(signum, frame):
 def main():
     import argparse
 
-    from dbbasic_object_core.runtime.object_runtime import ObjectRuntime
-
     parser = argparse.ArgumentParser(description="Object Primitive Daemon")
     parser.add_argument("--interval", type=float, default=1.0,
                         help="Poll interval in seconds (default: 1.0)")
     args = parser.parse_args()
+
+    # The primitive-runtime passes (scheduler/queue/events trigger objects)
+    # need the optional dbbasic_object_core runtime. The storage passes
+    # (compaction, auto-transitions, cleanups) are stdlib and must run
+    # regardless -- a deployment without the runtime still gets them.
+    try:
+        from dbbasic_object_core.runtime.object_runtime import ObjectRuntime
+    except ImportError:
+        ObjectRuntime = None
+
+    # Same data-dir resolution as the server: env first, ./data fallback.
+    base_dir = os.environ.get("DBBASIC_DATA_DIR", "data")
 
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
@@ -880,12 +890,16 @@ def main():
     print("Object Primitive Daemon")
     print("=" * 60)
     print(f"Poll interval: {args.interval}s")
+    print(f"Data dir: {base_dir}")
     print(f"Object roots: {', '.join(str(root) for root in _object_roots())}")
-    print(f"Scheduler: {'enabled' if _find_trigger_file('scheduler') else 'no scheduler object'}")
-    print(f"Queue: {'enabled' if _find_trigger_file('queue') else 'no queue object'}")
-    print(f"Events: {'enabled' if _find_trigger_file('events') else 'no events object'}")
+    if ObjectRuntime is None:
+        print("Object runtime: NOT installed (scheduler/queue/events passes disabled)")
+    else:
+        print(f"Scheduler: {'enabled' if _find_trigger_file('scheduler') else 'no scheduler object'}")
+        print(f"Queue: {'enabled' if _find_trigger_file('queue') else 'no queue object'}")
+        print(f"Events: {'enabled' if _find_trigger_file('events') else 'no events object'}")
     print(f"Croniter: {'available' if croniter else 'NOT installed (cron tasks disabled)'}")
-    print(f"Rate limit cleanup: {'enabled' if Path('data/ratelimit').exists() else 'no ratelimit dir yet'}")
+    print(f"Rate limit cleanup: {'enabled' if (Path(base_dir) / 'ratelimit').exists() else 'no ratelimit dir yet'}")
     print(f"Compaction interval: {_env_int(COMPACTION_INTERVAL_SECONDS_ENV, _DEFAULT_COMPACTION_INTERVAL_SECONDS)}s")
     _startup_rules = auto_transition_rules_from_env()
     print(
@@ -897,37 +911,38 @@ def main():
     print("=" * 60)
     print()
 
-    runtime = ObjectRuntime(base_dir='./data')
+    runtime = ObjectRuntime(base_dir=str(base_dir)) if ObjectRuntime is not None else None
     last_event_cleanup = 0.0
 
     while _running:
-        try:
-            process_scheduler(runtime)
-        except Exception as e:
-            log(f"Scheduler error: {e}", 'ERROR')
+        if runtime is not None:
+            try:
+                process_scheduler(runtime)
+            except Exception as e:
+                log(f"Scheduler error: {e}", 'ERROR')
+
+            try:
+                process_queue(runtime)
+            except Exception as e:
+                log(f"Queue error: {e}", 'ERROR')
+
+            try:
+                process_events(runtime)
+            except Exception as e:
+                log(f"Events error: {e}", 'ERROR')
 
         try:
-            process_queue(runtime)
-        except Exception as e:
-            log(f"Queue error: {e}", 'ERROR')
-
-        try:
-            process_events(runtime)
-        except Exception as e:
-            log(f"Events error: {e}", 'ERROR')
-
-        try:
-            cleanup_ratelimit()
+            cleanup_ratelimit(base_dir=base_dir)
         except Exception as e:
             log(f"Cleanup error: {e}", 'ERROR')
 
         try:
-            process_compactions()
+            process_compactions(base_dir=base_dir)
         except Exception as e:
             log(f"Compaction error: {e}", 'ERROR')
 
         try:
-            process_stale_transitions()
+            process_stale_transitions(base_dir=base_dir)
         except Exception as e:
             log(f"Auto-transition error: {e}", 'ERROR')
 
@@ -935,7 +950,7 @@ def main():
         if now - last_event_cleanup >= EVENT_CLEANUP_INTERVAL_SECONDS:
             last_event_cleanup = now
             try:
-                cleanup_events()
+                cleanup_events(base_dir=base_dir)
             except Exception as e:
                 log(f"Event cleanup error: {e}", 'ERROR')
 
