@@ -234,11 +234,112 @@ def test_talk_base_capabilities_match_shell_verbatim():
     assert normalize(talk_block)[:400] == normalize(shell_block)[:400]
 
 
+def test_talk_marker_instruction_has_worked_example():
+    """Live use showed the model ignoring the [[view:<id>]] marker
+    instruction; a literal worked example was added to the shared
+    MATERIALIZE-PAGES block (in both files) to reinforce it."""
+    example_id = "26b247ed-3b1a-4206-b060-1d92847194de"
+    expected = f'Example reply: "Here are your open tasks. [[view:{example_id}]]"'
+
+    spec = importlib.util.spec_from_file_location("site_talk_marker_example", TALK_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert expected in module.TALK_SYSTEM
+
+    assert f"[[view:{example_id}]]" in SHELL_SOURCE
+    assert "Example reply" in SHELL_SOURCE
+
+
+def test_talk_marker_example_renders_verbatim_identical_in_shell_js(tmp_path):
+    """Behavioral verbatim-sync check for the appended example specifically
+    (the source-level verbatim test above only compares the first 400
+    normalized chars of the block, which ends before the example): evaluate
+    shell.py's actual system-prompt JS expression under node and confirm it
+    contains the exact same example text as talk.py's TALK_SYSTEM."""
+    node = shutil.which("node")
+    if not node:
+        return
+
+    example_id = "26b247ed-3b1a-4206-b060-1d92847194de"
+    expected = f'Example reply: "Here are your open tasks. [[view:{example_id}]]"'
+
+    spec = importlib.util.spec_from_file_location("site_shell_under_test", APP_SHELL_DIR / "objects" / "site" / "shell.py")
+    module = importlib.util.module_from_spec(spec)
+
+    class _NullLogger:
+        def info(self, *args, **kwargs):
+            pass
+
+    module._logger = _NullLogger()
+    spec.loader.exec_module(module)
+
+    script = module._SCRIPT
+    start = script.index('system: "You are the shell')
+    end = script.index("});", start)
+    expr = script[start + len("system: "):end]
+
+    probe_path = tmp_path / "shell_system_probe.js"
+    probe_path.write_text(f"const d = {expr};\nconsole.log(JSON.stringify(d));\n")
+    result = subprocess.run([node, str(probe_path)], capture_output=True, text=True)
+    assert result.returncode == 0, f"node probe failed:\n{result.stderr}"
+    shell_system = json.loads(result.stdout)
+    assert expected in shell_system
+
+
 def test_talk_falls_back_to_tool_calls_for_the_view_path():
     assert "viewPathFromToolCalls" in TALK_SOURCE
     assert "create_record" in TALK_SOURCE
     assert "update_record" in TALK_SOURCE
     assert 'args.collection !== "views"' in TALK_SOURCE
+
+
+# --- fresh model context per session (no shell_commands replay) ----------
+#
+# Root cause of the model ignoring the [[view:<id>]] marker in live use:
+# Talk used to replay up to 1000 old shell_commands rows into aiHistory on
+# every page load, and every historical turn recorded before the marker
+# convention existed demonstrated the pre-marker habit -- in-context
+# examples override instructions no matter how the system prompt is
+# reworded. Talk must start each session with an empty aiHistory and only
+# ever grow it from turns submitted in *this* session; shell.py's own
+# replay (which drives its visible transcript, not just model context) is
+# unaffected.
+
+
+def test_talk_does_not_replay_shell_commands_into_model_context():
+    assert "loadHistory" not in TALK_SOURCE
+    assert "shell_commands/records?limit=1000" not in TALK_SOURCE
+    assert "let aiHistory = [];" in TALK_SOURCE
+    # Turns are still recorded to the shared table -- just never replayed
+    # back into the chat call's history array on load.
+    assert "/collections/shell_commands/records" in TALK_SOURCE
+
+    # The only place aiHistory grows is inside submitTurn(), from the turn
+    # that was just submitted, not from a fetch of past rows.
+    submit_turn = re.search(r"async function submitTurn\(input\) \{(.*?)\n\}", TALK_SOURCE, re.S)
+    assert submit_turn, "submitTurn() not found in talk.py"
+    push_sites = [m.start() for m in re.finditer(r"aiHistory\.push\(", TALK_SOURCE)]
+    assert len(push_sites) == 2
+    for site in push_sites:
+        assert submit_turn.start() < site < submit_turn.end()
+
+
+def test_talk_object_no_longer_calls_loadhistory_on_page_load():
+    html = _render_talk_html()
+    script = _extract_inline_script(html)
+    assert "loadHistory" not in script
+    assert "initMic();" in script
+    assert "loadPrefs();" in script
+
+
+def test_shell_replay_into_model_context_is_unaffected():
+    """shell.py's replay behavior stays as-is -- it drives the visible
+    transcript on load (not just aiHistory), so it is unrelated to the
+    Talk-specific in-context-examples problem."""
+    assert "async function loadHistory()" in SHELL_SOURCE
+    assert "shell_commands/records?limit=1000" in SHELL_SOURCE
+    assert "aiHistory.push" in SHELL_SOURCE
+    assert "loadHistory();" in SHELL_SOURCE
 
 
 # --- shell.py patches (linkify + embed, extended stripForSpeech) ---------
@@ -363,7 +464,7 @@ def test_talk_prefs_reads_go_through_pref_helper_not_raw_field_access():
 
 
 def test_talk_schema_bumped_with_radio_protocol_fields():
-    assert SHELL_PREFS_SCHEMA["version"] == 3
+    assert SHELL_PREFS_SCHEMA["version"] == 4
 
     fields = {f["name"]: f for f in SHELL_PREFS_SCHEMA["fields"]}
     assert fields["talk_wake_word"]["default"] == "computer"
@@ -589,3 +690,142 @@ def test_talk_helper_functions_behave_correctly_under_node():
     assert out["endStrip"] == "turn on the lights"
     assert out["endStripPunct"] == "turn on the lights,"
     assert out["noEnd"] is None
+
+
+# --- voice engine preference (talk_tts: auto / server / browser) ---------
+
+
+def test_talk_tts_schema_field_added_with_default_auto():
+    fields = {f["name"]: f for f in SHELL_PREFS_SCHEMA["fields"]}
+    assert fields["talk_tts"]["type"] == "enum"
+    assert fields["talk_tts"]["default"] == "auto"
+    assert set(fields["talk_tts"]["enum"]) == {"auto", "server", "browser"}
+    assert "talk_tts" in SHELL_PREFS_SCHEMA["forms"]["default"]["fields"]
+
+    # Client-side defaults mirror the schema default in both objects.
+    assert 'talk_tts: "auto"' in TALK_SOURCE
+    assert 'talk_tts: "auto"' in SHELL_SOURCE
+
+
+def test_talk_speak_routes_by_talk_tts_preference():
+    fn = re.search(r"async function speak\(text\) \{(.*?)\n\}\n", TALK_SOURCE, re.S)
+    assert fn, "speak() not found in talk.py"
+    body = fn.group(1)
+    assert "talkTtsMode()" in body
+    assert 'mode === "browser"' in body
+    assert 'mode === "auto" && window.speechSynthesis && hasLocalVoice()' in body
+    assert "speakBrowser(spoken)" in body
+    # "server" (and "auto" without a local voice) keep the original POST
+    # /api/tts-first, speechSynthesis-fallback behavior.
+    assert '/api/tts' in body
+    assert "catch (e) {" in body
+
+    mode_fn = re.search(r"function talkTtsMode\(\) \{(.*?)\n\}", TALK_SOURCE, re.S)
+    assert mode_fn, "talkTtsMode() not found in talk.py"
+    assert '"server"' in mode_fn.group(1) and '"browser"' in mode_fn.group(1)
+    assert "DEFAULT_TALK_TTS" in mode_fn.group(1)
+    assert 'const DEFAULT_TALK_TTS = "auto";' in TALK_SOURCE
+
+
+def test_talk_speak_browser_sets_and_clears_speaking_flag():
+    """The browser-voice path must uphold the same recognition-pause
+    contract as the server path: set `speaking` and stop listening before
+    the utterance, clear it and resume only once the utterance ends."""
+    fn = re.search(r"function speakBrowser\(text\) \{(.*?)\n\}\n", TALK_SOURCE, re.S)
+    assert fn, "speakBrowser() not found in talk.py"
+    body = fn.group(1)
+    assert "speaking = true;" in body
+    assert "stopListening();" in body
+    assert "speaking = false; resumeListeningIfNeeded();" in body
+    assert body.index("speaking = true;") < body.index("window.speechSynthesis.speak(utter);")
+    assert "utter.addEventListener(\"end\"," in body
+
+    # "browser" mode, the "auto"-with-a-local-voice shortcut, and the
+    # server-mode fallback all funnel through this one function -- no
+    # separate untracked speechSynthesis path.
+    speak_fn = re.search(r"async function speak\(text\) \{(.*?)\n\}\n", TALK_SOURCE, re.S)
+    assert speak_fn
+    assert speak_fn.group(1).count("speakBrowser(spoken)") == 3
+
+
+def test_talk_pick_voice_prefers_named_then_local_english_else_default():
+    assert "const PREFERRED_VOICE_RE = /Samantha|Ava|Karen|Daniel/;" in TALK_SOURCE
+
+    fn = re.search(r"function pickVoice\(\) \{(.*?)\n\}", TALK_SOURCE, re.S)
+    assert fn, "pickVoice() not found in talk.py"
+    body = fn.group(1)
+    assert "PREFERRED_VOICE_RE.test(v.name)" in body
+    assert "v.localService && /^en/i.test(v.lang)" in body
+    assert "return localEn || null;" in body
+
+    has_local = re.search(r"function hasLocalVoice\(\) \{(.*?)\n\}", TALK_SOURCE, re.S)
+    assert has_local, "hasLocalVoice() not found in talk.py"
+    assert "v.localService" in has_local.group(1)
+
+
+def test_talk_voice_picking_behaves_correctly_under_node(tmp_path):
+    node = shutil.which("node")
+    if not node:
+        return
+
+    html = _render_talk_html()
+    script = _extract_inline_script(html)
+    start = script.index("const PREFERRED_VOICE_RE")
+    end = script.index("function speakBrowser(text)")
+    helpers = script[start:end]
+
+    probe = (
+        "let voicesFixture = [];\n"
+        "const window = {speechSynthesis: {getVoices: () => voicesFixture}};\n"
+        + helpers
+        + "\n"
+        "voicesFixture = [\n"
+        "  {name: 'Generic Voice', lang: 'en-US', localService: true},\n"
+        "  {name: 'Karen', lang: 'en-AU', localService: true},\n"
+        "];\n"
+        "const named = pickVoice();\n"
+        "voicesFixture = [{name: 'Generic Voice', lang: 'en-US', localService: true}];\n"
+        "const localEn = pickVoice();\n"
+        "voicesFixture = [{name: 'Generic Voice', lang: 'fr-FR', localService: false}];\n"
+        "const none = pickVoice();\n"
+        "voicesFixture = [{name: 'Generic Voice', lang: 'en-US', localService: true}];\n"
+        "const anyLocalTrue = hasLocalVoice();\n"
+        "voicesFixture = [];\n"
+        "const anyLocalFalse = hasLocalVoice();\n"
+        "console.log(JSON.stringify({\n"
+        "  named: named && named.name,\n"
+        "  localEn: localEn && localEn.name,\n"
+        "  none,\n"
+        "  anyLocalTrue,\n"
+        "  anyLocalFalse,\n"
+        "}));\n"
+    )
+    probe_path = tmp_path / "voice_probe.js"
+    probe_path.write_text(probe)
+    result = subprocess.run([node, str(probe_path)], capture_output=True, text=True)
+    assert result.returncode == 0, f"node probe failed:\n{result.stderr}"
+    out = json.loads(result.stdout)
+    assert out["named"] == "Karen"
+    assert out["localEn"] == "Generic Voice"
+    assert out["none"] is None
+    assert out["anyLocalTrue"] is True
+    assert out["anyLocalFalse"] is False
+
+
+def test_shell_speak_routes_by_talk_tts_preference():
+    fn = re.search(r"async function speak\(text\) \{(.*?)\n\}\n", SHELL_SOURCE, re.S)
+    assert fn, "speak() not found in shell.py"
+    body = fn.group(1)
+    assert "talkTtsMode()" in body
+    assert 'mode === "browser"' in body
+    assert 'mode === "auto" && window.speechSynthesis && hasLocalVoice()' in body
+    assert "speakBrowser(spoken)" in body
+    assert '/api/tts' in body
+    assert "catch (e) {" in body
+
+    assert "function talkTtsMode() {" in SHELL_SOURCE
+    assert "function speakBrowser(text) {" in SHELL_SOURCE
+    assert "function pickVoice() {" in SHELL_SOURCE
+    assert "function hasLocalVoice() {" in SHELL_SOURCE
+    assert "const PREFERRED_VOICE_RE = /Samantha|Ava|Karen|Daniel/;" in SHELL_SOURCE
+    assert 'const DEFAULT_TALK_TTS = "auto";' in SHELL_SOURCE
