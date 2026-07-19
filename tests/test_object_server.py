@@ -2963,6 +2963,233 @@ def test_admin_collection_record_write_aliases_create_update_delete(tmp_path, mo
     assert [item["id"] for item in list_payload["records"]] == ["c1", "c3"]
 
 
+def write_append_schema(data_dir, collection, fields=None):
+    path = data_dir / "schemas" / f"{collection}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"fields": fields or [{"name": "id"}], "storage": "append"}))
+    return path
+
+
+def test_admin_storage_requires_admin_token(monkeypatch):
+    monkeypatch.delenv("DBBASIC_ADMIN_TOKEN", raising=False)
+
+    status, _, payload = request("/admin/storage", headers=auth_headers())
+
+    assert status == 403
+    assert payload == {
+        "status": "error",
+        "error": "Admin storage requires DBBASIC_ADMIN_TOKEN.",
+    }
+
+
+def test_admin_storage_rejects_unauthenticated_request(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/admin/storage")
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
+
+
+def test_admin_storage_lists_append_collections_with_stats(tmp_path, monkeypatch):
+    """With DBBASIC_RECORDS_CACHE_MAX_ROWS forced to 0, every point op
+    misses _RECORDS_CACHE and resolves via the id->offset sidecar instead
+    (same technique object_records' own oidx tests use) -- the sidecar
+    built along the way is exactly what lets GET /admin/storage answer
+    real numbers instead of an "estimated" entry, without ever folding
+    records.tsv itself."""
+    monkeypatch.setenv("DBBASIC_RECORDS_CACHE_MAX_ROWS", "0")
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    for i in range(3):
+        request(
+            "/admin/collections/widgets/records",
+            method="POST",
+            body=json.dumps({"id": f"w{i}", "name": f"n{i}"}).encode(),
+            headers=auth_headers(),
+        )
+    request(
+        "/admin/collections/widgets/records/w0",
+        method="PUT",
+        body=json.dumps({"name": "n0-updated"}).encode(),
+        headers=auth_headers(),
+    )
+
+    status, _, payload = request("/admin/storage", headers=auth_headers())
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert len(payload["append_collections"]) == 1
+    entry = payload["append_collections"][0]
+    assert entry["collection"] == "widgets"
+    assert entry["storage"] == "append"
+    assert entry["physical_rows"] == 4
+    assert entry["live_rows"] == 3
+    assert entry["dead_rows"] == 1
+    assert "estimated" not in entry
+
+
+def test_admin_storage_reports_estimated_entry_without_folding(tmp_path, monkeypatch):
+    """The ordinary (default cache threshold) case: a small append
+    collection stays warm in _RECORDS_CACHE and no sidecar is ever built,
+    since every point op is a cache hit. GET /admin/storage must still
+    answer in O(1) -- an "estimated" entry, never a fold of records.tsv."""
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    request(
+        "/admin/collections/widgets/records",
+        method="POST",
+        body=json.dumps({"id": "w1", "name": "Alpha"}).encode(),
+        headers=auth_headers(),
+    )
+
+    status, _, payload = request("/admin/storage", headers=auth_headers())
+
+    assert status == 200
+    entry = payload["append_collections"][0]
+    assert entry["collection"] == "widgets"
+    assert entry["estimated"] is True
+    assert entry["physical_rows"] is None
+    assert entry["live_rows"] is None
+    assert entry["file_bytes"] > 0
+
+
+def test_admin_storage_excludes_classic_collections(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/admin/storage", headers=auth_headers())
+
+    assert status == 200
+    assert payload == {"status": "ok", "append_collections": []}
+
+
+def test_admin_status_reports_append_collection_count_in_capabilities(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}])
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/admin/status", headers=auth_headers())
+
+    assert status == 200
+    assert payload["capabilities"]["storage"] == {"append_collections": 1}
+
+
+def test_admin_collection_compact_happy_path_shrinks_file_and_reports_duration(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    request(
+        "/admin/collections/widgets/records",
+        method="POST",
+        body=json.dumps({"id": "w1", "name": "Alpha"}).encode(),
+        headers=auth_headers(),
+    )
+    for i in range(5):
+        request(
+            "/admin/collections/widgets/records/w1",
+            method="PUT",
+            body=json.dumps({"name": f"Alpha{i}"}).encode(),
+            headers=auth_headers(),
+        )
+
+    path = data_dir / "collections" / "widgets" / "records.tsv"
+    bytes_before = path.stat().st_size
+
+    status, _, payload = request(
+        "/admin/collections/widgets/compact",
+        method="POST",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["status"] == "ok"
+    assert payload["collection"] == "widgets"
+    assert payload["rows_before"] == 6
+    assert payload["rows_after"] == 1
+    assert payload["bytes_before"] == bytes_before
+    assert payload["bytes_after"] < bytes_before
+    assert isinstance(payload["duration_ms"], (int, float))
+    assert payload["duration_ms"] >= 0
+
+    assert path.stat().st_size == payload["bytes_after"]
+
+
+def test_admin_collection_compact_returns_400_for_classic_collection(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/admin/collections/contacts/compact",
+        method="POST",
+        headers=auth_headers(),
+    )
+
+    assert status == 400
+    assert payload["status"] == "error"
+    assert "not in append storage mode" in payload["error"]
+
+
+def test_admin_collection_compact_returns_404_for_unknown_collection(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/admin/collections/never_heard_of_it/compact",
+        method="POST",
+        headers=auth_headers(),
+    )
+
+    assert status == 404
+
+
+def test_admin_collection_compact_requires_admin_token(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}])
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/admin/collections/widgets/compact",
+        method="POST",
+    )
+
+    assert status == 401
+    assert payload == {"status": "error", "error": "Unauthorized"}
+
+
+def test_admin_collection_compact_rejects_get(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}])
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/admin/collections/widgets/compact",
+        method="GET",
+        headers=auth_headers(),
+    )
+
+    # Falls through to the GET dispatch for /admin/collections/{collection},
+    # which treats "compact" as an unsupported nested inspection path.
+    assert status == 400
+    assert payload["status"] == "error"
+
+
 def test_record_update_delete_do_not_leak_existence_before_auth(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")

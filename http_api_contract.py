@@ -48,6 +48,8 @@ PACKAGE_INSTALL_PATH = "/packages/{package_id}/install"
 PACKAGE_RESTORE_PATH = "/packages/{package_id}/restore"
 PACKAGE_CHANGES_PATH = "/packages/{package_id}/changes"
 ADMIN_STATUS_PATH = "/admin/status"
+ADMIN_STORAGE_PATH = "/admin/storage"
+ADMIN_COLLECTION_COMPACT_PATH = "/admin/collections/{collection}/compact"
 ADMIN_CHANGES_PATH = "/admin/changes"
 ADMIN_OPS_PATH = "/admin/ops"
 ADMIN_BACKUPS_PATH = "/admin/backups"
@@ -123,6 +125,10 @@ RESPONSE_FIELDS: dict[str, frozenset[str]] = {
     "admin_changes": frozenset({"status", "changes", "count", "total"}),
     "admin_status": frozenset(
         {"status", "timestamp", "version", "health", "inventory", "capabilities", "packages"}
+    ),
+    "admin_storage": frozenset({"status", "append_collections"}),
+    "collection_compact": frozenset(
+        {"status", "collection", "rows_before", "rows_after", "bytes_before", "bytes_after", "duration_ms"}
     ),
     "daemon_status": frozenset(
         {"status", "timestamp", "daemon", "scheduler", "queue", "events", "cleanup"}

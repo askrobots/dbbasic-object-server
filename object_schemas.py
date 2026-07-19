@@ -77,6 +77,32 @@ def list_schemas(
     return schemas
 
 
+def list_append_storage_collections(
+    *,
+    base_dir: Path | str = DEFAULT_DATA_DIR,
+) -> list[str]:
+    """Return the names of collections whose manual schema currently
+    declares ``"storage": "append"``, sorted.
+
+    Only a manual schema file can set `storage` (a derived schema -- a
+    collection with no schema file -- always defaults to classic; see
+    _collection_storage_mode in object_records.py), so this only needs to
+    glob the schemas directory and load each manual schema through
+    _load_manual_schema's existing mtime/size-keyed _SCHEMA_CACHE, rather
+    than walking every collection's records directory. Repeated calls
+    (e.g. object_records.list_append_collection_stats on every /admin/
+    storage poll, or the daemon's compaction pass on every tick) are cheap
+    after the first, same as every other schema read in this codebase.
+    """
+    base = Path(base_dir)
+    names = []
+    for name in _iter_manual_schema_names(base):
+        schema = _load_manual_schema(name, base_dir=base)
+        if schema is not None and schema.get("storage") == STORAGE_APPEND:
+            names.append(name)
+    return sorted(names)
+
+
 def get_schema(
     schema: str,
     *,

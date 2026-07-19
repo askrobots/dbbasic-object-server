@@ -643,15 +643,18 @@ def compact_collection(
 
     Rewrites atomically via the same _write_collection_records path a
     plain write uses (temp file + replace), under the collection's file
-    lock, keeping the `_op` column (every row becomes an upsert). A manual
-    trigger for now -- no HTTP surface in this change (see
-    docs/append-only-storage-design.md Compaction: "run on a schedule or
-    when the superseded-row ratio passes a threshold — never inline in a
-    request"). Auto-compaction (_maybe_flag_auto_compact) causes a
-    collection's next ordinary write to perform this same rewrite instead
-    of a plain append; this function can also be called directly at any
-    time, including on a classic-mode or never-written collection, where
-    it is a correctly-reported no-op.
+    lock, keeping the `_op` column (every row becomes an upsert). Callable
+    directly (this function), via POST /admin/collections/{collection}/
+    compact (object_server.py), or automatically: Auto-compaction
+    (_maybe_flag_auto_compact) causes a collection's next ordinary write
+    to perform this same rewrite instead of a plain append, and the
+    daemon's process_compactions (object_daemon.py) polls append_
+    collection_stats and compacts any collection over its bloat/row
+    thresholds on a timer (see docs/append-only-storage-design.md
+    Compaction: "run on a schedule or when the superseded-row ratio
+    passes a threshold — never inline in a request"). This function can
+    also be called directly at any time, including on a classic-mode or
+    never-written collection, where it is a correctly-reported no-op.
 
     Returns {"rows_before", "rows_after", "bytes_before", "bytes_after"}
     (row counts are physical rows on disk before/after; for a collection
@@ -694,6 +697,201 @@ def compact_collection(
             "bytes_before": bytes_before,
             "bytes_after": bytes_after,
         }
+
+
+def append_collection_stats(
+    collection: str,
+    *,
+    base_dir: Path | str = DEFAULT_DATA_DIR,
+    roots: Iterable[Path] | None = None,
+    allow_fold: bool = True,
+) -> dict[str, Any] | None:
+    """Return compaction-observability stats for one collection, or None
+    when it is not currently in append storage mode (docs/storage-modes.md
+    "Compaction").
+
+    Returns:
+        {"collection", "storage": "append", "physical_rows", "live_rows",
+         "dead_rows", "bloat_ratio" (dead_rows / max(live_rows, 1), rounded
+         3dp), "file_bytes", "sidecar_present", "compaction_flagged"}
+
+    Cheapest-source-first, same doctrine as _fast_record_lookup's point-op
+    resolution (docs/append-only-storage-design.md Sidecars), tried in
+    order and combined -- either can answer `live_rows`, but only the
+    sidecar can answer `physical_rows` short of a fold:
+
+      1. A warm _RECORDS_CACHE hit (_peek_records_cache) answers
+         `live_rows` for free -- it's already the folded record count, no
+         I/O at all.
+      2. The id->offset sidecar (.records.oidx), read directly via
+         _load_oidx_body -- a "pure line-count read" as opposed to a
+         records.tsv parse: one line per physical row was written when
+         that row was appended (OIDX_FILE's format), so the sidecar's own
+         body length IS `physical_rows` without touching records.tsv at
+         all, and the same read's last-wins fold gives `live_rows` too
+         (used only when tier 1 didn't already answer it). Deliberately
+         narrower than the hot-path loader _load_oidx: this never triggers
+         a catch-up scan or a from-scratch rebuild when the sidecar is
+         stale or missing (`covered_bytes` short of the file's current
+         size, wrong header inode, or absent) -- an observability call
+         should never be the reason records.tsv gets scanned; it just
+         doesn't answer from this tier, and falls through to tier 3 (or
+         the estimated shortcut below) instead.
+      3. Neither tier answered both numbers: a full fold via
+         _parse_append_body -- the same O(file) cost compact_collection
+         itself pays to read the file (docs/storage-modes.md: "cold reads
+         of an append file cost ~1.6x a classic parse"). This is the ONLY
+         expensive path in this function, and only runs when `allow_fold`
+         is True (the default for direct/CLI callers, and for the daemon's
+         polling pass, where an occasional full fold is an acceptable
+         cost against an interval timer). Callers that must never pay it
+         -- GET /admin/storage (object_server.py), which must stay O(1)
+         regardless of any one collection's cache/sidecar state -- pass
+         allow_fold=False and get an {"estimated": True, "physical_rows":
+         None, "live_rows": None, "dead_rows": None, "bloat_ratio": None}
+         entry instead (still with a real, cheap `file_bytes` from the
+         initial stat).
+
+    A collection whose records.tsv doesn't exist yet (schema declared
+    "append" but never written) short-circuits to an honest all-zero
+    result before any of the above -- that check (`path.exists()`, done as
+    part of the initial stat) is itself O(1), so it's never worth
+    representing as "estimated".
+    """
+    _ensure_collection_known(collection, base_dir=base_dir, roots=roots)
+    mode = _collection_storage_mode(collection, base_dir=base_dir, roots=roots)
+    if mode != object_schemas.STORAGE_APPEND:
+        return None
+
+    path = collection_records_file(collection, base_dir=base_dir)
+    try:
+        st = path.stat()
+        file_bytes = st.st_size
+        data_ino: int | None = st.st_ino
+    except OSError:
+        file_bytes = 0
+        data_ino = None
+
+    cache_key = str(path.resolve(strict=False))
+    sidecar_path = _oidx_path(path)
+    sidecar_present = sidecar_path.exists()
+    compaction_flagged = cache_key in _PENDING_COMPACTION
+
+    if data_ino is None:
+        # No records.tsv at all -- a schema can declare "append" storage
+        # before its collection is ever written. Nothing to fold, sidecar
+        # or otherwise; report honest zeros rather than routing this
+        # through the fold/estimate machinery below.
+        return {
+            "collection": collection,
+            "storage": object_schemas.STORAGE_APPEND,
+            "physical_rows": 0,
+            "live_rows": 0,
+            "dead_rows": 0,
+            "bloat_ratio": 0.0,
+            "file_bytes": 0,
+            "sidecar_present": sidecar_present,
+            "compaction_flagged": compaction_flagged,
+        }
+
+    live_rows: int | None = None
+    physical_rows: int | None = None
+
+    peeked = _peek_records_cache(path)
+    if peeked is not None:
+        live_rows = len(peeked[1])
+
+    if sidecar_present:
+        header_ino = _read_oidx_header(sidecar_path)
+        if header_ino == data_ino:
+            loaded = _load_oidx_body(sidecar_path)
+            if loaded is not None:
+                body_dict, body_covered, body_physical = loaded
+                covered = (
+                    body_covered if body_covered is not None else _records_header_length(path)
+                )
+                if covered == file_bytes:
+                    physical_rows = body_physical
+                    if live_rows is None:
+                        live_rows = len(body_dict)
+
+    if physical_rows is None or live_rows is None:
+        if not allow_fold:
+            return {
+                "collection": collection,
+                "storage": object_schemas.STORAGE_APPEND,
+                "physical_rows": None,
+                "live_rows": None,
+                "dead_rows": None,
+                "bloat_ratio": None,
+                "file_bytes": file_bytes,
+                "sidecar_present": sidecar_present,
+                "compaction_flagged": compaction_flagged,
+                "estimated": True,
+            }
+
+        physical_header = _physical_header(path)
+        if not physical_header or physical_header[0] != OP_FIELD:
+            # Exists on disk but never written in append physical format
+            # (e.g. an empty file) -- nothing to fold.
+            physical_rows = 0
+            live_rows = 0
+        else:
+            with path.open(newline="") as handle:
+                text = handle.read()
+            folded_records, physical_row_count = _parse_append_body(collection, text, physical_header)
+            physical_rows = physical_row_count
+            live_rows = len(folded_records)
+
+    dead_rows = max(physical_rows - live_rows, 0)
+    bloat_ratio = round(dead_rows / max(live_rows, 1), 3)
+    return {
+        "collection": collection,
+        "storage": object_schemas.STORAGE_APPEND,
+        "physical_rows": physical_rows,
+        "live_rows": live_rows,
+        "dead_rows": dead_rows,
+        "bloat_ratio": bloat_ratio,
+        "file_bytes": file_bytes,
+        "sidecar_present": sidecar_present,
+        "compaction_flagged": compaction_flagged,
+    }
+
+
+def list_append_collection_stats(
+    *,
+    base_dir: Path | str = DEFAULT_DATA_DIR,
+    roots: Iterable[Path] | None = None,
+    allow_fold: bool = True,
+) -> list[dict[str, Any]]:
+    """Return append_collection_stats() for every collection whose schema
+    currently declares "storage": "append", sorted by collection name.
+
+    Discovery (object_schemas.list_append_storage_collections) is cheap
+    regardless of how many collections exist on disk: it globs the schemas
+    directory and loads each manual schema through the same mtime/size-
+    keyed cache every other schema read in this codebase already goes
+    through, never touching records.tsv. A collection whose schema
+    disappears between that listing and its own stats call (a benign race
+    under concurrent schema edits) is skipped rather than raising -- same
+    tolerance _ensure_collection_known's callers generally apply to
+    concurrent schema/collection changes.
+    """
+    names = object_schemas.list_append_storage_collections(base_dir=base_dir)
+    stats: list[dict[str, Any]] = []
+    for name in names:
+        try:
+            entry = append_collection_stats(
+                name, base_dir=base_dir, roots=roots, allow_fold=allow_fold
+            )
+        except (
+            object_collections.InvalidCollectionNameError,
+            object_collections.CollectionNotFoundError,
+        ):
+            continue
+        if entry is not None:
+            stats.append(entry)
+    return stats
 
 
 def collection_records_file(collection: str, base_dir: Path | str = DEFAULT_DATA_DIR) -> Path:
@@ -1373,6 +1571,17 @@ def _append_compact_min_rows() -> int:
     return _env_int(APPEND_COMPACT_MIN_ROWS_ENV, _DEFAULT_APPEND_COMPACT_MIN_ROWS)
 
 
+def append_compact_min_rows() -> int:
+    """Public read of DBBASIC_APPEND_COMPACT_MIN_ROWS (default 10_000).
+
+    Exists so callers outside this module (object_daemon.py's
+    process_compactions) can apply the exact same physical-row-count floor
+    _maybe_flag_auto_compact uses for its own auto-compaction trigger,
+    without duplicating the env var's default value.
+    """
+    return _append_compact_min_rows()
+
+
 def _maybe_flag_auto_compact(path: Path, *, physical_row_count: int, live_row_count: int) -> None:
     """Flag a collection for compaction on its NEXT WRITE.
 
@@ -1861,19 +2070,31 @@ def _read_oidx_header(oidx_path: Path) -> int | None:
         return None
 
 
-def _load_oidx_body(oidx_path: Path) -> tuple[dict[str, int], int | None] | None:
+def _load_oidx_body(
+    oidx_path: Path,
+) -> tuple[dict[str, int], int | None, int] | None:
     """Parse a sidecar's data lines (everything after the header) into
-    ({id: offset}, covered_bytes). Returns None when the file can't be
-    trusted at all (missing, or a data line doesn't have exactly the 4
-    expected columns / non-integer offsets -- genuine corruption, not a
-    torn write, so this doesn't try to salvage a prefix: the caller
-    rebuilds instead of guessing).
+    ({id: offset}, covered_bytes, indexed_row_count). Returns None when the
+    file can't be trusted at all (missing, or a data line doesn't have
+    exactly the 4 expected columns / non-integer offsets -- genuine
+    corruption, not a torn write, so this doesn't try to salvage a prefix:
+    the caller rebuilds instead of guessing).
 
     covered_bytes is None when there are no data lines yet (a header-only
     sidecar, e.g. right after this collection's very first indexed
     write): the caller supplies the real baseline in that case
     (_records_header_length), since a brand-new sidecar covers exactly
     the data file's own header bytes, not zero.
+
+    indexed_row_count is the number of body lines parsed -- one per
+    PHYSICAL row of records.tsv this sidecar has indexed (create, update,
+    and delete rows all count; only the blank-id rows
+    _scan_append_rows_for_offsets never indexes are excluded, per that
+    function's docstring). Exists for object_records.append_collection_
+    stats' cheap physical-row-count path (a "pure line-count read of the
+    sidecar", avoiding a full fold of records.tsv) -- no other caller
+    needs it, so it costs this function nothing beyond incrementing a
+    counter already being iterated for the fold below.
 
     A torn last line (the file doesn't end with "\\n") is dropped, same
     rule as everywhere else: an idx line, like a data row, is only
@@ -1895,6 +2116,7 @@ def _load_oidx_body(oidx_path: Path) -> tuple[dict[str, int], int | None] | None
 
     result: dict[str, int] = {}
     covered_bytes: int | None = None
+    indexed_row_count = 0
     for line in body_lines:
         if not line:
             continue
@@ -1912,8 +2134,9 @@ def _load_oidx_body(oidx_path: Path) -> tuple[dict[str, int], int | None] | None
         else:
             result[record_id] = row_start
         covered_bytes = row_end
+        indexed_row_count += 1
 
-    return result, covered_bytes
+    return result, covered_bytes, indexed_row_count
 
 
 def _oidx_get_row(
@@ -2010,7 +2233,7 @@ def _load_oidx(path: Path) -> tuple[dict[str, int], bool]:
     if header_ino == data_ino:
         loaded = _load_oidx_body(oidx_path)
         if loaded is not None:
-            body_dict, body_covered = loaded
+            body_dict, body_covered, _body_row_count = loaded
             covered = body_covered if body_covered is not None else _records_header_length(path)
             if covered <= data_size:
                 if covered < data_size:

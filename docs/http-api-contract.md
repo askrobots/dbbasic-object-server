@@ -1606,6 +1606,76 @@ enforced permission policy when enforcement is enabled).
 Other write methods on `/admin/collections*` paths — including collection
 create or delete — remain unsupported and return `405`.
 
+## Admin Storage And Compaction
+
+Compaction observability and control for append-mode collections (see
+[storage-modes.md](storage-modes.md)):
+
+```http
+GET  /admin/storage
+POST /admin/collections/{collection}/compact
+Authorization: Token <token>
+```
+
+`GET /admin/storage` returns stats for every collection whose schema
+currently declares `"storage": "append"`:
+
+```json
+{
+  "status": "ok",
+  "append_collections": [
+    {
+      "collection": "events_log",
+      "storage": "append",
+      "physical_rows": 41200,
+      "live_rows": 9800,
+      "dead_rows": 31400,
+      "bloat_ratio": 3.204,
+      "file_bytes": 5872000,
+      "sidecar_present": true,
+      "compaction_flagged": false
+    }
+  ]
+}
+```
+
+This route is deliberately cheap: it never folds a collection's
+`records.tsv` to answer, preferring a warm in-process cache entry or the
+id→offset sidecar's own row count. A collection neither can answer comes
+back as an **estimated** entry instead of paying an O(file) parse on a
+status call — `file_bytes` is still real, but `physical_rows`,
+`live_rows`, `dead_rows`, and `bloat_ratio` are `null` and
+`"estimated": true` is set. `bloat_ratio` is `dead_rows / max(live_rows,
+1)`, rounded to 3 decimal places. A classic-mode collection is never
+included.
+
+`POST /admin/collections/{collection}/compact` runs
+`object_records.compact_collection` under the same gate that protects
+other mutating admin record routes (admin token, or enforced permission
+policy when enforcement is enabled — there is no single record for this
+operation, so the collection-level write check is the whole check):
+
+```json
+{
+  "status": "ok",
+  "collection": "events_log",
+  "rows_before": 41200,
+  "rows_after": 9800,
+  "bytes_before": 5872000,
+  "bytes_after": 1398600,
+  "duration_ms": 812.4
+}
+```
+
+Returns `400` for a collection not currently in append storage mode
+(nothing to compact) and `404` for an unknown collection. Compaction also
+runs automatically — on a write, once a collection's dead-row ratio and
+size cross their thresholds, and on a timer if the optional daemon
+(`object_daemon.py`) is running — see storage-modes.md for the envs
+(`DBBASIC_APPEND_COMPACT_MIN_ROWS`, `DBBASIC_COMPACTION_INTERVAL_SECONDS`,
+`DBBASIC_COMPACTION_BLOAT_RATIO`). The `/admin/status` `capabilities.storage`
+block reports `{"append_collections": <count>}`.
+
 ## Admin Schema Writes
 
 Operator screens can replace and roll back collection schemas through narrow

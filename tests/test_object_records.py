@@ -1,6 +1,7 @@
 import csv
 import json
 import random
+import unittest.mock
 from pathlib import Path
 from uuid import UUID
 
@@ -2266,3 +2267,253 @@ def test_incremental_cache_equivalence_across_random_external_append_batches(tmp
         assert warm_result == cold_records, (
             f"iteration {iteration}: warm={warm_result!r} cold={cold_records!r}"
         )
+
+
+# --- Compaction observability (docs/append-only-storage-design.md
+# "Compaction", docs/storage-modes.md) ---------------------------------------
+
+
+def _seed_widgets(data_dir: Path) -> None:
+    """5 creates, 1 update (supersedes), 1 delete (tombstone): 7 physical
+    rows, 4 live (w0 updated, w1 deleted -> 3 remain plus updated w0), 3
+    dead. Exact numbers every stats test below relies on."""
+    for i in range(5):
+        object_records.create_collection_record(
+            "widgets", {"id": f"w{i}", "name": f"n{i}"}, base_dir=data_dir, roots=[]
+        )
+    object_records.update_collection_record(
+        "widgets", "w0", {"name": "n0-updated"}, base_dir=data_dir, roots=[]
+    )
+    object_records.delete_collection_record("widgets", "w1", base_dir=data_dir, roots=[])
+
+
+def test_append_collection_stats_is_none_for_classic_collections(tmp_path):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+    assert object_records.append_collection_stats("contacts", base_dir=data_dir, roots=[]) is None
+
+
+def test_append_collection_stats_is_none_for_schema_with_no_storage_key(tmp_path):
+    data_dir = tmp_path / "data"
+    write_schema(data_dir, "contacts", [{"name": "id"}, {"name": "name"}])
+    object_records.create_collection_record(
+        "contacts", {"id": "c1", "name": "Ada"}, base_dir=data_dir, roots=[]
+    )
+    assert object_records.append_collection_stats("contacts", base_dir=data_dir, roots=[]) is None
+
+
+def test_append_collection_stats_for_never_written_collection_is_honest_zeros(tmp_path):
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    assert object_records.append_collection_stats("widgets", base_dir=data_dir, roots=[]) == {
+        "collection": "widgets",
+        "storage": "append",
+        "physical_rows": 0,
+        "live_rows": 0,
+        "dead_rows": 0,
+        "bloat_ratio": 0.0,
+        "file_bytes": 0,
+        "sidecar_present": False,
+        "compaction_flagged": False,
+    }
+
+
+def test_append_collection_stats_via_warm_records_cache(tmp_path):
+    """Default cache threshold: the seeded collection stays warm in
+    _RECORDS_CACHE, so stats must be served from it (no sidecar
+    involved)."""
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    _seed_widgets(data_dir)
+
+    path = object_records.collection_records_file("widgets", base_dir=data_dir)
+    cache_key = str(path.resolve())
+    assert cache_key in object_records._RECORDS_CACHE  # warm precondition
+
+    stats = object_records.append_collection_stats("widgets", base_dir=data_dir, roots=[])
+    assert stats == {
+        "collection": "widgets",
+        "storage": "append",
+        "physical_rows": 7,
+        "live_rows": 4,
+        "dead_rows": 3,
+        "bloat_ratio": 0.75,
+        "file_bytes": path.stat().st_size,
+        "sidecar_present": False,
+        "compaction_flagged": False,
+    }
+
+
+def test_append_collection_stats_via_sidecar_with_cold_cache(tmp_path, monkeypatch):
+    """DBBASIC_RECORDS_CACHE_MAX_ROWS=0 forces every point op through the
+    id->offset sidecar instead of _RECORDS_CACHE (same technique the oidx
+    test block above this one uses) -- stats must then be answered by a
+    cheap sidecar line-count read, not a full fold."""
+    monkeypatch.setenv("DBBASIC_RECORDS_CACHE_MAX_ROWS", "0")
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    _seed_widgets(data_dir)
+
+    path = object_records.collection_records_file("widgets", base_dir=data_dir)
+    cache_key = str(path.resolve())
+    assert cache_key not in object_records._RECORDS_CACHE  # cold precondition
+    oidx_path = object_records._oidx_path(path)
+    assert oidx_path.exists()  # built lazily by the point ops above
+
+    # Belt and suspenders: an actual full fold must not run for this case.
+    def _boom(*args, **kwargs):
+        raise AssertionError("full fold ran when the sidecar should have answered")
+
+    monkeypatch.setattr(object_records, "_parse_append_body", _boom)
+
+    stats = object_records.append_collection_stats("widgets", base_dir=data_dir, roots=[])
+    assert stats == {
+        "collection": "widgets",
+        "storage": "append",
+        "physical_rows": 7,
+        "live_rows": 4,
+        "dead_rows": 3,
+        "bloat_ratio": 0.75,
+        "file_bytes": path.stat().st_size,
+        "sidecar_present": True,
+        "compaction_flagged": False,
+    }
+
+
+def test_append_collection_stats_falls_back_to_full_fold_when_allowed(tmp_path, monkeypatch):
+    """Neither cache nor sidecar available (sidecar never built: default
+    cache threshold means no point op ever missed _RECORDS_CACHE) --
+    allow_fold=True (the default) must still produce the correct numbers
+    via a full parse."""
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    _seed_widgets(data_dir)
+
+    path = object_records.collection_records_file("widgets", base_dir=data_dir)
+    oidx_path = object_records._oidx_path(path)
+    assert not oidx_path.exists()  # never built: cache always answered point ops
+    object_records._RECORDS_CACHE.clear()
+
+    stats = object_records.append_collection_stats("widgets", base_dir=data_dir, roots=[])
+    assert stats == {
+        "collection": "widgets",
+        "storage": "append",
+        "physical_rows": 7,
+        "live_rows": 4,
+        "dead_rows": 3,
+        "bloat_ratio": 0.75,
+        "file_bytes": path.stat().st_size,
+        "sidecar_present": False,
+        "compaction_flagged": False,
+    }
+
+
+def test_append_collection_stats_allow_fold_false_returns_estimated_without_folding(tmp_path):
+    """allow_fold=False must never pay for a full parse: with the warm
+    cache dropped and no sidecar built, it returns an "estimated" entry
+    (file_bytes only, physical/live/dead/bloat null) instead of folding."""
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    _seed_widgets(data_dir)
+    object_records._RECORDS_CACHE.clear()
+
+    path = object_records.collection_records_file("widgets", base_dir=data_dir)
+    assert not object_records._oidx_path(path).exists()
+
+    calls = []
+    original = object_records._parse_append_body
+
+    def _tracking(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+
+    with unittest.mock.patch.object(object_records, "_parse_append_body", _tracking):
+        stats = object_records.append_collection_stats(
+            "widgets", base_dir=data_dir, roots=[], allow_fold=False
+        )
+
+    assert calls == []  # sentinel: no full parse ran
+    assert stats == {
+        "collection": "widgets",
+        "storage": "append",
+        "physical_rows": None,
+        "live_rows": None,
+        "dead_rows": None,
+        "bloat_ratio": None,
+        "file_bytes": path.stat().st_size,
+        "sidecar_present": False,
+        "compaction_flagged": False,
+        "estimated": True,
+    }
+
+
+def test_append_collection_stats_reflects_compaction_flag(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_APPEND_COMPACT_MIN_ROWS", "5")
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "churn", [{"name": "id"}, {"name": "value"}])
+
+    object_records.create_collection_record(
+        "churn", {"id": "c1", "value": "v0"}, base_dir=data_dir, roots=[]
+    )
+    for i in range(10):
+        object_records.update_collection_record(
+            "churn", "c1", {"value": f"v{i}"}, base_dir=data_dir, roots=[]
+        )
+
+    path = object_records.collection_records_file("churn", base_dir=data_dir)
+    cache_key = str(path.resolve())
+    object_records._RECORDS_CACHE.pop(cache_key, None)  # force a cold parse to flag
+    object_records._read_collection_records("churn", base_dir=data_dir)
+    assert cache_key in object_records._PENDING_COMPACTION
+
+    stats = object_records.append_collection_stats("churn", base_dir=data_dir, roots=[])
+    assert stats["compaction_flagged"] is True
+
+
+def test_append_collection_stats_after_compaction_is_bloat_free(tmp_path):
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    _seed_widgets(data_dir)
+
+    object_records.compact_collection("widgets", base_dir=data_dir, roots=[])
+
+    stats = object_records.append_collection_stats("widgets", base_dir=data_dir, roots=[])
+    assert stats["physical_rows"] == 4
+    assert stats["live_rows"] == 4
+    assert stats["dead_rows"] == 0
+    assert stats["bloat_ratio"] == 0.0
+
+
+def test_list_append_collection_stats_only_includes_append_mode_collections(tmp_path):
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    _seed_widgets(data_dir)
+    write_schema(data_dir, "contacts", [{"name": "id"}, {"name": "name"}])
+    object_records.create_collection_record(
+        "contacts", {"id": "c1", "name": "Ada"}, base_dir=data_dir, roots=[]
+    )
+
+    stats = object_records.list_append_collection_stats(base_dir=data_dir, roots=[])
+    assert [entry["collection"] for entry in stats] == ["widgets"]
+    assert stats[0]["physical_rows"] == 7
+
+
+def test_list_append_collection_stats_skips_missing_collection_records_file(tmp_path):
+    """A schema declaring storage:append with no records.tsv yet must show
+    up with zeroed stats, not be skipped or raise."""
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "empties", [{"name": "id"}])
+
+    stats = object_records.list_append_collection_stats(base_dir=data_dir, roots=[])
+    assert len(stats) == 1
+    assert stats[0]["collection"] == "empties"
+    assert stats[0]["physical_rows"] == 0
+
+
+def test_list_append_collection_stats_empty_when_no_append_collections(tmp_path):
+    data_dir = tmp_path / "data"
+    write_schema(data_dir, "contacts", [{"name": "id"}])
+    object_records.create_collection_record(
+        "contacts", {"id": "c1"}, base_dir=data_dir, roots=[]
+    )
+    assert object_records.list_append_collection_stats(base_dir=data_dir, roots=[]) == []

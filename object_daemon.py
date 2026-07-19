@@ -32,15 +32,24 @@ except ImportError:
     croniter = None
 
 import object_events
+import object_records
 from object_execution import ObjectExecutionFailure, ObjectExecutionRequest, execute_object
 from object_namespace import find_trigger_file, get_object_roots, resolve_object_id
-
 
 # Daemon state
 _running = True
 EVENT_KEEP_COUNT_ENV = "DBBASIC_EVENT_KEEP_COUNT"
 EVENT_KEEP_SECONDS_ENV = "DBBASIC_EVENT_KEEP_SECONDS"
 EVENT_CLEANUP_INTERVAL_SECONDS = 60.0
+
+# Compaction pass (docs/append-only-storage-design.md Compaction: "run on
+# a schedule or when the superseded-row ratio passes a threshold -- never
+# inline in a request"). See process_compactions.
+COMPACTION_INTERVAL_SECONDS_ENV = "DBBASIC_COMPACTION_INTERVAL_SECONDS"
+COMPACTION_BLOAT_RATIO_ENV = "DBBASIC_COMPACTION_BLOAT_RATIO"
+_DEFAULT_COMPACTION_INTERVAL_SECONDS = 3600
+_DEFAULT_COMPACTION_BLOAT_RATIO = 1.0
+COMPACTION_MARKER_NAME = ".compaction_last_run"
 
 
 def log(msg, level='INFO'):
@@ -398,6 +407,108 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_float(name: str, default: float) -> float:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
+# --- Compaction ---
+
+def process_compactions(*, base_dir: Path | str = "data") -> dict | None:
+    """Compact over-threshold append-mode collections on a timer.
+
+    Runs at most once per DBBASIC_COMPACTION_INTERVAL_SECONDS (default
+    3600 -- an hour), gated by a marker FILE (`.compaction_last_run` under
+    `base_dir`) rather than an in-process variable like the event-cleanup
+    pass above uses: a file marker survives a daemon restart, and if more
+    than one daemon process ever points at the same data dir, whichever
+    one's write lands last simply wins that interval's marker -- there is
+    no harm in an occasional double-run of a compaction that is itself
+    idempotent-per-collection (compact_collection on an already-compacted
+    file is a correctly-reported no-op).
+
+    Every collection whose schema currently declares "storage": "append"
+    (object_records.list_append_collection_stats) is compacted when BOTH:
+      - its physical row count is at or above DBBASIC_APPEND_COMPACT_
+        MIN_ROWS (object_records.append_compact_min_rows -- the same
+        floor object_records._maybe_flag_auto_compact uses for its own
+        inline auto-compact trigger on ordinary writes), AND
+      - its bloat_ratio is at or above DBBASIC_COMPACTION_BLOAT_RATIO
+        (default 1.0 -- dead rows at least matching live rows).
+    A stats entry this call can't get real numbers for (list_append_
+    collection_stats defaults to allow_fold=True, so this is not expected
+    in practice, but a None/estimated physical_rows or bloat_ratio is
+    skipped rather than guessed at) is left alone; it will be reconsidered
+    on the next interval.
+
+    Each collection's compaction is wrapped in its own try/except: one
+    collection failing (a lock contention, a mid-flight schema change, a
+    permissions error) is logged and skipped, never allowed to stop the
+    rest of the pass or propagate out of this function -- the daemon is
+    an optional process (nothing else may depend on it running), and a
+    single bad collection must not take an entire poll interval's worth
+    of compaction down with it. The daemon's own main loop wraps this
+    call in a try/except too, belt and suspenders.
+
+    Returns None when the interval hasn't elapsed yet (no work attempted
+    this call). Otherwise returns {"checked": <int>, "compacted": [{
+    "collection", "rows_before", "rows_after", "bytes_before",
+    "bytes_after"}, ...]} -- mainly for tests and manual/CLI invocation;
+    the daemon's own loop only logs.
+    """
+    interval = _env_int(COMPACTION_INTERVAL_SECONDS_ENV, _DEFAULT_COMPACTION_INTERVAL_SECONDS)
+    marker_path = Path(base_dir) / COMPACTION_MARKER_NAME
+    now = time.time()
+    try:
+        last_run = marker_path.stat().st_mtime
+    except OSError:
+        last_run = 0.0
+
+    if now - last_run < interval:
+        return None
+
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    marker_path.write_text(str(now))
+
+    bloat_threshold = _env_float(COMPACTION_BLOAT_RATIO_ENV, _DEFAULT_COMPACTION_BLOAT_RATIO)
+    min_rows = object_records.append_compact_min_rows()
+
+    try:
+        stats = object_records.list_append_collection_stats(base_dir=base_dir)
+    except Exception as e:
+        log(f"Compaction: could not list append collections: {e}", "ERROR")
+        return {"checked": 0, "compacted": []}
+
+    compacted = []
+    for entry in stats:
+        collection = entry.get("collection")
+        try:
+            physical_rows = entry.get("physical_rows")
+            bloat_ratio = entry.get("bloat_ratio")
+            if physical_rows is None or bloat_ratio is None:
+                continue
+            if physical_rows < min_rows or bloat_ratio < bloat_threshold:
+                continue
+
+            summary = object_records.compact_collection(collection, base_dir=base_dir)
+            log(
+                f"Compaction: {collection} rows {summary['rows_before']}->"
+                f"{summary['rows_after']}, bytes {summary['bytes_before']}->"
+                f"{summary['bytes_after']}"
+            )
+            compacted.append({"collection": collection, **summary})
+        except Exception as e:
+            log(f"Compaction: {collection} failed: {e}", "ERROR")
+            continue
+
+    return {"checked": len(stats), "compacted": compacted}
+
+
 # --- Object Execution ---
 
 def _execute_target(runtime: ObjectRuntime, object_id: str, method: str, payload: dict):
@@ -426,6 +537,7 @@ def shutdown(signum, frame):
 
 def main():
     import argparse
+
     from dbbasic_object_core.runtime.object_runtime import ObjectRuntime
 
     parser = argparse.ArgumentParser(description="Object Primitive Daemon")
@@ -446,6 +558,7 @@ def main():
     print(f"Events: {'enabled' if _find_trigger_file('events') else 'no events object'}")
     print(f"Croniter: {'available' if croniter else 'NOT installed (cron tasks disabled)'}")
     print(f"Rate limit cleanup: {'enabled' if Path('data/ratelimit').exists() else 'no ratelimit dir yet'}")
+    print(f"Compaction interval: {_env_int(COMPACTION_INTERVAL_SECONDS_ENV, _DEFAULT_COMPACTION_INTERVAL_SECONDS)}s")
     print()
     print("Press Ctrl+C to stop")
     print("=" * 60)
@@ -474,6 +587,11 @@ def main():
             cleanup_ratelimit()
         except Exception as e:
             log(f"Cleanup error: {e}", 'ERROR')
+
+        try:
+            process_compactions()
+        except Exception as e:
+            log(f"Compaction error: {e}", 'ERROR')
 
         now = time.time()
         if now - last_event_cleanup >= EVENT_CLEANUP_INTERVAL_SECONDS:

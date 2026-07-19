@@ -702,6 +702,10 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
             await _handle_admin_status(send, method, headers)
             return
 
+        if path == http_api_contract.ADMIN_STORAGE_PATH:
+            await _handle_admin_storage(send, method, headers)
+            return
+
         if path == http_api_contract.ADMIN_CHANGES_PATH:
             await _handle_admin_changes(send, method, query, headers)
             return
@@ -2322,6 +2326,115 @@ async def _handle_admin_status(
     await _send_json(send, payload, status=status_code)
 
 
+async def _handle_admin_storage(
+    send,
+    method: str,
+    headers: dict[str, str],
+) -> None:
+    """GET /admin/storage: compaction-observability stats for every
+    append-mode collection (docs/storage-modes.md "Compaction").
+
+    Must stay fast regardless of collection size or cache/sidecar state --
+    passes allow_fold=False so no single collection's stats call can turn
+    this into an O(file) scan; a collection whose cheap sources (warm
+    _RECORDS_CACHE, coherent id->offset sidecar) can't answer comes back
+    as an "estimated" entry (file_bytes only) instead of triggering a full
+    fold. See object_records.append_collection_stats.
+    """
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    gate_error = _admin_token_gate_error(
+        headers,
+        f"Admin storage requires {ADMIN_TOKEN_ENV}.",
+    )
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return
+
+    append_collections = object_records.list_append_collection_stats(
+        base_dir=_data_dir(),
+        allow_fold=False,
+    )
+    await _send_json(
+        send,
+        {"status": "ok", "append_collections": append_collections},
+    )
+
+
+async def _handle_admin_collection_compact(
+    send,
+    collection: str,
+    headers: dict[str, str],
+) -> None:
+    """POST /admin/collections/{collection}/compact: run
+    object_records.compact_collection under the same gates that protect
+    other mutating admin record routes (admin token, then the same
+    collection-level write-permission check _record_write_denied_before_
+    lookup applies to record create/update/delete -- there is no single
+    record here, so the collection-level check is the whole check, same
+    as it is for those routes before their own per-record lookup runs).
+
+    404 for an unknown collection, 400 for a collection not currently in
+    append storage mode (nothing to compact -- compact_collection itself
+    tolerates being called on a classic collection as a no-op, but this
+    endpoint reports that as a client error instead of a silent 200, so
+    "I asked to compact X" never comes back "ok" for a collection that
+    was never compactable to begin with).
+    """
+    if await _record_write_denied_before_lookup(
+        send,
+        headers,
+        object_permissions.UPDATE,
+        collection=collection,
+    ):
+        return
+
+    try:
+        mode_stats = object_records.append_collection_stats(collection, base_dir=_data_dir())
+    except object_collections.InvalidCollectionNameError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    except object_collections.CollectionNotFoundError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+
+    if mode_stats is None:
+        await _send_json(
+            send,
+            {
+                "status": "error",
+                "error": f"Collection is not in append storage mode: {collection}",
+            },
+            status=400,
+        )
+        return
+
+    started_at = time.perf_counter()
+    try:
+        summary = object_records.compact_collection(collection, base_dir=_data_dir())
+    except OSError as exc:
+        await _send_json(
+            send,
+            {"status": "error", "error": f"Could not compact collection: {exc}"},
+            status=500,
+        )
+        return
+    duration_ms = (time.perf_counter() - started_at) * 1000
+
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "collection": collection,
+            **summary,
+            "duration_ms": duration_ms,
+        },
+    )
+
+
 async def _handle_admin_changes(
     send,
     method: str,
@@ -3065,6 +3178,10 @@ async def _handle_admin_collection(
         await _handle_collection_record_delete(send, parts[0], parts[2], headers)
         return
 
+    if method == "POST" and len(parts) == 2 and parts[1] == "compact":
+        await _handle_admin_collection_compact(send, parts[0], headers)
+        return
+
     if method != "GET":
         await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
         return
@@ -3109,6 +3226,7 @@ async def _handle_admin_collection(
                 "/admin/collections/{collection}/records/{record_id}",
                 "/admin/collections/{collection}/changes",
                 "/admin/collections/{collection}/records/{record_id}/changes",
+                "/admin/collections/{collection}/compact",
             ],
         },
         status=400,
@@ -3628,6 +3746,11 @@ def _admin_capabilities_payload() -> dict[str, Any]:
             "can_preview": True,
             "can_restore": False,
             **_backup_schedule_payload(),
+        },
+        "storage": {
+            "append_collections": len(
+                object_schemas.list_append_storage_collections(base_dir=_data_dir())
+            ),
         },
         "permission_enforcement": {
             "enabled": _permission_enforcement_enabled(),

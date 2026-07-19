@@ -47,12 +47,36 @@ Superseded rows and tombstones accumulate until compaction folds the file
 back to live rows only (atomic rewrite, under the writer lock):
 
 - Manually: `object_records.compact_collection("name", base_dir=...)`
-  (returns rows/bytes before and after). CLI/HTTP surfaces may wrap this
-  later.
+  (returns rows/bytes before and after).
 - Automatically: when a read observes more dead rows than live ones and
   the file exceeds `DBBASIC_APPEND_COMPACT_MIN_ROWS` (default 10000)
   physical rows, the **next write** compacts instead of appending. Reads
   never rewrite anything.
+- Via HTTP (admin-gated, same posture as other mutating admin record
+  routes): `POST /admin/collections/{collection}/compact` runs
+  `compact_collection` and returns its rows/bytes-before/after summary
+  plus `duration_ms`. 404 for an unknown collection, 400 for a collection
+  not currently in append storage mode. `GET /admin/storage` reports
+  per-collection compaction observability -- `{"physical_rows",
+  "live_rows", "dead_rows", "bloat_ratio", "file_bytes",
+  "sidecar_present", "compaction_flagged"}` for every append-mode
+  collection (`object_records.append_collection_stats` /
+  `list_append_collection_stats`). This endpoint is cheap by
+  construction: it never folds records.tsv to answer, preferring a warm
+  in-process cache entry or the id->offset sidecar's own row count; a
+  collection neither can answer comes back with `"estimated": true` and
+  only `file_bytes` populated (`physical_rows`/`live_rows` null) rather
+  than paying an O(file) parse on a status call.
+- Via the daemon (object_daemon.py, optional -- nothing else depends on
+  it running): `process_compactions` polls every
+  `DBBASIC_COMPACTION_INTERVAL_SECONDS` (default 3600, tracked by a
+  `.compaction_last_run` marker file under the data dir rather than an
+  in-process timer, so the interval survives a daemon restart) and
+  compacts any append-mode collection whose `bloat_ratio` is at or above
+  `DBBASIC_COMPACTION_BLOAT_RATIO` (default 1.0 -- dead rows at least
+  matching live rows) AND whose physical row count is at or above
+  `DBBASIC_APPEND_COMPACT_MIN_ROWS`. A failure compacting one collection
+  is logged and skipped; it never stops the rest of the pass.
 
 ### Crash behavior
 

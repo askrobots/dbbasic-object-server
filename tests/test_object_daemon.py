@@ -4,6 +4,7 @@ import sys
 import time
 from pathlib import Path
 
+import object_records
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("object_daemon", ROOT / "object_daemon.py")
@@ -11,6 +12,13 @@ object_daemon = importlib.util.module_from_spec(spec)
 sys.modules["object_daemon"] = object_daemon
 assert spec.loader is not None
 spec.loader.exec_module(object_daemon)
+
+
+def write_append_schema(data_dir: Path, collection: str, fields: list[dict] | None = None) -> Path:
+    path = data_dir / "schemas" / f"{collection}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"fields": fields or [{"name": "id"}], "storage": "append"}))
+    return path
 
 
 class FakeStateManager:
@@ -371,3 +379,113 @@ def test_process_events_records_failure_without_advancing_cursor(tmp_path, monke
     assert updated["delivery"]["failures"] == 1
     assert updated["delivery"]["last_attempted_event_id"] == "evt_001"
     assert "callback down" in updated["delivery"]["last_error"]
+
+
+# --- Compaction pass (docs/append-only-storage-design.md Compaction) --------
+
+
+def _seed_bloated_append_collection(data_dir: Path, collection: str, *, live: int = 1, churn: int = 5) -> None:
+    """Create `collection` in append storage, then churn one record
+    `churn` times so physical rows pile up well past `live`."""
+    write_append_schema(data_dir, collection, [{"name": "id"}, {"name": "value"}])
+    for i in range(live):
+        object_records.create_collection_record(
+            collection, {"id": f"r{i}", "value": "v0"}, base_dir=data_dir, roots=[]
+        )
+    for i in range(churn):
+        object_records.update_collection_record(
+            collection, "r0", {"value": f"v{i}"}, base_dir=data_dir, roots=[]
+        )
+
+
+def test_process_compactions_compacts_collections_over_threshold(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_COMPACTION_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("DBBASIC_APPEND_COMPACT_MIN_ROWS", "3")
+    monkeypatch.setenv("DBBASIC_COMPACTION_BLOAT_RATIO", "1.0")
+    data_dir = tmp_path / "data"
+
+    # "hot": 1 live + 5 updates = 6 physical rows, 1 live -> well over both
+    # the row floor and the bloat ratio.
+    _seed_bloated_append_collection(data_dir, "hot", live=1, churn=5)
+    # "cold": 2 live rows, no churn -> under DBBASIC_APPEND_COMPACT_MIN_ROWS
+    # even though (trivially) bloat_ratio is 0, so it must be left alone.
+    write_append_schema(data_dir, "cold", [{"name": "id"}, {"name": "value"}])
+    object_records.create_collection_record("cold", {"id": "c1", "value": "v"}, base_dir=data_dir, roots=[])
+    object_records.create_collection_record("cold", {"id": "c2", "value": "v"}, base_dir=data_dir, roots=[])
+
+    hot_path = object_records.collection_records_file("hot", base_dir=data_dir)
+    cold_path = object_records.collection_records_file("cold", base_dir=data_dir)
+    hot_rows_before = len(hot_path.read_text().splitlines()) - 1
+    cold_rows_before = len(cold_path.read_text().splitlines()) - 1
+    assert hot_rows_before == 6
+    assert cold_rows_before == 2
+
+    result = object_daemon.process_compactions(base_dir=data_dir)
+
+    assert result is not None
+    assert [entry["collection"] for entry in result["compacted"]] == ["hot"]
+
+    hot_rows_after = len(hot_path.read_text().splitlines()) - 1
+    cold_rows_after = len(cold_path.read_text().splitlines()) - 1
+    assert hot_rows_after == 1  # compacted down to its one live record
+    assert cold_rows_after == cold_rows_before  # untouched: under the row floor
+
+
+def test_process_compactions_honors_interval_marker(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_APPEND_COMPACT_MIN_ROWS", "3")
+    monkeypatch.setenv("DBBASIC_COMPACTION_BLOAT_RATIO", "1.0")
+    monkeypatch.setenv("DBBASIC_COMPACTION_INTERVAL_SECONDS", "3600")
+    data_dir = tmp_path / "data"
+    _seed_bloated_append_collection(data_dir, "hot", live=1, churn=5)
+    path = object_records.collection_records_file("hot", base_dir=data_dir)
+
+    # First call: no marker yet -> runs and compacts.
+    first = object_daemon.process_compactions(base_dir=data_dir)
+    assert first is not None
+    assert [entry["collection"] for entry in first["compacted"]] == ["hot"]
+    rows_after_first = len(path.read_text().splitlines()) - 1
+    assert rows_after_first == 1
+
+    # Re-bloat the file directly (bypassing the pass) and call again
+    # immediately: the marker was just written, so the interval hasn't
+    # elapsed and this call must be a pure no-op -- no listing, no compaction.
+    for i in range(5):
+        object_records.update_collection_record(
+            "hot", "r0", {"value": f"w{i}"}, base_dir=data_dir, roots=[]
+        )
+    rows_before_second = len(path.read_text().splitlines()) - 1
+    assert rows_before_second > 1
+
+    second = object_daemon.process_compactions(base_dir=data_dir)
+    assert second is None
+    rows_after_second = len(path.read_text().splitlines()) - 1
+    assert rows_after_second == rows_before_second  # untouched
+
+
+def test_process_compactions_one_collection_failing_does_not_stop_others(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_COMPACTION_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("DBBASIC_APPEND_COMPACT_MIN_ROWS", "3")
+    monkeypatch.setenv("DBBASIC_COMPACTION_BLOAT_RATIO", "1.0")
+    data_dir = tmp_path / "data"
+    _seed_bloated_append_collection(data_dir, "bad", live=1, churn=5)
+    _seed_bloated_append_collection(data_dir, "good", live=1, churn=5)
+
+    real_compact = object_records.compact_collection
+
+    def flaky_compact(collection, **kwargs):
+        if collection == "bad":
+            raise RuntimeError("simulated compaction failure")
+        return real_compact(collection, **kwargs)
+
+    monkeypatch.setattr(object_records, "compact_collection", flaky_compact)
+
+    result = object_daemon.process_compactions(base_dir=data_dir)
+
+    assert result is not None
+    assert result["checked"] == 2
+    assert [entry["collection"] for entry in result["compacted"]] == ["good"]
+
+    good_path = object_records.collection_records_file("good", base_dir=data_dir)
+    bad_path = object_records.collection_records_file("bad", base_dir=data_dir)
+    assert len(good_path.read_text().splitlines()) - 1 == 1  # compacted
+    assert len(bad_path.read_text().splitlines()) - 1 == 6  # left as-is after its failure
