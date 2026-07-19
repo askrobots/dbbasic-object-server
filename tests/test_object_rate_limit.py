@@ -111,3 +111,52 @@ def test_rate_limit_file_is_safe_under_concurrent_access(tmp_path):
     assert len(timestamps) == 50
     for timestamp in timestamps:
         float(timestamp)
+
+
+def test_degraded_fails_open_by_default_but_flags_it(tmp_path):
+    """When storage is unusable, the GLOBAL limiter (fail_closed=False, the
+    default) must stay up -- a broken ratelimit dir cannot take the whole
+    site down -- but the result is flagged `degraded` so the caller can log
+    it. It must NOT silently return a normal allow."""
+    # A file where the ratelimit directory is expected -> mkdir/open raises
+    # OSError inside check_rate_limit.
+    blocker = tmp_path / "ratelimit"
+    blocker.write_text("not a directory")
+
+    result = object_rate_limit.check_rate_limit(
+        directory=blocker, identity="visitor", limit=5, window_seconds=60
+    )
+    assert result.degraded is True
+    assert result.allowed is True  # fail-open default keeps the site up
+
+
+def test_degraded_fails_closed_when_requested(tmp_path):
+    """A public-write surface passes fail_closed=True: when the abuse counter
+    is unavailable, deny rather than admit an unmetered flood."""
+    blocker = tmp_path / "ratelimit"
+    blocker.write_text("not a directory")
+
+    result = object_rate_limit.check_rate_limit(
+        directory=blocker, identity="visitor", limit=5, window_seconds=60,
+        fail_closed=True,
+    )
+    assert result.degraded is True
+    assert result.allowed is False  # fail-closed denies the write
+
+
+def test_read_error_does_not_masquerade_as_empty_bucket(tmp_path):
+    """A genuine OSError reading the bucket must surface as degraded, not as
+    an empty timestamp list (which would silently fail open regardless of
+    posture)."""
+    rate_dir = tmp_path / "ratelimit"
+    rate_dir.mkdir()
+    # Make the bucket a directory so read_text() raises OSError (IsADirectory).
+    key = __import__("hashlib").sha256(b"visitor").hexdigest()[:32]
+    (rate_dir / f"{key}.txt").mkdir()
+
+    result = object_rate_limit.check_rate_limit(
+        directory=rate_dir, identity="visitor", limit=5, window_seconds=60,
+        fail_closed=True,
+    )
+    assert result.degraded is True
+    assert result.allowed is False

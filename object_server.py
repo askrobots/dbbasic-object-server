@@ -2220,15 +2220,30 @@ async def _send_rate_limit_if_needed(
     if limit <= 0:
         return False
 
-    try:
-        result = object_rate_limit.check_rate_limit(
-            directory=_rate_limit_dir(),
-            identity=_rate_limit_identity(scope, headers),
-            limit=limit,
-            window_seconds=_rate_limit_window_seconds(),
-        )
-    except OSError:
-        return False
+    # This is the GLOBAL per-request DoS limiter, so it stays fail-open on
+    # storage failure (fail_closed=False): a broken ratelimit dir must not
+    # take the whole site down. But the degradation is no longer silent --
+    # check_rate_limit flags it and we log it, because an invisibly-degraded
+    # limiter is a security hole. Public-write surfaces get their own check
+    # with fail_closed=True (see object_rate_limit.check_rate_limit).
+    result = object_rate_limit.check_rate_limit(
+        directory=_rate_limit_dir(),
+        identity=_rate_limit_identity(scope, headers),
+        limit=limit,
+        window_seconds=_rate_limit_window_seconds(),
+    )
+
+    if result.degraded:
+        try:
+            object_logs.append_object_log(
+                "object_rate_limit",
+                "WARNING",
+                "rate limiter degraded (storage unavailable); "
+                f"failing {'open' if result.allowed else 'closed'} for this request",
+                base_dir=_data_dir(),
+            )
+        except Exception:
+            pass
 
     if result.allowed:
         return False
