@@ -601,7 +601,9 @@ object-first storage/schema loop,
 `docs/asgi-realtime-direction.md` for the ASGI/realtime direction, and
 `docs/rest-and-object-messages.md` for the resource/message split. See
 `docs/single-vm-deployment.md` for the first conservative staging deployment
-shape, and `docs/docker-deployment.md` for the container-based alternative.
+shape, and `docs/docker-deployment.md` for the container-based alternative. See
+`docs/storage-modes.md` for the two collection storage modes (classic and
+opt-in append-only).
 
 Read `SECURITY.md` and `CONTRIBUTING.md` before copying code or documentation from private prototypes into this repository.
 
