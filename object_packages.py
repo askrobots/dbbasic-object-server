@@ -21,6 +21,8 @@ import object_package_baselines
 import object_permission_store
 import object_permissions
 import object_reconciles
+import object_record_changes
+import object_records
 import object_schemas
 import object_source
 from object_namespace import get_object_roots, object_id_from_path, resolve_object_id, validate_object_id
@@ -408,6 +410,7 @@ def install_package(
             )
             continue
         _write_file_atomic_bytes(destination, content)
+        _attribute_seed_records(entry["collection"], package_id=package_id, base_dir=base)
         installed_seed.append(
             {
                 **planned,
@@ -1026,6 +1029,34 @@ def _write_file_atomic_bytes(path: Path, content: bytes) -> None:
                 Path(tmp_name).unlink()
             except FileNotFoundError:
                 pass
+
+
+def _attribute_seed_records(collection: str, *, package_id: str, base_dir: Path) -> None:
+    """Emit an attributed "create" change for every row a seed file just wrote.
+
+    Seed writes land the whole records.tsv in one atomic byte-for-byte
+    copy (see the seed_writes loop above), bypassing
+    object_records.create_collection_record entirely -- so, unlike a
+    normal record write, nothing emits a change automatically. This is
+    the seed-install side of universal attribution: read the file back
+    (install-once, so every row it now holds is a fresh create) and log
+    one change per row, attributed to the installing package rather than
+    left unattributed.
+    """
+    try:
+        rows = object_records.read_collection_records(collection, base_dir=base_dir)
+    except (object_collections.CollectionNotFoundError, object_collections.InvalidCollectionNameError):
+        return
+    for row in rows:
+        object_record_changes.append_record_change(
+            collection=collection,
+            record_id=row["id"],
+            action="create",
+            before=None,
+            after=row,
+            actor=f"package-install:{package_id}",
+            base_dir=base_dir,
+        )
 
 
 def _relative_display_path(path: Path, root: Path) -> str:

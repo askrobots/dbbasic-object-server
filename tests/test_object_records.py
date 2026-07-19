@@ -8,6 +8,7 @@ from uuid import UUID
 import pytest
 
 import object_collections
+import object_record_changes
 import object_records
 import object_schemas
 
@@ -2566,3 +2567,190 @@ def test_list_append_collection_stats_empty_when_no_append_collections(tmp_path)
         "contacts", {"id": "c1"}, base_dir=data_dir, roots=[]
     )
     assert object_records.list_append_collection_stats(base_dir=data_dir, roots=[]) == []
+
+
+# --- Universal attribution: every write emits exactly one attributed change ---
+# (create/update/delete_collection_record now emit via object_record_changes
+# themselves, regardless of caller -- HTTP API, CLI, package installs, etc.)
+
+
+def test_create_collection_record_with_no_actor_emits_unattributed_change(tmp_path):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\n")
+
+    object_records.create_collection_record(
+        "contacts", {"id": "c1", "name": "Ada"}, base_dir=data_dir, roots=[]
+    )
+
+    changes = object_record_changes.list_record_changes("contacts", base_dir=data_dir)["changes"]
+    assert len(changes) == 1
+    assert changes[0]["actor"] == "unattributed"
+    assert changes[0]["action"] == "create"
+    assert changes[0]["record_id"] == "c1"
+    assert changes[0]["before"] is None
+    assert changes[0]["after"] == {"id": "c1", "name": "Ada"}
+
+
+def test_create_collection_record_with_actor_records_it(tmp_path):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\n")
+
+    object_records.create_collection_record(
+        "contacts", {"id": "c1", "name": "Ada"}, base_dir=data_dir, roots=[], actor="x"
+    )
+
+    changes = object_record_changes.list_record_changes("contacts", base_dir=data_dir)["changes"]
+    assert len(changes) == 1
+    assert changes[0]["actor"] == "x"
+
+
+def test_update_collection_record_with_no_actor_emits_unattributed_change(tmp_path):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+
+    object_records.update_collection_record(
+        "contacts", "c1", {"name": "Ada Lovelace"}, base_dir=data_dir, roots=[]
+    )
+
+    changes = object_record_changes.list_record_changes("contacts", base_dir=data_dir)["changes"]
+    assert len(changes) == 1
+    assert changes[0]["actor"] == "unattributed"
+    assert changes[0]["action"] == "update"
+    assert changes[0]["before"] == {"id": "c1", "name": "Ada"}
+    assert changes[0]["after"] == {"id": "c1", "name": "Ada Lovelace"}
+
+
+def test_update_collection_record_with_actor_records_it(tmp_path):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+
+    object_records.update_collection_record(
+        "contacts", "c1", {"name": "Ada Lovelace"}, base_dir=data_dir, roots=[], actor="x"
+    )
+
+    changes = object_record_changes.list_record_changes("contacts", base_dir=data_dir)["changes"]
+    assert len(changes) == 1
+    assert changes[0]["actor"] == "x"
+
+
+def test_delete_collection_record_with_no_actor_emits_unattributed_change(tmp_path):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+
+    object_records.delete_collection_record("contacts", "c1", base_dir=data_dir, roots=[])
+
+    changes = object_record_changes.list_record_changes("contacts", base_dir=data_dir)["changes"]
+    assert len(changes) == 1
+    assert changes[0]["actor"] == "unattributed"
+    assert changes[0]["action"] == "delete"
+    assert changes[0]["before"] == {"id": "c1", "name": "Ada"}
+    assert changes[0]["after"] is None
+
+
+def test_delete_collection_record_with_actor_records_it(tmp_path):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+
+    object_records.delete_collection_record("contacts", "c1", base_dir=data_dir, roots=[], actor="x")
+
+    changes = object_record_changes.list_record_changes("contacts", base_dir=data_dir)["changes"]
+    assert len(changes) == 1
+    assert changes[0]["actor"] == "x"
+
+
+def test_compaction_does_not_emit_a_change(tmp_path):
+    """Compaction is a physical-only rewrite -- it must never emit a change."""
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    object_records.create_collection_record(
+        "widgets", {"id": "w1", "name": "Alpha"}, base_dir=data_dir, roots=[], actor="x"
+    )
+    object_records.update_collection_record(
+        "widgets", "w1", {"name": "Alpha2"}, base_dir=data_dir, roots=[], actor="x"
+    )
+    before = object_record_changes.list_record_changes("widgets", base_dir=data_dir)["total"]
+
+    object_records.compact_collection("widgets", base_dir=data_dir, roots=[])
+
+    after = object_record_changes.list_record_changes("widgets", base_dir=data_dir)["total"]
+    assert after == before
+
+
+def test_append_mode_create_update_delete_attribution(tmp_path):
+    """Universal attribution also applies to append-storage collections."""
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+
+    object_records.create_collection_record(
+        "widgets", {"id": "w1", "name": "Alpha"}, base_dir=data_dir, roots=[], actor="seed"
+    )
+    object_records.update_collection_record(
+        "widgets", "w1", {"name": "Alpha2"}, base_dir=data_dir, roots=[]
+    )
+    object_records.delete_collection_record("widgets", "w1", base_dir=data_dir, roots=[], actor="cleanup")
+
+    changes = object_record_changes.list_record_changes("widgets", base_dir=data_dir)["changes"]
+    assert [change["action"] for change in changes] == ["delete", "update", "create"]
+    assert changes[2]["actor"] == "seed"
+    assert changes[1]["actor"] == "unattributed"
+    assert changes[0]["actor"] == "cleanup"
+
+
+def test_record_write_emits_exactly_one_change_no_recursion(tmp_path, monkeypatch):
+    """A record write must emit its own change exactly once -- and must never
+
+    trigger a change-about-a-change: object_record_changes.append_record_change
+    writes its JSONL entry directly (it never calls back into object_records'
+    create/update/delete_collection_record), so there is no path for one write
+    to recursively emit a second, unbounded chain of changes.
+    """
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\n")
+
+    calls: list[str] = []
+    original = object_record_changes.append_record_change
+
+    def counting(*args, **kwargs):
+        calls.append(kwargs.get("collection"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(object_record_changes, "append_record_change", counting)
+
+    object_records.create_collection_record(
+        "contacts", {"id": "c1", "name": "Ada"}, base_dir=data_dir, roots=[], actor="x"
+    )
+
+    # Exactly one emission for one write -- not zero, not two, not a chain.
+    assert calls == ["contacts"]
+    # The change log itself is never stored as a queryable collection record,
+    # so there is nothing for a write to recurse into in the first place.
+    assert not (data_dir / "collections" / "record_changes").exists()
+
+
+def test_record_change_entry_shape_is_unchanged(tmp_path):
+    """Backward compat: the stored change entry keeps its original shape
+    whether emission is triggered from the write path or from a direct
+    object_record_changes.append_record_change call.
+    """
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\n")
+
+    object_records.create_collection_record(
+        "contacts", {"id": "c1", "name": "Ada"}, base_dir=data_dir, roots=[], actor="x"
+    )
+
+    entry = object_record_changes.list_record_changes("contacts", base_dir=data_dir)["changes"][0]
+    assert set(entry) == {
+        "change_id",
+        "timestamp",
+        "collection",
+        "record_id",
+        "action",
+        "actor",
+        "message",
+        "correlation_id",
+        "changed_fields",
+        "before",
+        "after",
+    }
+    UUID(entry["change_id"])

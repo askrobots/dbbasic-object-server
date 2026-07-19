@@ -4189,6 +4189,49 @@ def test_collection_record_mutations_append_change_history(tmp_path, monkeypatch
     assert record_payload["changes"][0]["action"] == "update"
 
 
+def test_collection_record_mutations_emit_exactly_one_change_each(tmp_path, monkeypatch):
+    """HTTP API writes must produce exactly ONE change event each, attributed
+
+    to the API's actor -- object_records now emits the change itself as
+    part of the write, and object_server must not also emit a second, separate
+    change for the same mutation.
+    """
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\nc2\tGrace\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    create_status, _, _ = request(
+        "/collections/contacts/records",
+        method="POST",
+        body=json.dumps({"id": "c3", "name": "Katherine"}).encode("utf-8"),
+        headers=auth_headers(),
+    )
+    update_status, _, _ = request(
+        "/collections/contacts/records/c1",
+        method="PUT",
+        body=json.dumps({"name": "Ada Lovelace"}).encode("utf-8"),
+        headers=auth_headers(),
+    )
+    delete_status, _, _ = request(
+        "/collections/contacts/records/c2",
+        method="DELETE",
+        headers=auth_headers(),
+    )
+
+    assert create_status == 201
+    assert update_status == 200
+    assert delete_status == 200
+
+    for record_id, action in (("c3", "create"), ("c1", "update"), ("c2", "delete")):
+        matching = object_record_changes.list_record_changes(
+            "contacts", record_id=record_id, base_dir=data_dir
+        )
+        assert matching["count"] == 1, f"expected exactly one change for {record_id}"
+        assert matching["changes"][0]["action"] == action
+        assert matching["changes"][0]["actor"] == "admin"
+
+
 def test_collection_record_mutations_publish_metadata_events(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     write_records(data_dir, "contacts", "id\tname\nc1\tAda\nc2\tGrace\n")

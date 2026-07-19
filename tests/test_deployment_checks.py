@@ -1,8 +1,10 @@
 import json
 import stat
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import deployment_checks
+import object_record_changes
 
 
 def chmod(path: Path, mode: int):
@@ -327,3 +329,82 @@ def test_cli_uses_environment_paths(tmp_path, monkeypatch):
 
 def test_mode_format_includes_leading_zero():
     assert deployment_checks._mode(stat.S_IMODE(0o750)) == "0750"
+
+
+def test_unattributed_record_changes_ok_when_no_log(tmp_path):
+    results = deployment_checks.check_unattributed_record_changes(data_dir=tmp_path / "data")
+
+    assert [result.status for result in results] == ["ok"]
+
+
+def test_unattributed_record_changes_ok_when_all_attributed(tmp_path):
+    data_dir = tmp_path / "data"
+    object_record_changes.append_record_change(
+        collection="contacts",
+        record_id="c1",
+        action="create",
+        before=None,
+        after={"id": "c1"},
+        actor="admin",
+        base_dir=data_dir,
+    )
+
+    results = deployment_checks.check_unattributed_record_changes(data_dir=data_dir)
+
+    assert [result.status for result in results] == ["ok"]
+
+
+def test_unattributed_record_changes_warns_and_counts(tmp_path):
+    data_dir = tmp_path / "data"
+    object_record_changes.append_record_change(
+        collection="contacts",
+        record_id="c1",
+        action="create",
+        before=None,
+        after={"id": "c1"},
+        actor="unattributed",
+        base_dir=data_dir,
+    )
+    object_record_changes.append_record_change(
+        collection="contacts",
+        record_id="c2",
+        action="create",
+        before=None,
+        after={"id": "c2"},
+        actor="admin",
+        base_dir=data_dir,
+    )
+
+    results = deployment_checks.check_unattributed_record_changes(data_dir=data_dir)
+
+    assert len(results) == 1
+    assert results[0].status == "warning"
+    assert "1 unattributed" in results[0].message
+    assert "contacts=1" in results[0].message
+    # Never a hard failure -- visibility only, per the deployment check contract.
+    assert not deployment_checks.has_errors(results)
+
+
+def test_unattributed_record_changes_ignores_entries_outside_window(tmp_path):
+    data_dir = tmp_path / "data"
+    path = object_record_changes.record_changes_file("contacts", base_dir=data_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stale_timestamp = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+    entry = {
+        "change_id": "11111111-1111-4111-8111-111111111111",
+        "timestamp": stale_timestamp,
+        "collection": "contacts",
+        "record_id": "c1",
+        "action": "create",
+        "actor": "unattributed",
+        "message": "Created record",
+        "correlation_id": None,
+        "changed_fields": ["id"],
+        "before": None,
+        "after": {"id": "c1"},
+    }
+    path.write_text(json.dumps(entry) + "\n")
+
+    results = deployment_checks.check_unattributed_record_changes(data_dir=data_dir, window_hours=24)
+
+    assert [result.status for result in results] == ["ok"]

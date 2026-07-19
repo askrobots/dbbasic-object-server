@@ -8,8 +8,11 @@ import os
 import pwd
 import stat
 from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
+
+import object_record_changes
 
 DEFAULT_CODE_DIR = Path("/opt/dbbasic-object-server")
 DEFAULT_OBJECTS_DIR = Path("/var/lib/dbbasic-object-server/objects")
@@ -19,6 +22,8 @@ DEFAULT_SERVICE_FILE = Path("/etc/systemd/system/dbbasic-object-server.service")
 DEFAULT_JOURNALD_DROPIN = Path("/etc/systemd/journald.conf.d/99-dbbasic.conf")
 DEFAULT_SERVICE_USER = "dbbasic"
 DEFAULT_SERVICE_GROUP = "dbbasic"
+UNATTRIBUTED_ACTOR = "unattributed"
+DEFAULT_UNATTRIBUTED_WINDOW_HOURS = 24
 
 Status = Literal["ok", "warning", "error"]
 
@@ -103,6 +108,77 @@ def check_single_vm_layout(
 
 def has_errors(results: list[CheckResult]) -> bool:
     return any(result.status == "error" for result in results)
+
+
+def check_unattributed_record_changes(
+    *,
+    data_dir: Path | str | None = None,
+    window_hours: int = DEFAULT_UNATTRIBUTED_WINDOW_HOURS,
+) -> list[CheckResult]:
+    """Count recent record changes with no real actor, and warn (never fail).
+
+    Universal attribution defaults an un-actored write to "unattributed"
+    rather than skipping it (see object_records.create/update/delete_
+    collection_record), so writes never go missing -- but a growing count
+    here means some caller still isn't passing its own actor through.
+    This is visibility, not enforcement: it always reports "warning", so
+    it can be tightened to fail-closed later once callers are cleaned up.
+    """
+    name = "record change attribution"
+    data_path = Path(
+        data_dir if data_dir is not None else os.environ.get("DBBASIC_DATA_DIR", DEFAULT_DATA_DIR)
+    )
+    root = data_path / object_record_changes.RECORD_CHANGES_DIR
+    if not root.is_dir():
+        return [_result(name, root, "ok", "no record change log yet")]
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=window_hours)
+    unattributed_by_collection: dict[str, int] = {}
+    total = 0
+
+    for changes_file in sorted(root.glob(f"*/{object_record_changes.CHANGES_FILE}")):
+        collection = changes_file.parent.name
+        for line in changes_file.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(entry, dict) or entry.get("actor") != UNATTRIBUTED_ACTOR:
+                continue
+            if not _within_window(entry.get("timestamp"), cutoff):
+                continue
+            total += 1
+            unattributed_by_collection[collection] = unattributed_by_collection.get(collection, 0) + 1
+
+    if total == 0:
+        return [_result(name, root, "ok", f"no unattributed record changes in the last {window_hours}h")]
+
+    top = ", ".join(
+        f"{collection}={count}"
+        for collection, count in sorted(unattributed_by_collection.items(), key=lambda item: -item[1])[:5]
+    )
+    return [
+        _result(
+            name,
+            root,
+            "warning",
+            f"{total} unattributed record change(s) in the last {window_hours}h ({top})",
+        )
+    ]
+
+
+def _within_window(timestamp: object, cutoff: datetime) -> bool:
+    if not isinstance(timestamp, str):
+        return False
+    try:
+        parsed = datetime.fromisoformat(timestamp)
+    except ValueError:
+        return False
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed >= cutoff
 
 
 def _check_service_directory(
@@ -284,6 +360,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--env-owner", default="root")
     parser.add_argument("--system-owner", default="root")
     parser.add_argument("--system-group", default="root")
+    parser.add_argument(
+        "--unattributed-window-hours",
+        type=int,
+        default=DEFAULT_UNATTRIBUTED_WINDOW_HOURS,
+        help="lookback window for the unattributed record-change count",
+    )
     parser.add_argument("--json", action="store_true", help="print machine-readable JSON")
     args = parser.parse_args(argv)
 
@@ -299,6 +381,12 @@ def main(argv: list[str] | None = None) -> int:
         env_owner=args.env_owner,
         system_owner=args.system_owner,
         system_group=args.system_group,
+    )
+    results.extend(
+        check_unattributed_record_changes(
+            data_dir=args.data_dir,
+            window_hours=args.unattributed_window_hours,
+        )
     )
 
     if args.json:

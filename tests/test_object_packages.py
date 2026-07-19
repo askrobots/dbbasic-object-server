@@ -8,6 +8,7 @@ import object_namespace
 import object_package_baselines
 import object_packages
 import object_reconciles
+import object_record_changes
 import object_records
 import object_schemas
 import object_state
@@ -379,6 +380,48 @@ def test_install_package_creates_objects_schemas_and_seed(tmp_path):
     assert schema["name"] == "contacts"
     assert schema["field_count"] == 1
     assert (data_dir / "collections" / "contacts" / "records.tsv").read_text() == "id\tname\nc1\tAlice\n"
+
+
+def test_install_package_attributes_seed_records(tmp_path):
+    """Seed writes bypass object_records.create_collection_record (the whole
+
+    records.tsv lands as one atomic byte copy), so unlike a normal record
+    write nothing emits a change automatically -- universal attribution
+    still requires one, attributed to the installing package.
+    """
+    packages_root = tmp_path / "packages"
+    data_dir = tmp_path / "data"
+    object_root = tmp_path / "objects"
+    write_package(
+        packages_root,
+        "hello-world",
+        {
+            "id": "hello-world",
+            "name": "Hello World",
+            "version": "0.1.0",
+            "objects": [],
+            "schemas": [{"collection": "contacts", "path": "schemas/contacts.json"}],
+            "permissions": [],
+            "seed": [{"collection": "contacts", "path": "seed/contacts.tsv"}],
+            "migrations": [],
+        },
+        files=(
+            ("schemas/contacts.json", '{"name":"contacts","fields":[{"name":"id","type":"text"}]}\n'),
+            ("seed/contacts.tsv", "id\tname\nc1\tAlice\nc2\tBob\n"),
+        ),
+    )
+
+    object_packages.install_package(
+        "hello-world",
+        root=packages_root,
+        base_dir=data_dir,
+        object_roots=[object_root],
+    )
+
+    changes = object_record_changes.list_record_changes("contacts", base_dir=data_dir)["changes"]
+    assert {change["record_id"] for change in changes} == {"c1", "c2"}
+    assert all(change["action"] == "create" for change in changes)
+    assert all(change["actor"] == "package-install:hello-world" for change in changes)
 
 
 def test_install_package_refuses_existing_objects_without_replace(tmp_path):

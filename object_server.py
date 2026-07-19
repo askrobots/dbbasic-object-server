@@ -6298,7 +6298,7 @@ async def _handle_user_file_upload(
 
     try:
         stored = object_records.create_collection_record(
-            USER_FILES_COLLECTION, record, base_dir=_data_dir()
+            USER_FILES_COLLECTION, record, base_dir=_data_dir(), actor=_record_change_actor(headers)
         )
     except object_collections.CollectionNotFoundError:
         await _send_json(
@@ -6398,7 +6398,7 @@ async def _handle_user_file(
             return
         try:
             object_records.delete_collection_record(
-                USER_FILES_COLLECTION, file_id, base_dir=_data_dir()
+                USER_FILES_COLLECTION, file_id, base_dir=_data_dir(), actor=_record_change_actor(headers)
             )
         except (LookupError, ValueError) as exc:
             await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
@@ -7045,6 +7045,7 @@ async def _handle_collection_record_create(
             collection,
             record_payload,
             base_dir=_data_dir(),
+            actor=_record_change_actor(headers),
         )
     except object_collections.InvalidCollectionNameError as exc:
         await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
@@ -7069,26 +7070,15 @@ async def _handle_collection_record_create(
         )
         return
 
-    try:
-        change = object_record_changes.append_record_change(
-            collection=collection,
-            record_id=record["id"],
-            action="create",
-            before=None,
-            after=record,
-            actor=_record_change_actor(headers),
-            correlation_id=object_correlation.current_correlation_id(),
-            base_dir=_data_dir(),
-        )
-    except (OSError, ValueError) as exc:
-        await _send_json(
-            send,
-            {"status": "error", "error": f"Could not record collection change: {exc}"},
-            status=500,
-        )
-        return
-
-    _publish_record_change_event(change, record=record)
+    # object_records.create_collection_record already durably appended the
+    # attributed change (universal attribution); this only re-reads it so
+    # realtime/handler/event-bus fan-out can use the real persisted
+    # change_id/timestamp. A read failure here is not fatal -- the change
+    # itself is already safely on disk -- so it only costs this one
+    # best-effort publish.
+    change = _record_change_for_publish(collection, record["id"])
+    if change is not None:
+        _publish_record_change_event(change, record=record)
 
     await _send_json(
         send,
@@ -7288,6 +7278,7 @@ async def _handle_collection_record_update(
             record_id,
             changes,
             base_dir=_data_dir(),
+            actor=_record_change_actor(headers),
         )
     except object_records.RecordNotFoundError as exc:
         await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
@@ -7306,26 +7297,13 @@ async def _handle_collection_record_update(
         )
         return
 
-    try:
-        change = object_record_changes.append_record_change(
-            collection=collection,
-            record_id=record_id,
-            action="update",
-            before=existing,
-            after=record,
-            actor=_record_change_actor(headers),
-            correlation_id=object_correlation.current_correlation_id(),
-            base_dir=_data_dir(),
-        )
-    except (OSError, ValueError) as exc:
-        await _send_json(
-            send,
-            {"status": "error", "error": f"Could not record collection change: {exc}"},
-            status=500,
-        )
-        return
-
-    _publish_record_change_event(change, record=record)
+    # See the matching comment in _handle_collection_record_create: the
+    # attributed change is already durably appended by
+    # object_records.update_collection_record; this just re-reads it for
+    # publish.
+    change = _record_change_for_publish(collection, record_id)
+    if change is not None:
+        _publish_record_change_event(change, record=record)
 
     await _send_json(
         send,
@@ -7387,6 +7365,7 @@ async def _handle_collection_record_delete(
             collection,
             record_id,
             base_dir=_data_dir(),
+            actor=_record_change_actor(headers),
         )
     except object_records.RecordNotFoundError as exc:
         await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
@@ -7405,26 +7384,13 @@ async def _handle_collection_record_delete(
         )
         return
 
-    try:
-        change = object_record_changes.append_record_change(
-            collection=collection,
-            record_id=record_id,
-            action="delete",
-            before=record,
-            after=None,
-            actor=_record_change_actor(headers),
-            correlation_id=object_correlation.current_correlation_id(),
-            base_dir=_data_dir(),
-        )
-    except (OSError, ValueError) as exc:
-        await _send_json(
-            send,
-            {"status": "error", "error": f"Could not record collection change: {exc}"},
-            status=500,
-        )
-        return
-
-    _publish_record_change_event(change, record=record)
+    # See the matching comment in _handle_collection_record_create: the
+    # attributed change is already durably appended by
+    # object_records.delete_collection_record; this just re-reads it for
+    # publish.
+    change = _record_change_for_publish(collection, record_id)
+    if change is not None:
+        _publish_record_change_event(change, record=record)
 
     await _send_json(
         send,
@@ -7672,6 +7638,7 @@ def _upsert_user_pref(user_id: str, key: str, value: str) -> dict[str, str]:
             {"value": value},
             base_dir=_data_dir(),
             roots=get_object_roots(),
+            actor=user_id,
         )
     return object_records.create_collection_record(
         USER_PREFS_COLLECTION,
@@ -7683,6 +7650,7 @@ def _upsert_user_pref(user_id: str, key: str, value: str) -> dict[str, str]:
         },
         base_dir=_data_dir(),
         roots=get_object_roots(),
+        actor=user_id,
     )
 
 
@@ -9761,6 +9729,28 @@ def _record_change_actor(headers: dict[str, str]) -> str:
     if subject.roles:
         return ",".join(subject.roles)
     return "api"
+
+
+def _record_change_for_publish(collection: str, record_id: str) -> dict[str, Any] | None:
+    """Re-read the change object_records just durably appended, for publish.
+
+    object_records.create/update/delete_collection_record already emit the
+    attributed change record as part of the write itself (universal
+    attribution -- see object_record_changes). The HTTP handlers still want
+    the real persisted change_id/timestamp/changed_fields for realtime and
+    event-bus fan-out, so this fetches the newest entry back rather than
+    emitting a second, separate change. Best-effort: a read failure here
+    only costs the realtime/event-bus publish, not the write or its log
+    entry, which are already safely on disk.
+    """
+    try:
+        payload = object_record_changes.list_record_changes(
+            collection, record_id=record_id, limit=1, base_dir=_data_dir()
+        )
+    except (OSError, ValueError):
+        return None
+    changes = payload.get("changes") or []
+    return changes[0] if changes else None
 
 
 def _publish_record_change_event(

@@ -21,7 +21,9 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import object_collections
+import object_correlation
 import object_ids
+import object_record_changes
 import object_schemas
 from object_versions import DEFAULT_DATA_DIR
 
@@ -408,8 +410,17 @@ def create_collection_record(
     *,
     base_dir: Path | str = DEFAULT_DATA_DIR,
     roots: Iterable[Path] | None = None,
+    actor: str | None = None,
 ) -> dict[str, str]:
-    """Append one record to a collection TSV and return the stored row."""
+    """Append one record to a collection TSV and return the stored row.
+
+    Every successful write is durably attributed here (universal
+    attribution -- every mutation, on every path, emits a record change).
+    ``actor`` identifies who/what caused the write; callers that omit it
+    are logged as ``"unattributed"`` rather than silently skipped, so gaps
+    stay visible instead of disappearing. See object_record_changes for
+    the append itself and its recursion note.
+    """
     _ensure_collection_known(collection, base_dir=base_dir, roots=roots)
     extra_names = _extra_field_names(collection, base_dir=base_dir, roots=roots)
     clean = _normalize_record_payload(record, require_id=True)
@@ -489,7 +500,18 @@ def create_collection_record(
             delta_op=OP_UPSERT,
             delta_id=record_id,
         )
-        return _surface_extra(_project_record(clean, merged_fields), extra_names=extra_names)
+        result = _surface_extra(_project_record(clean, merged_fields), extra_names=extra_names)
+        object_record_changes.append_record_change(
+            collection=collection,
+            record_id=record_id,
+            action="create",
+            before=None,
+            after=result,
+            actor=actor or "unattributed",
+            correlation_id=object_correlation.current_correlation_id(),
+            base_dir=base_dir,
+        )
+        return result
 
 
 def update_collection_record(
@@ -499,8 +521,14 @@ def update_collection_record(
     *,
     base_dir: Path | str = DEFAULT_DATA_DIR,
     roots: Iterable[Path] | None = None,
+    actor: str | None = None,
 ) -> dict[str, str]:
-    """Update one existing record by id and return the stored row."""
+    """Update one existing record by id and return the stored row.
+
+    See create_collection_record for the attribution contract: every
+    successful update is durably attributed, defaulting to
+    ``"unattributed"`` when the caller doesn't identify itself.
+    """
     _ensure_collection_known(collection, base_dir=base_dir, roots=roots)
     if not validate_record_id(record_id):
         raise InvalidRecordIdError(f"Invalid record id: {record_id}")
@@ -578,7 +606,18 @@ def update_collection_record(
             delta_op=OP_UPSERT,
             delta_id=record_id,
         )
-        return _surface_extra(_project_record(updated, merged_fields), extra_names=extra_names)
+        result = _surface_extra(_project_record(updated, merged_fields), extra_names=extra_names)
+        object_record_changes.append_record_change(
+            collection=collection,
+            record_id=record_id,
+            action="update",
+            before=existing,
+            after=result,
+            actor=actor or "unattributed",
+            correlation_id=object_correlation.current_correlation_id(),
+            base_dir=base_dir,
+        )
+        return result
 
 
 def delete_collection_record(
@@ -587,8 +626,14 @@ def delete_collection_record(
     *,
     base_dir: Path | str = DEFAULT_DATA_DIR,
     roots: Iterable[Path] | None = None,
+    actor: str | None = None,
 ) -> dict[str, str]:
-    """Delete one existing record by id and return the removed row."""
+    """Delete one existing record by id and return the removed row.
+
+    See create_collection_record for the attribution contract: every
+    successful delete is durably attributed, defaulting to
+    ``"unattributed"`` when the caller doesn't identify itself.
+    """
     _ensure_collection_known(collection, base_dir=base_dir, roots=roots)
     if not validate_record_id(record_id):
         raise InvalidRecordIdError(f"Invalid record id: {record_id}")
@@ -630,7 +675,18 @@ def delete_collection_record(
             delta_op=OP_DELETE,
             delta_id=record_id,
         )
-        return _project_record(removed, fields)
+        result = _project_record(removed, fields)
+        object_record_changes.append_record_change(
+            collection=collection,
+            record_id=record_id,
+            action="delete",
+            before=result,
+            after=None,
+            actor=actor or "unattributed",
+            correlation_id=object_correlation.current_correlation_id(),
+            base_dir=base_dir,
+        )
+        return result
 
 
 def compact_collection(
