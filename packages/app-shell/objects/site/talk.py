@@ -74,7 +74,11 @@ _BASE_CAPABILITIES = (
     "saying something is unavailable. "
     "To show one specific record on screen, create a view whose blocks contain a "
     "detail block for it. Never claim something is on screen unless you created "
-    "or updated a views record in this same turn."
+    "or updated a views record in this same turn. "
+    "Whenever the screen should show a view -- newly created OR one that already "
+    "exists -- end your reply with the marker [[view:<record id>]] alone on the "
+    "last line. The marker is machine-read; it is never displayed or spoken, so "
+    "it does not violate the no-ids-aloud rule."
 )
 
 _TALK_ADDENDUM = (
@@ -140,6 +144,7 @@ function stripForSpeech(text) {
     .replace(/\\[([^\\]]*)\\]\\([^)]*\\)/g, "$1")
     .replace(/https?:\\/\\/\\S+/g, " ")
     .replace(/\\/views\\/\\S+/g, " ")
+    .replace(/\\[\\[view:[^\\]]*\\]\\]/g, " ")
     .replace(/[*_#>~]/g, " ")
     .replace(/\\s+/g, " ")
     .trim()
@@ -158,7 +163,19 @@ function renderStageView(path) {
   stage.innerHTML = `<iframe src="${esc(path)}?embed=1" class="stageframe"></iframe>`;
 }
 
+// The machine channel: the model ends a reply with [[view:<id>]] when the
+// stage should show that view (new OR already-existing) -- explicit
+// signaling instead of path-sniffing, since spoken replies never carry
+// paths. The marker is stripped from everything displayed and spoken.
+const VIEW_MARKER_RE = /\\[\\[view:([A-Za-z0-9-]+)\\]\\]/;
+
+function stripViewMarker(text) {
+  return String(text ?? "").replace(/\\[\\[view:[^\\]]*\\]\\]/g, " ").trim();
+}
+
 function viewPathFromReply(text) {
+  const marker = String(text || "").match(VIEW_MARKER_RE);
+  if (marker) return "/views/" + marker[1];
   const match = String(text || "").match(VIEWS_PATH_RE);
   return match ? match[0].replace(/[.,;:)]+$/, "") : null;
 }
@@ -640,16 +657,18 @@ async function submitTurn(input) {
   // undefined.split() would throw here and silently kill the turn.
   const tools = String(pref("tools", DEFAULT_TOOLS)).split(",").map((t) => t.trim()).filter(Boolean);
   const [ok, body] = await api("POST", "/api/ai/chat",
-    {message: input, model: pref("ai_model", DEFAULT_MODEL), tools, history: aiHistory.slice(-20), system: TALK_SYSTEM});
+    {message: input, model: pref("ai_model", DEFAULT_MODEL), tools, history: aiHistory.slice(-20),
+     system: TALK_SYSTEM + " Current local date/time: " + new Date().toString() + "."});
 
-  const replyText = ok ? body.reply : (body.error || "Something went wrong.");
+  const rawReply = ok ? body.reply : (body.error || "Something went wrong.");
+  const replyText = stripViewMarker(rawReply);
   capAssistant.textContent = stripForSpeech(replyText) || replyText;
 
   if (ok) {
     aiHistory.push({role: "user", content: input});
     aiHistory.push({role: "assistant", content: body.reply});
-    const viewPath = viewPathFromReply(body.reply) || viewPathFromToolCalls(body.tool_calls);
-    if (viewPath) renderStageView(viewPath); else renderCard(body.reply);
+    const viewPath = viewPathFromReply(rawReply) || viewPathFromToolCalls(body.tool_calls);
+    if (viewPath) renderStageView(viewPath); else renderCard(replyText);
   } else {
     renderCard(replyText);
   }

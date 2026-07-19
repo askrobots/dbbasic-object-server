@@ -104,10 +104,14 @@ function finish(out, text, {err = false, tools = null, markdown = false} = {}) {
   // second markdown implementation.
   if (markdown) {
     out.classList.add("md");
+    // [[view:<id>]] is the machine channel: extract it for the embed, then
+    // strip it so it is never rendered.
+    const marker = String(text ?? "").match(/\[\[view:([A-Za-z0-9-]+)\]\]/);
+    text = String(text ?? "").replace(/\[\[view:[^\]]*\]\]/g, " ").trim();
     out.innerHTML = linkifyViews(window.dbbasicMarkdown ? window.dbbasicMarkdown(text) : esc(text));
     // A materialized page is worth more than a link: embed it right under
     // the reply, small, with an escape hatch to the full page.
-    const viewMatch = String(text ?? "").match(/\/views\/[A-Za-z0-9_-]+/);
+    const viewMatch = marker ? ["/views/" + marker[1]] : String(text ?? "").match(/\/views\/[A-Za-z0-9_-]+/);
     if (viewMatch) {
       const path = viewMatch[0].replace(/[.,;:)]+$/, "");
       const embed = document.createElement("div");
@@ -135,6 +139,7 @@ function stripForSpeech(text) {
     .replace(/\\[([^\\]]*)\\]\\([^)]*\\)/g, "$1")
     .replace(/https?:\\/\\/\\S+/g, " ")
     .replace(/\\/views\\/\\S+/g, " ")
+    .replace(/\\[\\[view:[^\\]]*\\]\\]/g, " ")
     .replace(/[*_#>~]/g, " ")
     .replace(/\\s+/g, " ")
     .trim()
@@ -374,7 +379,12 @@ async function run(input) {
              "saying something is unavailable. " +
              "To show one specific record on screen, create a view whose blocks contain a " +
              "detail block for it. Never claim something is on screen unless you created " +
-             "or updated a views record in this same turn."});
+             "or updated a views record in this same turn. " +
+             "Whenever the screen should show a view -- newly created OR one that already " +
+             "exists -- end your reply with the marker [[view:<record id>]] alone on the " +
+             "last line. The marker is machine-read; it is never displayed or spoken, so " +
+             "it does not violate the no-ids-aloud rule." +
+             " Current local date/time: " + new Date().toString() + "."});
   finish(out, ok ? body.reply : body.error,
          {err: !ok, tools: ok ? body.tool_calls : null, markdown: ok});
   if (ok) {
