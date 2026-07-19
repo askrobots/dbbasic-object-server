@@ -1,0 +1,1 @@
+id	invoice_id	description	quantity	unit_price_cents	line_total_cents	tax_rate_bps	line_tax_cents	owner_id	created_at

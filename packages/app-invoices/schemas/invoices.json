@@ -1,0 +1,176 @@
+{
+  "name": "invoices",
+  "title": "Invoices",
+  "version": 1,
+  "description": "Line-item invoices, quotes, and credit notes. Lines live in invoice_lines; subtotal/tax/total/balance are stamped by the invoice_totals handler, never typed by hand. See plan/vocabulary/20-invoice-spec.md.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "doc_type",
+      "type": "enum",
+      "label": "Document Type",
+      "default": "invoice",
+      "enum": ["invoice", "credit_note", "quote"],
+      "help": "invoice/credit_note/quote share this schema. Real predecessor numbers each type separately (INV-####/CN-####/QT-####); auto-numbering is deferred here (see the number field) but the type is captured now so nothing is lost."
+    },
+    {
+      "name": "number",
+      "type": "text",
+      "required": true,
+      "label": "Number",
+      "help": "Human document number, e.g. INV-0001. v1 is typed by the owner, not auto-assigned -- a sequenced invoice_counters collection + closed create route is a later slice (plan/vocabulary/20-invoice-spec.md), not built here."
+    },
+    {
+      "name": "customer_id",
+      "label": "Customer (contact)",
+      "relation": {"collection": "contacts", "display_field": "first_name"},
+      "help": "Optional cross-reference only. The snapshot fields below are what every surface renders -- editing the contact later never rewrites an already-issued document."
+    },
+    {
+      "name": "customer_name",
+      "type": "text",
+      "required": true,
+      "label": "Bill To",
+      "validation": {"min_length": 1, "max_length": 200}
+    },
+    {
+      "name": "customer_email",
+      "type": "text",
+      "label": "Customer Email",
+      "validation": {"max_length": 254}
+    },
+    {
+      "name": "customer_address",
+      "type": "textarea",
+      "label": "Billing Address"
+    },
+    {
+      "name": "currency",
+      "type": "text",
+      "default": "USD",
+      "label": "Currency (ISO 4217)",
+      "validation": {"pattern": "^[A-Z]{3}$"}
+    },
+    {
+      "name": "status",
+      "type": "enum",
+      "label": "Status",
+      "default": "draft",
+      "enum": ["draft", "sent", "paid", "partial", "overdue", "void"],
+      "transitions": {
+        "draft": [
+          {"to": "sent", "when": {"owner_id": "$user_id"}},
+          {"to": "void", "when": {"owner_id": "$user_id"}}
+        ],
+        "sent": [
+          {"to": "paid", "when": {"owner_id": "$user_id"}},
+          {"to": "partial", "when": {"owner_id": "$user_id"}},
+          {"to": "overdue", "when": {"owner_id": "$user_id"}},
+          {"to": "void", "when": {"owner_id": "$user_id"}}
+        ],
+        "partial": [
+          {"to": "paid", "when": {"owner_id": "$user_id"}},
+          {"to": "void", "when": {"owner_id": "$user_id"}}
+        ]
+      },
+      "help": "paid and void are terminal. Every other move requires the invoice owner. overdue is a manual move in v1 -- a daemon pass that flips sent->overdue once due_date has passed is a later slice, not built here."
+    },
+    {
+      "name": "issue_date",
+      "type": "date",
+      "label": "Issue Date"
+    },
+    {
+      "name": "due_date",
+      "type": "date",
+      "label": "Due Date"
+    },
+    {
+      "name": "subtotal_cents",
+      "type": "integer",
+      "default": "0",
+      "label": "Subtotal (cents)",
+      "help": "Stamped by the invoice_totals handler: sum of every line's line_total_cents. Never user-entered -- see package README-equivalent (dbbasic-package.json description) for why this is not schema read_only."
+    },
+    {
+      "name": "tax_cents",
+      "type": "integer",
+      "default": "0",
+      "label": "Tax (cents)",
+      "help": "Stamped by invoice_totals: sum of every line's line_tax_cents (line_total_cents * tax_rate_bps // 10000, floored)."
+    },
+    {
+      "name": "total_cents",
+      "type": "integer",
+      "default": "0",
+      "label": "Total (cents)",
+      "help": "Stamped by invoice_totals: subtotal_cents + tax_cents."
+    },
+    {
+      "name": "amount_paid_cents",
+      "type": "integer",
+      "default": "0",
+      "label": "Amount Paid (cents)",
+      "help": "Manual partial-payment tracking is out of scope for v1 (plan/vocabulary/20-invoice-spec.md Out of Scope); the field exists so balance_due_cents and the partial status are meaningful once payment recording lands."
+    },
+    {
+      "name": "balance_due_cents",
+      "type": "integer",
+      "default": "0",
+      "label": "Balance Due (cents)",
+      "help": "Stamped by invoice_totals: total_cents - amount_paid_cents."
+    },
+    {
+      "name": "notes",
+      "type": "textarea",
+      "label": "Notes"
+    },
+    {
+      "name": "payment_link",
+      "type": "text",
+      "label": "Payment Link"
+    },
+    {
+      "name": "paid_at",
+      "type": "datetime",
+      "label": "Paid At"
+    },
+    {
+      "name": "public_token",
+      "type": "text",
+      "label": "Public Link Token",
+      "help": "Separate rotatable token for a future public/printable view (plan/vocabulary/20-invoice-spec.md's /i/{token} route). The public page itself is a later slice -- not built here."
+    },
+    {
+      "name": "source_order_id",
+      "type": "text",
+      "label": "Source Order",
+      "help": "Provenance link to the order this invoice was converted from (real predecessor's convert_to_invoice). No orders/catalog package exists yet in this codebase -- the field is kept so a future app-orders package has somewhere to record it without a backfill."
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["doc_type", "number", "customer_id", "customer_name",
+                           "customer_email", "customer_address", "currency",
+                           "issue_date", "due_date", "status", "notes", "payment_link"]}
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["number", "customer_name", "status", "total_cents", "due_date"]
+  },
+  "search": {
+    "fields": ["number", "customer_name"]
+  }
+}
