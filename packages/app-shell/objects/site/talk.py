@@ -80,8 +80,10 @@ _BASE_CAPABILITIES = (
     "{kind:'markdown', text}. "
     "After creating it, tell the user the page is at /views/{id} (the record id). "
     "Prefer a count block above a list block for status-style pages. "
-    "Use the list_collections tool to discover what collections exist before "
-    "saying something is unavailable. "
+    "You do NOT know from memory which collections exist. Call list_collections "
+    "and read its result before answering; if the collection the user named "
+    "appears in that result, USE it -- never say it is missing when it is in "
+    "the list. The user's tasks live in the collection named tasks. "
     "To show one specific record on screen, create a view whose blocks contain a "
     "detail block for it. Never claim something is on screen unless you created "
     "or updated a views record in this same turn. "
@@ -107,7 +109,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
 const stage = document.getElementById("stage");
 const capUser = document.getElementById("capUser");
 const capAssistant = document.getElementById("capAssistant");
-let prefs = {id: OWNER_ID, ai_model: "anthropic:claude-haiku-4-5",
+let prefs = {id: OWNER_ID, ai_model: "anthropic:claude-sonnet-5",
              tools: "global_search,list_collections,list_records,get_record,create_record,update_record",
              talk_wake_word: "computer", talk_end_word: "over",
              talk_endpoint: "silence", talk_silence_ms: "1400", talk_tts: "auto"};
@@ -127,7 +129,7 @@ const DEFAULT_END_WORD = "over";
 const DEFAULT_ENDPOINT = "silence";
 const DEFAULT_SILENCE_MS = 1400;
 const DEFAULT_TOOLS = "global_search,list_records,get_record,create_record,update_record";
-const DEFAULT_MODEL = "anthropic:claude-haiku-4-5";
+const DEFAULT_MODEL = "anthropic:claude-sonnet-5";
 const DEFAULT_TALK_TTS = "auto";
 
 function pref(name, fallback) {

@@ -70,7 +70,7 @@ _SCRIPT = """
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 const log = document.getElementById("log");
-let prefs = {id: OWNER_ID, ai_model: "anthropic:claude-haiku-4-5",
+let prefs = {id: OWNER_ID, ai_model: "anthropic:claude-sonnet-5",
              tools: "global_search,list_collections,list_records,get_record,create_record,update_record",
              voice_enabled: "false", talk_tts: "auto"};
 let aiHistory = [];
@@ -422,8 +422,10 @@ async function run(input) {
              "{kind:'markdown', text}. " +
              "After creating it, tell the user the page is at /views/{id} (the record id). " +
              "Prefer a count block above a list block for status-style pages. " +
-             "Use the list_collections tool to discover what collections exist before " +
-             "saying something is unavailable. " +
+             "You do NOT know from memory which collections exist. Call list_collections " +
+             "and read its result before answering; if the collection the user named " +
+             "appears in that result, USE it -- never say it is missing when it is in " +
+             "the list. The user's tasks live in the collection named tasks. " +
              "To show one specific record on screen, create a view whose blocks contain a " +
              "detail block for it. Never claim something is on screen unless you created " +
              "or updated a views record in this same turn. " +
