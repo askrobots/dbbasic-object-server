@@ -8,12 +8,21 @@ own data the same way, so a public view over a private collection renders
 its frame plus an empty/denied block for anonymous visitors: it can never
 show what the engine would not otherwise serve.
 
-Blocks are DATA, not code: a closed v1 vocabulary of five kinds --
-list, form, detail, count, markdown -- read from the record's `blocks`
-JSON and rendered through the existing generators (window.dbbasicList,
-window.dbbasicForm) or small renderers here. An unknown kind, a malformed
-block, or invalid blocks JSON never becomes a blank page or raw markup: it
-becomes a visible placeholder card, and the rest of the view still renders.
+Blocks are DATA, not code: a closed v1 vocabulary of six kinds --
+list, form, detail, count, markdown, reader -- read from the record's
+`blocks` JSON and rendered through the existing generators
+(window.dbbasicList, window.dbbasicForm) or small renderers here. An
+unknown kind, a malformed block, or invalid blocks JSON never becomes a
+blank page or raw markup: it becomes a visible placeholder card, and the
+rest of the view still renders.
+
+`reader` ({kind:'reader', url}) is client-side like every other block
+here: it POSTs the url to /api/read (object_server's flag-gated,
+signed-in-only fetch -- see DBBASIC_ENABLE_READER and object_reader's SSRF
+gate) and renders the stripped title/text/links it gets back. A disabled
+flag, a signed-out visitor, or a refused/failed fetch all come back as a
+normal JSON error body, which renders as the same placeholder card as any
+other broken block -- no separate error path needed here.
 
 Two of the block options ask more of the generators than they currently
 offer:
@@ -57,6 +66,11 @@ _STYLE = """
 .detaillabel { color: var(--muted); font-size: 0.82rem; }
 .detailvalue { word-break: break-word; }
 .markdownblock { line-height: 1.6; }
+.readertitle { margin: 0 0 0.5rem; font-size: 1.3rem; }
+.readertext p { line-height: 1.6; margin: 0 0 0.85rem; }
+.readerlinks { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md);
+               padding: 0.75rem 1rem 0.75rem 2rem; margin-top: 0.75rem; font-size: 0.9rem; }
+.readerlinks li { margin: 0.25rem 0; }
 """
 
 _SCRIPT = r"""
@@ -65,7 +79,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
 const human = (n) => String(n || "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 const el = (id) => document.getElementById(id);
 
-const KNOWN_KINDS = ["list", "form", "detail", "count", "markdown"];
+const KNOWN_KINDS = ["list", "form", "detail", "count", "markdown", "reader"];
 
 function unsupportedCard(msg) {
   return '<div class="viewblock-error">' + esc(msg || "unsupported block") + "</div>";
@@ -192,7 +206,42 @@ function renderMarkdown(block, mount) {
   mount.innerHTML = '<div class="markdownblock">' + html + "</div>";
 }
 
-const RENDERERS = {list: renderList, form: renderForm, detail: renderDetail, count: renderCount, markdown: renderMarkdown};
+// Fetch one url through the flag-gated, signed-in-only /api/read and render
+// title + paragraphs + a numbered link list. Every failure shape (flag off,
+// signed out, SSRF-refused, non-HTML, timeout) comes back as {status:
+// "error", error} from the endpoint and renders as the same placeholder
+// card -- no separate error UI needed here.
+function renderReader(block, mount) {
+  if (!block.url) { mount.innerHTML = unsupportedCard("reader block needs a url"); return; }
+  mount.innerHTML = '<div class="state">Fetching&hellip;</div>';
+  fetch("/api/read", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {"content-type": "application/json", accept: "application/json"},
+    body: JSON.stringify({url: block.url}),
+  })
+    .then((res) => res.json().then((data) => ({ok: res.ok, data})))
+    .then(({ok, data}) => {
+      if (!ok || data.status === "error") {
+        mount.innerHTML = unsupportedCard(data.error || "could not read page");
+        return;
+      }
+      const paragraphs = String(data.text || "").split("\n\n")
+        .filter((p) => p.trim())
+        .map((p) => "<p>" + esc(p) + "</p>")
+        .join("") || '<p class="state">No readable text.</p>';
+      const links = (data.links || [])
+        .map((l) => "<li>" + esc(l.n) + ". <a href=\"" + esc(l.href)
+          + "\" target=\"_blank\" rel=\"noopener\">" + esc(l.label) + "</a></li>")
+        .join("");
+      mount.innerHTML = '<h1 class="readertitle">' + esc(data.title || block.url) + "</h1>"
+        + '<div class="readertext">' + paragraphs + "</div>"
+        + (links ? '<ol class="readerlinks">' + links + "</ol>" : "");
+    })
+    .catch(() => { mount.innerHTML = unsupportedCard("could not read page"); });
+}
+
+const RENDERERS = {list: renderList, form: renderForm, detail: renderDetail, count: renderCount, markdown: renderMarkdown, reader: renderReader};
 
 function renderBlocks(view) {
   const container = el("blocks");

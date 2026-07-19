@@ -58,6 +58,7 @@ import object_permission_status
 import object_permissions
 import object_packages
 import object_rate_limit
+import object_reader
 import object_reconciles
 import object_record_changes
 import object_records
@@ -600,6 +601,10 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
 
         if path == http_api_contract.TTS_PATH:
             await _handle_tts(send, method, body, headers)
+            return
+
+        if path == http_api_contract.READ_PATH:
+            await _handle_read(send, method, body, headers)
             return
 
         schema_meta_prefix = f"{http_api_contract.SCHEMA_META_PATH}/"
@@ -6769,6 +6774,99 @@ async def _handle_tts(
         return
 
     await _send_bytes(send, audio, content_type="audio/wav")
+
+
+READER_ENABLED_ENV = "DBBASIC_ENABLE_READER"
+READER_TIMEOUT_SECONDS_ENV = "DBBASIC_READER_TIMEOUT_SECONDS"
+READER_MAX_BYTES_ENV = "DBBASIC_READER_MAX_BYTES"
+DEFAULT_READER_TIMEOUT_SECONDS = 10.0
+DEFAULT_READER_MAX_BYTES = 2_000_000
+
+
+async def _handle_read(
+    send,
+    method: str,
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    """Fetch one URL server-side and return {title, text, links}.
+
+    Mirrors _handle_tts's gating shape exactly: a feature flag first (off
+    by default), then a signed-in session, then the same cross-origin
+    cookie check every authenticated POST here uses -- the capability
+    being gated is the server reaching outbound, not the fetched content
+    (which is public web data either way). The global per-request rate
+    limiter above already covers this path like every other route; the
+    SSRF gate itself lives in object_reader and cannot be bypassed here.
+    """
+    if method != "POST":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    if not _env_enabled(READER_ENABLED_ENV):
+        await _send_json(
+            send,
+            {"status": "error", "error": f"Reader is disabled. Set {READER_ENABLED_ENV}=true."},
+            status=403,
+        )
+        return
+
+    session = _current_identity_session(headers)
+    if session is None:
+        await _send_json(
+            send, {"status": "error", "error": "Reader requires a signed-in session."}, status=401
+        )
+        return
+
+    cookie_token = _session_cookie_token(headers)
+    if cookie_token and not _authorization_token(headers) and not _cookie_request_origin_allowed(headers):
+        await _send_json(
+            send,
+            {"status": "error", "error": "Cross-origin cookie writes are not allowed."},
+            status=403,
+        )
+        return
+
+    try:
+        payload = _parse_json_body(body)
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    url = payload.get("url")
+    if not isinstance(url, str) or not url.strip():
+        await _send_json(send, {"status": "error", "error": "url is required"}, status=400)
+        return
+
+    timeout = _env_float(READER_TIMEOUT_SECONDS_ENV, DEFAULT_READER_TIMEOUT_SECONDS)
+    max_bytes = _env_int(READER_MAX_BYTES_ENV, DEFAULT_READER_MAX_BYTES)
+
+    try:
+        result = await asyncio.to_thread(
+            object_reader.read_page, url.strip(), timeout=timeout, max_bytes=max_bytes
+        )
+    except object_reader.ReaderError as exc:
+        try:
+            object_logs.append_object_log(
+                "object_reader", "WARNING", f"read_page refused/failed: {exc}", base_dir=_data_dir()
+            )
+        except Exception:
+            pass
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=502)
+        return
+
+    try:
+        object_logs.append_object_log(
+            "object_reader",
+            "INFO",
+            f"read_page fetched {url.strip()} -> {result['final_url']} "
+            f"truncated={result['truncated']} actor={session.user_id}",
+            base_dir=_data_dir(),
+        )
+    except Exception:
+        pass
+
+    await _send_json(send, {"status": "ok", **result})
 
 
 async def _handle_search(

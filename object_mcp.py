@@ -269,6 +269,22 @@ TOOLS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "name": "read_page",
+        "description": (
+            "Fetch a URL server-side and return it stripped to readable text: "
+            "{title, text, links: [{n, label, href}], final_url, truncated}. "
+            "Links are numbered in document order so they work as speakable "
+            "navigation targets. Gated by DBBASIC_ENABLE_READER; refuses "
+            "non-http(s) schemes and requests aimed at private/internal "
+            "addresses (SSRF gate)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {"url": {"type": "string", "description": "http(s) URL to fetch"}},
+            "required": ["url"],
+        },
+    },
 ]
 
 TOOL_NAMES = frozenset(tool["name"] for tool in TOOLS)
@@ -412,6 +428,9 @@ def tool_route(name: str, arguments: Mapping[str, Any]) -> tuple[str, str, str, 
                     raise ValueError(f"{key} must be a non-empty string")
                 pairs.append((key, value.strip()))
         return ("GET", "/admin/changes", urllib.parse.urlencode(pairs), b"")
+    if name == "read_page":
+        body = {"url": _required_str(args, "url")}
+        return ("POST", "/api/read", "", _json_bytes(body))
 
     raise ValueError(f"Unknown tool: {name}")
 

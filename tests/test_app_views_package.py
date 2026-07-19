@@ -17,7 +17,7 @@ import python_object_runtime
 PACKAGES_ROOT = Path(__file__).resolve().parents[1] / "packages"
 APP_VIEWS_DIR = PACKAGES_ROOT / "app-views"
 
-CLOSED_VOCABULARY = {"list", "form", "detail", "count", "markdown"}
+CLOSED_VOCABULARY = {"list", "form", "detail", "count", "markdown", "reader"}
 
 
 def test_get_package_normalizes_app_views_manifest():
@@ -238,7 +238,7 @@ def test_renderer_returns_404_shape_for_a_missing_view_id(tmp_path):
 def test_renderer_source_covers_the_closed_block_vocabulary():
     source = (APP_VIEWS_DIR / "objects" / "site" / "view_render.py").read_text()
 
-    assert 'KNOWN_KINDS = ["list", "form", "detail", "count", "markdown"]' in source
+    assert 'KNOWN_KINDS = ["list", "form", "detail", "count", "markdown", "reader"]' in source
     for kind in CLOSED_VOCABULARY:
         assert f'"{kind}": render' in source or f"render{kind.capitalize()}" in source
     assert "unsupported" in source.lower()
@@ -271,6 +271,26 @@ def test_renderer_markdown_block_escapes_before_formatting():
     assert esc_pos < bold_pos < italic_pos < link_pos < br_pos
     assert "innerHTML = block.text" not in source
     assert "innerHTML = mount.textContent" not in source
+
+
+def test_renderer_reader_block_fetches_api_read_and_escapes_output():
+    """The reader block is client-side like every other block here: it
+    POSTs to /api/read and renders whatever comes back through esc() --
+    title, paragraph text, and link labels must never be innerHTML'd raw,
+    same discipline as renderMarkdown."""
+    source = (APP_VIEWS_DIR / "objects" / "site" / "view_render.py").read_text()
+
+    match = re.search(r"function renderReader\(block, mount\) \{(.*?)\n\}", source, re.S)
+    assert match, "renderReader function not found in view_render.py"
+    body = match.group(1)
+
+    assert '"/api/read"' in body
+    assert "method: \"POST\"" in body
+    assert "esc(data.title" in body
+    assert "esc(p)" in body
+    assert "esc(l.href)" in body
+    assert "esc(l.label)" in body
+    assert "unsupportedCard(data.error" in body
 
 
 def test_nav_lists_pinned_views_and_fails_silently():
