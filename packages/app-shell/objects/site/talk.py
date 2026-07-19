@@ -93,6 +93,10 @@ _BASE_CAPABILITIES = (
     "it does not violate the no-ids-aloud rule. "
     'Example reply: "Here are your open tasks. '
     '[[view:26b247ed-3b1a-4206-b060-1d92847194de]]"'
+    " You can also READ WEB PAGES with the read_page tool when the user gives a "
+    "URL or asks you to read/summarize a page: it returns the page text and its "
+    'links numbered in order. Offer the links as "link 1, link 2, ..." so the '
+    'user can say "open link N" and you read_page that link\'s url next.'
 )
 
 _TALK_ADDENDUM = (
@@ -110,7 +114,7 @@ const stage = document.getElementById("stage");
 const capUser = document.getElementById("capUser");
 const capAssistant = document.getElementById("capAssistant");
 let prefs = {id: OWNER_ID, ai_model: "anthropic:claude-sonnet-5",
-             tools: "global_search,list_collections,list_records,get_record,create_record,update_record",
+             tools: "global_search,list_collections,list_records,get_record,create_record,update_record,read_page",
              talk_wake_word: "computer", talk_end_word: "over",
              talk_endpoint: "silence", talk_silence_ms: "1400", talk_tts: "auto"};
 let aiHistory = [];
@@ -128,7 +132,7 @@ const DEFAULT_WAKE_WORD = "computer";
 const DEFAULT_END_WORD = "over";
 const DEFAULT_ENDPOINT = "silence";
 const DEFAULT_SILENCE_MS = 1400;
-const DEFAULT_TOOLS = "global_search,list_records,get_record,create_record,update_record";
+const DEFAULT_TOOLS = "global_search,list_collections,list_records,get_record,create_record,update_record,read_page";
 const DEFAULT_MODEL = "anthropic:claude-sonnet-5";
 const DEFAULT_TALK_TTS = "auto";
 

@@ -71,7 +71,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 const log = document.getElementById("log");
 let prefs = {id: OWNER_ID, ai_model: "anthropic:claude-sonnet-5",
-             tools: "global_search,list_collections,list_records,get_record,create_record,update_record",
+             tools: "global_search,list_collections,list_records,get_record,create_record,update_record,read_page",
              voice_enabled: "false", talk_tts: "auto"};
 let aiHistory = [];
 const TTS_MAX_CHARS = 800;
@@ -435,6 +435,10 @@ async function run(input) {
              "it does not violate the no-ids-aloud rule. " +
              "Example reply: \\"Here are your open tasks. " +
              "[[view:26b247ed-3b1a-4206-b060-1d92847194de]]\\"" +
+             " You can also READ WEB PAGES with the read_page tool when the user gives a " +
+             "URL or asks you to read/summarize a page: it returns the page text and its " +
+             "links numbered in order. Offer the links as \\"link 1, link 2, ...\\" so the " +
+             "user can say \\"open link N\\" and you read_page that link's url next." +
              " Current local date/time: " + new Date().toString() + "."});
   finish(out, ok ? body.reply : body.error,
          {err: !ok, tools: ok ? body.tool_calls : null, markdown: ok});
