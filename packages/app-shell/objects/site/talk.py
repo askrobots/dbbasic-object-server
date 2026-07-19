@@ -69,7 +69,12 @@ _BASE_CAPABILITIES = (
     "{kind:'detail', collection, record_id} | "
     "{kind:'markdown', text}. "
     "After creating it, tell the user the page is at /views/{id} (the record id). "
-    "Prefer a count block above a list block for status-style pages."
+    "Prefer a count block above a list block for status-style pages. "
+    "Use the list_collections tool to discover what collections exist before "
+    "saying something is unavailable. "
+    "To show one specific record on screen, create a view whose blocks contain a "
+    "detail block for it. Never claim something is on screen unless you created "
+    "or updated a views record in this same turn."
 )
 
 _TALK_ADDENDUM = (
@@ -87,7 +92,7 @@ const stage = document.getElementById("stage");
 const capUser = document.getElementById("capUser");
 const capAssistant = document.getElementById("capAssistant");
 let prefs = {id: OWNER_ID, ai_model: "anthropic:claude-haiku-4-5",
-             tools: "global_search,list_records,get_record,create_record,update_record",
+             tools: "global_search,list_collections,list_records,get_record,create_record,update_record",
              talk_wake_word: "computer", talk_end_word: "over",
              talk_endpoint: "silence", talk_silence_ms: "1400"};
 let aiHistory = [];
@@ -150,7 +155,7 @@ function renderCard(text) {
 }
 
 function renderStageView(path) {
-  stage.innerHTML = `<iframe src="${esc(path)}" class="stageframe"></iframe>`;
+  stage.innerHTML = `<iframe src="${esc(path)}?embed=1" class="stageframe"></iframe>`;
 }
 
 function viewPathFromReply(text) {

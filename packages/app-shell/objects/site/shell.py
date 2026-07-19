@@ -71,7 +71,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 const log = document.getElementById("log");
 let prefs = {id: OWNER_ID, ai_model: "anthropic:claude-haiku-4-5",
-             tools: "global_search,list_records,get_record,create_record",
+             tools: "global_search,list_collections,list_records,get_record,create_record,update_record",
              voice_enabled: "false"};
 let aiHistory = [];
 const TTS_MAX_CHARS = 800;
@@ -112,7 +112,7 @@ function finish(out, text, {err = false, tools = null, markdown = false} = {}) {
       const path = viewMatch[0].replace(/[.,;:)]+$/, "");
       const embed = document.createElement("div");
       embed.className = "viewembed";
-      embed.innerHTML = `<iframe src="${path}"></iframe><a href="${path}" target="_blank" rel="noopener">open ↗</a>`;
+      embed.innerHTML = `<iframe src="${path}?embed=1"></iframe><a href="${path}" target="_blank" rel="noopener">open ↗</a>`;
       out.insertAdjacentElement("afterend", embed);
     }
   } else { out.textContent = text; }
@@ -369,7 +369,12 @@ async function run(input) {
              "{kind:'detail', collection, record_id} | " +
              "{kind:'markdown', text}. " +
              "After creating it, tell the user the page is at /views/{id} (the record id). " +
-             "Prefer a count block above a list block for status-style pages."});
+             "Prefer a count block above a list block for status-style pages. " +
+             "Use the list_collections tool to discover what collections exist before " +
+             "saying something is unavailable. " +
+             "To show one specific record on screen, create a view whose blocks contain a " +
+             "detail block for it. Never claim something is on screen unless you created " +
+             "or updated a views record in this same turn."});
   finish(out, ok ? body.reply : body.error,
          {err: !ok, tools: ok ? body.tool_calls : null, markdown: ok});
   if (ok) {

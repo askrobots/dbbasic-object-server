@@ -280,6 +280,16 @@ def GET(request):
         if user_id
         else f'<a href="/login?next=/views/{view_id}">sign in</a>'
     )
+    # ?embed=1: chromeless rendition for stages/iframes (Talk, shell embeds,
+    # someday in-world screens) -- same page, no app bar, no who-row.
+    embed = str(request.get("embed") or "").strip() not in ("", "0", "false")
+    header_html = (
+        f'<header class="app"><h1 id="viewtitle">Loading&hellip;</h1>'
+        f'<div class="who">{who}</div></header>'
+        if not embed
+        else '<h1 id="viewtitle" class="embed-title">Loading&hellip;</h1>'
+    )
+    nav_html = "" if embed else '<script src="/nav"></script>'
     html = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -291,13 +301,13 @@ def GET(request):
 </head>
 <body>
 <div class="wrap">
-<header class="app"><h1 id="viewtitle">Loading&hellip;</h1><div class="who">{who}</div></header>
+{header_html}
 <div class="blocks" id="blocks"><div class="state">loading&hellip;</div></div>
 </div>
 <script src="/list"></script>
 <script src="/form"></script>
 <script>const VIEW_ID = {view_id!r}; const VIEWER_ID = {(user_id or "")!r};{_SCRIPT}</script>
-<script src="/nav"></script>
+{nav_html}
 </body>
 </html>"""
     return {"content_type": "text/html; charset=utf-8", "body": html}
