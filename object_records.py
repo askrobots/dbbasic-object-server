@@ -411,6 +411,7 @@ def create_collection_record(
     base_dir: Path | str = DEFAULT_DATA_DIR,
     roots: Iterable[Path] | None = None,
     actor: str | None = None,
+    preserve_read_only: bool = False,
 ) -> dict[str, str]:
     """Append one record to a collection TSV and return the stored row.
 
@@ -420,6 +421,19 @@ def create_collection_record(
     are logged as ``"unattributed"`` rather than silently skipped, so gaps
     stay visible instead of disappearing. See object_record_changes for
     the append itself and its recursion note.
+
+    ``preserve_read_only``: an ordinary write (client-submitted payload)
+    may never set a ``read_only`` field (e.g. a schema's ``created_at``) --
+    the server owns it, per ``_apply_auto_created_at``. A bulk loader
+    replaying another system's history (object_import.py) legitimately
+    needs to carry that system's own ``created_at`` through instead of
+    stamping "now", which is exactly what a hand-typed form must never be
+    able to do. Setting this narrows, not removes, the read-only
+    protection: a genuinely ``computed`` field (a server-derived formula,
+    not just a field the client shouldn't touch) still rejects a
+    client-submitted value regardless of this flag -- see
+    ``_validate_record_against_schema``. Trusted, explicit, opt-in callers
+    only; never wired to an HTTP request payload.
     """
     _ensure_collection_known(collection, base_dir=base_dir, roots=roots)
     extra_names = _extra_field_names(collection, base_dir=base_dir, roots=roots)
@@ -436,6 +450,7 @@ def create_collection_record(
         submitted_fields=submitted_fields,
         base_dir=base_dir,
         roots=roots,
+        allow_read_only_submission=preserve_read_only,
     )
     clean = _canonicalize_schema_values(collection, clean, base_dir=base_dir, roots=roots)
     clean = _route_extra(clean, existing_blob={}, extra_names=extra_names)
@@ -2863,6 +2878,7 @@ def _validate_record_against_schema(
     submitted_fields: frozenset[str],
     base_dir: Path | str,
     roots: Iterable[Path] | None,
+    allow_read_only_submission: bool = False,
 ) -> None:
     fields = _schema_fields(collection, base_dir=base_dir, roots=roots)
     if not fields:
@@ -2873,9 +2889,10 @@ def _validate_record_against_schema(
         value = record.get(name, "")
 
         if name in submitted_fields and _is_computed_or_read_only(field):
-            raise InvalidRecordPayloadError(
-                f"Record field '{name}' is computed or read-only and cannot be written"
-            )
+            if not (allow_read_only_submission and not _is_computed_field(field)):
+                raise InvalidRecordPayloadError(
+                    f"Record field '{name}' is computed or read-only and cannot be written"
+                )
 
         if _field_is_required(field) and not _is_computed_or_read_only(field) and _is_empty(value):
             raise InvalidRecordPayloadError(f"Record field '{name}' is required")
@@ -2919,6 +2936,15 @@ def _is_computed_or_read_only(field: dict[str, Any]) -> bool:
         or field.get("readonly")
         or field.get("readOnly")
     )
+
+
+def _is_computed_field(field: dict[str, Any]) -> bool:
+    """Return True for a server-derived formula field, as opposed to a
+    field that is merely ``read_only`` (client can't set it, but nothing
+    computes its value -- see ``preserve_read_only`` on
+    ``create_collection_record``)."""
+    field_type = str(field.get("type", "")).lower()
+    return bool(field_type == "computed" or field.get("computed"))
 
 
 def _is_empty(value: str | None) -> bool:

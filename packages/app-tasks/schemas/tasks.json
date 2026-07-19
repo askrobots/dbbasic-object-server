@@ -1,7 +1,7 @@
 {
   "name": "tasks",
   "title": "Tasks",
-  "version": 3,
+  "version": 4,
   "description": "Work items with an enforced status lifecycle.",
   "fields": [
     {
@@ -29,8 +29,9 @@
       "type": "enum",
       "label": "Status",
       "default": "open",
-      "enum": ["open", "assigned", "waiting_on_client", "approved", "disputed", "cancelled"],
+      "enum": ["draft", "open", "assigned", "waiting_on_client", "approved", "disputed", "cancelled"],
       "transitions": {
+        "draft": ["open", "assigned", "cancelled"],
         "open": ["assigned", "cancelled"],
         "assigned": ["waiting_on_client", "open", "cancelled"],
         "waiting_on_client": ["approved", "disputed", "assigned"],

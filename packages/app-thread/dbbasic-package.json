@@ -1,0 +1,24 @@
+{
+  "id": "app-thread",
+  "name": "Thread",
+  "version": "0.1.0",
+  "description": "Comment/discussion data shape landed early: the thread_comments collection (attachable to a record in any collection) plus owner-scoped permission rules. No widget, config records, or moderation surfaces yet -- this is the first slice of the full thread block, shipped with the final schema so adopting the block later needs no data migration.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": [],
+  "objects": [],
+  "schemas": [
+    {
+      "collection": "thread_comments",
+      "path": "schemas/thread_comments.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [],
+  "migrations": []
+}

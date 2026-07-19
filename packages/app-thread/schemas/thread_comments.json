@@ -1,0 +1,86 @@
+{
+  "name": "thread_comments",
+  "title": "Comments",
+  "version": 1,
+  "storage": "append",
+  "description": "Generic discussion: one comment shape attachable to a record in any collection via parent_collection/parent_id. This is the thread block's data shape landed early -- no widget, config records, or moderation surfaces yet; the schema matches the full design so no re-migration is ever needed.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "parent_collection",
+      "type": "text",
+      "required": true,
+      "read_only": true,
+      "label": "Parent collection"
+    },
+    {
+      "name": "parent_id",
+      "type": "text",
+      "required": true,
+      "read_only": true,
+      "label": "Parent record"
+    },
+    {
+      "name": "reply_to_id",
+      "type": "text",
+      "label": "In reply to",
+      "relation": {"collection": "thread_comments", "display_field": "body"}
+    },
+    {
+      "name": "body",
+      "type": "textarea",
+      "required": true,
+      "label": "Comment",
+      "validation": {"min_length": 1, "max_length": 4000}
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Author",
+      "permissions": {"public": "hidden"}
+    },
+    {
+      "name": "author_name",
+      "type": "text",
+      "label": "Name",
+      "validation": {"max_length": 80}
+    },
+    {
+      "name": "status",
+      "type": "enum",
+      "enum": ["published", "pending", "flagged", "removed"],
+      "default": "published",
+      "permissions": {"public": "hidden", "role:moderator": "edit"},
+      "transitions": {
+        "published": ["flagged", "removed"],
+        "pending": ["published", "flagged", "removed"],
+        "flagged": ["published", "removed"],
+        "removed": []
+      }
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    },
+    {
+      "name": "edited_at",
+      "type": "datetime",
+      "label": "Edited",
+      "read_only": true
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["body"]}
+  },
+  "views": {
+    "list_mode": "cards",
+    "list_fields": ["body", "created_at"]
+  },
+  "search": {
+    "fields": ["body"]
+  }
+}

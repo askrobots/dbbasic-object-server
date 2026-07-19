@@ -1,0 +1,12 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "thread_comments",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "signed-in users manage comments they authored; wider visibility and the public/anonymous path arrive with the full thread block (see 22-thread-spec)"
+    }
+  ]
+}
