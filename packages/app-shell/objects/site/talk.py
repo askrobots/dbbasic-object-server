@@ -1,11 +1,21 @@
 """Talk: the shell as a stage instead of a transcript.
 
 Same brain as /shell -- one POST /api/ai/chat, the same prefs/model/tools,
-the same shell_commands history -- projected differently. The shell renders
+the same shell_commands table -- projected differently. The shell renders
 a scrolling keyboard log; Talk fills the screen with whatever the
 conversation just produced (a spoken answer or a materialized /views page)
 and reduces the transcript to a single caption strip. No server route is
 new here: this object is a second window onto the same conversation.
+
+Every turn is still recorded to shell_commands (Talk and the shell share
+that record), but Talk does NOT replay old shell_commands rows into the
+model's context on load. A model given a transcript of *any* age of
+in-context examples will imitate the habits those examples demonstrate
+even when the current instructions say otherwise -- concretely, replaying
+turns recorded before the [[view:<id>]] marker convention existed taught
+the model to keep ignoring the marker instruction, no matter how the
+system prompt was reworded. So each Talk page load starts aiHistory empty
+and it only ever accumulates turns from *this* session.
 
 _BASE_CAPABILITIES below is copied verbatim from shell.py's system prompt
 (including the views MATERIALIZE PAGES block) so the two stay in sync --
@@ -78,7 +88,9 @@ _BASE_CAPABILITIES = (
     "Whenever the screen should show a view -- newly created OR one that already "
     "exists -- end your reply with the marker [[view:<record id>]] alone on the "
     "last line. The marker is machine-read; it is never displayed or spoken, so "
-    "it does not violate the no-ids-aloud rule."
+    "it does not violate the no-ids-aloud rule. "
+    'Example reply: "Here are your open tasks. '
+    '[[view:26b247ed-3b1a-4206-b060-1d92847194de]]"'
 )
 
 _TALK_ADDENDUM = (
@@ -98,7 +110,7 @@ const capAssistant = document.getElementById("capAssistant");
 let prefs = {id: OWNER_ID, ai_model: "anthropic:claude-haiku-4-5",
              tools: "global_search,list_collections,list_records,get_record,create_record,update_record",
              talk_wake_word: "computer", talk_end_word: "over",
-             talk_endpoint: "silence", talk_silence_ms: "1400"};
+             talk_endpoint: "silence", talk_silence_ms: "1400", talk_tts: "auto"};
 let aiHistory = [];
 const TTS_MAX_CHARS = 800;
 const VIEWS_PATH_RE = /\\/views\\/[A-Za-z0-9_-]+/;
@@ -116,6 +128,7 @@ const DEFAULT_ENDPOINT = "silence";
 const DEFAULT_SILENCE_MS = 1400;
 const DEFAULT_TOOLS = "global_search,list_records,get_record,create_record,update_record";
 const DEFAULT_MODEL = "anthropic:claude-haiku-4-5";
+const DEFAULT_TALK_TTS = "auto";
 
 function pref(name, fallback) {
   const v = prefs[name];
@@ -126,6 +139,10 @@ function endWord() { return String(pref("talk_end_word", DEFAULT_END_WORD)).trim
 function endpointMode() {
   const m = String(pref("talk_endpoint", DEFAULT_ENDPOINT)).trim();
   return (m === "word" || m === "manual" || m === "silence") ? m : DEFAULT_ENDPOINT;
+}
+function talkTtsMode() {
+  const m = String(pref("talk_tts", DEFAULT_TALK_TTS)).trim();
+  return (m === "server" || m === "browser") ? m : DEFAULT_TALK_TTS;
 }
 function silenceMs() {
   const n = Number(pref("talk_silence_ms", DEFAULT_SILENCE_MS));
@@ -200,14 +217,63 @@ function viewPathFromToolCalls(toolCalls) {
 let currentAudio = null;
 let speaking = false;
 
-// Speak one assistant reply. Server TTS first (POST /api/tts, played as an
-// object URL); any failure falls back to the browser's own speechSynthesis.
-// The mic is kept stopped for the whole span (see stopListening() calls
-// around this) and only resumed once playback actually ends, so the
-// recognizer never hears the machine talking to itself.
+// Voice picking for the browser speechSynthesis engine: prefer a
+// natural-sounding named voice, then the first on-device (localService)
+// English voice, else leave utter.voice unset and let the browser use its
+// own default.
+const PREFERRED_VOICE_RE = /Samantha|Ava|Karen|Daniel/;
+function getVoices() {
+  return (window.speechSynthesis && window.speechSynthesis.getVoices()) || [];
+}
+function pickVoice() {
+  const voices = getVoices();
+  if (!voices.length) return null;
+  const byName = voices.find((v) => PREFERRED_VOICE_RE.test(v.name));
+  if (byName) return byName;
+  const localEn = voices.find((v) => v.localService && /^en/i.test(v.lang));
+  return localEn || null;
+}
+// The "auto" engine gate: is there at least one on-device voice at all
+// (any language) -- if so, speaking never has to leave the device.
+function hasLocalVoice() {
+  return getVoices().some((v) => v.localService);
+}
+
+// speechSynthesis-only speaking path, used both when talk_tts is "browser"
+// and as the fallback when "server"/"auto" server TTS fails. Carries the
+// exact same speaking-flag/listen-pause contract as the server path below:
+// set before speaking, cleared and resumed only once the utterance ends.
+function speakBrowser(text) {
+  if (!window.speechSynthesis) { speaking = false; resumeListeningIfNeeded(); return; }
+  speaking = true;
+  stopListening();
+  window.speechSynthesis.cancel();
+  const utter = new SpeechSynthesisUtterance(text);
+  const voice = pickVoice();
+  if (voice) utter.voice = voice;
+  utter.addEventListener("end", () => { speaking = false; resumeListeningIfNeeded(); });
+  window.speechSynthesis.speak(utter);
+}
+
+// Speak one assistant reply, routed by the talk_tts preference:
+//   "server"  -- always server TTS (POST /api/tts), speechSynthesis on failure.
+//   "browser" -- always speechSynthesis, no server round-trip.
+//   "auto"    -- speechSynthesis if an on-device voice is available, else
+//                server-with-fallback, same as "server".
+// Whichever path runs, the mic is kept stopped for the whole span and only
+// resumed once playback actually ends, so the recognizer never hears the
+// machine talking to itself.
 async function speak(text) {
   const spoken = stripForSpeech(text);
   if (!spoken) { resumeListeningIfNeeded(); return; }
+
+  const mode = talkTtsMode();
+  if (mode === "browser") { speakBrowser(spoken); return; }
+  if (mode === "auto" && window.speechSynthesis && hasLocalVoice()) {
+    speakBrowser(spoken);
+    return;
+  }
+
   speaking = true;
   stopListening();
   try {
@@ -227,15 +293,7 @@ async function speak(text) {
     });
     await currentAudio.play();
   } catch (e) {
-    if (window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-      const utter = new SpeechSynthesisUtterance(spoken);
-      utter.addEventListener("end", () => { speaking = false; resumeListeningIfNeeded(); });
-      window.speechSynthesis.speak(utter);
-    } else {
-      speaking = false;
-      resumeListeningIfNeeded();
-    }
+    speakBrowser(spoken);
   }
 }
 
@@ -628,23 +686,6 @@ async function loadPrefs() {
   if (res.ok) { const body = await res.json(); prefs = body.record || prefs; }
 }
 
-// Talk shares shell_commands with the shell -- one conversation, two
-// projections -- so recent shell turns give this page's chat call
-// continuity too. Nothing is rendered from it; only the caption strip and
-// the stage reflect the current turn.
-async function loadHistory() {
-  const res = await fetch("/collections/shell_commands/records?limit=1000",
-                          {credentials: "same-origin", headers: {accept: "application/json"}});
-  if (!res.ok) return;
-  const body = await res.json();
-  for (const row of (body.records || []).slice(-30)) {
-    if (row.kind === "ai" && row.output) {
-      aiHistory.push({role: "user", content: row.input});
-      aiHistory.push({role: "assistant", content: row.output});
-    }
-  }
-}
-
 async function submitTurn(input) {
   capUser.textContent = input;
   capUser.classList.remove("armed", "active");
@@ -695,7 +736,6 @@ document.getElementById("prompt").addEventListener("submit", (event) => {
 });
 initMic();
 loadPrefs();
-loadHistory();
 """
 
 

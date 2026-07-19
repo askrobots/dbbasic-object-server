@@ -72,10 +72,15 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
 const log = document.getElementById("log");
 let prefs = {id: OWNER_ID, ai_model: "anthropic:claude-haiku-4-5",
              tools: "global_search,list_collections,list_records,get_record,create_record,update_record",
-             voice_enabled: "false"};
+             voice_enabled: "false", talk_tts: "auto"};
 let aiHistory = [];
 const TTS_MAX_CHARS = 800;
+const DEFAULT_TALK_TTS = "auto";
 const voiceOn = () => prefs.voice_enabled === "true";
+function talkTtsMode() {
+  const m = String(prefs.talk_tts || DEFAULT_TALK_TTS).trim();
+  return (m === "server" || m === "browser") ? m : DEFAULT_TALK_TTS;
+}
 
 function entry(input) {
   const div = document.createElement("div");
@@ -148,12 +153,57 @@ function stripForSpeech(text) {
 
 let currentAudio = null;
 
-// Speak one assistant reply. Server TTS first (POST /api/tts, played as an
-// object URL); any failure -- flag off, no engine, network -- falls back to
-// the browser's own speechSynthesis so voice mode never just goes silent.
+// Voice picking for the browser speechSynthesis engine -- kept identical to
+// talk.py's pickVoice()/hasLocalVoice(): prefer a natural-sounding named
+// voice, then the first on-device (localService) English voice, else leave
+// utter.voice unset and let the browser use its own default.
+const PREFERRED_VOICE_RE = /Samantha|Ava|Karen|Daniel/;
+function getVoices() {
+  return (window.speechSynthesis && window.speechSynthesis.getVoices()) || [];
+}
+function pickVoice() {
+  const voices = getVoices();
+  if (!voices.length) return null;
+  const byName = voices.find((v) => PREFERRED_VOICE_RE.test(v.name));
+  if (byName) return byName;
+  const localEn = voices.find((v) => v.localService && /^en/i.test(v.lang));
+  return localEn || null;
+}
+// The "auto" engine gate: is there at least one on-device voice at all
+// (any language) -- if so, speaking never has to leave the device.
+function hasLocalVoice() {
+  return getVoices().some((v) => v.localService);
+}
+
+// speechSynthesis-only speaking path, used both when talk_tts is "browser"
+// and as the fallback when "server"/"auto" server TTS fails.
+function speakBrowser(text) {
+  if (!window.speechSynthesis) return;
+  window.speechSynthesis.cancel();
+  const utter = new SpeechSynthesisUtterance(text);
+  const voice = pickVoice();
+  if (voice) utter.voice = voice;
+  window.speechSynthesis.speak(utter);
+}
+
+// Speak one assistant reply, routed by the talk_tts preference:
+//   "server"  -- always server TTS (POST /api/tts), speechSynthesis on failure.
+//   "browser" -- always speechSynthesis, no server round-trip.
+//   "auto"    -- speechSynthesis if an on-device voice is available, else
+//                server-with-fallback, same as "server".
+// Any failure -- flag off, no engine, network -- falls back to the
+// browser's own speechSynthesis so voice mode never just goes silent.
 async function speak(text) {
   const spoken = stripForSpeech(text);
   if (!spoken) return;
+
+  const mode = talkTtsMode();
+  if (mode === "browser") { speakBrowser(spoken); return; }
+  if (mode === "auto" && window.speechSynthesis && hasLocalVoice()) {
+    speakBrowser(spoken);
+    return;
+  }
+
   try {
     const res = await fetch("/api/tts", {
       method: "POST", credentials: "same-origin",
@@ -167,10 +217,7 @@ async function speak(text) {
     currentAudio.addEventListener("ended", () => URL.revokeObjectURL(url));
     await currentAudio.play();
   } catch (e) {
-    if (window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.speak(new SpeechSynthesisUtterance(spoken));
-    }
+    speakBrowser(spoken);
   }
 }
 
@@ -383,7 +430,9 @@ async function run(input) {
              "Whenever the screen should show a view -- newly created OR one that already " +
              "exists -- end your reply with the marker [[view:<record id>]] alone on the " +
              "last line. The marker is machine-read; it is never displayed or spoken, so " +
-             "it does not violate the no-ids-aloud rule." +
+             "it does not violate the no-ids-aloud rule. " +
+             "Example reply: \\"Here are your open tasks. " +
+             "[[view:26b247ed-3b1a-4206-b060-1d92847194de]]\\"" +
              " Current local date/time: " + new Date().toString() + "."});
   finish(out, ok ? body.reply : body.error,
          {err: !ok, tools: ok ? body.tool_calls : null, markdown: ok});

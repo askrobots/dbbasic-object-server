@@ -1,7 +1,7 @@
 {
   "name": "shell_preferences",
   "title": "Shell Preferences",
-  "version": 3,
+  "version": 4,
   "description": "Per-user shell settings; the record id is the user id.",
   "fields": [
     {
@@ -56,10 +56,18 @@
       "label": "Talk Silence Endpoint (ms)",
       "default": "1400",
       "help": "Talk page: milliseconds of sustained quiet that ends an utterance in silence endpoint mode"
+    },
+    {
+      "name": "talk_tts",
+      "type": "enum",
+      "label": "Voice Engine",
+      "default": "auto",
+      "enum": ["auto", "server", "browser"],
+      "help": "Which engine speaks AI replies: auto prefers an on-device browser voice when one is available and falls back to the server otherwise, server always uses server TTS (with a browser fallback on failure), browser always uses the browser's own speechSynthesis"
     }
   ],
   "forms": {
-    "default": {"fields": ["ai_model", "tools", "voice_enabled", "talk_wake_word", "talk_end_word", "talk_endpoint", "talk_silence_ms"]}
+    "default": {"fields": ["ai_model", "tools", "voice_enabled", "talk_wake_word", "talk_end_word", "talk_endpoint", "talk_silence_ms", "talk_tts"]}
   },
   "views": {
     "list_mode": "table",
