@@ -1,0 +1,24 @@
+{
+  "id": "app-activity",
+  "name": "Activity",
+  "version": "0.1.0",
+  "description": "Read-only activity feed: a page and endpoint that fold the universal record-change ledger every collection write already appends to into \"actor ACTION collection title\" rows for the signed-in user's own activity. Owns no collection and no schema -- it only reads object_record_changes logs. Deferred: a broader activity-on-anything-I-can-see feed that filters other users' changes per record against the viewer's read access (see plan/vocabulary/23-activity-spec.md).",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": [],
+  "objects": [
+    {
+      "id": "site_activity",
+      "path": "objects/site/activity.py"
+    }
+  ],
+  "schemas": [],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [],
+  "migrations": []
+}

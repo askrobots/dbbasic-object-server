@@ -19,6 +19,7 @@ _JS = r"""
     ["/projects", "Projects"], ["/contacts", "Contacts"], ["/articles", "Articles"],
     ["/links", "Links"], ["/calendar", "Calendar"], ["/files", "Files"],
     ["/invoices", "Invoices"],
+    ["/activity", "Activity"],
     ["/dashboard", "Dashboard"], ["/appearance", "Appearance"],
   ];
   const HIT_URL = {

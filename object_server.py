@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import http_api_contract
+import object_activity
 import object_backup
 import object_collections
 import object_correlation
@@ -614,6 +615,10 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
 
         if path == http_api_contract.FLAGS_PATH:
             await _handle_flags(send, method, headers)
+            return
+
+        if path == http_api_contract.ACTIVITY_PATH:
+            await _handle_activity(send, method, query, headers)
             return
 
         if path == http_api_contract.PREFS_PATH:
@@ -8042,6 +8047,46 @@ async def _handle_flags(send, method: str, headers: dict[str, str]) -> None:
     subject = _permission_subject(headers)
     flags = _resolve_flags(subject.user_id)
     await _send_json(send, {"status": "ok", "flags": flags})
+
+
+async def _handle_activity(
+    send,
+    method: str,
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    """GET /api/activity -> the caller's own recent activity feed.
+
+    A thin read-only wrapper over object_activity.recent_activity, scoped to
+    the signed-in caller's own changes (see that module's docstring for why
+    v1 only does "your activity"). Unlike /prefs, which hands anonymous
+    callers an empty map because reading your own (empty) preferences is
+    harmless, a feed endpoint rejects anonymous callers outright -- there is
+    no legitimate empty-but-still-answerable case here, only "no session".
+    """
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    session = _current_identity_session(headers)
+    if session is None:
+        await _send_json(
+            send,
+            {"status": "error", "error": "Activity requires a signed-in session."},
+            status=401,
+        )
+        return
+
+    try:
+        limit = _query_int(query, "limit", default=50, minimum=1, maximum=200)
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    entries = object_activity.recent_activity(
+        base_dir=_data_dir(), actor=session.user_id, limit=limit
+    )
+    await _send_json(send, {"status": "ok", "activity": entries})
 
 
 async def _handle_schema(
