@@ -1,19 +1,16 @@
 """Tests for the backup inventory module and the admin backup endpoints."""
 
-import json
-
 import pytest
-
-import object_backup
-import object_backup_index
-import object_server
-
 from test_object_server import (
     auth_headers,
     enable_admin_token,
     raw_request,
     request,
 )
+
+import object_backup
+import object_backup_index
+import object_server
 
 
 def _write_backup(directory, name, content=b"archive-bytes"):
@@ -223,6 +220,243 @@ def test_preview_record_present_in_both_backup_only_and_absent(tmp_path, monkeyp
     absent = object_backup_index.preview_record(backup_id, "notes", "nope", data_dir=data_dir)
     assert absent["present_in_backup"] is False and absent["present_in_live"] is False
     assert absent["record"] is None
+
+
+# --- preview_collection / preview_record: append-mode ("_op") folding ---------
+#
+# docs/storage-modes.md "Current limits" used to note that preview/diff did
+# not interpret `_op`. These build a records.tsv payload by hand (the
+# physical on-disk format append mode writes -- see object_records.py's
+# OP_FIELD/OP_UPSERT/OP_DELETE and _fold_append_rows) rather than going
+# through the record engine, since object_backup_index's fold is meant to
+# be a small, independent replica of that format, not a round-trip through
+# object_records itself.
+
+def _live_path(data_dir):
+    return data_dir / "collections" / "notes" / "records.tsv"
+
+
+def test_preview_collection_append_backup_vs_classic_live(tmp_path, monkeypatch):
+    # backup: append-mode log. n2 is superseded once (final color: purple);
+    # n3 is created then tombstoned (must not appear as live in the backup).
+    data_dir, backup_id = _make_backup_with_collection(
+        tmp_path,
+        monkeypatch,
+        "_op\tid\tname\tcolor\n"
+        "\tn1\tFirst\tred\n"
+        "\tn2\tSecond\tblue\n"
+        "\tn2\tSecond\tpurple\n"
+        "\tn3\tThird\tgreen\n"
+        "del\tn3\t\t\n",
+    )
+
+    # live: classic, mutated after the backup.
+    _live_path(data_dir).write_text(
+        "id\tname\tcolor\n"
+        "n1\tFirst\tred\n"
+        "n2\tSecond\tblue\n"
+        "n4\tFourth\tyellow\n"
+    )
+
+    preview = object_backup_index.preview_collection(backup_id, "notes", data_dir=data_dir)
+    assert preview["added"] == []  # n3 is tombstoned in the backup -> not live there
+    assert preview["removed"] == ["n4"]  # restoring would drop n4 from live
+    assert preview["changed"] == [{"id": "n2", "fields": ["color"]}]  # folds to purple
+    assert preview["unchanged"] == 1  # n1
+
+
+def test_preview_collection_classic_backup_vs_append_live(tmp_path, monkeypatch):
+    # backup: classic.
+    data_dir, backup_id = _make_backup_with_collection(
+        tmp_path,
+        monkeypatch,
+        "id\tname\tcolor\n"
+        "n1\tFirst\tred\n"
+        "n2\tSecond\tpurple\n",
+    )
+
+    # live: append-mode log, mutated after the backup.
+    _live_path(data_dir).write_text(
+        "_op\tid\tname\tcolor\n"
+        "\tn1\tFirst\tred\n"
+        "\tn2\tSecond\tblue\n"
+        "\tn4\tFourth\tyellow\n"
+    )
+
+    preview = object_backup_index.preview_collection(backup_id, "notes", data_dir=data_dir)
+    assert preview["added"] == []
+    assert preview["removed"] == ["n4"]
+    assert preview["changed"] == [{"id": "n2", "fields": ["color"]}]
+    assert preview["unchanged"] == 1
+
+
+def test_preview_collection_superseded_rows_fold_to_final_values_only(tmp_path, monkeypatch):
+    # id updated 3x in the log -> counts once, and the diff only ever sees
+    # the final value (not any intermediate one).
+    data_dir, backup_id = _make_backup_with_collection(
+        tmp_path,
+        monkeypatch,
+        "_op\tid\tname\n"
+        "\tn1\tv1\n"
+        "\tn1\tv2\n"
+        "\tn1\tv3\n",
+    )
+    _live_path(data_dir).write_text("id\tname\nn1\tv3\n")
+
+    preview = object_backup_index.preview_collection(backup_id, "notes", data_dir=data_dir)
+    assert preview["added"] == []
+    assert preview["removed"] == []
+    assert preview["changed"] == []
+    assert preview["unchanged"] == 1
+
+
+def test_preview_collection_tombstone_in_backup_reports_removed(tmp_path, monkeypatch):
+    # Restore semantics are "live becomes the backup": a tombstoned id in
+    # the backup, with the id still live now, would be dropped by a
+    # restore -- so it belongs in "removed", not "added".
+    data_dir, backup_id = _make_backup_with_collection(
+        tmp_path,
+        monkeypatch,
+        "_op\tid\tname\n"
+        "\tn1\tFirst\n"
+        "del\tn1\t\n",
+    )
+    _live_path(data_dir).write_text("id\tname\nn1\tFirst\n")
+
+    preview = object_backup_index.preview_collection(backup_id, "notes", data_dir=data_dir)
+    assert preview["added"] == []
+    assert preview["removed"] == ["n1"]
+    assert preview["changed"] == []
+
+
+def test_preview_collection_tombstone_in_live_reports_added(tmp_path, monkeypatch):
+    # Mirror image: a tombstoned id in LIVE, with the id present in the
+    # backup, would reappear on restore -- so it belongs in "added".
+    data_dir, backup_id = _make_backup_with_collection(
+        tmp_path,
+        monkeypatch,
+        "id\tname\nn1\tFirst\n",
+    )
+    _live_path(data_dir).write_text(
+        "_op\tid\tname\n"
+        "\tn1\tFirst\n"
+        "del\tn1\t\n"
+    )
+
+    preview = object_backup_index.preview_collection(backup_id, "notes", data_dir=data_dir)
+    assert preview["added"] == ["n1"]
+    assert preview["removed"] == []
+    assert preview["changed"] == []
+
+
+def test_preview_collection_resurrection_uses_final_values(tmp_path, monkeypatch):
+    # del then re-create in the log -> treated as live, holding only the
+    # values from after the re-create.
+    data_dir, backup_id = _make_backup_with_collection(
+        tmp_path,
+        monkeypatch,
+        "_op\tid\tname\n"
+        "\tn1\tFirst\n"
+        "del\tn1\t\n"
+        "\tn1\tResurrected\n",
+    )
+    _live_path(data_dir).write_text("id\tname\nn1\tFirst\n")
+
+    preview = object_backup_index.preview_collection(backup_id, "notes", data_dir=data_dir)
+    assert preview["added"] == []
+    assert preview["removed"] == []
+    assert preview["changed"] == [{"id": "n1", "fields": ["name"]}]
+    assert preview["unchanged"] == 0
+
+    record = object_backup_index.preview_record(backup_id, "notes", "n1", data_dir=data_dir)
+    assert record["present_in_backup"] is True
+    assert record["record"] == {"id": "n1", "name": "Resurrected"}
+
+
+def test_preview_op_field_never_leaks_into_changed_fields_or_record(tmp_path, monkeypatch):
+    data_dir, backup_id = _make_backup_with_collection(
+        tmp_path,
+        monkeypatch,
+        "_op\tid\tname\tcolor\n"
+        "\tn1\tFirst\tred\n"
+        "\tn1\tFirst\tblue\n",
+    )
+    _live_path(data_dir).write_text(
+        "_op\tid\tname\tcolor\n"
+        "\tn1\tFirst\tgreen\n"
+    )
+
+    preview = object_backup_index.preview_collection(backup_id, "notes", data_dir=data_dir)
+    for entry in preview["changed"]:
+        assert "_op" not in entry["fields"]
+
+    record = object_backup_index.preview_record(backup_id, "notes", "n1", data_dir=data_dir)
+    assert "_op" not in record["record"]
+
+
+def test_preview_torn_final_line_ignored_on_backup_and_live(tmp_path, monkeypatch):
+    # A torn (unterminated) final physical line represents an in-flight
+    # write and must be dropped, on either side.
+    data_dir, backup_id = _make_backup_with_collection(
+        tmp_path,
+        monkeypatch,
+        "_op\tid\tname\n"
+        "\tn1\tFirst\n"
+        "\tn2\tSec",  # torn: no trailing newline
+    )
+    live_text = (
+        "_op\tid\tname\n"
+        "\tn1\tFirst\n"
+        "\tn1\tUpdated"  # torn: no trailing newline -- must not apply
+    )
+    _live_path(data_dir).write_text(live_text)
+    assert not live_text.endswith("\n")
+
+    preview = object_backup_index.preview_collection(backup_id, "notes", data_dir=data_dir)
+    # backup: n2's torn row is dropped, so only n1 is live in the backup.
+    # live: n1's torn update is dropped, so live n1 keeps its prior value.
+    assert preview["added"] == []
+    assert preview["removed"] == []
+    assert preview["changed"] == []
+    assert preview["unchanged"] == 1
+
+
+def test_preview_diff_hash_stable_across_physical_layout(tmp_path, monkeypatch):
+    # Same logical content via two different physical log layouts (one has
+    # an extra superseded row) must hash identically, since diff_hash is
+    # computed over the folded diff, not the raw rows.
+    data_dir_a, backup_id_a = _make_backup_with_collection(
+        tmp_path / "a",
+        monkeypatch,
+        "_op\tid\tname\n\tn1\tFirst\n",
+    )
+    data_dir_b, backup_id_b = _make_backup_with_collection(
+        tmp_path / "b",
+        monkeypatch,
+        "_op\tid\tname\n\tn1\tOld\n\tn1\tFirst\n",
+    )
+    _live_path(data_dir_a).write_text("id\tname\nn1\tFirst\n")
+    _live_path(data_dir_b).write_text("id\tname\nn1\tFirst\n")
+
+    preview_a = object_backup_index.preview_collection(backup_id_a, "notes", data_dir=data_dir_a)
+    preview_b = object_backup_index.preview_collection(backup_id_b, "notes", data_dir=data_dir_b)
+    assert preview_a["diff_hash"] == preview_b["diff_hash"]
+
+
+def test_preview_record_tombstoned_in_backup_reports_absent(tmp_path, monkeypatch):
+    data_dir, backup_id = _make_backup_with_collection(
+        tmp_path,
+        monkeypatch,
+        "_op\tid\tname\n"
+        "\tn1\tFirst\n"
+        "del\tn1\t\n",
+    )
+    _live_path(data_dir).write_text("id\tname\nn1\tFirst\n")
+
+    record = object_backup_index.preview_record(backup_id, "notes", "n1", data_dir=data_dir)
+    assert record["record"] is None
+    assert record["present_in_backup"] is False
+    assert record["present_in_live"] is True
 
 
 # --- preview endpoints ---------------------------------------------------------
