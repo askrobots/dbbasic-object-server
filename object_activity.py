@@ -36,7 +36,12 @@ EXCLUDED_COLLECTIONS = frozenset({
 # First present of these fields on the change's snapshot becomes the feed
 # row's title; record_id is the final fallback so every entry always has
 # something to show.
-_TITLE_FIELDS = ("title", "name", "number", "subject")
+_TITLE_FIELDS = ("title", "name", "number", "subject", "body", "content", "comment", "message")
+# Text-shaped fallback fields (body/content/...) can be long; a feed row wants
+# a glance, not a paragraph, so they're truncated. Named/numbered fields are
+# already short and shown whole.
+_TITLE_TEXT_FIELDS = frozenset({"body", "content", "comment", "message"})
+_TITLE_MAX = 80
 
 
 def recent_activity(
@@ -115,7 +120,10 @@ def _derive_title(change: dict[str, Any]) -> str:
     for field in _TITLE_FIELDS:
         value = snapshot.get(field)
         if value:
-            return str(value)
+            text = str(value)
+            if field in _TITLE_TEXT_FIELDS and len(text) > _TITLE_MAX:
+                text = text[:_TITLE_MAX].rstrip() + "…"
+            return text
     return str(change.get("record_id") or "")
 
 
