@@ -1,7 +1,7 @@
 {
   "name": "shell_preferences",
   "title": "Shell Preferences",
-  "version": 2,
+  "version": 3,
   "description": "Per-user shell settings; the record id is the user id.",
   "fields": [
     {
@@ -27,13 +27,42 @@
       "label": "Voice",
       "default": "false",
       "help": "Speak AI replies aloud and enable the mic button (/voice toggles)"
+    },
+    {
+      "name": "talk_wake_word",
+      "type": "text",
+      "label": "Talk Wake Word",
+      "default": "computer",
+      "help": "Talk page: word that arms conversation-mode capture; empty captures everything while the mic is on"
+    },
+    {
+      "name": "talk_end_word",
+      "type": "text",
+      "label": "Talk End Word",
+      "default": "over",
+      "help": "Talk page: trailing word that ends and submits an utterance; empty disables end-word submission"
+    },
+    {
+      "name": "talk_endpoint",
+      "type": "enum",
+      "label": "Talk Endpoint Mode",
+      "default": "silence",
+      "enum": ["silence", "word", "manual"],
+      "help": "How Talk decides an utterance is finished: silence (VAD), word (end word only), or manual (button/Enter only)"
+    },
+    {
+      "name": "talk_silence_ms",
+      "type": "text",
+      "label": "Talk Silence Endpoint (ms)",
+      "default": "1400",
+      "help": "Talk page: milliseconds of sustained quiet that ends an utterance in silence endpoint mode"
     }
   ],
   "forms": {
-    "default": {"fields": ["ai_model", "tools", "voice_enabled"]}
+    "default": {"fields": ["ai_model", "tools", "voice_enabled", "talk_wake_word", "talk_end_word", "talk_endpoint", "talk_silence_ms"]}
   },
   "views": {
     "list_mode": "table",
-    "list_fields": ["ai_model", "tools", "voice_enabled"]
+    "list_fields": ["ai_model", "tools", "voice_enabled", "talk_endpoint"]
   }
 }

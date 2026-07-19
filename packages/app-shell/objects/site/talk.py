@@ -34,12 +34,22 @@ _STYLE = """
 .cap.user { color: var(--muted); }
 .cap.assistant { color: var(--text); font-weight: 600; }
 .controls { display: flex; align-items: center; gap: 0.75rem; }
-#mic { width: 4.5rem; height: 4.5rem; flex: 0 0 auto; border-radius: 50%; font-size: 0.75rem;
+.micwrap { position: relative; flex: 0 0 auto; }
+#mic { width: 4.5rem; height: 4.5rem; border-radius: 50%; font-size: 0.75rem;
        background: var(--panel-2); border: 1px solid var(--line); color: var(--muted); cursor: pointer; }
 #mic.on { color: var(--danger); border-color: var(--danger); background: var(--panel); }
+/* Level meter ring: a privacy indicator as much as a VU meter -- it must
+   read as visibly dead (opacity 0, no shadow) whenever the mic is off. */
+.miclevel { position: absolute; inset: -6px; border-radius: 50%; pointer-events: none;
+            opacity: 0; box-shadow: 0 0 0 0 var(--danger); transition: opacity 80ms linear; }
 form#prompt { flex: 1; display: flex; gap: 0.5rem; }
 form#prompt input { flex: 1; }
 .backlink { color: var(--muted); font-size: 0.82rem; white-space: nowrap; }
+/* Caption states: armed (waiting for the wake word), active (live capture
+   or the assistant's reply), sent (what was just submitted, muted). */
+.cap.user.armed { font-style: italic; opacity: 0.7; }
+.cap.user.active { color: var(--text); opacity: 1; font-style: normal; }
+.cap.user.sent { color: var(--muted); opacity: 1; font-style: normal; }
 """
 
 # Copied verbatim from shell.py's /api/ai/chat system prompt so the two
@@ -77,10 +87,41 @@ const stage = document.getElementById("stage");
 const capUser = document.getElementById("capUser");
 const capAssistant = document.getElementById("capAssistant");
 let prefs = {id: OWNER_ID, ai_model: "anthropic:claude-haiku-4-5",
-             tools: "global_search,list_records,get_record,create_record,update_record"};
+             tools: "global_search,list_records,get_record,create_record,update_record",
+             talk_wake_word: "computer", talk_end_word: "over",
+             talk_endpoint: "silence", talk_silence_ms: "1400"};
 let aiHistory = [];
 const TTS_MAX_CHARS = 800;
 const VIEWS_PATH_RE = /\\/views\\/[A-Za-z0-9_-]+/;
+
+// Preference reads all go through pref() rather than raw prefs.x access:
+// loadPrefs() replaces `prefs` wholesale with whatever record comes back
+// from the server, and a record written before a field existed in the
+// schema simply won't have that key. pref() falls back to the shipped
+// default only when the key is *missing* -- an explicit empty string (the
+// wake/end word's "off" setting) is a real value, not a gap, and must be
+// left alone.
+const DEFAULT_WAKE_WORD = "computer";
+const DEFAULT_END_WORD = "over";
+const DEFAULT_ENDPOINT = "silence";
+const DEFAULT_SILENCE_MS = 1400;
+const DEFAULT_TOOLS = "global_search,list_records,get_record,create_record,update_record";
+const DEFAULT_MODEL = "anthropic:claude-haiku-4-5";
+
+function pref(name, fallback) {
+  const v = prefs[name];
+  return v === undefined || v === null ? fallback : v;
+}
+function wakeWord() { return String(pref("talk_wake_word", DEFAULT_WAKE_WORD)).trim(); }
+function endWord() { return String(pref("talk_end_word", DEFAULT_END_WORD)).trim(); }
+function endpointMode() {
+  const m = String(pref("talk_endpoint", DEFAULT_ENDPOINT)).trim();
+  return (m === "word" || m === "manual" || m === "silence") ? m : DEFAULT_ENDPOINT;
+}
+function silenceMs() {
+  const n = Number(pref("talk_silence_ms", DEFAULT_SILENCE_MS));
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_SILENCE_MS;
+}
 
 // Strip markdown -- and, unlike the shell's stripForSpeech, urls and
 // /views paths too -- down to sentences worth speaking. The talk-mode
@@ -185,6 +226,295 @@ let recognizer = null;
 let conversationMode = false;
 let listening = false;
 
+// --- Radio protocol: wake word / end word / VAD silence endpointing ------
+//
+// `buffer` holds finalized transcript from earlier recognizer sessions in
+// the current utterance; `sessionLive` holds the current (possibly still
+// interim) recognizer session's transcript. Both are already wake-word-
+// stripped once armed flips false, so most readers just concatenate them.
+//
+// Word-boundary matching is done by tokenizing on whitespace rather than
+// regex word-boundary escapes -- this file has already had one bug from a
+// backslash escape that didn't survive its Python-string layer, so the
+// word-match helpers below avoid backslash metacharacters entirely.
+let buffer = "";
+let sessionLive = "";
+let armed = true;
+let finalDebounceTimer = null;
+
+function tokenize(text) {
+  return String(text ?? "").trim().split(/\\s+/).filter(Boolean);
+}
+
+// Strip leading/trailing punctuation from one token for comparison --
+// "computer," or "over." still match "computer" / "over".
+function wordKey(token) {
+  return token.replace(/[.,!?;:]+$/, "").replace(/^[.,!?;:]+/, "").toLowerCase();
+}
+
+// If `word` appears as a whole token in `text`, return everything after
+// its first occurrence (joined back with spaces); otherwise null.
+function findWakeSplit(text, word) {
+  const target = word.trim().toLowerCase();
+  if (!target) return null;
+  const tokens = tokenize(text);
+  for (let i = 0; i < tokens.length; i++) {
+    if (wordKey(tokens[i]) === target) return tokens.slice(i + 1).join(" ");
+  }
+  return null;
+}
+
+// If `text`'s last token is `word`, return everything before it (joined
+// back with spaces); otherwise null. Tolerant of trailing punctuation on
+// the last token ("...turn it on, over." still matches "over").
+function tailMatchesEndWord(text, word) {
+  const target = word.trim().toLowerCase();
+  if (!target) return null;
+  const tokens = tokenize(text);
+  if (!tokens.length) return null;
+  if (wordKey(tokens[tokens.length - 1]) !== target) return null;
+  return tokens.slice(0, -1).join(" ");
+}
+
+function resetTalkState() {
+  buffer = "";
+  sessionLive = "";
+  armed = true;
+  if (finalDebounceTimer) { clearTimeout(finalDebounceTimer); finalDebounceTimer = null; }
+  utteranceStarted = false;
+  silenceStartTs = null;
+  speechHoldStart = null;
+}
+
+function updateCaptionArmed() {
+  const w = wakeWord();
+  capUser.textContent = w ? `say "${w}" to address me` : "";
+  capUser.classList.remove("active", "sent");
+  capUser.classList.add("armed");
+}
+
+function updateCaptionActive(text) {
+  capUser.textContent = text || "…";
+  capUser.classList.remove("armed", "sent");
+  capUser.classList.add("active");
+}
+
+// What would be submitted right now, with wake word and end word both
+// stripped if present -- used by VAD endpointing and by manual send/Enter,
+// which fold in whatever voice buffer exists regardless of protocol.
+function pendingText() {
+  let text = ((buffer ? buffer + " " : "") + sessionLive).trim();
+  const w = wakeWord();
+  if (w) {
+    const split = findWakeSplit(text, w);
+    if (split !== null) text = split;
+  }
+  const ew = endWord();
+  if (ew) {
+    const stripped = tailMatchesEndWord(text, ew);
+    if (stripped !== null) text = stripped;
+  }
+  return text;
+}
+
+function bufferHasContent() {
+  return ((buffer ? buffer + " " : "") + sessionLive).trim().length > 0;
+}
+
+// The single funnel for every voice-triggered submission (end word, VAD
+// silence, isFinal-debounce fallback): clear/re-arm first so new speech
+// during the in-flight chat call starts a fresh utterance, then hand off
+// to the same submitTurn() the text box and Enter use.
+function finalizeVoiceSubmit(text) {
+  if (finalDebounceTimer) { clearTimeout(finalDebounceTimer); finalDebounceTimer = null; }
+  const clean = String(text ?? "").trim();
+  resetTalkState();
+  if (!clean) { if (conversationMode) updateCaptionArmed(); return; }
+  submitTurn(clean);
+}
+
+// Called on every recognizer result (interim and final). Handles the wake
+// gate, live caption, end-word override, and -- on a final result -- folds
+// the session transcript into `buffer` and (endpoint "word" with no end
+// word configured) arms the isFinal-debounce fallback.
+function processTranscript(isFinal) {
+  const combinedRaw = ((buffer ? buffer + " " : "") + sessionLive).trim();
+  const w = wakeWord();
+
+  if (armed) {
+    if (w) {
+      const split = findWakeSplit(combinedRaw, w);
+      if (split === null) {
+        updateCaptionArmed();
+        if (isFinal) sessionLive = "";
+        return;
+      }
+      armed = false;
+      buffer = "";
+      sessionLive = split;
+    } else {
+      armed = false; // empty wake word: capture everything while the mic is on
+    }
+  }
+
+  const active = ((buffer ? buffer + " " : "") + sessionLive).trim();
+  updateCaptionActive(active);
+
+  const endpoint = endpointMode();
+  const ew = endWord();
+  if (ew && (endpoint === "word" || endpoint === "silence")) {
+    const stripped = tailMatchesEndWord(active, ew);
+    if (stripped !== null) { finalizeVoiceSubmit(stripped); return; }
+  }
+
+  if (isFinal) {
+    buffer = active;
+    sessionLive = "";
+    if (endpoint === "word" && !ew) {
+      // No end word configured for word mode: fall back to the original
+      // isFinal-triggered submit, debounced so a recognizer that fires
+      // several quick finals in a row (common near silence) only submits
+      // once.
+      if (finalDebounceTimer) clearTimeout(finalDebounceTimer);
+      finalDebounceTimer = setTimeout(() => {
+        finalDebounceTimer = null;
+        finalizeVoiceSubmit(buffer);
+      }, 800);
+    }
+  }
+}
+
+// --- Mic level meter + VAD silence endpointing ----------------------------
+//
+// A separate getUserMedia stream (SpeechRecognition exposes no raw audio)
+// feeds an AnalyserNode; a rAF loop computes RMS to both draw the level
+// ring around the mic button and, in "silence" endpoint mode, decide when
+// an utterance has ended. The stream is only open while conversation mode
+// is on -- it doubles as the privacy indicator, so it must go fully dead
+// (tracks stopped, context closed) the instant the mode turns off.
+const MIN_SPEECH_THRESHOLD = 0.015;
+const CALIBRATION_MS = 800;
+const SPEECH_HOLD_MS = 150;
+
+let micStream = null;
+let audioCtx = null;
+let analyser = null;
+let meterRafId = null;
+let noiseFloor = 0;
+let speechThreshold = MIN_SPEECH_THRESHOLD;
+let calibrating = false;
+let calibrationStart = 0;
+let calibrationSamples = [];
+let utteranceStarted = false;
+let silenceStartTs = null;
+let speechHoldStart = null;
+
+function updateMeterVisual(rms) {
+  const ring = document.getElementById("miclevel");
+  if (!ring) return;
+  // Force the ring to idle during TTS playback -- the stream is still
+  // open (so the mic doesn't visibly "go dead" mid-conversation), but a
+  // level driven by the machine's own voice bleeding into the mic would
+  // be a misleading, distracting reading.
+  const level = speaking ? 0 : Math.min(1, rms * 6);
+  ring.style.opacity = String(Math.min(0.65, level * 1.3));
+  ring.style.boxShadow = "0 0 0 " + (level * 14).toFixed(1) + "px var(--danger)";
+}
+
+function evaluateVAD(rms, now) {
+  if (speaking || !conversationMode) { silenceStartTs = null; speechHoldStart = null; return; }
+  if (endpointMode() !== "silence") return;
+  const above = rms >= speechThreshold;
+  if (above) {
+    silenceStartTs = null;
+    if (speechHoldStart === null) speechHoldStart = now;
+    if (!utteranceStarted && now - speechHoldStart >= SPEECH_HOLD_MS) utteranceStarted = true;
+    return;
+  }
+  speechHoldStart = null;
+  if (!utteranceStarted || !bufferHasContent()) return;
+  if (silenceStartTs === null) { silenceStartTs = now; return; }
+  if (now - silenceStartTs < silenceMs()) return;
+  silenceStartTs = null;
+  utteranceStarted = false;
+  if (armed) {
+    // Never woken -- silence ended the attempt, discard rather than submit.
+    resetTalkState();
+    updateCaptionArmed();
+  } else {
+    finalizeVoiceSubmit(pendingText());
+  }
+}
+
+async function startMeter() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({audio: true});
+  } catch (e) { return; }
+  if (!conversationMode) { stream.getTracks().forEach((t) => t.stop()); return; }
+  const Ctor = window.AudioContext || window.webkitAudioContext;
+  if (!Ctor) { stream.getTracks().forEach((t) => t.stop()); return; }
+  micStream = stream;
+  audioCtx = new Ctor();
+  const source = audioCtx.createMediaStreamSource(micStream);
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 512;
+  source.connect(analyser);
+  const data = new Uint8Array(analyser.fftSize);
+
+  calibrating = true;
+  calibrationStart = performance.now();
+  calibrationSamples = [];
+  utteranceStarted = false;
+  silenceStartTs = null;
+  speechHoldStart = null;
+  const ring = document.getElementById("miclevel");
+  if (ring) ring.hidden = false;
+
+  function frame() {
+    if (!analyser) return; // meter was stopped
+    analyser.getByteTimeDomainData(data);
+    let sumSquares = 0;
+    for (let i = 0; i < data.length; i++) {
+      const v = (data[i] - 128) / 128;
+      sumSquares += v * v;
+    }
+    const rms = Math.sqrt(sumSquares / data.length);
+    const now = performance.now();
+
+    if (calibrating) {
+      calibrationSamples.push(rms);
+      if (now - calibrationStart >= CALIBRATION_MS) {
+        const avg = calibrationSamples.reduce((a, b) => a + b, 0) / calibrationSamples.length;
+        noiseFloor = avg;
+        speechThreshold = Math.max(avg * 3, MIN_SPEECH_THRESHOLD);
+        calibrating = false;
+      }
+    } else {
+      evaluateVAD(rms, now);
+    }
+
+    updateMeterVisual(rms);
+    meterRafId = requestAnimationFrame(frame);
+  }
+  meterRafId = requestAnimationFrame(frame);
+}
+
+function stopMeter() {
+  if (meterRafId) cancelAnimationFrame(meterRafId);
+  meterRafId = null;
+  analyser = null;
+  if (audioCtx) { try { audioCtx.close(); } catch (e) { /* already closed */ } audioCtx = null; }
+  if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
+  calibrating = false;
+  utteranceStarted = false;
+  silenceStartTs = null;
+  speechHoldStart = null;
+  const ring = document.getElementById("miclevel");
+  if (ring) { ring.style.opacity = "0"; ring.style.boxShadow = "none"; ring.hidden = true; }
+}
+
 function stopListening() {
   listening = false;
   if (recognizer) { try { recognizer.stop(); } catch (e) { /* already stopped */ } }
@@ -202,21 +532,28 @@ function resumeListeningIfNeeded() {
 
 function initMic() {
   const mic = document.getElementById("mic");
-  if (!SpeechRecognitionCtor || !mic) { if (mic) mic.hidden = true; return; }
+  const ring = document.getElementById("miclevel");
+  if (!SpeechRecognitionCtor || !mic) {
+    if (mic) mic.hidden = true;
+    if (ring) ring.hidden = true;
+    return;
+  }
   mic.hidden = false;
   recognizer = new SpeechRecognitionCtor();
   recognizer.continuous = false;
   recognizer.interimResults = true;
   recognizer.lang = "en-US";
 
+  // Interim and final results both feed the same processTranscript(), which
+  // is the single funnel for the wake gate, live caption, and end-word/
+  // isFinal submission -- there is no separate "submit" path for voice.
   recognizer.onresult = (event) => {
     let text = "";
     for (let i = 0; i < event.results.length; i++) text += event.results[i][0].transcript;
-    capUser.textContent = text;
-    if (event.results[event.results.length - 1].isFinal) {
-      stopListening();
-      if (text.trim()) submitTurn(text.trim());
-    }
+    sessionLive = text;
+    const isFinal = event.results[event.results.length - 1].isFinal;
+    processTranscript(isFinal);
+    if (isFinal) stopListening();
   };
   recognizer.onerror = () => { listening = false; };
   recognizer.onend = () => {
@@ -232,8 +569,19 @@ function initMic() {
   mic.addEventListener("click", () => {
     conversationMode = !conversationMode;
     mic.classList.toggle("on", conversationMode);
-    mic.textContent = conversationMode ? "listening\\u2026" : "mic";
-    if (conversationMode) startListening(); else stopListening();
+    mic.textContent = conversationMode ? "listening…" : "mic";
+    if (conversationMode) {
+      resetTalkState();
+      updateCaptionArmed();
+      startListening();
+      startMeter();
+    } else {
+      stopListening();
+      stopMeter();
+      resetTalkState();
+      capUser.textContent = "";
+      capUser.classList.remove("armed", "active", "sent");
+    }
   });
 }
 
@@ -277,12 +625,17 @@ async function loadHistory() {
 
 async function submitTurn(input) {
   capUser.textContent = input;
+  capUser.classList.remove("armed", "active");
+  capUser.classList.add("sent");
   capAssistant.textContent = "\\u2026";
   stopListening();
 
-  const tools = prefs.tools.split(",").map((t) => t.trim()).filter(Boolean);
+  // pref(), not raw prefs.tools -- a shell_preferences record written
+  // before this field existed in the schema won't have it, and
+  // undefined.split() would throw here and silently kill the turn.
+  const tools = String(pref("tools", DEFAULT_TOOLS)).split(",").map((t) => t.trim()).filter(Boolean);
   const [ok, body] = await api("POST", "/api/ai/chat",
-    {message: input, model: prefs.ai_model, tools, history: aiHistory.slice(-20), system: TALK_SYSTEM});
+    {message: input, model: pref("ai_model", DEFAULT_MODEL), tools, history: aiHistory.slice(-20), system: TALK_SYSTEM});
 
   const replyText = ok ? body.reply : (body.error || "Something went wrong.");
   capAssistant.textContent = stripForSpeech(replyText) || replyText;
@@ -299,12 +652,21 @@ async function submitTurn(input) {
   record(input, replyText, "ai");
 }
 
+// Manual send/Enter always submits whatever is in the voice buffer plus
+// whatever is typed, regardless of endpoint protocol or wake-word arming
+// -- an explicit click/Enter is its own address signal. pendingText()
+// still strips a wake/end word if one happens to be present so a
+// half-spoken command doesn't come along for the ride.
 document.getElementById("prompt").addEventListener("submit", (event) => {
   event.preventDefault();
   const box = event.target.elements["line"];
-  const input = box.value.trim();
-  if (!input) return;
+  const typed = box.value.trim();
+  const voice = conversationMode ? pendingText() : "";
   box.value = "";
+  if (finalDebounceTimer) { clearTimeout(finalDebounceTimer); finalDebounceTimer = null; }
+  resetTalkState();
+  const input = [voice, typed].filter(Boolean).join(" ").trim();
+  if (!input) { if (conversationMode) updateCaptionArmed(); return; }
   submitTurn(input);
 });
 initMic();
@@ -331,9 +693,12 @@ def GET(request):
 <div id="capAssistant" class="cap assistant"></div>
 </div>
 <div class="controls">
+<div class="micwrap">
 <button type="button" id="mic" hidden aria-label="toggle conversation mode">mic</button>
+<span id="miclevel" class="miclevel" hidden></span>
+</div>
 <form id="prompt" autocomplete="off">
-<input name="line" placeholder="or type\\u2026" autofocus>
+<input name="line" placeholder="or type..." autofocus>
 <button type="submit" class="btn primary" aria-label="send">send</button>
 </form>
 <a class="backlink" href="/shell">back to shell</a>
