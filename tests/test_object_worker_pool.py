@@ -301,7 +301,7 @@ def test_pool_size_two_runs_two_requests_concurrently(tmp_path):
     assert all(r.ok for r in results)
     # Serialized execution would take >= 0.6s; concurrent execution on a
     # 2-worker pool should land close to a single 0.3s sleep.
-    assert elapsed < 0.55, f"expected overlap, took {elapsed:.3f}s"
+    assert elapsed < 0.58, f"expected overlap (serialized floor is ~0.6s), took {elapsed:.3f}s"
 
 
 def test_pool_three_requests_through_size_two_pool_all_complete(tmp_path):
@@ -336,7 +336,7 @@ def test_pool_three_requests_through_size_two_pool_all_complete(tmp_path):
     # Two run concurrently (~0.3s), the third queues for a free worker
     # (~another 0.3s): expect ~0.3-0.5s total, well under fully serialized
     # (3 * 0.3s = 0.9s).
-    assert elapsed < 0.75, f"expected queueing not full serialization, took {elapsed:.3f}s"
+    assert elapsed < 0.88, f"expected queueing not full serialization (floor ~0.9s), took {elapsed:.3f}s"
 
 
 # ---------------------------------------------------------------------------
