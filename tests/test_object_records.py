@@ -1149,6 +1149,25 @@ def write_append_schema(data_dir: Path, collection: str, fields: list[dict] | No
     return path
 
 
+def append_physical_rows(
+    path: Path, physical_fields: list[str], rows: list[dict[str, str]]
+) -> None:
+    """Simulate an external writer (another process, the CLI, a sibling
+    pool worker) appending physical rows directly to an already
+    append-physical records.tsv -- a plain file write that goes through
+    none of object_records' own API or cache-refresh machinery, matching
+    exactly the physical format object_records._append_records_rows
+    itself writes: tab-delimited, "\\n" line terminator, QUOTE_MINIMAL,
+    one row per dict in `physical_fields` order (including the `_op`
+    column -- pass object_records.OP_FIELD explicitly in each row)."""
+    with path.open("a", newline="") as handle:
+        writer = csv.writer(
+            handle, delimiter="\t", lineterminator="\n", quoting=csv.QUOTE_MINIMAL
+        )
+        for row in rows:
+            writer.writerow([row.get(field, "") for field in physical_fields])
+
+
 def test_op_field_is_rejected_in_user_payloads(tmp_path):
     data_dir = tmp_path / "data"
     write_records(data_dir, "widgets", "id\tname\n")
@@ -1526,7 +1545,7 @@ def test_append_mode_cache_refreshes_on_same_inode_append(tmp_path):
 
     # A cache HIT (no reparse) must still return the fresh value.
     cache_key = str(path.resolve())
-    signature, _, cached_records, _ = object_records._RECORDS_CACHE[cache_key]
+    signature, _, cached_records, _, _ = object_records._RECORDS_CACHE[cache_key]
     assert signature == object_records._stat_signature(path)
     assert cached_records == [{"id": "w1", "name": "Alpha2"}]
 
@@ -2009,3 +2028,241 @@ def test_append_mode_equivalent_to_classic_mode_with_sidecar_forced(tmp_path, mo
     classic_listing = object_records.list_collection_records("items", base_dir=classic_dir, roots=[])
     append_listing = object_records.list_collection_records("items", base_dir=append_dir, roots=[])
     assert classic_listing == append_listing
+
+
+# ---------------------------------------------------------------------------
+# Records-cache tail-delta incremental read (docs/append-only-storage-
+# design.md Sidecars, bullet 2). Every test below writes external append
+# rows directly with append_physical_rows -- bypassing object_records'
+# API and its own cache-refresh calls entirely -- to simulate a SEPARATE
+# writer (another process, the CLI, a sibling pool worker) growing an
+# append-mode file underneath a cache entry this process already has warm.
+# ---------------------------------------------------------------------------
+
+
+def test_incremental_cache_folds_external_append_without_full_reparse(tmp_path, monkeypatch):
+    """A warm cache entry for an append-mode file, grown in place by an
+    external writer (same inode, pure growth), must be caught up via the
+    tail-delta incremental fold -- not a full re-parse of the whole file.
+    Proven two ways: the module's incremental-fold counter advances by
+    exactly one, and _parse_records_file is monkeypatched to blow up if
+    it's ever called from this point on."""
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    object_records.create_collection_record(
+        "widgets", {"id": "w1", "name": "Alpha"}, base_dir=data_dir, roots=[]
+    )
+    warm = object_records.read_collection_records("widgets", base_dir=data_dir, roots=[])
+    assert warm == [{"id": "w1", "name": "Alpha"}]
+
+    path = data_dir / "collections" / "widgets" / "records.tsv"
+    inode_before = path.stat().st_ino
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError(
+            "_parse_records_file ran: the incremental tail-delta path did not take effect"
+        )
+
+    monkeypatch.setattr(object_records, "_parse_records_file", _boom)
+
+    append_physical_rows(
+        path,
+        [object_records.OP_FIELD, "id", "name"],
+        [{"id": "w2", "name": "Beta", object_records.OP_FIELD: ""}],
+    )
+    assert path.stat().st_ino == inode_before  # confirms this was growth-in-place, not a rewrite
+
+    before_folds = object_records._INCREMENTAL_CACHE_FOLDS
+    result = object_records.read_collection_records("widgets", base_dir=data_dir, roots=[])
+    assert result == [{"id": "w1", "name": "Alpha"}, {"id": "w2", "name": "Beta"}]
+    assert object_records._INCREMENTAL_CACHE_FOLDS == before_folds + 1
+
+
+def test_incremental_cache_folds_external_update_at_same_position(tmp_path):
+    """An externally appended upsert for an id already present must
+    replace it AT ITS EXISTING POSITION (matching a full fold's
+    last-wins-in-place semantics -- see _fold_append_rows), not move it
+    to the end. Cross-checked against a forced cold full parse of the
+    identical on-disk content."""
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    for i in range(3):
+        object_records.create_collection_record(
+            "widgets", {"id": f"w{i}", "name": f"n{i}"}, base_dir=data_dir, roots=[]
+        )
+    warm = object_records.read_collection_records("widgets", base_dir=data_dir, roots=[])
+    assert [record["id"] for record in warm] == ["w0", "w1", "w2"]
+
+    path = data_dir / "collections" / "widgets" / "records.tsv"
+    before_folds = object_records._INCREMENTAL_CACHE_FOLDS
+    append_physical_rows(
+        path,
+        [object_records.OP_FIELD, "id", "name"],
+        [{"id": "w1", "name": "n1-updated", object_records.OP_FIELD: ""}],
+    )
+
+    result = object_records.read_collection_records("widgets", base_dir=data_dir, roots=[])
+    assert object_records._INCREMENTAL_CACHE_FOLDS == before_folds + 1
+    assert result == [
+        {"id": "w0", "name": "n0"},
+        {"id": "w1", "name": "n1-updated"},
+        {"id": "w2", "name": "n2"},
+    ]
+
+    # Cross-check against an independent cold full parse of the exact same
+    # on-disk bytes -- the cache is untouched by this call.
+    _, cold_records = object_records._parse_records_file("widgets", path)
+    assert cold_records == result
+
+
+def test_incremental_cache_falls_back_to_full_fold_on_tombstone(tmp_path):
+    """A delta containing ANY tombstone must bail out of the incremental
+    merge entirely and fall back to a full fold (deletes shift every
+    later position, which the cheap replace-or-append merge does not
+    model) -- but the RESULT must still be correct, and the fold counter
+    must show the incremental path did NOT run."""
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    for i in range(3):
+        object_records.create_collection_record(
+            "widgets", {"id": f"w{i}", "name": f"n{i}"}, base_dir=data_dir, roots=[]
+        )
+    object_records.read_collection_records("widgets", base_dir=data_dir, roots=[])  # warm it
+
+    path = data_dir / "collections" / "widgets" / "records.tsv"
+    before_folds = object_records._INCREMENTAL_CACHE_FOLDS
+    append_physical_rows(
+        path,
+        [object_records.OP_FIELD, "id", "name"],
+        [{"id": "w1", "name": "", object_records.OP_FIELD: object_records.OP_DELETE}],
+    )
+
+    result = object_records.read_collection_records("widgets", base_dir=data_dir, roots=[])
+    assert object_records._INCREMENTAL_CACHE_FOLDS == before_folds  # did NOT take the fast path
+    assert result == [{"id": "w0", "name": "n0"}, {"id": "w2", "name": "n2"}]
+
+
+def test_incremental_cache_ignores_torn_tail_fragment_in_delta(tmp_path):
+    """A torn (unterminated) fragment at EOF -- the classic log torn-tail
+    case, from a writer that crashed mid-row -- must be excluded from the
+    incremental fold's delta, exactly as a full fold would exclude it,
+    and must never resurface once a later, legitimate write repairs and
+    extends the file."""
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    object_records.create_collection_record(
+        "widgets", {"id": "w1", "name": "Alpha"}, base_dir=data_dir, roots=[]
+    )
+    object_records.read_collection_records("widgets", base_dir=data_dir, roots=[])  # warm it
+
+    path = data_dir / "collections" / "widgets" / "records.tsv"
+    append_physical_rows(
+        path,
+        [object_records.OP_FIELD, "id", "name"],
+        [{"id": "w2", "name": "Beta", object_records.OP_FIELD: ""}],
+    )
+    # A crash mid-write: a fragment with no trailing newline.
+    with path.open("a", newline="") as handle:
+        handle.write("\tw3\tGam")
+    assert not path.read_text().endswith("\n")
+
+    result = object_records.read_collection_records("widgets", base_dir=data_dir, roots=[])
+    assert result == [{"id": "w1", "name": "Alpha"}, {"id": "w2", "name": "Beta"}]
+
+    # A subsequent legitimate write must self-heal (truncate the fragment
+    # away) and append cleanly -- the fragment must never come back.
+    created = object_records.create_collection_record(
+        "widgets", {"id": "w3", "name": "Gamma"}, base_dir=data_dir, roots=[]
+    )
+    assert created == {"id": "w3", "name": "Gamma"}
+    assert path.read_text().endswith("\n")
+    listing = object_records.list_collection_records(
+        "widgets", base_dir=data_dir, roots=[]
+    )["records"]
+    assert listing == [
+        {"id": "w1", "name": "Alpha"},
+        {"id": "w2", "name": "Beta"},
+        {"id": "w3", "name": "Gamma"},
+    ]
+
+
+def test_incremental_cache_evicts_when_growth_crosses_row_threshold(tmp_path, monkeypatch):
+    """A successful incremental fold that pushes a collection's row count
+    past DBBASIC_RECORDS_CACHE_MAX_ROWS must still return the correct
+    (larger) result, but must NOT leave an entry cached -- same rule the
+    full-parse path already applies (test_records_cache_row_threshold_
+    excludes_large_collections)."""
+    monkeypatch.setenv("DBBASIC_RECORDS_CACHE_MAX_ROWS", "3")
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "widgets", [{"name": "id"}, {"name": "name"}])
+    for i in range(3):
+        object_records.create_collection_record(
+            "widgets", {"id": f"w{i}", "name": f"n{i}"}, base_dir=data_dir, roots=[]
+        )
+    object_records.read_collection_records("widgets", base_dir=data_dir, roots=[])
+    cache_key = _cache_key("widgets", data_dir)
+    assert cache_key in object_records._RECORDS_CACHE
+
+    path = data_dir / "collections" / "widgets" / "records.tsv"
+    append_physical_rows(
+        path,
+        [object_records.OP_FIELD, "id", "name"],
+        [
+            {"id": "w3", "name": "n3", object_records.OP_FIELD: ""},
+            {"id": "w4", "name": "n4", object_records.OP_FIELD: ""},
+        ],
+    )
+
+    result = object_records.read_collection_records("widgets", base_dir=data_dir, roots=[])
+    assert len(result) == 5
+    assert cache_key not in object_records._RECORDS_CACHE
+
+    # Must still reparse correctly on the very next read (uncached, but
+    # correct every time).
+    result_again = object_records.read_collection_records("widgets", base_dir=data_dir, roots=[])
+    assert result_again == result
+
+
+def test_incremental_cache_equivalence_across_random_external_append_batches(tmp_path):
+    """PROPERTY: for a long, seeded, randomized sequence of external
+    append batches (each batch a handful of upserts and occasional
+    deletes, written directly to disk exactly as a separate process
+    would), the WARM read path -- whichever of incremental-fold or
+    fallback-full-fold it takes -- must always agree with an independent
+    COLD full parse of the identical on-disk bytes. ~50 iterations."""
+    data_dir = tmp_path / "data"
+    write_append_schema(data_dir, "items", [{"name": "id"}, {"name": "value"}])
+    path = data_dir / "collections" / "items" / "records.tsv"
+    physical_fields = [object_records.OP_FIELD, "id", "value"]
+
+    object_records.create_collection_record(
+        "items", {"id": "seed", "value": "0"}, base_dir=data_dir, roots=[]
+    )
+    object_records.read_collection_records("items", base_dir=data_dir, roots=[])  # warm once
+
+    rng = random.Random(20260718)
+    id_pool = [f"e{i}" for i in range(8)]
+
+    for iteration in range(50):
+        batch = []
+        for _ in range(rng.randint(1, 4)):
+            record_id = rng.choice(id_pool)
+            if rng.random() < 0.15:
+                batch.append({
+                    "id": record_id,
+                    "value": "",
+                    object_records.OP_FIELD: object_records.OP_DELETE,
+                })
+            else:
+                batch.append({
+                    "id": record_id,
+                    "value": f"v{iteration}",
+                    object_records.OP_FIELD: "",
+                })
+        append_physical_rows(path, physical_fields, batch)
+
+        warm_result = object_records.read_collection_records("items", base_dir=data_dir, roots=[])
+        _, cold_records = object_records._parse_records_file("items", path)
+        assert warm_result == cold_records, (
+            f"iteration {iteration}: warm={warm_result!r} cold={cold_records!r}"
+        )

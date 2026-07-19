@@ -109,7 +109,7 @@ _DEFAULT_RECORDS_CACHE_MAX_ROWS = 500_000
 # past the threshold, so an oversized collection never lingers there under
 # an old signature.
 #
-# Value is (stat_signature, fields, records, id_index):
+# Value is (stat_signature, fields, records, id_index, covered_bytes):
 #   - stat_signature = (st_mtime_ns, st_size, st_ino). A CLASSIC-mode write
 #     goes through an atomic tempfile-then-replace, so a new inode backs the
 #     path after each write; including st_ino means a same-tick mtime
@@ -144,6 +144,27 @@ _DEFAULT_RECORDS_CACHE_MAX_ROWS = 500_000
 #     with duplicate ids). For append mode this is built from the already-
 #     deduplicated folded records, so in practice every live id maps to
 #     exactly one position.
+#   - covered_bytes is the byte offset (from 0) that this entry's fold
+#     already accounts for -- always equal to the file's size at the
+#     stat this entry was built from (signature[1]), for every entry
+#     produced by a full parse or a full rewrite (_cache_entry's
+#     full-parse branch, _refresh_records_cache, _refresh_records_cache_
+#     after_append). It exists so _cache_entry's INCREMENTAL branch
+#     (docs/append-only-storage-design.md Sidecars, bullet 2: "cache
+#     entries remember the byte offset they consumed; when a stat
+#     signature changes by growth alone, parse only the tail delta") can
+#     tell how much of a GROWN append-mode file is already folded into
+#     `records`, so only the new bytes need parsing -- see
+#     _try_incremental_cache_entry. A CLASSIC-mode entry carries this
+#     field too (harmless: it's just the file's size at cache time,
+#     unused by anything) since a classic rewrite always produces a new
+#     inode, which alone rules out the incremental branch regardless of
+#     covered_bytes. Only an incrementally-built entry can end up with
+#     covered_bytes < signature[1] -- when the tail delta itself ends in
+#     a torn (uncommitted) row, that fragment's bytes are correctly left
+#     out of both `records` and covered_bytes, exactly as a full parse
+#     would also drop them (_drop_torn_tail); a later append still
+#     compares against this same covered_bytes to find its own delta.
 #
 # ALIASING SAFETY: the `records` list and its dicts stored here are shared,
 # mutable module state. Nothing in this module may mutate them in place.
@@ -192,7 +213,14 @@ _DEFAULT_RECORDS_CACHE_MAX_ROWS = 500_000
 # writer (~line 1022, os.replace), and object_backup.py's restore writer
 # (~line 607, Path.replace) were all checked and write via a temp path
 # followed by an atomic replace, never an in-place open("w").
-_RECORDS_CACHE: "OrderedDict[str, tuple[tuple[int, int, int], list[str], list[dict[str, str]], dict[str, int]]]" = OrderedDict()
+_RECORDS_CACHE: "OrderedDict[str, tuple[tuple[int, int, int], list[str], list[dict[str, str]], dict[str, int], int]]" = OrderedDict()
+
+# Observability-only counter: incremented once per successful tail-delta
+# incremental fold in _cache_entry (see _try_incremental_cache_entry).
+# Never read by any runtime code path -- it exists purely so tests can
+# assert the incremental path actually ran (rather than a full re-parse)
+# without needing to monkeypatch internals just to observe that.
+_INCREMENTAL_CACHE_FOLDS = 0
 
 # In-memory mirror of the on-disk id->offset sidecar (see OIDX_FILE above),
 # keyed by resolved records.tsv path. Value is (data_ino, covered_bytes,
@@ -808,14 +836,20 @@ def _store_records_cache(
     fields: list[str],
     records: list[dict[str, str]],
     id_index: dict[str, int],
+    covered_bytes: int,
 ) -> None:
     """Insert/refresh one entry as most-recently-used, then evict over capacity.
 
     Eviction is pure LRU by entry count: once the dict exceeds
     DBBASIC_RECORDS_CACHE_MAX_ENTRIES, the oldest (least-recently-used)
     entries are dropped first via OrderedDict.popitem(last=False).
+
+    `covered_bytes` is normally just `signature[1]` (every caller except
+    _try_incremental_cache_entry's torn-tail case passes exactly that) --
+    see the _RECORDS_CACHE block comment above for what it means and the
+    one case where it differs.
     """
-    _RECORDS_CACHE[cache_key] = (signature, fields, records, id_index)
+    _RECORDS_CACHE[cache_key] = (signature, fields, records, id_index, covered_bytes)
     _RECORDS_CACHE.move_to_end(cache_key)
     max_entries = _records_cache_max_entries()
     while len(_RECORDS_CACHE) > max_entries:
@@ -866,14 +900,24 @@ def _cache_entry(
     _RECORDS_CACHE docstring above. Callers within this module must copy
     before handing anything back across the public API.
 
-    This is the O(n) fold path: a full parse of the whole file whenever
-    there's no warm cache hit. _fast_record_lookup (get/create/update/
-    delete's shared point-op resolver) tries _peek_records_cache and then
-    the id->offset sidecar FIRST specifically to avoid paying this on
-    every write to a collection too large to fit in _RECORDS_CACHE; this
-    function remains the correctness fallback for everything else (list,
-    read_collection_records, a cold/small collection's first touch, and
-    any point op the sidecar can't answer authoritatively).
+    On a peek miss, tries one more thing before paying a full parse: if a
+    STALE entry is sitting in _RECORDS_CACHE for this exact path and the
+    file has purely grown in place (same inode, size beyond what that
+    entry covered) on an append-mode file, _try_incremental_cache_entry
+    folds only the new tail bytes onto the stale entry instead -- O(new
+    rows), not O(file). See that function for the full precondition list
+    and fallback rules; anything it can't handle falls through to the
+    ordinary full parse below, unchanged.
+
+    Absent that, this is the O(n) fold path: a full parse of the whole
+    file whenever there's no warm cache hit. _fast_record_lookup (get/
+    create/update/delete's shared point-op resolver) tries
+    _peek_records_cache and then the id->offset sidecar FIRST specifically
+    to avoid paying this on every write to a collection too large to fit
+    in _RECORDS_CACHE; this function remains the correctness fallback for
+    everything else (list, read_collection_records, a cold/small
+    collection's first touch, and any point op the sidecar can't answer
+    authoritatively).
     """
     if not path.exists():
         return ["id"], [], {}
@@ -886,17 +930,141 @@ def _cache_entry(
 
     cache_key = str(path.resolve(strict=False))
     signature = _stat_signature(path)
+
+    incremental = _try_incremental_cache_entry(path, cache_key, signature)
+    if incremental is not None:
+        return incremental
+
     fields, records = _parse_records_file(collection, path)
     id_index = _build_id_index(records)
     if signature is not None:
         if len(records) <= _records_cache_max_rows():
-            _store_records_cache(cache_key, signature, fields, records, id_index)
+            _store_records_cache(cache_key, signature, fields, records, id_index, signature[1])
         else:
             # Too large to cache: don't pin it, and drop any stale entry
             # left over from before this collection grew past the
             # threshold, so it doesn't linger under an old signature.
             _RECORDS_CACHE.pop(cache_key, None)
     return fields, records, id_index
+
+
+def _try_incremental_cache_entry(
+    path: Path,
+    cache_key: str,
+    signature: tuple[int, int, int] | None,
+) -> tuple[list[str], list[dict[str, str]], dict[str, int]] | None:
+    """Attempt the tail-delta incremental fold for an append-mode file that
+    grew in place since it was last cached (docs/append-only-storage-
+    design.md Sidecars, bullet 2: "when a stat signature changes by
+    growth alone, parse only the tail delta"). Returns the fresh (fields,
+    records, id_index) on success, or None when the fast path doesn't
+    apply -- _cache_entry then falls back to its ordinary full parse,
+    unchanged.
+
+    This is what makes a WARM cache stay O(delta) instead of O(file) when
+    the growth happened outside this process's own write path (another
+    process's writer, the CLI, a sibling pool worker, or this process's
+    cache having gone cold and been rebuilt from a stat mismatch) -- the
+    in-process fast-append path (_refresh_records_cache_after_append)
+    already keeps this process's OWN writes O(1); this covers the gap
+    where the growth was observed on a read instead.
+
+    Preconditions, ALL required (anything off -> None, no partial work is
+    trusted):
+      - a stat signature could be taken (file still exists, readable)
+      - a PRIOR entry is warm in _RECORDS_CACHE for this exact path (a
+        cold/evicted/never-cached collection has nothing to build on --
+        the ordinary full parse is the only option)
+      - same inode as the prior entry's signature -- a classic-mode
+        rewrite, and an append-mode compaction/transition/new-field
+        rewrite, all produce a fresh inode via temp+replace
+        (_write_collection_records), so this alone rules out every case
+        except an in-place append-mode growth
+      - the new size is strictly greater than the prior entry's
+        covered_bytes -- pure growth, nothing rewritten in place
+      - the file's CURRENT physical header is append-format (`_op` first
+        column) and its logical fields match the prior entry's fields
+        exactly (a header/field change under the same inode should be
+        impossible given the point above, but this stays defensive
+        rather than trusting that unconditionally)
+
+    On success, parses only the new bytes (_append_tail_delta_records,
+    the shared torn-tail-tolerant tail reader also used by the id->offset
+    sidecar's catch-up scan -- see _scan_append_tail) and folds them onto
+    the PRIOR entry's records/id_index -- never mutating the prior
+    entry's own list/dict in place (a fresh list/dict is always built;
+    other code in this same event-loop turn may still hold references to
+    the prior entry's objects, same rule as every other cache-installing
+    function in this module).
+
+    A tombstone (`_op == "del"`) ANYWHERE in the delta bails out (returns
+    None, falling back to the full fold) rather than special-casing
+    position shifts: a delete removes a slot and shifts every later
+    position down by one (see _fold_append_rows), which this cheap
+    replace-or-append merge does not model. Deletes are the rare case for
+    the append-shaped workloads this exists for (game-server state,
+    impression logs, price history), so this is an accepted, documented
+    trade, not a gap -- correctness always wins over speed here. A
+    blank-id row in the delta (only reachable via a hand-edited file --
+    see _fold_append_rows) bails out for the same reason: its fold
+    position depends on the FULL row history, which an incremental merge
+    doesn't have.
+
+    The row-count cache threshold (DBBASIC_RECORDS_CACHE_MAX_ROWS) is
+    still honored: a successful merge that grows the collection past it
+    is still returned to the caller (correct, and far cheaper than a
+    full parse either way), but is evicted rather than (re)cached -- the
+    same rule _cache_entry's full-parse branch applies just above.
+    """
+    if signature is None:
+        return None
+
+    prior = _RECORDS_CACHE.get(cache_key)
+    if prior is None:
+        return None
+    old_signature, old_fields, old_records, old_id_index, old_covered = prior
+
+    if old_signature[2] != signature[2]:
+        return None  # different inode: not an in-place append
+    if signature[1] <= old_covered:
+        return None  # no growth beyond what's already folded
+
+    physical_header = _physical_header(path)
+    if not physical_header or physical_header[0] != OP_FIELD:
+        return None  # not (or no longer) append-physical
+    if physical_header[1:] != old_fields:
+        return None  # defensive: header shouldn't change under the same inode
+
+    delta_rows, new_covered = _append_tail_delta_records(path, physical_header, old_covered)
+    if not delta_rows:
+        return None  # nothing complete to fold yet (e.g. a torn tail only)
+
+    if any(
+        row.get(OP_FIELD, OP_UPSERT) == OP_DELETE or not row.get("id")
+        for row in delta_rows
+    ):
+        return None  # tombstone or blank id: fall back to a full fold
+
+    new_records = list(old_records)
+    new_id_index = dict(old_id_index)
+    for row in delta_rows:
+        record_id = row["id"]
+        clean = {key: value for key, value in row.items() if key != OP_FIELD}
+        idx = new_id_index.get(record_id)
+        if idx is not None:
+            new_records[idx] = clean
+        else:
+            new_id_index[record_id] = len(new_records)
+            new_records.append(clean)
+
+    global _INCREMENTAL_CACHE_FOLDS
+    _INCREMENTAL_CACHE_FOLDS += 1
+
+    if len(new_records) <= _records_cache_max_rows():
+        _store_records_cache(cache_key, signature, old_fields, new_records, new_id_index, new_covered)
+    else:
+        _RECORDS_CACHE.pop(cache_key, None)
+    return old_fields, new_records, new_id_index
 
 
 def _parse_records_file(collection: str, path: Path) -> tuple[list[str], list[dict[str, str]]]:
@@ -1098,6 +1266,109 @@ def _fold_append_rows(physical_rows: list[dict[str, str]]) -> list[dict[str, str
     return list(folded.values()) + [record for _, record in blank_id_rows]
 
 
+def _scan_append_tail(
+    path: Path, physical_fields: list[str], start_byte: int
+) -> tuple[list[tuple[int, int, dict[str, str]]], int]:
+    """Read and parse complete physical rows of an append-mode file from
+    `start_byte` to EOF, returning (rows, covered_bytes) where each row is
+    (row_start_offset, row_end_offset, physical_record) -- `physical_record`
+    keyed by every column in `physical_fields`, `_op` included, exactly
+    like a row from _parse_append_body before folding. `covered_bytes` is
+    the byte offset up to which parsing is authoritative (>= start_byte,
+    equal to it when nothing new/complete was found). `start_byte` must
+    land exactly on a row boundary -- every offset any caller ever hands
+    back here (a prior scan/cache entry's covered_bytes, or the
+    records-header length) always does, since it is always either 0 or a
+    previous row's end.
+
+    Torn-tail tolerant exactly like _parse_append_body: a trailing
+    unterminated physical line is dropped first (_drop_torn_tail), and a
+    row that still fails to parse (or reports more fields than the header
+    -- real corruption, not a torn write) stops consumption at that point
+    rather than raising. NEVER raises: this is the shared low-level scan
+    behind two callers that both need "read complete new rows appended
+    since an earlier point, without re-reading or re-folding the whole
+    file" -- the id->offset sidecar's incremental catch-up
+    (_scan_append_rows_for_offsets, which projects each row down to just
+    its (op, id) for the offset index) and the records-cache's tail-delta
+    incremental fold (_append_tail_delta_records, which keeps every field
+    since it must produce real records). Neither caller may raise either,
+    so this doesn't.
+
+    Byte offsets are computed by decoding `path`'s bytes from `start_byte`
+    once, then, after each row csv.reader consumes, converting the
+    now-consumed prefix of that decoded text back to its exact byte
+    length (`str.encode` on the newly consumed slice only, not the whole
+    prefix each time, so total work stays O(scanned bytes) instead of
+    O(scanned bytes squared)). `start_byte` itself is always a byte
+    offset immediately after a "\\n", which is a single ASCII byte and
+    therefore never a UTF-8 continuation byte -- so slicing raw bytes from
+    there and decoding is always safe.
+    """
+    try:
+        with path.open("rb") as handle:
+            handle.seek(start_byte)
+            raw = handle.read()
+    except OSError:
+        return [], start_byte
+    if not raw:
+        return [], start_byte
+
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return [], start_byte
+    text = _drop_torn_tail(text)
+    if not text:
+        return [], start_byte
+
+    field_count = len(physical_fields)
+    stream = io.StringIO(text)
+    reader = csv.reader(stream, delimiter="\t")
+    rows: list[tuple[int, int, dict[str, str]]] = []
+    prev_char = 0
+    byte_cursor = start_byte
+    while True:
+        try:
+            row = next(reader)
+        except StopIteration:
+            break
+        except csv.Error:
+            break
+        cur_char = stream.tell()
+        row_bytes = len(text[prev_char:cur_char].encode("utf-8"))
+        prev_char = cur_char
+        row_start = byte_cursor
+        row_end = byte_cursor + row_bytes
+        byte_cursor = row_end
+        if not row:
+            continue
+        if len(row) > field_count:
+            break
+        record = {
+            physical_fields[i]: (row[i] if i < len(row) else "")
+            for i in range(field_count)
+        }
+        rows.append((row_start, row_end, record))
+
+    return rows, byte_cursor
+
+
+def _append_tail_delta_records(
+    path: Path, physical_fields: list[str], start_byte: int
+) -> tuple[list[dict[str, str]], int]:
+    """Parse complete physical rows appended to an append-mode file since
+    `start_byte`, returning (physical_rows, covered_bytes) -- a thin
+    projection of _scan_append_tail down to just the row dicts (`_op`
+    included, unfolded), for _try_incremental_cache_entry's tail-delta
+    fold. See _scan_append_tail for the shared torn-tail-tolerant scan
+    this builds on: never raises, stops at the first row it can't make
+    sense of.
+    """
+    scanned, covered_bytes = _scan_append_tail(path, physical_fields, start_byte)
+    return [record for _, _, record in scanned], covered_bytes
+
+
 def _append_compact_min_rows() -> int:
     return _env_int(APPEND_COMPACT_MIN_ROWS_ENV, _DEFAULT_APPEND_COMPACT_MIN_ROWS)
 
@@ -1222,7 +1493,7 @@ def _refresh_records_cache(
     # csv.DictWriter/extrasaction wrote that row).
     cached_records = [_project_record(record, fields) for record in records]
     id_index = _build_id_index(cached_records)
-    _store_records_cache(cache_key, signature, list(fields), cached_records, id_index)
+    _store_records_cache(cache_key, signature, list(fields), cached_records, id_index, signature[1])
 
 
 def _refresh_records_cache_after_append(
@@ -1282,7 +1553,7 @@ def _refresh_records_cache_after_append(
     if prior is None or prior[1] != fields:
         return False
 
-    _, _prior_fields, old_records, old_id_index = prior
+    _, _prior_fields, old_records, old_id_index, _prior_covered = prior
     if len(old_records) > _records_cache_max_rows():
         _RECORDS_CACHE.pop(cache_key, None)
         return True
@@ -1312,7 +1583,11 @@ def _refresh_records_cache_after_append(
         _RECORDS_CACHE.pop(cache_key, None)
         return True
 
-    _store_records_cache(cache_key, signature, list(fields), new_records, new_id_index)
+    # This process just performed the append that produced `signature`, so
+    # it authoritatively covers the whole current file, same as any other
+    # fully-covering entry (see the covered_bytes bullet in the
+    # _RECORDS_CACHE block comment above).
+    _store_records_cache(cache_key, signature, list(fields), new_records, new_id_index, signature[1])
     return True
 
 
@@ -1474,61 +1749,15 @@ def _scan_append_rows_for_offsets(
     derived from comparing covered_bytes to the file's actual size,
     reports that honestly rather than guessing).
 
-    Byte offsets are computed by decoding `path`'s bytes from `start_byte`
-    once, then, after each row csv.reader consumes, converting the
-    now-consumed prefix of that decoded text back to its exact byte
-    length (`str.encode` on the newly consumed slice only, not the whole
-    prefix each time, so total work stays O(scanned bytes) instead of
-    O(scanned bytes squared)). `start_byte` itself is always a byte
-    offset immediately after a "\\n", which is a single ASCII byte and
-    therefore never a UTF-8 continuation byte -- so slicing raw bytes from
-    there and decoding is always safe.
+    Delegates the actual scan to _scan_append_tail (shared with the
+    records-cache's tail-delta incremental fold, _append_tail_delta_
+    records) and projects each full physical row down to just (op, id)
+    plus its byte span -- all this function's callers need.
     """
-    try:
-        with path.open("rb") as handle:
-            handle.seek(start_byte)
-            raw = handle.read()
-    except OSError:
-        return [], start_byte, 0
-    if not raw:
-        return [], start_byte, 0
-
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        return [], start_byte, 0
-    text = _drop_torn_tail(text)
-    if not text:
-        return [], start_byte, 0
-
-    field_count = len(physical_fields)
-    stream = io.StringIO(text)
-    reader = csv.reader(stream, delimiter="\t")
+    scanned, covered_bytes = _scan_append_tail(path, physical_fields, start_byte)
     entries: list[tuple[int, int, str, str]] = []
     row_count = 0
-    prev_char = 0
-    byte_cursor = start_byte
-    while True:
-        try:
-            row = next(reader)
-        except StopIteration:
-            break
-        except csv.Error:
-            break
-        cur_char = stream.tell()
-        row_bytes = len(text[prev_char:cur_char].encode("utf-8"))
-        prev_char = cur_char
-        row_start = byte_cursor
-        row_end = byte_cursor + row_bytes
-        byte_cursor = row_end
-        if not row:
-            continue
-        if len(row) > field_count:
-            break
-        record = {
-            physical_fields[i]: (row[i] if i < len(row) else "")
-            for i in range(field_count)
-        }
+    for row_start, row_end, record in scanned:
         row_count += 1
         record_id = record.get("id", "")
         if not record_id:
@@ -1536,7 +1765,7 @@ def _scan_append_rows_for_offsets(
         op = record.get(OP_FIELD, OP_UPSERT)
         entries.append((row_start, row_end, op, record_id))
 
-    return entries, byte_cursor, row_count
+    return entries, covered_bytes, row_count
 
 
 def _fold_oidx_entries(

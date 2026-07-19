@@ -76,12 +76,29 @@ mode keep full temp+rename atomicity.
   windowing need the full picture -- a secondary sidecar for that is
   future work (design doc, item 5). At or below the threshold, nothing
   changed: the in-process cache still serves everything, sidecar or not.
+- At or below the threshold, a WARM cache entry for an append-mode
+  collection that grows in place (another process, the CLI, or a sibling
+  worker appending — same inode, size only) is caught up with a
+  tail-delta fold of just the new rows instead of a full re-parse of the
+  whole file (design doc, Sidecars: "when a stat signature changes by
+  growth alone, parse only the tail delta"). Measured: reading a
+  400,000-row collection right after an external +100-row append dropped
+  from ~742–815ms (full re-fold every time, regardless of how small the
+  growth was) to ~74–100ms (fold just the 100 new rows) — roughly 8x at
+  this size, and the gap widens with collection size since the old cost
+  was O(file) and the new one is O(delta). A delta containing any
+  deletion falls back to a full fold (deletes shift every later row's
+  position, which the cheap merge doesn't model); growth past the cache
+  threshold is still evicted per the existing row-count rule above.
 - Cold reads of an append file cost ~1.6x a classic parse (fold
   overhead). Compaction restores parity.
-- Backup **preview/diff** does not yet interpret `_op`: for append-mode
-  collections it may show `_op` as a field and count a tombstoned record
-  as live. Backup/restore of the file itself is unaffected (the file is
-  opaque bytes to backup). Known follow-up.
+- Backup **preview/diff** interprets `_op`: for append-mode collections
+  (backup side, live side, or both — a backup taken before a mode switch
+  compares fine against a now-classic or now-append live file) it folds
+  the log last-wins-by-id before diffing, so `_op` never appears as a
+  field and a tombstoned id is treated as absent, not live. Backup/restore
+  of the file itself is unaffected either way (the file is opaque bytes to
+  backup).
 
 ## Choosing
 
