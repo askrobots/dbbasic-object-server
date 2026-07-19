@@ -369,6 +369,7 @@ def GET(request):
 <div id="log"><div class="entry"><div class="out">type /help for commands, or just talk</div></div></div>
 <form id="prompt" autocomplete="off">
 <input name="line" placeholder="&gt;_" autofocus>
+<button type="submit" class="btn primary" aria-label="send">send</button>
 <button type="button" id="mic" hidden aria-label="voice input">mic</button>
 </form>
 """
