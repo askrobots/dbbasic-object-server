@@ -15,7 +15,7 @@ _JS = r"""
   if (document.getElementById("dbbasic-appbar")) return;
 
   const APPS = [
-    ["/shell", "Shell"], ["/notes", "Notes"], ["/tasks", "Tasks"],
+    ["/shell", "Shell"], ["/talk", "Talk"], ["/notes", "Notes"], ["/tasks", "Tasks"],
     ["/projects", "Projects"], ["/contacts", "Contacts"], ["/articles", "Articles"],
     ["/links", "Links"], ["/calendar", "Calendar"], ["/files", "Files"],
     ["/dashboard", "Dashboard"], ["/appearance", "Appearance"],

@@ -44,6 +44,12 @@ form#prompt input { flex: 1; font-family: var(--font-mono); }
 .entry .out.md pre code { background: none; padding: 0; }
 .entry .out.md ul, .entry .out.md ol { padding-left: 1.4rem; margin: 0.3rem 0; }
 .entry .out.md h1, .entry .out.md h2, .entry .out.md h3 { font-size: 1em; margin: 0.4rem 0 0.2rem; }
+/* Materialized /views page, embedded compact under the reply that made it. */
+.viewembed { margin: 0.4rem 0 0.75rem; }
+.viewembed iframe { width: 100%; max-height: 360px; border: 1px solid var(--line);
+                     border-radius: var(--radius-md); }
+.viewembed a { display: inline-block; margin-top: 0.25rem; font-size: 0.78rem;
+               color: var(--accent-strong); }
 """
 
 _HELP = (
@@ -80,6 +86,16 @@ function entry(input) {
   return div.querySelector(".out");
 }
 
+// Matches a /views/{id} path in already-rendered HTML, but not one that is
+// already the href of a link (dbbasicMarkdown may have linkified it itself
+// from markdown link syntax) -- so linkifyViews() never nests an <a> inside
+// an existing href attribute.
+const VIEWS_PATH_RE = /(?<!href=")\/views\/[A-Za-z0-9_-]+/g;
+
+function linkifyViews(html) {
+  return html.replace(VIEWS_PATH_RE, (path) => `<a href="${path}">${path}</a>`);
+}
+
 function finish(out, text, {err = false, tools = null, markdown = false} = {}) {
   out.classList.remove("pending");
   out.classList.toggle("err", err);
@@ -88,7 +104,17 @@ function finish(out, text, {err = false, tools = null, markdown = false} = {}) {
   // second markdown implementation.
   if (markdown) {
     out.classList.add("md");
-    out.innerHTML = window.dbbasicMarkdown ? window.dbbasicMarkdown(text) : esc(text);
+    out.innerHTML = linkifyViews(window.dbbasicMarkdown ? window.dbbasicMarkdown(text) : esc(text));
+    // A materialized page is worth more than a link: embed it right under
+    // the reply, small, with an escape hatch to the full page.
+    const viewMatch = String(text ?? "").match(/\/views\/[A-Za-z0-9_-]+/);
+    if (viewMatch) {
+      const path = viewMatch[0].replace(/[.,;:)]+$/, "");
+      const embed = document.createElement("div");
+      embed.className = "viewembed";
+      embed.innerHTML = `<iframe src="${path}"></iframe><a href="${path}" target="_blank" rel="noopener">open ↗</a>`;
+      out.insertAdjacentElement("afterend", embed);
+    }
   } else { out.textContent = text; }
   if (tools && tools.length) {
     const info = document.createElement("div");
@@ -107,6 +133,8 @@ function stripForSpeech(text) {
     .replace(/`[^`]*`/g, " ")
     .replace(/!\\[[^\\]]*\\]\\([^)]*\\)/g, " ")
     .replace(/\\[([^\\]]*)\\]\\([^)]*\\)/g, "$1")
+    .replace(/https?:\\/\\/\\S+/g, " ")
+    .replace(/\\/views\\/\\S+/g, " ")
     .replace(/[*_#>~]/g, " ")
     .replace(/\\s+/g, " ")
     .trim()

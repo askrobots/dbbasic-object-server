@@ -1,8 +1,8 @@
 {
   "id": "app-shell",
   "name": "Shell",
-  "version": "0.1.0",
-  "description": "The talk-to-everything terminal: prefix commands create records, bare text goes to AI chat with the user's model and MCP tool subset.",
+  "version": "0.2.0",
+  "description": "The talk-to-everything terminal: prefix commands create records, bare text goes to AI chat with the user's model and MCP tool subset. Talk is the same conversation projected as a voice-first stage.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
@@ -10,6 +10,10 @@
     {
       "id": "site_shell",
       "path": "objects/site/shell.py"
+    },
+    {
+      "id": "site_talk",
+      "path": "objects/site/talk.py"
     }
   ],
   "schemas": [

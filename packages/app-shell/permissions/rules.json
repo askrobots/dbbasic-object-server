@@ -25,6 +25,13 @@
     },
     {
       "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_talk",
+      "reason": "the talk page is public; it shows a sign-in prompt to visitors, same as the shell"
+    },
+    {
+      "effect": "allow",
       "principal": "registered",
       "actions": ["read"],
       "collection": "ai_usage",
