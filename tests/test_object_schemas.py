@@ -296,6 +296,80 @@ def test_manual_schema_rejects_invalid_field_name(tmp_path):
         object_schemas.get_schema("invoices", base_dir=data_dir, roots=[])
 
 
+def test_get_schema_accepts_guarded_transition_entries(tmp_path):
+    data_dir = tmp_path / "data"
+    write_schema(
+        data_dir,
+        "tasks",
+        {
+            "fields": [
+                {"name": "id"},
+                {
+                    "name": "status",
+                    "type": "enum",
+                    "enum": ["open", "closed"],
+                    "transitions": {
+                        "open": [{"to": "closed", "when": {"owner_id": "$user_id"}}],
+                        "closed": ["open"],
+                    },
+                },
+            ]
+        },
+    )
+
+    schema = object_schemas.get_schema("tasks", base_dir=data_dir, roots=[])
+
+    status_field = next(f for f in schema["fields"] if f["name"] == "status")
+    assert status_field["transitions"] == {
+        "open": [{"to": "closed", "when": {"owner_id": "$user_id"}}],
+        "closed": ["open"],
+    }
+
+
+def test_manual_schema_rejects_transition_entry_missing_to(tmp_path):
+    data_dir = tmp_path / "data"
+    write_schema(
+        data_dir,
+        "tasks",
+        {
+            "fields": [
+                {"name": "id"},
+                {
+                    "name": "status",
+                    "type": "enum",
+                    "transitions": {"open": [{"when": {"owner_id": "$user_id"}}]},
+                },
+            ]
+        },
+    )
+
+    with pytest.raises(ValueError, match="'to'"):
+        object_schemas.get_schema("tasks", base_dir=data_dir, roots=[])
+
+
+def test_manual_schema_rejects_non_string_when_values(tmp_path):
+    data_dir = tmp_path / "data"
+    write_schema(
+        data_dir,
+        "tasks",
+        {
+            "fields": [
+                {"name": "id"},
+                {
+                    "name": "status",
+                    "type": "enum",
+                    "transitions": {
+                        "open": [{"to": "closed", "when": {"owner_id": 42}}]
+                    },
+                },
+            ]
+        },
+    )
+
+    with pytest.raises(ValueError, match="'when' values"):
+        object_schemas.get_schema("tasks", base_dir=data_dir, roots=[])
+
+
 # --- Perf pass: schema cache ---
 
 

@@ -57,6 +57,24 @@ code, versioned and rolled back through the normal schema history.
 
   Form UIs can offer only the moves allowed from the record's current
   value; the server rejects everything else either way.
+
+  A list entry can also be a guarded object instead of a plain string,
+  adding *who* on top of *whether*:
+
+  ```json
+  {"transitions": {
+    "assigned": [{"to": "open", "when": {"assigned_to": "$user_id"}}]
+  }}
+  ```
+
+  The move is allowed only once every `when` clause matches the record's
+  current stored values against the resolved subject variable
+  (`$user_id`, `$account_id`, `$accessible_projects`, `$owned_projects`,
+  `$writable_projects`) or a literal string — the same closed set and
+  matching rules row filters use (see docs/permissions-model.md). Guards
+  are only evaluated where a request subject is available (the HTTP
+  update path); direct library callers still get the plain validity
+  check (the move's `to` must be in the list) but not the guard.
 - `relation` — a validated pointer to another collection:
 
   ```json

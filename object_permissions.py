@@ -40,9 +40,10 @@ RULE_EFFECTS = frozenset({"allow", "deny"})
 class PermissionSubject:
     """The authenticated actor being checked.
 
-    ``project_ids`` are the projects shared with this subject, resolved by
-    the server from grant records before checks run — the engine itself
-    stays pure and does no IO.
+    ``project_ids`` are the projects shared with this subject and
+    ``writable_project_ids`` narrows that to grants with ``permission ==
+    "write"``; both are resolved by the server from grant records before
+    checks run — the engine itself stays pure and does no IO.
     """
 
     user_id: str | None = None
@@ -51,6 +52,7 @@ class PermissionSubject:
     subscriptions: tuple[str, ...] = ()
     project_ids: tuple[str, ...] = ()
     owned_project_ids: tuple[str, ...] = ()
+    writable_project_ids: tuple[str, ...] = ()
 
     @classmethod
     def anonymous(cls) -> "PermissionSubject":
@@ -64,11 +66,13 @@ class PermissionSubject:
         self,
         project_ids: Iterable[str],
         owned_project_ids: Iterable[str] = (),
+        writable_project_ids: Iterable[str] = (),
     ) -> "PermissionSubject":
         return replace(
             self,
             project_ids=tuple(project_ids),
             owned_project_ids=tuple(owned_project_ids),
+            writable_project_ids=tuple(writable_project_ids),
         )
 
 
@@ -304,6 +308,9 @@ def subject_from_dict(payload: Mapping[str, Any] | None) -> PermissionSubject:
         owned_project_ids=_string_tuple(
             payload.get("owned_project_ids", ()), "subject.owned_project_ids"
         ),
+        writable_project_ids=_string_tuple(
+            payload.get("writable_project_ids", ()), "subject.writable_project_ids"
+        ),
     )
 
 
@@ -455,6 +462,21 @@ def subject_roles(subject: PermissionSubject, policy: PermissionPolicy) -> froze
 def subject_has_admin_role(subject: PermissionSubject, policy: PermissionPolicy) -> bool:
     """Return True when the subject has one of the policy admin roles."""
     return _has_admin_role(_subject_roles(subject, policy), policy)
+
+
+def record_matches_filter(
+    record: Mapping[str, Any],
+    row_filter: Mapping[str, Any],
+    subject: PermissionSubject,
+) -> bool:
+    """Return True when a record's stored values satisfy a filter/guard.
+
+    Shared by row filters and schema transition guards: every key
+    resolves its expected value through the same closed set of
+    $-variables (see ``_resolve_filter_value``) or treats it as a
+    literal string. An empty stored field never matches a $-variable.
+    """
+    return _record_matches_filter(record, row_filter, subject)
 
 
 def principal_matches(
@@ -677,6 +699,8 @@ def _resolve_filter_value(value: Any, subject: PermissionSubject) -> Any:
         return tuple(subject.project_ids)
     if value == "$owned_projects":
         return tuple(subject.owned_project_ids)
+    if value == "$writable_projects":
+        return tuple(subject.writable_project_ids)
     return value
 
 

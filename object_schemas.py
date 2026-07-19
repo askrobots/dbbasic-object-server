@@ -420,7 +420,6 @@ def _normalize_field(payload: Any, *, schema: str) -> dict[str, Any]:
         "validation",
         "default",
         "enum",
-        "transitions",
         "computed",
         "read_only",
         "readonly",
@@ -435,8 +434,83 @@ def _normalize_field(payload: Any, *, schema: str) -> dict[str, Any]:
     for key in metadata_keys:
         if key in payload:
             field[key] = _json_compatible(payload[key], field_name=f"{schema}.{name}.{key}")
+    if "transitions" in payload:
+        field["transitions"] = _normalize_transitions(
+            payload["transitions"], field_name=f"{schema}.{name}.transitions"
+        )
 
     return field
+
+
+def _normalize_transitions(value: Any, *, field_name: str) -> dict[str, list[Any]]:
+    """Normalize a field's ``transitions`` map, validating the new guarded shape.
+
+    Each current-value key maps to a list where an entry is either a plain
+    string (allowed for any caller who may update the record) or an object
+    ``{"to": "<value>", "when": {<field>: <$var or literal>, ...}}`` whose
+    move is only allowed once a subject is available and every ``when``
+    clause matches (see object_records._validate_field_transitions). This
+    only validates shape; the closed set of $-variables is resolved later,
+    against the record and subject, by object_permissions.
+    """
+    if not isinstance(value, Mapping):
+        raise ValueError(f"Schema field '{field_name}' must be an object")
+
+    normalized: dict[str, list[Any]] = {}
+    for from_value, entries in value.items():
+        if not isinstance(from_value, str):
+            raise ValueError(f"Schema field '{field_name}' keys must be strings")
+        if not isinstance(entries, list):
+            raise ValueError(f"Schema field '{field_name}[{from_value!r}]' must be a list")
+
+        normalized_entries: list[Any] = []
+        for entry in entries:
+            if isinstance(entry, str):
+                normalized_entries.append(entry)
+                continue
+            if isinstance(entry, Mapping):
+                to_value = entry.get("to")
+                if not isinstance(to_value, str) or not to_value:
+                    raise ValueError(
+                        f"Schema field '{field_name}[{from_value!r}]' entry is missing a "
+                        "string 'to' value"
+                    )
+                normalized_entry: dict[str, Any] = {"to": to_value}
+                if "when" in entry:
+                    when = entry["when"]
+                    if not isinstance(when, Mapping) or not when:
+                        raise ValueError(
+                            f"Schema field '{field_name}[{from_value!r}]' 'when' must be a "
+                            "non-empty object"
+                        )
+                    normalized_when: dict[str, str] = {}
+                    for when_key, when_value in when.items():
+                        if not isinstance(when_key, str) or not when_key:
+                            raise ValueError(
+                                f"Schema field '{field_name}[{from_value!r}]' 'when' keys "
+                                "must be non-empty strings"
+                            )
+                        if not isinstance(when_value, str) or not when_value:
+                            raise ValueError(
+                                f"Schema field '{field_name}[{from_value!r}]' 'when' values "
+                                "must be non-empty strings"
+                            )
+                        normalized_when[when_key] = when_value
+                    normalized_entry["when"] = normalized_when
+                extra_keys = sorted(set(entry.keys()) - {"to", "when"})
+                if extra_keys:
+                    raise ValueError(
+                        f"Schema field '{field_name}[{from_value!r}]' has unexpected keys: "
+                        f"{extra_keys}"
+                    )
+                normalized_entries.append(normalized_entry)
+                continue
+            raise ValueError(
+                f"Schema field '{field_name}[{from_value!r}]' entries must be strings or objects"
+            )
+        normalized[from_value] = normalized_entries
+
+    return normalized
 
 
 def _schema_root(base_dir: Path) -> Path:

@@ -2,7 +2,7 @@
   "id": "app-settings",
   "name": "Settings",
   "version": "0.1.0",
-  "description": "user_prefs (per-user, owner-scoped settings) and feature_flags (instance-level toggles) per docs/upgrade-and-customization.md Rule 5. Effective flag value = user override (a user_prefs key of \"flag:<name>\") -> instance feature_flags value, resolved by GET /api/flags.",
+  "description": "user_prefs (per-user, owner-scoped settings) and feature_flags (instance-level toggles) per docs/upgrade-and-customization.md Rule 5. Effective flag value = user override (a user_prefs key of \"flag:<name>\") -> instance feature_flags value, resolved by GET /api/flags. Also ai_prices: instance-level, live-editable per-model AI pricing that object_ai's cost recording looks up instead of hardcoding.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
@@ -15,6 +15,10 @@
     {
       "collection": "feature_flags",
       "path": "schemas/feature_flags.json"
+    },
+    {
+      "collection": "ai_prices",
+      "path": "schemas/ai_prices.json"
     }
   ],
   "permissions": [
@@ -22,6 +26,11 @@
       "path": "permissions/rules.json"
     }
   ],
-  "seed": [],
+  "seed": [
+    {
+      "collection": "ai_prices",
+      "path": "seed/ai_prices.tsv"
+    }
+  ],
   "migrations": []
 }

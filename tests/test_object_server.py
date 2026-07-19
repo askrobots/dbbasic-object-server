@@ -4500,6 +4500,158 @@ def test_collection_record_update_enforcement_checks_existing_and_candidate(tmp_
     assert other_payload == {"status": "error", "error": "no matching role rule", "code": "forbidden"}
 
 
+def write_schema(data_dir, collection, fields):
+    path = data_dir / "schemas" / f"{collection}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"fields": fields}))
+    return path
+
+
+def test_collection_record_update_enforces_transition_guard_through_http(tmp_path, monkeypatch):
+    """FEATURE 1: a guarded transition ({"to": ..., "when": {...}}) is
+    checked against the already-resolved request subject on the HTTP
+    update path -- on top of, not instead of, the row-filtered update
+    right the policy already grants."""
+    data_dir = tmp_path / "data"
+    write_schema(
+        data_dir,
+        "tickets",
+        [
+            {"name": "id"},
+            {"name": "owner_id"},
+            {
+                "name": "status",
+                "type": "enum",
+                "enum": ["open", "closed"],
+                "transitions": {"open": [{"to": "closed", "when": {"owner_id": "$user_id"}}]},
+            },
+        ],
+    )
+    write_records(data_dir, "tickets", "id\towner_id\tstatus\nt1\t7\topen\n")
+    save_permission_policy(
+        data_dir,
+        {
+            "access_mode": "role_based",
+            "rules": [
+                {
+                    "effect": "allow",
+                    "principal": "registered",
+                    "actions": ["update"],
+                    "collection": "tickets",
+                }
+            ],
+        },
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+    monkeypatch.setenv(object_server.PERMISSION_TRUST_HEADERS_ENV, "true")
+    enable_admin_token(monkeypatch)
+
+    denied_status, _, denied_payload = request(
+        "/collections/tickets/records/t1",
+        method="PUT",
+        body=json.dumps({"status": "closed"}).encode("utf-8"),
+        headers=[("x-dbbasic-user-id", "8")],
+    )
+
+    assert denied_status == 403
+    assert denied_payload["code"] == "forbidden"
+    assert "cannot move from 'open' to 'closed'" in denied_payload["error"]
+
+    allowed_status, _, allowed_payload = request(
+        "/collections/tickets/records/t1",
+        method="PUT",
+        body=json.dumps({"status": "closed"}).encode("utf-8"),
+        headers=[("x-dbbasic-user-id", "7")],
+    )
+
+    assert allowed_status == 200
+    assert allowed_payload["record"]["status"] == "closed"
+
+
+def test_writable_projects_resolves_from_write_grants_for_row_filter_and_guard(
+    tmp_path, monkeypatch
+):
+    """FEATURE 2: $writable_projects narrows $accessible_projects to
+    project_access rows with permission == "write", and it works both as
+    a plain row filter and inside a transition guard's "when" clause."""
+    data_dir = tmp_path / "data"
+    write_schema(
+        data_dir,
+        "docs",
+        [
+            {"name": "id"},
+            {"name": "project_id"},
+            {
+                "name": "status",
+                "type": "enum",
+                "enum": ["draft", "published"],
+                "transitions": {
+                    "draft": [{"to": "published", "when": {"project_id": "$writable_projects"}}]
+                },
+            },
+        ],
+    )
+    write_records(
+        data_dir,
+        "docs",
+        "id\tproject_id\tstatus\nd1\tp1\tdraft\nd2\tp2\tdraft\n",
+    )
+    write_records(
+        data_dir,
+        "project_access",
+        "id\tproject_id\tuser_id\tpermission\n"
+        "g1\tp1\t7\twrite\n"
+        "g2\tp2\t7\tread\n",
+    )
+    save_permission_policy(
+        data_dir,
+        {
+            "access_mode": "role_based",
+            "rules": [
+                {
+                    "effect": "allow",
+                    "principal": "registered",
+                    "actions": ["read", "update"],
+                    "collection": "docs",
+                    "row_filter": {"project_id": "$writable_projects"},
+                }
+            ],
+        },
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+    monkeypatch.setenv(object_server.PERMISSION_TRUST_HEADERS_ENV, "true")
+    enable_admin_token(monkeypatch)
+    headers = [("x-dbbasic-user-id", "7")]
+
+    # Row filter: only the write-granted project's doc is visible.
+    list_status, _, list_payload = request("/collections/docs/records", headers=headers)
+    assert list_status == 200
+    assert [row["id"] for row in list_payload["records"]] == ["d1"]
+
+    # Guard: publishing the write-granted doc succeeds...
+    allowed_status, _, allowed_payload = request(
+        "/collections/docs/records/d1",
+        method="PUT",
+        body=json.dumps({"status": "published"}).encode("utf-8"),
+        headers=headers,
+    )
+    assert allowed_status == 200
+    assert allowed_payload["record"]["status"] == "published"
+
+    # ...but the read-only-granted project's doc is not even reachable for
+    # update (row filter denies it before the guard is ever evaluated).
+    denied_status, _, denied_payload = request(
+        "/collections/docs/records/d2",
+        method="PUT",
+        body=json.dumps({"status": "published"}).encode("utf-8"),
+        headers=headers,
+    )
+    assert denied_status == 403
+    assert denied_payload["code"] == "forbidden"
+
+
 def test_collection_record_delete_enforcement_uses_row_filter(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     write_records(data_dir, "contacts", "id\tname\towner_id\nc1\tAda\t7\nc2\tBob\t8\n")

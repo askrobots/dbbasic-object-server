@@ -23,6 +23,7 @@ from typing import Any, Iterable
 import object_collections
 import object_correlation
 import object_ids
+import object_permissions
 import object_record_changes
 import object_schemas
 from object_versions import DEFAULT_DATA_DIR
@@ -274,6 +275,17 @@ class DuplicateRecordIdError(ValueError):
 
 class InvalidRecordPayloadError(ValueError):
     """Raised when a record write payload is not usable."""
+
+
+class TransitionNotAllowedError(InvalidRecordPayloadError):
+    """Raised when a transition's value is valid but its guard denies the subject.
+
+    Subclasses InvalidRecordPayloadError so callers that don't distinguish
+    the two keep working (still a 400-shaped payload error); callers that
+    plumb a subject into update_collection_record (see
+    _validate_field_transitions) can catch this specifically to report a
+    permission-style 403 instead.
+    """
 
 
 def validate_record_id(record_id: str) -> bool:
@@ -537,12 +549,20 @@ def update_collection_record(
     base_dir: Path | str = DEFAULT_DATA_DIR,
     roots: Iterable[Path] | None = None,
     actor: str | None = None,
+    transition_subject: object_permissions.PermissionSubject | None = None,
 ) -> dict[str, str]:
     """Update one existing record by id and return the stored row.
 
     See create_collection_record for the attribution contract: every
     successful update is durably attributed, defaulting to
     ``"unattributed"`` when the caller doesn't identify itself.
+
+    ``transition_subject`` is optional and only affects schema-declared
+    transition guards (see _validate_field_transitions). The HTTP update
+    path resolves the request subject once permissions have already run
+    and passes it through here; direct library callers (daemon, CLI,
+    tests) that don't pass one are trusted callers -- guarded moves are
+    still checked for validity, just not for who is making them.
     """
     _ensure_collection_known(collection, base_dir=base_dir, roots=roots)
     if not validate_record_id(record_id):
@@ -590,6 +610,7 @@ def update_collection_record(
             updated,
             base_dir=base_dir,
             roots=roots,
+            subject=transition_subject,
         )
         updated = _canonicalize_schema_values(
             collection, updated, base_dir=base_dir, roots=roots
@@ -2808,18 +2829,37 @@ def _validate_field_transitions(
     *,
     base_dir: Path | str,
     roots: Iterable[Path] | None,
+    subject: object_permissions.PermissionSubject | None = None,
 ) -> None:
     """Enforce declared value transitions on update.
 
-    A field may declare which values each current value can move to:
+    A field may declare which values each current value can move to. Each
+    list entry is either a plain string, allowed for any caller who may
+    update the record, or a guarded object:
 
         {"name": "status", "type": "enum", "enum": [...],
-         "transitions": {"open": ["assigned", "cancelled"], ...}}
+         "transitions": {
+             "open": ["assigned", {"to": "cancelled", "when": {"owner_id": "$user_id"}}],
+             ...
+         }}
+
+    A guarded move is allowed only once every ``when`` clause matches the
+    record's CURRENT stored values (``existing``, before this update)
+    against the resolved subject variable or literal -- the same closed
+    set and matching rules row filters use (see
+    object_permissions.record_matches_filter).
 
     This is deliberately data plus one check — not a state machine
     framework: no hooks, no side effects, no transition callbacks. A
     current value missing from the map cannot change; an empty existing
     value may move anywhere.
+
+    Guards are enforced only when ``subject`` is supplied. The HTTP update
+    path resolves and plumbs the request subject once permissions have
+    already run (see update_collection_record); direct library callers
+    with no subject -- daemon, CLI, tests -- are trusted callers: a
+    guarded move is still checked for validity (its "to" is in the list)
+    but the "when" clause is not enforced.
     """
     fields = _schema_fields(collection, base_dir=base_dir, roots=roots)
     for field in fields:
@@ -2831,14 +2871,46 @@ def _validate_field_transitions(
         new_value = updated.get(name, "")
         if old_value == new_value or _is_empty(old_value):
             continue
-        allowed = transitions.get(old_value)
-        allowed_values = [str(item) for item in allowed] if isinstance(allowed, list) else []
-        if new_value not in allowed_values:
-            options = ", ".join(allowed_values) if allowed_values else "none"
-            raise InvalidRecordPayloadError(
+
+        entries = transitions.get(old_value)
+        entries = entries if isinstance(entries, list) else []
+
+        allowed_values: list[str] = []
+        move_is_valid = False
+        guard_failed = False
+        for entry in entries:
+            if isinstance(entry, str):
+                to_value, when = entry, None
+            elif isinstance(entry, dict):
+                to_value, when = str(entry.get("to", "")), entry.get("when") or {}
+            else:
+                continue
+
+            if to_value and to_value not in allowed_values:
+                allowed_values.append(to_value)
+            if to_value != new_value:
+                continue
+
+            if when is None or subject is None:
+                move_is_valid = True
+            elif object_permissions.record_matches_filter(existing, when, subject):
+                move_is_valid = True
+            else:
+                guard_failed = True
+
+        if move_is_valid:
+            continue
+
+        options = ", ".join(allowed_values) if allowed_values else "none"
+        if guard_failed:
+            raise TransitionNotAllowedError(
                 f"Record field '{name}' cannot move from '{old_value}' to "
-                f"'{new_value}' (allowed: {options})"
+                f"'{new_value}' for this subject (allowed: {options})"
             )
+        raise InvalidRecordPayloadError(
+            f"Record field '{name}' cannot move from '{old_value}' to "
+            f"'{new_value}' (allowed: {options})"
+        )
 
 
 def _canonicalize_schema_values(

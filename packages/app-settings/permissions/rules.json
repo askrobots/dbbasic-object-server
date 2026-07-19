@@ -14,6 +14,13 @@
       "actions": ["read"],
       "collection": "feature_flags",
       "reason": "signed-in users can read feature flags"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["read"],
+      "collection": "ai_prices",
+      "reason": "signed-in users can read AI pricing (e.g. to show estimated cost before sending a chat); only admins can edit prices"
     }
   ]
 }

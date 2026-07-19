@@ -1,0 +1,55 @@
+{
+  "name": "ai_prices",
+  "title": "AI Model Prices",
+  "version": 1,
+  "description": "Per-model provider pricing for AI chat cost recording. Editable live like any other record -- object_ai never hardcodes a price table, so a stale entry here is a data-entry fix, not a code change.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "provider",
+      "type": "text",
+      "required": true,
+      "label": "Provider",
+      "help": "anthropic, openai, ..."
+    },
+    {
+      "name": "model",
+      "type": "text",
+      "required": true,
+      "label": "Model"
+    },
+    {
+      "name": "input_per_million_cents",
+      "type": "int",
+      "required": true,
+      "label": "Input cents / 1M tokens",
+      "help": "Integer cents only -- never a float for money"
+    },
+    {
+      "name": "output_per_million_cents",
+      "type": "int",
+      "required": true,
+      "label": "Output cents / 1M tokens",
+      "help": "Integer cents only -- never a float for money"
+    },
+    {
+      "name": "effective_date",
+      "type": "date",
+      "required": true,
+      "label": "Effective Date",
+      "help": "When this price took effect; lookups use the most recent row for a (provider, model) pair"
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["provider", "model", "input_per_million_cents", "output_per_million_cents", "effective_date"]}
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["provider", "model", "input_per_million_cents", "output_per_million_cents", "effective_date"]
+  },
+  "search": {
+    "fields": ["provider", "model"]
+  }
+}

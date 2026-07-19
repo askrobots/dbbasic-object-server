@@ -1,8 +1,8 @@
 {
   "name": "tasks",
   "title": "Tasks",
-  "version": 4,
-  "description": "Work items with an enforced status lifecycle.",
+  "version": 5,
+  "description": "Work items with an enforced status lifecycle. Transition guards add who-per-verb on top of row-filtered update rights.",
   "fields": [
     {
       "name": "id"
@@ -31,13 +31,31 @@
       "default": "open",
       "enum": ["draft", "open", "assigned", "waiting_on_client", "approved", "disputed", "cancelled"],
       "transitions": {
-        "draft": ["open", "assigned", "cancelled"],
-        "open": ["assigned", "cancelled"],
-        "assigned": ["waiting_on_client", "open", "cancelled"],
-        "waiting_on_client": ["approved", "disputed", "assigned"],
-        "disputed": ["assigned", "cancelled"]
+        "draft": [
+          {"to": "open", "when": {"owner_id": "$user_id"}},
+          {"to": "assigned", "when": {"owner_id": "$user_id"}},
+          {"to": "cancelled", "when": {"owner_id": "$user_id"}}
+        ],
+        "open": [
+          "assigned",
+          {"to": "cancelled", "when": {"owner_id": "$user_id"}}
+        ],
+        "assigned": [
+          {"to": "waiting_on_client", "when": {"assigned_to": "$user_id"}},
+          {"to": "open", "when": {"assigned_to": "$user_id"}},
+          {"to": "cancelled", "when": {"owner_id": "$user_id"}}
+        ],
+        "waiting_on_client": [
+          {"to": "approved", "when": {"owner_id": "$user_id"}},
+          {"to": "disputed", "when": {"owner_id": "$user_id"}},
+          "assigned"
+        ],
+        "disputed": [
+          {"to": "assigned", "when": {"owner_id": "$user_id"}},
+          {"to": "cancelled", "when": {"owner_id": "$user_id"}}
+        ]
       },
-      "help": "approved and cancelled are terminal"
+      "help": "approved and cancelled are terminal. draft moves and cancelling require the task owner; returning or submitting an assigned task requires the current assignee; resolving waiting_on_client or a dispute requires the owner. Anyone with update rights may accept an open task."
     },
     {
       "name": "urgency",

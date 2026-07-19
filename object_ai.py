@@ -322,6 +322,41 @@ class _OpenAIProvider:
             )
 
 
+def select_price_row(
+    rows: list[dict[str, Any]], *, provider: str, model: str
+) -> dict[str, Any] | None:
+    """Pick the most recent ai_prices row for (provider, model), or None.
+
+    "Most recent" is the matching row with the greatest ``effective_date``
+    (ISO 8601 strings sort lexicographically). Prices are ordinary records —
+    editable live, never hardcoded — so a missing row is expected, not an
+    error; the caller decides what that means (it records tokens with a
+    null cost rather than failing the chat).
+    """
+    candidates = [
+        row for row in rows if row.get("provider") == provider and row.get("model") == model
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda row: row.get("effective_date") or "")
+
+
+def compute_cost_cents(
+    tokens_in: int, tokens_out: int, price_row: dict[str, Any] | None
+) -> int | None:
+    """Integer-cent cost for a turn, or None when there is no price row.
+
+    Money math stays in integer cents throughout: each side is
+    ``tokens * per_million_cents // 1_000_000`` (integer division), summed
+    after rounding down separately -- never a float division on money.
+    """
+    if price_row is None:
+        return None
+    input_rate = int(price_row.get("input_per_million_cents") or 0)
+    output_rate = int(price_row.get("output_per_million_cents") or 0)
+    return (tokens_in * input_rate // 1_000_000) + (tokens_out * output_rate // 1_000_000)
+
+
 def _json_or_error(status: int, body: bytes) -> dict[str, Any]:
     try:
         payload = json.loads(body.decode("utf-8"))

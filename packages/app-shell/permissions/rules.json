@@ -22,6 +22,14 @@
       "actions": ["execute"],
       "object_id": "site_shell",
       "reason": "the shell page is public; it shows a sign-in prompt to visitors"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["read"],
+      "collection": "ai_usage",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "each user can see their own AI token/cost history; only the chat handler writes it"
     }
   ]
 }

@@ -19,9 +19,9 @@ import signal
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from dbbasic_object_core.runtime.object_runtime import ObjectRuntime
@@ -31,7 +31,9 @@ try:
 except ImportError:
     croniter = None
 
+import object_collections
 import object_events
+import object_record_changes
 import object_records
 from object_execution import ObjectExecutionFailure, ObjectExecutionRequest, execute_object
 from object_namespace import find_trigger_file, get_object_roots, resolve_object_id
@@ -50,6 +52,28 @@ COMPACTION_BLOAT_RATIO_ENV = "DBBASIC_COMPACTION_BLOAT_RATIO"
 _DEFAULT_COMPACTION_INTERVAL_SECONDS = 3600
 _DEFAULT_COMPACTION_BLOAT_RATIO = 1.0
 COMPACTION_MARKER_NAME = ".compaction_last_run"
+
+# Stale-state auto-transition pass. The predecessor system's "48-hour
+# auto-approve" job (waiting_on_client -> approved on tasks) was written
+# but never scheduled anywhere, silently stranding 200+ records in a
+# waiting state forever. To make that class of mistake impossible here,
+# this pass ships ON by default -- see _DEFAULT_AUTO_TRANSITION_RULES --
+# and requires no setup beyond running the daemon. See
+# process_stale_transitions.
+AUTO_TRANSITION_RULES_ENV = "DBBASIC_AUTO_TRANSITION_RULES"
+AUTO_TRANSITION_INTERVAL_SECONDS_ENV = "DBBASIC_AUTO_TRANSITION_INTERVAL_SECONDS"
+_DEFAULT_AUTO_TRANSITION_INTERVAL_SECONDS = 3600
+AUTO_TRANSITION_MARKER_NAME = ".auto_transition_last_run"
+AUTO_TRANSITION_ACTOR = "daemon:auto-transition"
+_DEFAULT_AUTO_TRANSITION_RULES = json.dumps([
+    {"collection": "tasks", "field": "status", "from": "waiting_on_client",
+     "to": "approved", "after_hours": 48},
+])
+
+# Collections named in a rule but not found on disk (the owning package
+# isn't installed) are logged once per process, not once per poll --
+# see _apply_auto_transition_rule.
+_WARNED_UNKNOWN_AUTO_TRANSITION_COLLECTIONS: set[str] = set()
 
 
 def log(msg, level='INFO'):
@@ -509,6 +533,310 @@ def process_compactions(*, base_dir: Path | str = "data") -> dict | None:
     return {"checked": len(stats), "compacted": compacted}
 
 
+# --- Stale-state auto-transition ---
+
+def auto_transition_rules_from_env() -> list[dict]:
+    """Parse DBBASIC_AUTO_TRANSITION_RULES into a list of clean rule dicts.
+
+    Unset -> _DEFAULT_AUTO_TRANSITION_RULES (tasks' waiting_on_client ->
+    approved after 48h). Set to "" or "[]" -> [] (the pass runs every
+    interval, finds nothing configured, and logs a zero-work summary
+    line rather than silently vanishing -- see process_stale_transitions).
+    A malformed entry (missing string field, unparseable after_hours) is
+    dropped with a warning rather than aborting the whole list; a
+    malformed *list* (bad JSON, not a JSON array) disables every rule and
+    is logged loudly, since silently falling back to the default here
+    would hide a real configuration mistake.
+    """
+    raw = os.environ.get(AUTO_TRANSITION_RULES_ENV)
+    if raw is None:
+        raw = _DEFAULT_AUTO_TRANSITION_RULES
+    text = raw.strip()
+    if not text:
+        return []
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as e:
+        log(f"Auto-transition: {AUTO_TRANSITION_RULES_ENV} is not valid JSON, disabling: {e}", "ERROR")
+        return []
+    if not isinstance(parsed, list):
+        log(f"Auto-transition: {AUTO_TRANSITION_RULES_ENV} must be a JSON list, disabling", "ERROR")
+        return []
+
+    rules = []
+    for entry in parsed:
+        if not isinstance(entry, dict):
+            log(f"Auto-transition: skipping non-object rule: {entry!r}", "WARN")
+            continue
+        collection = entry.get("collection")
+        field = entry.get("field")
+        from_value = entry.get("from")
+        to_value = entry.get("to")
+        if not all(isinstance(v, str) and v for v in (collection, field, from_value, to_value)):
+            log(f"Auto-transition: skipping malformed rule (missing collection/field/from/to): {entry!r}", "WARN")
+            continue
+        try:
+            after_hours = float(entry.get("after_hours"))
+        except (TypeError, ValueError):
+            log(f"Auto-transition: skipping rule with invalid after_hours: {entry!r}", "WARN")
+            continue
+        rules.append({
+            "collection": collection,
+            "field": field,
+            "from": from_value,
+            "to": to_value,
+            "after_hours": after_hours,
+        })
+    return rules
+
+
+def _parse_iso_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _latest_field_entry_timestamps(
+    collection: str, field: str, from_value: str, *, base_dir: Path | str
+) -> dict[str, str]:
+    """Best-effort record id -> timestamp of the most recent change that
+    set `field` to `from_value`, built from ONE sequential read of the
+    collection's record-change log (object_record_changes.CHANGES_FILE).
+
+    This is the most accurate signal available for "how long has this
+    record been sitting in this state": it answers exactly the question
+    the FSM cares about, unlike a record's own `created_at` (when the row
+    was first made, not when it entered THIS state) or a generic
+    `updated_at` (bumped by any field edit, not just this one). It only
+    stays cheap because it is read once per rule per pass -- not once per
+    candidate record -- and the log is append-ordered, so a later entry
+    for the same id simply overwrites an earlier one as this walks the
+    file forward, leaving the most recent one behind.
+
+    Returns {} when the log doesn't exist yet or can't be read; callers
+    fall back to the record's own fields in that case (see
+    _record_age_seconds).
+    """
+    try:
+        path = object_record_changes.record_changes_file(collection, base_dir=base_dir)
+    except object_collections.InvalidCollectionNameError:
+        return {}
+    if not path.exists():
+        return {}
+
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return {}
+
+    timestamps: dict[str, str] = {}
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        after = entry.get("after")
+        if not isinstance(after, dict) or after.get(field) != from_value:
+            continue
+        record_id = entry.get("record_id")
+        timestamp = entry.get("timestamp")
+        if isinstance(record_id, str) and isinstance(timestamp, str):
+            timestamps[record_id] = timestamp
+    return timestamps
+
+
+def _record_age_seconds(
+    record: dict[str, str],
+    record_id: str,
+    change_timestamps: dict[str, str],
+    *,
+    now: datetime,
+) -> float | None:
+    """Return how long `record` has held its current value, in seconds, or
+    None when no usable timestamp exists at all (caller skips the record
+    rather than guessing).
+
+    Preference order, documented honestly: the record-change log's entry
+    for the change that set this record's field to its current value
+    (most accurate -- see _latest_field_entry_timestamps), then an
+    explicit `updated_at` field on the record itself (cheap, no schema in
+    this codebase declares one yet, but a future one might), then
+    `created_at` (tasks.json's only timestamp field today -- a real but
+    honestly-worse proxy, since it marks row creation, not state entry).
+    """
+    for source in (
+        change_timestamps.get(record_id),
+        record.get("updated_at"),
+        record.get("created_at"),
+    ):
+        parsed = _parse_iso_timestamp(source)
+        if parsed is not None:
+            return (now - parsed).total_seconds()
+    return None
+
+
+def _apply_auto_transition_rule(rule: dict, *, base_dir: Path | str) -> int:
+    """Apply one rule and return the count of records actually moved.
+
+    Every failure mode here is a skip, never an abort: an unknown
+    collection (the owning package isn't installed) is logged once and
+    skipped; a record with no usable timestamp is skipped; a record whose
+    live value has already moved on since it was listed is skipped; and a
+    write rejected by the schema (e.g. a transitions map that no longer
+    allows this move) is logged and skipped, matching process_compactions'
+    per-item isolation posture -- one bad record must never stop the rest
+    of the rule, and one bad rule must never stop the rest of the pass.
+    """
+    collection = rule["collection"]
+    field = rule["field"]
+    from_value = rule["from"]
+    to_value = rule["to"]
+    after_hours = rule["after_hours"]
+
+    try:
+        records = object_records.read_collection_records(collection, base_dir=base_dir)
+    except (object_collections.CollectionNotFoundError, object_collections.InvalidCollectionNameError):
+        if collection not in _WARNED_UNKNOWN_AUTO_TRANSITION_COLLECTIONS:
+            log(
+                f"Auto-transition: collection '{collection}' not found (package not "
+                f"installed?), skipping rule -- will keep checking, logged once",
+                "WARN",
+            )
+            _WARNED_UNKNOWN_AUTO_TRANSITION_COLLECTIONS.add(collection)
+        return 0
+
+    _WARNED_UNKNOWN_AUTO_TRANSITION_COLLECTIONS.discard(collection)
+
+    candidates = [r for r in records if r.get(field) == from_value]
+    if not candidates:
+        return 0
+
+    change_timestamps = _latest_field_entry_timestamps(collection, field, from_value, base_dir=base_dir)
+    cutoff_seconds = after_hours * 3600.0
+    now = datetime.now(timezone.utc)
+
+    moved = 0
+    for record in candidates:
+        record_id = record.get("id")
+        if not record_id:
+            continue
+
+        age_seconds = _record_age_seconds(record, record_id, change_timestamps, now=now)
+        if age_seconds is None or age_seconds < cutoff_seconds:
+            continue
+
+        try:
+            current = object_records.get_collection_record(collection, record_id, base_dir=base_dir)
+        except object_records.RecordNotFoundError:
+            continue  # deleted since the listing above
+        if current.get(field) != from_value:
+            continue  # moved on already -- someone/something got there first
+
+        try:
+            object_records.update_collection_record(
+                collection, record_id, {field: to_value},
+                base_dir=base_dir, actor=AUTO_TRANSITION_ACTOR,
+            )
+            moved += 1
+        except Exception as e:
+            log(
+                f"Auto-transition: {collection}/{record_id} {field} "
+                f"'{from_value}'->'{to_value}' failed: {e}",
+                "ERROR",
+            )
+            continue
+
+    return moved
+
+
+def process_stale_transitions(*, base_dir: Path | str = "data") -> dict | None:
+    """Auto-transition records that have sat in one FSM state too long.
+
+    Runs at most once per DBBASIC_AUTO_TRANSITION_INTERVAL_SECONDS
+    (default 3600) gated by a marker FILE (`.auto_transition_last_run`
+    under `base_dir`), the same pattern process_compactions above uses
+    and for the same reason: a file marker survives a daemon restart, so
+    the 48-hour clock this pass exists to enforce is never quietly reset
+    by a deploy.
+
+    Rules come from DBBASIC_AUTO_TRANSITION_RULES (see
+    auto_transition_rules_from_env), a compact JSON list of
+    {"collection", "field", "from", "to", "after_hours"}. This pass ships
+    ON by default -- the empty-env case still resolves to a real rule
+    (tasks' waiting_on_client -> approved after 48h) -- because the
+    predecessor system's version of this job was written but never
+    scheduled, and 200+ records sat stranded as a result. Setting the env
+    to "" or "[]" is how an operator opts back out.
+
+    Every rule is applied independently and wrapped in its own try/except
+    (_apply_auto_transition_rule already isolates per-record failures;
+    this is belt and suspenders against a rule failing before it gets
+    that far, e.g. a read_collection_records call raising something other
+    than the two "not installed" exceptions it explicitly handles) --
+    one bad rule is logged and skipped, never allowed to stop the rest of
+    the pass.
+
+    Always logs exactly one summary line per run (even a no-op run, with
+    zero rules configured or zero records moved) so the pass's activity
+    -- or deliberate silence -- is visible in the daemon's own log rather
+    than something that has to be inferred. Returns None when the
+    interval hasn't elapsed yet (no work attempted this call). Otherwise
+    returns {"checked": <rule count>, "moved": <total records moved>,
+    "rules": [{"collection", "field", "from", "to", "moved"}, ...]} --
+    mainly for tests and manual/CLI invocation, matching
+    process_compactions' contract.
+    """
+    interval = _env_int(AUTO_TRANSITION_INTERVAL_SECONDS_ENV, _DEFAULT_AUTO_TRANSITION_INTERVAL_SECONDS)
+    marker_path = Path(base_dir) / AUTO_TRANSITION_MARKER_NAME
+    now = time.time()
+    try:
+        last_run = marker_path.stat().st_mtime
+    except OSError:
+        last_run = 0.0
+
+    if now - last_run < interval:
+        return None
+
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    marker_path.write_text(str(now))
+
+    rules = auto_transition_rules_from_env()
+    rule_results = []
+    total_moved = 0
+    for rule in rules:
+        try:
+            moved = _apply_auto_transition_rule(rule, base_dir=base_dir)
+        except Exception as e:
+            log(
+                f"Auto-transition: rule {rule['collection']}.{rule['field']} "
+                f"'{rule['from']}'->'{rule['to']}' failed: {e}",
+                "ERROR",
+            )
+            moved = 0
+        total_moved += moved
+        rule_results.append({
+            "collection": rule["collection"],
+            "field": rule["field"],
+            "from": rule["from"],
+            "to": rule["to"],
+            "moved": moved,
+        })
+
+    log(f"Auto-transition: checked {len(rules)} rule(s), moved {total_moved} record(s)")
+    return {"checked": len(rules), "moved": total_moved, "rules": rule_results}
+
+
 # --- Object Execution ---
 
 def _execute_target(runtime: ObjectRuntime, object_id: str, method: str, payload: dict):
@@ -559,6 +887,11 @@ def main():
     print(f"Croniter: {'available' if croniter else 'NOT installed (cron tasks disabled)'}")
     print(f"Rate limit cleanup: {'enabled' if Path('data/ratelimit').exists() else 'no ratelimit dir yet'}")
     print(f"Compaction interval: {_env_int(COMPACTION_INTERVAL_SECONDS_ENV, _DEFAULT_COMPACTION_INTERVAL_SECONDS)}s")
+    _startup_rules = auto_transition_rules_from_env()
+    print(
+        f"Auto-transition rules: {len(_startup_rules)} configured "
+        f"(interval {_env_int(AUTO_TRANSITION_INTERVAL_SECONDS_ENV, _DEFAULT_AUTO_TRANSITION_INTERVAL_SECONDS)}s)"
+    )
     print()
     print("Press Ctrl+C to stop")
     print("=" * 60)
@@ -592,6 +925,11 @@ def main():
             process_compactions()
         except Exception as e:
             log(f"Compaction error: {e}", 'ERROR')
+
+        try:
+            process_stale_transitions()
+        except Exception as e:
+            log(f"Auto-transition error: {e}", 'ERROR')
 
         now = time.time()
         if now - last_event_cleanup >= EVENT_CLEANUP_INTERVAL_SECONDS:

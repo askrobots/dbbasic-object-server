@@ -16,7 +16,7 @@ flowchart TD
     PROV -->|"tool calls"| MCP["MCP tool subset<br/>dispatched with YOUR credentials"]
     MCP --> PERM["Permission engine + audit"]
     PERM --> PROV
-    PROV --> REPLY["Reply + tool log + token usage"]
+    PROV --> REPLY["Reply + tool log + token usage + cost"]
 ```
 
 ## Setup: Your Key, Your Model
@@ -61,6 +61,22 @@ session replays recent history and sends prior AI turns back with each
 message, so conversations resume. The server stays stateless about
 chats: `POST /api/ai/chat` accepts a `history` list, and what to
 remember is the client's choice.
+
+## Cost Recording
+
+Every chat turn is priced server-side, not by the caller. `POST
+/api/ai/chat` reads token counts straight from the provider's own response,
+looks up the model's price in the `ai_prices` collection (editable records,
+never a hardcoded table -- so a price change is a data edit, not a
+deploy), and computes the cost in integer cents: `tokens *
+per_million_cents // 1_000_000`, input and output added separately, no
+float division on money. The result -- `tokens_in`, `tokens_out`,
+`cost_cents`, `model`, `provider` -- lands in the `ai_usage` collection,
+written by the chat handler itself with the caller's user id as actor, so
+the record can't be skipped or forged the way a client-written log could
+be. A model with no matching price row still gets its tokens recorded;
+only the cost is null. The same numbers come back in the chat response's
+`usage` object so a surface can show them immediately.
 
 ## Coding Without Coding
 

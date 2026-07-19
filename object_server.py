@@ -6448,6 +6448,8 @@ AI_CHAT_TIMEOUT_ENV = "DBBASIC_AI_TIMEOUT_SECONDS"
 AI_DEFAULT_MODEL_ENV = "DBBASIC_AI_DEFAULT_MODEL"
 DEFAULT_AI_MODEL = "anthropic:claude-haiku-4-5"
 DEFAULT_AI_TIMEOUT_SECONDS = 60.0
+AI_PRICES_COLLECTION = "ai_prices"
+AI_USAGE_COLLECTION = "ai_usage"
 
 
 async def _handle_ai_chat(
@@ -6603,7 +6605,53 @@ async def _handle_ai_chat(
         )
         return
 
+    # Cost recording is server-authoritative: the client never sees this
+    # write and cannot omit or falsify it. Prices live in the ai_prices
+    # collection (editable live, never hardcoded) -- a missing price row
+    # still records the turn's tokens, just with a null cost, so pricing
+    # gaps never fail a chat that otherwise succeeded.
+    usage = result.get("usage") or {}
+    tokens_in = int(usage.get("input_tokens") or 0)
+    tokens_out = int(usage.get("output_tokens") or 0)
+    price_row = object_ai.select_price_row(
+        _read_ai_prices_or_empty(), provider=service, model=model_name
+    )
+    cost_cents = object_ai.compute_cost_cents(tokens_in, tokens_out, price_row)
+    usage["cost_cents"] = cost_cents
+
+    usage_record = {
+        "id": object_ids.new_uuid4(),
+        "owner_id": session.user_id,
+        "provider": service,
+        "model": model_name,
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
+    }
+    if cost_cents is not None:
+        usage_record["cost_cents"] = cost_cents
+    object_records.create_collection_record(
+        AI_USAGE_COLLECTION,
+        usage_record,
+        base_dir=_data_dir(),
+        roots=get_object_roots(),
+        actor=session.user_id,
+    )
+
     await _send_json(send, {"status": "ok", "model": model, **result})
+
+
+def _read_ai_prices_or_empty() -> list[dict[str, str]]:
+    try:
+        return object_records.read_collection_records(
+            AI_PRICES_COLLECTION, base_dir=_data_dir(), roots=get_object_roots()
+        )
+    except (
+        object_collections.CollectionNotFoundError,
+        object_collections.InvalidCollectionNameError,
+        OSError,
+        ValueError,
+    ):
+        return []
 
 
 def _env_float(name: str, default: float) -> float:
@@ -7279,9 +7327,17 @@ async def _handle_collection_record_update(
             changes,
             base_dir=_data_dir(),
             actor=_record_change_actor(headers),
+            transition_subject=permission_check["subject"],
         )
     except object_records.RecordNotFoundError as exc:
         await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+    except object_records.TransitionNotAllowedError as exc:
+        await _send_json(
+            send,
+            {"status": "error", "error": str(exc), "code": "forbidden"},
+            status=403,
+        )
         return
     except (object_records.InvalidRecordIdError, object_records.InvalidRecordPayloadError) as exc:
         await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
@@ -9565,19 +9621,26 @@ def _with_accessible_projects(
     """Resolve the subject's project grants and ownership before checks run.
 
     Grants live in the plain ``project_access`` records collection
-    (project_id, user_id), so sharing is data: browseable, audited, and
-    versioned like every other record. Rules opt in with the
+    (project_id, user_id, permission), so sharing is data: browseable,
+    audited, and versioned like every other record. Rules opt in with the
     ``$accessible_projects`` row-filter value; ``$owned_projects``
     resolves from the projects collection's owner_id, which is what lets
     "owners may share their own projects" stay a plain row filter.
+    ``$writable_projects`` narrows accessible grants to rows whose
+    ``permission`` is ``"write"``, for rules and transition guards that
+    need more than read-only membership.
     """
     if subject.user_id is None:
         return subject
 
-    project_ids = [
-        record["project_id"]
+    access_rows = [
+        record
         for record in _read_records_or_empty(PROJECT_ACCESS_COLLECTION)
         if record.get("user_id") == subject.user_id and record.get("project_id")
+    ]
+    project_ids = [record["project_id"] for record in access_rows]
+    writable_project_ids = [
+        record["project_id"] for record in access_rows if record.get("permission") == "write"
     ]
     owned_project_ids = [
         record["id"]
@@ -9587,7 +9650,9 @@ def _with_accessible_projects(
     if not project_ids and not owned_project_ids:
         return subject
     return subject.with_projects(
-        dict.fromkeys(project_ids), dict.fromkeys(owned_project_ids)
+        dict.fromkeys(project_ids),
+        dict.fromkeys(owned_project_ids),
+        dict.fromkeys(writable_project_ids),
     )
 
 
@@ -9717,6 +9782,8 @@ def _permission_subject_payload(subject: object_permissions.PermissionSubject) -
         payload["project_ids"] = list(subject.project_ids)
     if subject.owned_project_ids:
         payload["owned_project_ids"] = list(subject.owned_project_ids)
+    if subject.writable_project_ids:
+        payload["writable_project_ids"] = list(subject.writable_project_ids)
     return payload
 
 

@@ -514,6 +514,27 @@ PermissionRule.allow(
 Creating a grant is creating a record; revoking is deleting it; both are
 audited and appear in the change history like every other write.
 
+Grants carry a `permission` of `read` or `write`. Most rules only need
+membership (`$accessible_projects`), but some need to tell read grants
+apart from write grants — "only project writers may publish" — and that
+narrower set is `$writable_projects`, resolved from the same
+`project_access` rows filtered to `permission == "write"`:
+
+```python
+PermissionRule.allow(
+    "registered",
+    ["update"],
+    collection="docs",
+    row_filter={"project_id": "$writable_projects"},
+    reason="only writers may edit docs in a shared project",
+)
+```
+
+It resolves the same way and is available everywhere
+`$accessible_projects` and `$owned_projects` are: row filters and, for
+schema-declared lifecycle fields, transition guards (see the
+`transitions` field key in docs/schema-forms.md).
+
 ## Row And Field Rules
 
 Row filters model rules like:

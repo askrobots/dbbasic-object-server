@@ -1,0 +1,57 @@
+{
+  "name": "ai_usage",
+  "title": "AI Usage",
+  "version": 1,
+  "description": "Append-only per-turn AI cost record: tokens and cost for one /api/ai/chat call. Written server-side by the chat handler itself (never by the client) so cost recording is authoritative -- a caller cannot omit or falsify it the way it could a client-written shell_commands row. cost_cents is null when no ai_prices row matched; tokens are always recorded regardless.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner",
+      "help": "The user who made the chat call"
+    },
+    {
+      "name": "provider",
+      "type": "text",
+      "required": true,
+      "label": "Provider"
+    },
+    {
+      "name": "model",
+      "type": "text",
+      "required": true,
+      "label": "Model"
+    },
+    {
+      "name": "tokens_in",
+      "type": "int",
+      "required": true,
+      "label": "Input Tokens"
+    },
+    {
+      "name": "tokens_out",
+      "type": "int",
+      "required": true,
+      "label": "Output Tokens"
+    },
+    {
+      "name": "cost_cents",
+      "type": "int",
+      "label": "Cost (cents)",
+      "help": "Null when no ai_prices row matched (provider, model) -- tokens are still recorded"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    }
+  ],
+  "views": {
+    "list_mode": "feed",
+    "list_fields": ["provider", "model", "tokens_in", "tokens_out", "cost_cents", "created_at"]
+  }
+}

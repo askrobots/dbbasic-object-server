@@ -48,7 +48,7 @@ else. See [design-system](design-system.md) and the
 | `app-files` | files | `/files` | Uploads with quotas; downloads governed by the metadata record |
 | `app-templates` | templates | — | Reusable bodies; public sharing |
 | `app-timers` | time_logs | — | Time tracking against tasks |
-| `app-shell` | shell_preferences, shell_commands | `/shell` | The talk-to-everything terminal (see the shell guide) |
+| `app-shell` | shell_preferences, shell_commands, ai_usage | `/shell` | The talk-to-everything terminal (see the shell guide); ai_usage is the server-written per-turn token/cost log |
 | `app-collab` | task_comments, feed_posts, notifications | — | Comments, the human+agent coordination feed, notification records |
 
 Packages without a page are managed entirely through generated UIs,

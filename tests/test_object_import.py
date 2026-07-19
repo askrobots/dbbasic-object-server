@@ -481,7 +481,13 @@ def test_tasks_schema_gains_draft_status():
     schema = json.loads((REPO_ROOT / "packages/app-tasks/schemas/tasks.json").read_text())
     status_field = next(f for f in schema["fields"] if f["name"] == "status")
     assert "draft" in status_field["enum"]
-    assert status_field["transitions"]["draft"] == ["open", "assigned", "cancelled"]
+    # draft moves are guarded to the task owner (see FEATURE 1: transition guards).
+    draft_targets = {entry["to"] for entry in status_field["transitions"]["draft"]}
+    assert draft_targets == {"open", "assigned", "cancelled"}
+    assert all(
+        entry.get("when") == {"owner_id": "$user_id"}
+        for entry in status_field["transitions"]["draft"]
+    )
 
 
 def test_tasks_schema_draft_transition_enforced(tmp_path):

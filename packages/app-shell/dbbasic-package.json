@@ -20,6 +20,10 @@
     {
       "collection": "shell_commands",
       "path": "schemas/shell_commands.json"
+    },
+    {
+      "collection": "ai_usage",
+      "path": "schemas/ai_usage.json"
     }
   ],
   "permissions": [

@@ -1,0 +1,6 @@
+id	provider	model	input_per_million_cents	output_per_million_cents	effective_date
+anthropic-claude-haiku-4-5	anthropic	claude-haiku-4-5	100	500	2026-01-01
+anthropic-claude-sonnet-5	anthropic	claude-sonnet-5	300	1500	2026-01-01
+anthropic-claude-opus-4-8	anthropic	claude-opus-4-8	500	2500	2026-01-01
+openai-gpt-5-mini	openai	gpt-5-mini	25	200	2026-01-01
+openai-gpt-5	openai	gpt-5	125	1000	2026-01-01

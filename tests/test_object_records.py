@@ -8,6 +8,7 @@ from uuid import UUID
 import pytest
 
 import object_collections
+import object_permissions
 import object_record_changes
 import object_records
 import object_schemas
@@ -322,6 +323,83 @@ def test_enum_transitions_are_enforced_on_update(tmp_path):
         "tasks", "t1", {"title": "Shipped"}, base_dir=data_dir, roots=[]
     )
     assert record["title"] == "Shipped"
+
+
+def _write_guarded_ticket_schema(data_dir):
+    write_schema(
+        data_dir,
+        "tickets",
+        [
+            {"name": "id"},
+            {"name": "owner_id"},
+            {
+                "name": "status",
+                "type": "enum",
+                "enum": ["open", "closed", "reopened"],
+                "transitions": {
+                    "open": ["closed"],
+                    "closed": [{"to": "reopened", "when": {"owner_id": "$user_id"}}],
+                },
+            },
+        ],
+    )
+
+
+def test_guarded_transition_without_subject_enforces_validity_but_not_guard(tmp_path):
+    """Direct library callers (daemon, CLI, tests) that don't pass a
+    transition_subject are trusted callers: a guarded move still has to be
+    in the list, but the guard's 'when' clause is not enforced."""
+    data_dir = tmp_path / "data"
+    _write_guarded_ticket_schema(data_dir)
+    write_records(data_dir, "tickets", "id\towner_id\tstatus\nt1\t7\tclosed\n")
+
+    # No subject: the guarded move is valid (present in the list) even
+    # though the record's owner_id doesn't match anyone in particular.
+    record = object_records.update_collection_record(
+        "tickets", "t1", {"status": "reopened"}, base_dir=data_dir, roots=[]
+    )
+    assert record["status"] == "reopened"
+
+    # A move that isn't in the list at all is still rejected outright.
+    with pytest.raises(object_records.InvalidRecordPayloadError):
+        object_records.update_collection_record(
+            "tickets", "t1", {"status": "closed"}, base_dir=data_dir, roots=[]
+        )
+
+
+def test_guarded_transition_with_subject_allows_matching_and_denies_others(tmp_path):
+    data_dir = tmp_path / "data"
+    _write_guarded_ticket_schema(data_dir)
+    write_records(data_dir, "tickets", "id\towner_id\tstatus\nt1\t7\tclosed\nt2\t7\tclosed\n")
+
+    owner = object_permissions.PermissionSubject(user_id="7")
+    other = object_permissions.PermissionSubject(user_id="8")
+
+    with pytest.raises(
+        object_records.TransitionNotAllowedError,
+        match="cannot move from 'closed' to 'reopened'",
+    ):
+        object_records.update_collection_record(
+            "tickets", "t1", {"status": "reopened"}, base_dir=data_dir, roots=[],
+            transition_subject=other,
+        )
+
+    record = object_records.update_collection_record(
+        "tickets", "t2", {"status": "reopened"}, base_dir=data_dir, roots=[],
+        transition_subject=owner,
+    )
+    assert record["status"] == "reopened"
+
+    # Plain string entries (open -> closed here) stay unguarded regardless
+    # of the subject passed in.
+    object_records.create_collection_record(
+        "tickets", {"id": "t3", "owner_id": "7", "status": "open"}, base_dir=data_dir, roots=[]
+    )
+    record = object_records.update_collection_record(
+        "tickets", "t3", {"status": "closed"}, base_dir=data_dir, roots=[],
+        transition_subject=other,
+    )
+    assert record["status"] == "closed"
 
 
 def test_update_collection_record_validates_final_schema_record(tmp_path):

@@ -2,8 +2,10 @@ import importlib.util
 import json
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import object_record_changes
 import object_records
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -489,3 +491,247 @@ def test_process_compactions_one_collection_failing_does_not_stop_others(tmp_pat
     bad_path = object_records.collection_records_file("bad", base_dir=data_dir)
     assert len(good_path.read_text().splitlines()) - 1 == 1  # compacted
     assert len(bad_path.read_text().splitlines()) - 1 == 6  # left as-is after its failure
+
+
+# --- Stale-state auto-transition pass ----------------------------------
+
+
+def write_tasks_schema(data_dir: Path) -> Path:
+    """A trimmed stand-in for packages/app-tasks/schemas/tasks.json: same
+    status enum/transitions and the same lone `created_at` timestamp
+    field (no `updated_at`), classic (non-append) storage."""
+    path = data_dir / "schemas" / "tasks.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "fields": [
+            {"name": "id"},
+            {"name": "title", "type": "text", "required": True},
+            {
+                "name": "status",
+                "type": "enum",
+                "default": "open",
+                "enum": ["draft", "open", "assigned", "waiting_on_client",
+                          "approved", "disputed", "cancelled"],
+                "transitions": {
+                    "draft": ["open", "assigned", "cancelled"],
+                    "open": ["assigned", "cancelled"],
+                    "assigned": ["waiting_on_client", "open", "cancelled"],
+                    "waiting_on_client": ["approved", "disputed", "assigned"],
+                    "disputed": ["assigned", "cancelled"],
+                },
+            },
+            {"name": "created_at", "type": "datetime", "read_only": True},
+        ],
+    }))
+    return path
+
+
+def _backdate_change_log(data_dir: Path, collection: str, record_id: str, *, hours_ago: float) -> None:
+    """Rewrite every record-change log entry for `record_id` to look
+    `hours_ago` old, so a record created "now" can still exercise the
+    stale-transition age check without sleeping in a test."""
+    path = object_record_changes.record_changes_file(collection, base_dir=data_dir)
+    past = (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).isoformat()
+    lines = path.read_text(encoding="utf-8").splitlines()
+    rewritten = []
+    for line in lines:
+        entry = json.loads(line)
+        if entry.get("record_id") == record_id:
+            entry["timestamp"] = past
+        rewritten.append(json.dumps(entry))
+    path.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
+
+
+def test_auto_transition_rules_from_env_defaults_to_tasks_rule(monkeypatch):
+    # Unscheduled by default was exactly the predecessor bug (200+ records
+    # stranded in waiting_on_client) -- the default here must be a real,
+    # working rule, not an empty list a caller has to opt into.
+    monkeypatch.delenv("DBBASIC_AUTO_TRANSITION_RULES", raising=False)
+    rules = object_daemon.auto_transition_rules_from_env()
+    assert rules == [{
+        "collection": "tasks",
+        "field": "status",
+        "from": "waiting_on_client",
+        "to": "approved",
+        "after_hours": 48.0,
+    }]
+
+
+def test_auto_transition_rules_from_env_empty_string_disables(monkeypatch):
+    monkeypatch.setenv("DBBASIC_AUTO_TRANSITION_RULES", "")
+    assert object_daemon.auto_transition_rules_from_env() == []
+    monkeypatch.setenv("DBBASIC_AUTO_TRANSITION_RULES", "[]")
+    assert object_daemon.auto_transition_rules_from_env() == []
+
+
+def test_process_stale_transitions_moves_stale_record_with_daemon_actor(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_AUTO_TRANSITION_INTERVAL_SECONDS", "0")
+    data_dir = tmp_path / "data"
+    write_tasks_schema(data_dir)
+    object_records.create_collection_record(
+        "tasks",
+        {"id": "t1", "title": "Stale task", "status": "waiting_on_client"},
+        base_dir=data_dir,
+        roots=[],
+        actor="tester",
+    )
+    _backdate_change_log(data_dir, "tasks", "t1", hours_ago=50)
+
+    result = object_daemon.process_stale_transitions(base_dir=data_dir)
+
+    assert result is not None
+    assert result["checked"] == 1
+    assert result["moved"] == 1
+    assert result["rules"][0]["collection"] == "tasks"
+
+    current = object_records.get_collection_record("tasks", "t1", base_dir=data_dir)
+    assert current["status"] == "approved"
+
+    changes = object_record_changes.list_record_changes("tasks", record_id="t1", base_dir=data_dir)
+    latest = changes["changes"][0]
+    assert latest["action"] == "update"
+    assert latest["actor"] == "daemon:auto-transition"
+    assert latest["after"]["status"] == "approved"
+
+
+def test_process_stale_transitions_leaves_fresh_record_alone(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_AUTO_TRANSITION_INTERVAL_SECONDS", "0")
+    data_dir = tmp_path / "data"
+    write_tasks_schema(data_dir)
+    object_records.create_collection_record(
+        "tasks",
+        {"id": "t1", "title": "Fresh task", "status": "waiting_on_client"},
+        base_dir=data_dir,
+        roots=[],
+        actor="tester",
+    )
+    # No backdating: the record just entered waiting_on_client.
+
+    result = object_daemon.process_stale_transitions(base_dir=data_dir)
+
+    assert result is not None
+    assert result["moved"] == 0
+    current = object_records.get_collection_record("tasks", "t1", base_dir=data_dir)
+    assert current["status"] == "waiting_on_client"
+
+
+def test_process_stale_transitions_disabled_by_empty_rules(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_AUTO_TRANSITION_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("DBBASIC_AUTO_TRANSITION_RULES", "[]")
+    data_dir = tmp_path / "data"
+    write_tasks_schema(data_dir)
+    object_records.create_collection_record(
+        "tasks",
+        {"id": "t1", "title": "Stale task", "status": "waiting_on_client"},
+        base_dir=data_dir,
+        roots=[],
+        actor="tester",
+    )
+    _backdate_change_log(data_dir, "tasks", "t1", hours_ago=200)
+
+    result = object_daemon.process_stale_transitions(base_dir=data_dir)
+
+    assert result == {"checked": 0, "moved": 0, "rules": []}
+    current = object_records.get_collection_record("tasks", "t1", base_dir=data_dir)
+    assert current["status"] == "waiting_on_client"  # untouched
+
+
+def test_process_stale_transitions_skips_unknown_collection(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_AUTO_TRANSITION_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv(
+        "DBBASIC_AUTO_TRANSITION_RULES",
+        json.dumps([{
+            "collection": "not_installed",
+            "field": "status",
+            "from": "waiting_on_client",
+            "to": "approved",
+            "after_hours": 48,
+        }]),
+    )
+    data_dir = tmp_path / "data"  # no schema, no records -- package "not installed"
+
+    result = object_daemon.process_stale_transitions(base_dir=data_dir)
+
+    assert result == {
+        "checked": 1,
+        "moved": 0,
+        "rules": [{
+            "collection": "not_installed",
+            "field": "status",
+            "from": "waiting_on_client",
+            "to": "approved",
+            "moved": 0,
+        }],
+    }
+
+
+def test_process_stale_transitions_skips_record_that_moved_on(tmp_path, monkeypatch):
+    """A record staged as a stale candidate by the pass's own listing, but
+    whose live value has already moved off `from` by the time the pass
+    gets to writing it (a race between the listing and the per-record
+    write), must be left alone -- not force-moved back to `to`."""
+    monkeypatch.setenv("DBBASIC_AUTO_TRANSITION_INTERVAL_SECONDS", "0")
+    data_dir = tmp_path / "data"
+    write_tasks_schema(data_dir)
+    object_records.create_collection_record(
+        "tasks",
+        {"id": "t1", "title": "Racing task", "status": "waiting_on_client"},
+        base_dir=data_dir,
+        roots=[],
+        actor="tester",
+    )
+    _backdate_change_log(data_dir, "tasks", "t1", hours_ago=50)
+
+    stale_snapshot = object_records.read_collection_records("tasks", base_dir=data_dir)
+
+    # The record moves on for real before the pass's write reaches it.
+    object_records.update_collection_record(
+        "tasks", "t1", {"status": "assigned"}, base_dir=data_dir, roots=[], actor="tester",
+    )
+
+    monkeypatch.setattr(
+        object_records,
+        "read_collection_records",
+        lambda collection, **kwargs: stale_snapshot if collection == "tasks" else [],
+    )
+
+    result = object_daemon.process_stale_transitions(base_dir=data_dir)
+
+    assert result["moved"] == 0
+    current = object_records.get_collection_record("tasks", "t1", base_dir=data_dir)
+    assert current["status"] == "assigned"  # not force-moved to "approved"
+
+
+def test_process_stale_transitions_honors_interval_marker(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_AUTO_TRANSITION_INTERVAL_SECONDS", "3600")
+    data_dir = tmp_path / "data"
+    write_tasks_schema(data_dir)
+    object_records.create_collection_record(
+        "tasks",
+        {"id": "t1", "title": "Stale task", "status": "waiting_on_client"},
+        base_dir=data_dir,
+        roots=[],
+        actor="tester",
+    )
+    _backdate_change_log(data_dir, "tasks", "t1", hours_ago=50)
+
+    first = object_daemon.process_stale_transitions(base_dir=data_dir)
+    assert first is not None
+    assert first["moved"] == 1
+
+    # Put another stale record in place directly (bypassing the pass) and
+    # call again immediately: the marker was just written, so the interval
+    # hasn't elapsed and this call must be a pure no-op.
+    object_records.create_collection_record(
+        "tasks",
+        {"id": "t2", "title": "Also stale", "status": "waiting_on_client"},
+        base_dir=data_dir,
+        roots=[],
+        actor="tester",
+    )
+    _backdate_change_log(data_dir, "tasks", "t2", hours_ago=50)
+
+    second = object_daemon.process_stale_transitions(base_dir=data_dir)
+    assert second is None
+    current = object_records.get_collection_record("tasks", "t2", base_dir=data_dir)
+    assert current["status"] == "waiting_on_client"  # untouched

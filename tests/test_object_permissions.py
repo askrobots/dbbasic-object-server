@@ -180,6 +180,61 @@ def test_subject_from_dict_reads_project_ids():
     assert enriched.owned_project_ids == ("p4",)
 
 
+def test_writable_projects_filter_matches_write_grants_only():
+    policy = permissions.PermissionPolicy(
+        access_mode="role_based",
+        rules=(
+            permissions.PermissionRule.allow(
+                "registered",
+                [permissions.UPDATE],
+                collection="notes",
+                row_filter={"project_id": "$writable_projects"},
+            ),
+        ),
+    )
+    writer = permissions.PermissionSubject(user_id="8", writable_project_ids=("p1",))
+    reader_only = permissions.PermissionSubject(user_id="9", project_ids=("p1",))
+    note = {"id": "n1", "project_id": "p1"}
+
+    assert permissions.check_permission(
+        writer, permissions.UPDATE, policy=policy, collection="notes", record=note
+    ).allowed is True
+    assert permissions.check_permission(
+        reader_only, permissions.UPDATE, policy=policy, collection="notes", record=note
+    ).allowed is False
+
+
+def test_subject_from_dict_reads_writable_project_ids():
+    subject = permissions.subject_from_dict(
+        {"user_id": "8", "writable_project_ids": ["p1"]}
+    )
+    assert subject.writable_project_ids == ("p1",)
+    enriched = subject.with_projects(["p3"], ["p4"], ["p5"])
+    assert enriched.project_ids == ("p3",)
+    assert enriched.owned_project_ids == ("p4",)
+    assert enriched.writable_project_ids == ("p5",)
+
+
+def test_record_matches_filter_public_wrapper_shares_row_filter_semantics():
+    """Transition guards reuse this for their ``when`` clauses (see
+    object_records._validate_field_transitions), so it must match the same
+    $-variable resolution and empty-string posture row filters use."""
+    subject = permissions.PermissionSubject(user_id="7")
+
+    assert permissions.record_matches_filter(
+        {"owner_id": "7"}, {"owner_id": "$user_id"}, subject
+    ) is True
+    assert permissions.record_matches_filter(
+        {"owner_id": "8"}, {"owner_id": "$user_id"}, subject
+    ) is False
+    assert permissions.record_matches_filter(
+        {"owner_id": ""}, {"owner_id": "$user_id"}, subject
+    ) is False
+    assert permissions.record_matches_filter(
+        {"status": "open"}, {"status": "open"}, subject
+    ) is True
+
+
 def test_owned_projects_filter_gates_grant_writes():
     policy = permissions.PermissionPolicy(
         access_mode="role_based",
