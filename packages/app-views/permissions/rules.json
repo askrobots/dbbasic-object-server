@@ -1,0 +1,27 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "views",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "signed-in users manage the views they own"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["read"],
+      "collection": "views",
+      "row_filter": {"is_public": "true"},
+      "reason": "views marked public are readable by anyone"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_view_render",
+      "reason": "the view renderer is public; the policy decides which views and blocks are visible"
+    }
+  ]
+}

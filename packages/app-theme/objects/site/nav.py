@@ -77,6 +77,22 @@ _JS = r"""
     if (!open) { place(appsMenu, appsBtn); appsMenu.classList.add("open"); }
   });
 
+  // Pinned views (app-views, optional): append any pinned view record to
+  // the Apps switcher. The nav ships in every install, app-views does not,
+  // so a missing collection or a failed fetch must stay silent -- the
+  // switcher already works without it.
+  (async function loadPinnedViews() {
+    try {
+      const res = await api("/collections/views/records?limit=200");
+      if (!res.ok) return;
+      const body = await res.json();
+      const pinned = (body.records || []).filter((v) => v.pinned === "true");
+      if (!pinned.length) return;
+      appsMenu.innerHTML += pinned.map((v) =>
+        '<a href="' + esc(v.route || ("/views/" + v.id)) + '">' + esc(v.title || "View") + "</a>").join("");
+    } catch (e) { /* app-views not installed -- the switcher still works without it */ }
+  })();
+
   // Global search
   const search = document.getElementById("nav-search");
   const resMenu = menu("nav-results"); resMenu.classList.add("results");

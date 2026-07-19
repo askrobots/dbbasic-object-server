@@ -1,0 +1,28 @@
+{
+  "id": "app-views",
+  "name": "Views",
+  "version": "0.1.0",
+  "description": "Dynamic UI: views as records. One universal renderer draws any view from a blocks descriptor (list, form, detail, count, markdown), so pages, dashboards, and saved searches are created and reshaped by writing data, not code. Routed pages need a site_routes record mapping /views/{view_id:uuid} to site_view_render.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "objects": [
+    {
+      "id": "site_view_render",
+      "path": "objects/site/view_render.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "views",
+      "path": "schemas/views.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [],
+  "migrations": []
+}

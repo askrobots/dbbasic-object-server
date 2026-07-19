@@ -1,0 +1,72 @@
+{
+  "name": "views",
+  "title": "Views",
+  "version": 1,
+  "description": "Views as records: a universal renderer reads one view's blocks and draws the page. Editing this record edits the page -- no deploy, no hand-written mount.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "title",
+      "type": "text",
+      "required": true,
+      "label": "Title",
+      "validation": {"min_length": 1, "max_length": 200}
+    },
+    {
+      "name": "route",
+      "type": "text",
+      "label": "Route",
+      "help": "optional site path, e.g. /stuck; served via site_routes"
+    },
+    {
+      "name": "layout",
+      "type": "enum",
+      "label": "Layout",
+      "default": "single",
+      "enum": ["single", "two_column", "grid"]
+    },
+    {
+      "name": "blocks",
+      "type": "textarea",
+      "label": "Blocks",
+      "help": "JSON list of block descriptors, validated server-side. Each block has a \"kind\" of list, form, detail, count, or markdown -- unknown kinds render as a placeholder, never as raw markup.",
+      "validation": {"max_length": 32768}
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "is_public",
+      "type": "boolean",
+      "label": "Public",
+      "default": "false"
+    },
+    {
+      "name": "pinned",
+      "type": "boolean",
+      "label": "Pinned",
+      "default": "false",
+      "help": "pinned views appear in the nav Apps switcher"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["title", "route", "layout", "blocks", "is_public", "pinned"]}
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["title", "route", "layout", "pinned"]
+  },
+  "search": {
+    "fields": ["title", "route"]
+  }
+}
