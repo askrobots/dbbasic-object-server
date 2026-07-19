@@ -710,7 +710,12 @@ async function submitTurn(input) {
   if (ok) {
     aiHistory.push({role: "user", content: input});
     aiHistory.push({role: "assistant", content: body.reply});
-    const viewPath = viewPathFromReply(rawReply) || viewPathFromToolCalls(body.tool_calls);
+    // Tool calls are ground truth for what was actually created/updated this
+    // turn; the [[view:id]] marker is the model retyping an id and can typo or
+    // hallucinate it (pointing the stage at a phantom view). So trust the tool
+    // call first, fall back to the marker only for "show an existing view again"
+    // turns that touched no records.
+    const viewPath = viewPathFromToolCalls(body.tool_calls) || viewPathFromReply(rawReply);
     if (viewPath) renderStageView(viewPath); else renderCard(replyText);
   } else {
     renderCard(replyText);
