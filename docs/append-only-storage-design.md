@@ -114,6 +114,17 @@ binds it: such a backend must emit the canonical `records.tsv` on demand.
 This paragraph exists so nobody ever "improves" the TSV engine into a
 half-database; past the envelope, graft a real one underneath instead.
 
+## Prior Art
+
+The delta-plus-merge shape has flat-file ancestry: Strozzi NoSQL (1998), the
+system that coined "NoSQL," documented exactly this pattern for big tables —
+extract a small working table, edit it, background-merge it into the sorted
+master, keeping the old table and the delta "for backup and/or journaling
+purposes." This design automates that workflow inside one file. Its lock
+strategy (a .lock sidecar next to the table, cleaned on interrupt) is also
+the mechanism this codebase independently uses. The offset-sidecar planned
+below is the trick genomics' tabix proved on TSV at petabyte scale.
+
 ## Build Order
 
 1. Tail-delta read cache (offset-tracking) — useful even before append-only

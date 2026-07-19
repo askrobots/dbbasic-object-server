@@ -62,6 +62,11 @@ pattern generally. Per-tenant single-file storage next to per-tenant code
 is the current direction of travel; this system's version is the flavor
 you can `cat`.
 
+Also the oldest advice in the flat-file lineage: Strozzi NoSQL's "Big
+tables" doc opens with *"big tables should be avoided in the first place"* —
+use the Unix filesystem to pre-organize relations and keep each one small.
+Per-tenant decomposition is that doctrine, systematized.
+
 ## Current State and Gap
 
 Today the platform is multi-tenant by *rows* (owner_id row filters, one
