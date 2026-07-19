@@ -137,6 +137,21 @@ This repository currently contains:
 - `object_daemon.py` - background worker for scheduler, queue, events, and cleanup
 - `object_daemon_control.py` - scheduler task and queue message write helpers for operator screens
 - `object_daemon_status.py` - read-only daemon, scheduler, queue, and delivery posture
+- `object_site_routes.py` - site routing: clean public URLs and host-aware multi-domain namespaces resolved to objects
+- `object_realtime.py` - in-process live pub/sub behind the /ws websocket push (signal, not data)
+- `object_search.py` - cross-collection record search driven by schema `search` metadata
+- `object_handlers.py` - event handler objects (`HANDLES`) dispatched post-commit on record changes, gated off by default
+- `object_package_baselines.py` - package provenance baselines: per-object/schema content hashes for customized-detection
+- `object_reconciles.py` - pending-reconcile records parked by data-preserving package upgrades
+- `object_worker_pool.py` - persistent worker-process pool for near-in-process untrusted execution, gated off by default
+- `object_backup_index.py` - backup inventory, on-demand creation, and read-only restore preview/diff
+- `object_ops_log.py` - operational event log: execution errors and auth activity for the ops screen
+- `object_metrics_history.py` - TSV-backed health metrics history snapshots
+- `object_multipart.py` - stdlib-only multipart form parsing for object execution
+- `object_user_files.py` - per-user file storage: bytes on disk, visibility on the metadata record
+- `object_service_keys.py` - write-only per-user service API keys (AI providers and similar)
+- `object_ai.py` - provider-neutral AI chat with MCP tool calling behind the shell
+- `object_mcp.py` - MCP (Model Context Protocol) surface so agents operate the server as tools
 - `http_api_contract.py` - compatibility constants for paths and response shapes
 - `deployment_checks.py` - single-VM filesystem ownership and permission checks
 - `packages/hello-world/` - minimal example package with one object
@@ -145,9 +160,11 @@ This repository currently contains:
 - `packages/admin-write-probe/` - narrow staging package for proving object
   state writes and admin-gated collection record writes
 
-It does not yet contain the full private prototype, cluster runtime, full Scroll
-admin dashboard, sample applications, production installer, public signup flow,
-or production isolation for untrusted user code.
+It does not yet contain the full private prototype, the cluster runtime, a
+public signup flow, or CPU/memory quotas for untrusted user code (the worker
+pool gives process isolation, not resource limits). The app suite, the
+single-VM and Docker installers, and the Scroll companion app
+(github.com/askrobots/dbbasic-scroll) all exist -- see below.
 
 ## Object Source Directories
 
@@ -509,10 +526,10 @@ Secrets stay out of source control: password hashes and session token hashes
 live under the runtime `data/` directory (git-ignored), and deployment tokens
 live in the environment file on the VM.
 
-## Current Extraction Slice
+## The Original Extraction Slice
 
-The current public slice is not the whole server yet. It defines the first shared
-rules the rest of the server will use:
+This section records the first extraction slice and the shared rules it set --
+the full current inventory is the contents list above. The founding pieces:
 
 - `object_server.py` exposes the first ASGI endpoints
 - `python_object_runtime.py` loads simple Python objects for early execution tests
@@ -636,12 +653,27 @@ record write with an audit trail, not a redeploy.
 
 Public staging runtime.
 
-The object server has moved past the first extraction slice. It now has enough
-public code to build controlled object-backed apps on one VM: ASGI serving,
-object execution, source/state/log/file/version storage, rollback, TSV-backed
-collections, schemas, validation, change logs, events, package dry-runs and
-gated installs, backups, identity records, permission policy/audit/enforcement
-hooks, traffic limits, health metrics, GitHub Actions, and deployment checks.
+The object server has moved well past the first extraction slice. Public code
+now covers: ASGI serving, object execution (in-process, pooled, or
+subprocess), source/state/log/file/version storage, rollback, TSV-backed
+collections with two storage modes (classic and opt-in append-only with
+tombstones, compaction, and a disposable id->offset sidecar), schemas with
+validation and an `extra` extension field, realtime websocket push,
+host-aware multi-domain site routing, cross-collection search, a
+data-preserving package upgrade system (provenance baselines, three-way
+reconcile, override objects, feature flags), event handler objects, backups
+with read-only restore preview, identity and permission
+policy/audit/enforcement, traffic limits, health metrics, and deployment
+checks. CI runs the full suite (1050 tests) on CPython 3.10 through 3.14
+including the free-threaded 3.14t build, plus an end-to-end Docker Compose
+build-and-health-check, on every push.
+
+Performance is measured, not asserted (Apple M1 and a 1-vCPU $6 VM; details
+in `docs/storage-modes.md` and the commit log): indexed point reads at one
+million rows in ~0.3ms, append-mode writes ~1ms at the same scale,
+generated pages ~12-31ms served in-process on the $6 VM, and the same
+storage layer stream-processed a one-billion-row file. The remaining O(n)
+paths are documented rather than hidden.
 
 It is suitable for local development, dogfooding, controlled staging, and
 careful internal apps where the operator controls the code and users. It is not
@@ -650,16 +682,18 @@ code.
 
 Near-term work:
 
-- connect guarded existing-user session minting to a real browser login or
-  trusted auth gateway
-- make permission enforcement default-on after the login/auth gateway is wired
-- add CPU and memory isolation for untrusted object code
-- finish event delivery controls after the scheduler/queue control surface is
-  stable
-- add file upload/delete with quotas, content limits, permissions, and audit
-- wire Scroll to the public identity, permission, package, event, backup, and
-  dashboard APIs
-- add a repeatable single-VM installer after the manual path stays boring
+- make permission enforcement default-on for fresh installs
+- CPU and memory quotas for untrusted object code (the worker pool provides
+  process isolation and timeouts today, not resource limits)
+- warm-standby replication and failover (design recorded; files ship, an IP
+  moves)
+- per-tenant collection roots (docs/per-tenant-storage-direction.md)
+- compaction scheduling and bloat observability for append-mode collections
+
+Done since this list was first written: browser login, the single-VM
+installer, the Docker/Coolify path, file upload with permissions and audit,
+and Scroll wired to the identity, permission, package, event, backup, and
+dashboard APIs.
 
 ## Public Repository Safety
 
