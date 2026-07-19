@@ -25,13 +25,20 @@
     }
   ],
   "forms": {
-    "default": {"fields": ["flag", "value", "description"]}
+    "default": {
+      "fields": [
+        "flag",
+        "value",
+        "description"
+      ]
+    }
   },
   "views": {
     "list_mode": "table",
-    "list_fields": ["flag", "value", "description"]
-  },
-  "search": {
-    "fields": ["flag", "description"]
+    "list_fields": [
+      "flag",
+      "value",
+      "description"
+    ]
   }
 }

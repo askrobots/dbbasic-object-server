@@ -22,7 +22,7 @@ def test_get_package_normalizes_app_settings_manifest():
 
     assert package["id"] == "app-settings"
     assert package["name"] == "Settings"
-    assert package["version"] == "0.1.0"
+    assert package["version"] == "0.2.0"
     assert package["objects"] == []
     assert package["seed"] == [{"collection": "ai_prices", "path": "seed/ai_prices.tsv"}]
     assert package["permissions"] == [{"path": "permissions/rules.json"}]

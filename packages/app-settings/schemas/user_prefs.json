@@ -25,13 +25,18 @@
     }
   ],
   "forms": {
-    "default": {"fields": ["key", "value"]}
+    "default": {
+      "fields": [
+        "key",
+        "value"
+      ]
+    }
   },
   "views": {
     "list_mode": "table",
-    "list_fields": ["key", "value"]
-  },
-  "search": {
-    "fields": ["key"]
+    "list_fields": [
+      "key",
+      "value"
+    ]
   }
 }

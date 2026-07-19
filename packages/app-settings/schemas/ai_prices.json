@@ -43,13 +43,24 @@
     }
   ],
   "forms": {
-    "default": {"fields": ["provider", "model", "input_per_million_cents", "output_per_million_cents", "effective_date"]}
+    "default": {
+      "fields": [
+        "provider",
+        "model",
+        "input_per_million_cents",
+        "output_per_million_cents",
+        "effective_date"
+      ]
+    }
   },
   "views": {
     "list_mode": "table",
-    "list_fields": ["provider", "model", "input_per_million_cents", "output_per_million_cents", "effective_date"]
-  },
-  "search": {
-    "fields": ["provider", "model"]
+    "list_fields": [
+      "provider",
+      "model",
+      "input_per_million_cents",
+      "output_per_million_cents",
+      "effective_date"
+    ]
   }
 }

@@ -26,8 +26,11 @@ _JS = r"""
     notes: (id) => "/notes/" + encodeURIComponent(id),
     articles: (id) => "/articles/" + encodeURIComponent(id),
     files: (id) => "/api/files/" + encodeURIComponent(id),
+    views: (id) => "/views/" + encodeURIComponent(id),
     tasks: () => "/tasks", projects: () => "/projects", contacts: () => "/contacts",
+    organizations: () => "/contacts", interactions: () => "/contacts",
     links: () => "/links", events: () => "/calendar",
+    invoices: () => "/invoices", templates: () => "/templates",
   };
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
     (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -111,7 +114,8 @@ _JS = r"""
       resMenu.innerHTML = groups.map(([col, hits]) =>
         '<div class="head">' + esc(col) + "</div>" +
         hits.map((h) => {
-          const label = esc(h.title || h.name || h.content || h.first_name || h.id).slice(0, 80);
+          const label = esc(h.title || h.name || h.number || h.subject || h.body
+            || h.content || h.comment || h.description || h.first_name || "(untitled)").slice(0, 80);
           const url = (HIT_URL[col] ? HIT_URL[col](h.id) : null);
           return url ? '<a class="hit item" href="' + url + '">' + label + "</a>"
                      : '<div class="hit item">' + label + "</div>";

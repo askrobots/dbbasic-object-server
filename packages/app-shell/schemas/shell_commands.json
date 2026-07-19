@@ -1,7 +1,7 @@
 {
   "name": "shell_commands",
   "title": "Shell History",
-  "version": 1,
+  "version": 2,
   "description": "Command history: what was typed and what came back.",
   "fields": [
     {
@@ -23,7 +23,14 @@
       "type": "enum",
       "label": "Kind",
       "default": "command",
-      "enum": ["command", "ai", "note", "task", "link", "search"]
+      "enum": [
+        "command",
+        "ai",
+        "note",
+        "task",
+        "link",
+        "search"
+      ]
     },
     {
       "name": "owner_id",
@@ -33,9 +40,9 @@
   ],
   "views": {
     "list_mode": "feed",
-    "list_fields": ["input", "kind"]
-  },
-  "search": {
-    "fields": ["input", "output"]
+    "list_fields": [
+      "input",
+      "kind"
+    ]
   }
 }

@@ -1,7 +1,7 @@
 {
   "id": "app-invoices",
   "name": "Invoices",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Line-item invoices, quotes, and credit notes (doc_type on one shared schema): owner-scoped CRUD, guarded status lifecycle (draft/sent/paid/partial/overdue/void), and a HANDLES totals handler (system_invoice_totals) that stamps subtotal/tax/total/balance from invoice_lines in integer cents on every line change. Deferred to a later slice: auto-numbered sequences per doc_type (invoice_counters + a closed invoices create route), the tokenized public/printable /i/{token} view, order-to-invoice conversion, and partial-payment recording (amount_paid_cents exists but nothing writes it yet). See plan/vocabulary/20-invoice-spec.md. subtotal_cents/tax_cents/total_cents/balance_due_cents/line_total_cents/line_tax_cents are deliberately NOT schema read_only -- see objects/system/invoice_totals.py's module docstring for why (update_collection_record has no read_only write exception, so a truly read_only field could never be re-stamped). Invoice detail permalinks need a site_routes record mapping /invoices/{invoice_id:uuid} to site_invoice_view -- not seeded by this package, same precedent as app-notes' /notes/{note_id:uuid}.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"

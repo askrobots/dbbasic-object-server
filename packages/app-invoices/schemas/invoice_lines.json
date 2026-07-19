@@ -11,7 +11,10 @@
       "name": "invoice_id",
       "type": "relation",
       "required": true,
-      "relation": {"collection": "invoices", "display_field": "number"},
+      "relation": {
+        "collection": "invoices",
+        "display_field": "number"
+      },
       "label": "Invoice",
       "help": "Set once at creation and not intended to change after. Not schema read_only -- see dbbasic-package.json's description for why (a required, client-submitted-at-creation field cannot also be read_only on this platform: the server rejects any client submission of a read_only field, even the first one)."
     },
@@ -20,7 +23,10 @@
       "type": "text",
       "required": true,
       "label": "Description",
-      "validation": {"min_length": 1, "max_length": 300}
+      "validation": {
+        "min_length": 1,
+        "max_length": 300
+      }
     },
     {
       "name": "quantity",
@@ -68,13 +74,23 @@
     }
   ],
   "forms": {
-    "default": {"fields": ["invoice_id", "description", "quantity", "unit_price_cents", "tax_rate_bps"]}
+    "default": {
+      "fields": [
+        "invoice_id",
+        "description",
+        "quantity",
+        "unit_price_cents",
+        "tax_rate_bps"
+      ]
+    }
   },
   "views": {
     "list_mode": "table",
-    "list_fields": ["description", "quantity", "unit_price_cents", "line_total_cents"]
-  },
-  "search": {
-    "fields": ["description"]
+    "list_fields": [
+      "description",
+      "quantity",
+      "unit_price_cents",
+      "line_total_cents"
+    ]
   }
 }
