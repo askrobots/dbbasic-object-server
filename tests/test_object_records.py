@@ -907,6 +907,55 @@ def test_update_after_cached_read_returns_fresh_data(tmp_path):
     assert listed == [{"id": "c1", "name": "Ada Lovelace"}]
 
 
+def test_classic_write_keeps_an_open_readers_fd_on_a_complete_version(tmp_path):
+    """The "Q2 property" that live cross-process editing depends on, pinned
+    by a test -- a code comment (object_records.py, the CONCURRENCY block)
+    can't fail CI. Classic create/update/delete each rewrite via a temp file
+    + atomic replace (_write_collection_records), so a reader in another
+    process that already has the file open keeps seeing the COMPLETE
+    pre-write version -- the atomic rename swaps the directory entry to a new
+    inode while the reader's fd holds the old one -- and a reader that opens
+    AFTER the write sees the COMPLETE post-write version. Never a torn mix.
+
+    This is load-bearing for any consumer that edits a collection live from
+    more than one process at once -- e.g. a request handler and a background
+    daemon mutating the same objects while clients are actively reading them.
+    The regression this guards against is a future "optimization" that
+    rewrites in place via open(path, "w"): that truncates the very inode a
+    concurrent reader's fd points at, turning live editing into live
+    corruption. Such a writer fails the mid-write assertions below.
+
+    (Append mode deliberately mutates the same inode and upholds the same
+    guarantee via the torn-tail rule instead -- see
+    test_append_mode_torn_tail_is_ignored_and_self_heals.)
+    """
+    data_dir = tmp_path / "data"
+    path = write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+
+    # UPDATE: a reader fd opened before the write still reads the whole
+    # pre-write file; a fresh read afterward sees the whole post-write file.
+    with path.open("rb") as held:
+        object_records.update_collection_record(
+            "contacts", "c1", {"name": "Ada Lovelace"}, base_dir=data_dir, roots=[]
+        )
+        assert held.read() == b"id\tname\nc1\tAda\n"
+    assert path.read_text() == "id\tname\nc1\tAda Lovelace\n"
+
+    # CREATE
+    with path.open("rb") as held:
+        object_records.create_collection_record(
+            "contacts", {"id": "c2", "name": "Grace"}, base_dir=data_dir, roots=[]
+        )
+        assert held.read() == b"id\tname\nc1\tAda Lovelace\n"
+    assert path.read_text() == "id\tname\nc1\tAda Lovelace\nc2\tGrace\n"
+
+    # DELETE
+    with path.open("rb") as held:
+        object_records.delete_collection_record("contacts", "c2", base_dir=data_dir, roots=[])
+        assert held.read() == b"id\tname\nc1\tAda Lovelace\nc2\tGrace\n"
+    assert path.read_text() == "id\tname\nc1\tAda Lovelace\n"
+
+
 def test_delete_collection_record_unaffected_by_extra(tmp_path):
     data_dir = tmp_path / "data"
     write_schema(
