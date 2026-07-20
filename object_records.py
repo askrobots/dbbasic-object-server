@@ -34,6 +34,22 @@ DEFAULT_RECORD_LIMIT = 100
 MAX_RECORD_LIMIT = 1000
 EXTRA_FIELD = "extra"
 
+# Maximum bytes for a single TSV field value. Python's csv module defaults
+# csv.field_size_limit() to 128 KiB; a single record field can legitimately
+# exceed that (a long article body, a big template JSON, the embedded-items
+# array of plan/vocabulary/66). Left unraised, a cell over 128 KiB is a
+# silent data-loss bug: a classic-mode read raises an uncaught csv.Error,
+# and an APPEND-mode read returns an EMPTY collection (the oversize row trips
+# the torn-tail-tolerant `except csv.Error: break` in _parse_append_body,
+# discarding every row from that point on). We raise the PARSE ceiling here
+# and enforce the SAME ceiling on WRITE (_check_field_sizes, called from
+# create/update) so no row is ever persisted that cannot be read back. 16 MiB
+# matches the platform's max request body -- a field cannot exceed the
+# request that wrote it. Per-surface limits (e.g. the 256 KiB line-items cap)
+# are stricter and enforced above this hard floor.
+MAX_TSV_FIELD_BYTES = 16 * 1024 * 1024
+csv.field_size_limit(MAX_TSV_FIELD_BYTES)
+
 _RECORD_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
 # Append-only storage (docs/append-only-storage-design.md). `OP_FIELD` is
@@ -455,6 +471,7 @@ def create_collection_record(
         raise InvalidRecordIdError(f"Invalid record id: {record_id}")
     submitted_fields = frozenset(clean)
     clean = _apply_schema_defaults(collection, clean, base_dir=base_dir, roots=roots)
+    _check_field_sizes(clean)
     clean = _apply_auto_created_at(collection, clean, submitted_fields, base_dir=base_dir, roots=roots)
     _validate_record_against_schema(
         collection,
@@ -604,6 +621,7 @@ def update_collection_record(
             base_dir=base_dir,
             roots=roots,
         )
+        _check_field_sizes(updated)
         _validate_field_transitions(
             collection,
             existing,
@@ -2239,22 +2257,28 @@ def _oidx_get_row(
     stripped) -- or None if the row can't be read/parsed cleanly, which
     the caller treats as "sidecar inconclusive, fall back to a full
     fold" rather than as "record missing"."""
+    # Read the full LOGICAL row via csv, not a raw readline(). A row whose
+    # value contains an embedded newline (a quoted field spanning several
+    # physical lines -- e.g. multi-line text, or pretty-printed JSON) must be
+    # consumed to its real row terminator; a readline() would stop at the
+    # first '\n' byte and silently return a truncated (often unparseable)
+    # value. csv.reader over the file from `offset` handles the quoted-field
+    # continuation exactly as the full-fold path (_parse_append_body) does,
+    # keeping the by-id read consistent with it. Any read/parse trouble ->
+    # None, so the caller falls back to a full fold rather than trusting a
+    # partial row.
     try:
-        with path.open("rb") as handle:
-            handle.seek(offset)
-            raw_line = handle.readline()
+        handle = path.open("rb")
     except OSError:
         return None
-    if not raw_line.endswith(b"\n"):
-        return None
     try:
-        text_line = raw_line.decode("utf-8")
-    except UnicodeDecodeError:
+        handle.seek(offset)
+        text = io.TextIOWrapper(handle, encoding="utf-8", newline="")
+        row = next(csv.reader(text, delimiter="\t"))
+    except (OSError, UnicodeDecodeError, StopIteration, csv.Error):
         return None
-    try:
-        row = next(csv.reader(io.StringIO(text_line), delimiter="\t"))
-    except (StopIteration, csv.Error):
-        return None
+    finally:
+        handle.close()
     field_count = len(physical_fields)
     if not row or len(row) > field_count:
         return None
@@ -2976,6 +3000,30 @@ def _validate_record_against_schema(
         _validate_field_enum(field, value)
         _validate_field_rules(field, value)
         _validate_field_relation(field, value, base_dir=base_dir)
+
+
+def _check_field_sizes(record: dict[str, Any]) -> None:
+    """Reject a write whose any field value exceeds MAX_TSV_FIELD_BYTES.
+
+    Enforced on create/update -- the entry points for new/changed data -- so
+    a value too large to be read back is never persisted (see
+    MAX_TSV_FIELD_BYTES: without this, an oversize cell silently empties an
+    append-mode collection on read). Measured in UTF-8 bytes, the unit the
+    on-disk TSV and csv.field_size_limit both work in. Iterates the record's
+    own values rather than schema fields, so it also guards schemaless
+    collections and the packed `extra` blob. Internal rewrites (compaction,
+    transition) do not pass through here and are not size-checked -- they
+    only ever re-serialize data that already passed this gate on write.
+    """
+    for name, value in record.items():
+        if value is None:
+            continue
+        size = len(str(value).encode("utf-8"))
+        if size > MAX_TSV_FIELD_BYTES:
+            raise InvalidRecordPayloadError(
+                f"Record field '{name}' is {size} bytes, exceeding the "
+                f"{MAX_TSV_FIELD_BYTES}-byte per-field maximum"
+            )
 
 
 def _schema_fields(
