@@ -1,7 +1,7 @@
 {
   "name": "contacts",
   "title": "Contacts",
-  "version": 2,
+  "version": 3,
   "description": "People: the core CRM record.",
   "fields": [
     {
@@ -33,6 +33,12 @@
       "validation": {"max_length": 40}
     },
     {
+      "name": "job_title",
+      "type": "text",
+      "label": "Job Title",
+      "validation": {"max_length": 120}
+    },
+    {
       "name": "organization_id",
       "label": "Organization",
       "relation": {"collection": "organizations", "display_field": "name"}
@@ -41,6 +47,13 @@
       "name": "project_id",
       "label": "Project",
       "relation": {"collection": "projects", "display_field": "name"}
+    },
+    {
+      "name": "lead_status",
+      "type": "enum",
+      "label": "Lead Status",
+      "enum": ["cold", "warm", "hot", "customer", "inactive"],
+      "help": "Optional pipeline stage; blank until set, no default is forced"
     },
     {
       "name": "tags",
@@ -66,12 +79,12 @@
     }
   ],
   "forms": {
-    "default": {"fields": ["first_name", "last_name", "email", "phone",
-                           "organization_id", "project_id", "tags", "notes"]}
+    "default": {"fields": ["first_name", "last_name", "email", "phone", "job_title",
+                           "organization_id", "project_id", "lead_status", "tags", "notes"]}
   },
   "views": {
     "list_mode": "cards",
-    "list_fields": ["first_name", "last_name", "email", "organization_id"]
+    "list_fields": ["first_name", "last_name", "email", "organization_id", "lead_status"]
   },
   "search": {
     "fields": ["first_name", "last_name", "email", "tags", "notes"]
