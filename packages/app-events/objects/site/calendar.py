@@ -1,46 +1,28 @@
 """Calendar page over the events collection.
 
-The collection is named events (matching the q9 app); this page lives at
-/calendar because /events is the server's built-in event-delivery API.
+The collection is named events (matching a private predecessor-system audit,
+not part of this repo); this page lives at /calendar because /events is the
+server's built-in event-delivery API. The month-grid display is the shared
+/list generator in calendar mode (events.views.list_mode == "calendar", spec
+60) -- this page keeps only its custom quick-add form and hands the display to
+window.dbbasicList, which reads the schema and renders the month grid.
 """
 
-# Page-unique layout only; everything else comes from the shared /style sheet.
+# Page-unique layout only (the quick-add form); the calendar grid + everything
+# else come from the shared /style sheet.
 _STYLE = """
 form.capture { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md);
                padding: var(--pad); display: grid; gap: var(--gap); margin-bottom: var(--gap);
                grid-template-columns: 2fr 1fr 1fr; }
 form.capture .btn { justify-self: start; }
 form.capture .error { grid-column: 1 / -1; }
-tr.past td { color: var(--muted); }
-td.when { white-space: nowrap; }
-td .purpose { color: var(--positive); font-size: 0.75rem; }
 """
 
 _SCRIPT = """
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
-  (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
-
-function render(records) {
-  const now = new Date().toISOString();
-  const sorted = records.slice().sort((a, b) => (a.starts_at || "").localeCompare(b.starts_at || ""));
-  const rows = sorted.map((e) => {
-    const past = (e.ends_at || e.starts_at || "") < now;
-    const when = (e.starts_at || "").replace("T", " ").slice(0, 16);
-    const link = e.url ? ` <a href="${esc(e.url)}" rel="noopener noreferrer">link</a>` : "";
-    return `<tr class="${past ? "past" : ""}"><td>${esc(e.title)}` +
-           `<div class="purpose">${esc(e.purpose)}</div></td>` +
-           `<td class="when">${esc(when)}</td><td>${esc(e.location)}${link}</td></tr>`;
-  });
-  document.getElementById("rows").innerHTML =
-    rows.join("") || '<tr><td colspan="3">No events yet.</td></tr>';
-}
-
-async function load() {
-  const res = await fetch("/collections/events/records?limit=500",
-                          {credentials: "same-origin", headers: {accept: "application/json"}});
-  const body = await res.json();
-  render(body.records || []);
-}
+// The month-grid display is the shared generator in calendar mode; this page
+// only owns the quick-add form and asks the list to reload after a save (the
+// realtime subscription would refresh it anyway, this just makes it instant).
+const cal = window.dbbasicList("events", {mount: "#events-mount"});
 
 document.getElementById("capture-form").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -57,19 +39,8 @@ document.getElementById("capture-form").addEventListener("submit", async (event)
   });
   const body = await res.json();
   document.getElementById("form-error").textContent = res.ok ? "" : (body.error || "Save failed");
-  if (res.ok) { event.target.reset(); load(); }
+  if (res.ok) { event.target.reset(); if (cal && cal.reload) cal.reload(); }
 });
-load();
-
-// Realtime: auto-refresh when this collection changes (another tab, user, or agent).
-(function () {
-  let _lt = null;
-  const reload = () => { clearTimeout(_lt); _lt = setTimeout(load, 150); };
-  (function wait() {
-    if (window.dbbasicSubscribe) window.dbbasicSubscribe("events", reload);
-    else setTimeout(wait, 300);
-  })();
-})();
 """
 
 
@@ -96,12 +67,12 @@ def GET(request):
 <button type="submit" class="btn primary">Add Event</button>
 <div class="error" id="form-error"></div>
 </form>
-<table>
-<thead><tr><th>Event</th><th>When</th><th>Where</th></tr></thead>
-<tbody id="rows"><tr><td colspan="3">loading&hellip;</td></tr></tbody>
-</table>
+<div id="events-mount"><div class="state">loading&hellip;</div></div>
 """
-        script = f"<script>const OWNER_ID = {user_id!r};{_SCRIPT}</script>"
+        script = (
+            '<script src="/list"></script>'
+            f"<script>const OWNER_ID = {user_id!r};{_SCRIPT}</script>"
+        )
 
     who = (
         f"signed in as <strong>{user_id}</strong>"

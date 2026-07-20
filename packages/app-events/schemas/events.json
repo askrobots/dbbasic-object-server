@@ -1,7 +1,7 @@
 {
   "name": "events",
   "title": "Events",
-  "version": 1,
+  "version": 2,
   "description": "Calendar events with attendees drawn from contacts.",
   "fields": [
     {
@@ -12,7 +12,10 @@
       "type": "text",
       "required": true,
       "label": "Title",
-      "validation": {"min_length": 1, "max_length": 255}
+      "validation": {
+        "min_length": 1,
+        "max_length": 255
+      }
     },
     {
       "name": "description",
@@ -34,20 +37,29 @@
       "name": "location",
       "type": "text",
       "label": "Location",
-      "validation": {"max_length": 255}
+      "validation": {
+        "max_length": 255
+      }
     },
     {
       "name": "url",
       "type": "text",
       "label": "URL",
-      "validation": {"max_length": 2000}
+      "validation": {
+        "max_length": 2000
+      }
     },
     {
       "name": "purpose",
       "type": "enum",
       "label": "Purpose",
       "default": "meeting",
-      "enum": ["meeting", "workshop", "recreation", "others"]
+      "enum": [
+        "meeting",
+        "workshop",
+        "recreation",
+        "others"
+      ]
     },
     {
       "name": "attendee_ids",
@@ -58,7 +70,10 @@
     {
       "name": "project_id",
       "label": "Project",
-      "relation": {"collection": "projects", "display_field": "name"}
+      "relation": {
+        "collection": "projects",
+        "display_field": "name"
+      }
     },
     {
       "name": "owner_id",
@@ -67,14 +82,37 @@
     }
   ],
   "forms": {
-    "default": {"fields": ["title", "description", "starts_at", "ends_at",
-                           "location", "url", "purpose", "attendee_ids", "project_id"]}
+    "default": {
+      "fields": [
+        "title",
+        "description",
+        "starts_at",
+        "ends_at",
+        "location",
+        "url",
+        "purpose",
+        "attendee_ids",
+        "project_id"
+      ]
+    }
   },
   "views": {
-    "list_mode": "table",
-    "list_fields": ["title", "starts_at", "location", "purpose"]
+    "list_mode": "calendar",
+    "list_fields": [
+      "title",
+      "starts_at",
+      "location",
+      "purpose"
+    ],
+    "calendar": {
+      "date_field": "starts_at"
+    }
   },
   "search": {
-    "fields": ["title", "description", "location"]
+    "fields": [
+      "title",
+      "description",
+      "location"
+    ]
   }
 }
