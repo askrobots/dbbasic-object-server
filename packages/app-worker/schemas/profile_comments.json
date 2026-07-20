@@ -1,0 +1,88 @@
+{
+  "name": "profile_comments",
+  "title": "Profile Comments",
+  "version": 1,
+  "description": "Moderated guestbook comments on a public profile. A faithful port of the source system's ProfileComment model: author_name/author_email/author_url plus a pending/approved/rejected moderation status and the submitter's ip_address. v1 posture (see permissions/rules.json and dbbasic-package.json): guestbook posting is signed-in only, not anonymous -- the source's anonymous-submission path needs the anti-abuse stack in plan/vocabulary/02-public-write-hardening-spec.md (rate limits, honeypot, timing token), which this package does not build. The author_name/author_email/author_url fields are carried from the source's anonymous-guestbook shape even though v1 has no anonymous path, so no migration is needed when that path lands.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "profile_id",
+      "type": "relation",
+      "required": true,
+      "relation": {"collection": "profiles", "display_field": "display_name"},
+      "label": "Profile"
+    },
+    {
+      "name": "author_name",
+      "type": "text",
+      "label": "Name",
+      "validation": {"max_length": 120}
+    },
+    {
+      "name": "author_email",
+      "type": "text",
+      "label": "Email",
+      "validation": {"max_length": 254},
+      "permissions": {"public": "hidden"},
+      "help": "Carried from the source's anonymous-guestbook shape. Hidden from public reads even though v1 has no public-write path to it -- defense in depth, matching the public-write-hardening spec's posture for contact fields."
+    },
+    {
+      "name": "author_url",
+      "type": "text",
+      "label": "URL",
+      "validation": {"max_length": 300}
+    },
+    {
+      "name": "content",
+      "type": "textarea",
+      "required": true,
+      "label": "Comment",
+      "validation": {"min_length": 1, "max_length": 2000}
+    },
+    {
+      "name": "status",
+      "type": "enum",
+      "label": "Status",
+      "default": "pending",
+      "enum": ["pending", "approved", "rejected"],
+      "permissions": {"public": "hidden"},
+      "transitions": {
+        "pending": [
+          {"to": "approved", "when": {"owner_id": "$user_id"}},
+          {"to": "rejected", "when": {"owner_id": "$user_id"}}
+        ],
+        "approved": [
+          {"to": "rejected", "when": {"owner_id": "$user_id"}}
+        ]
+      },
+      "help": "Matches the source: every new comment lands pending and only an approved comment is publicly visible (see permissions/rules.json's row_filter). The owner_id guard on these transitions is the SAME KNOWN GAP app-forum documents for is_solution: owner_id on a comment is the commenter, not the profile owner, so v1 lets a commenter move their own comment between pending/approved/rejected -- there is no row_filter path today for the profile owner to moderate someone else's comment. A moderator-role or profile-owner-scoped permission rule closes this; not built here."
+    },
+    {
+      "name": "ip_address",
+      "type": "text",
+      "label": "IP Address",
+      "permissions": {"public": "hidden"},
+      "help": "Carried from the source's abuse-tracking field. Nothing in this package stamps it -- no request-context plumbing exists on the create path here -- so it stays empty until a later slice fills it in."
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["content"]}
+  },
+  "views": {
+    "list_mode": "cards",
+    "list_fields": ["content", "status", "created_at"]
+  }
+}

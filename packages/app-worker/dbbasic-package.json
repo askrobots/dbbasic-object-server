@@ -1,0 +1,54 @@
+{
+  "id": "app-worker",
+  "name": "Worker",
+  "version": "0.1.0",
+  "description": "Public creator profiles + follow graph + moderated guestbook -- a faithful port of a private predecessor-system audit, not part of this repo: a public profile (bio, free-text skills, experience, location, education, website, social links), a directed follower->following edge (follows), and a moderated guestbook (profile_comments, pending/approved/rejected, only-approved is publicly visible). This is a PUBLIC CREATOR PROFILE, NOT a task marketplace: the source had no skills-matching, no availability, and no rating/review system (those were commented-out stubs in the source model and are not built here). Storefront/cart/checkout in the source came from its catalog app (a separate concern -- see this codebase's app-catalog/app-orders, not touched by this package). Public profile pages need a site_routes record mapping /u/{username} to site_profile, and /profile/edit to site_profile_edit -- not seeded by this package, same precedent as app-notes' /notes/{note_id:uuid}. Deferred to a later slice (fields are carried, behavior is not): anonymous guestbook posting (v1 is signed-in only; the source's anonymous path needs the anti-abuse stack in plan/vocabulary/02-public-write-hardening-spec.md -- rate limits, honeypot, timing token -- none of which this package builds), cross-user comment moderation (the profile_comments status transitions are owner-gated to the COMMENTER's owner_id, not the profile owner -- the same cross-user moderation gap app-forum documents for is_pinned/is_locked/is_solved; a profile-owner-scoped or moderator-role permission rule closes it, not built here), full profile aggregation of the user's other public content (this package includes one opportunistic aggregation -- recent public articles, fetched without a hard dependency on app-articles -- links/notes/files/templates aggregation is not built), ratings/reviews (a commented-out stub in the source model, never built there, not built here), a storefront/cart/checkout (that is the catalog's orders, a separate concern from this package), and follow-edge deduplication (follows has no server-side unique_together equivalent -- the follow button checks client-side before creating an edge, but the raw records API does not enforce uniqueness).",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": [],
+  "objects": [
+    {
+      "id": "site_profile",
+      "path": "objects/site/profile.py"
+    },
+    {
+      "id": "site_profile_edit",
+      "path": "objects/site/profile_edit.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "profiles",
+      "path": "schemas/profiles.json"
+    },
+    {
+      "collection": "follows",
+      "path": "schemas/follows.json"
+    },
+    {
+      "collection": "profile_comments",
+      "path": "schemas/profile_comments.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "profiles",
+      "path": "seed/profiles.tsv"
+    },
+    {
+      "collection": "follows",
+      "path": "seed/follows.tsv"
+    },
+    {
+      "collection": "profile_comments",
+      "path": "seed/profile_comments.tsv"
+    }
+  ],
+  "migrations": []
+}

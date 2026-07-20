@@ -1,0 +1,45 @@
+{
+  "name": "follows",
+  "title": "Follows",
+  "version": 1,
+  "storage": "append",
+  "description": "A directed follower -> following edge between two accounts. A faithful port of the source system's Follow model, which used a database unique_together(follower, following) constraint. This package does not reconstruct that constraint server-side (no per-collection uniqueness check exists in this codebase's schema validation): the follow button in objects/site/profile.py checks for an existing edge client-side before creating one, but a determined caller of the raw records API could still create a duplicate row. \"storage\": \"append\" because this is a write-hot, never-edited edge log -- same shape as app-catalog's stock_moves and app-thread's thread_comments (docs/append-only-storage-design.md). Unfollow is a delete of the edge row, not a state flag -- the simplest thing that matches the source's directed-edge semantics without inventing a tombstone convention this package doesn't otherwise need.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "follower_id",
+      "type": "text",
+      "required": true,
+      "label": "Follower",
+      "help": "The account doing the following."
+    },
+    {
+      "name": "following_id",
+      "type": "text",
+      "required": true,
+      "label": "Following",
+      "help": "The account being followed."
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner",
+      "help": "Equal to follower_id: the follower owns the edge they created, so they alone can delete it (unfollow). The account being followed has no write access to someone else's follow row."
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["follower_id", "following_id"]}
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["follower_id", "following_id", "created_at"]
+  }
+}

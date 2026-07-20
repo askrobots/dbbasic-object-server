@@ -1,0 +1,64 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["read"],
+      "collection": "profiles",
+      "reason": "public creator profiles are readable by anyone, no row_filter needed since every profile is visible -- same posture as app-forum's boards"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["read"],
+      "collection": "follows",
+      "reason": "the follow graph is public, matching the source's public follower/following counts and lists on a profile page"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["read"],
+      "collection": "profile_comments",
+      "row_filter": {"status": "approved"},
+      "reason": "only approved guestbook comments are publicly visible, matching the source's moderation posture -- pending and rejected comments are invisible to anonymous and non-owner readers"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "profiles",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "a signed-in user manages their own profile; id == the user's own id, one profile per user"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "follows",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "a signed-in user manages the follow edges they created (owner_id == follower_id): follow is create, unfollow is delete. The account being followed has no special access to someone else's edge"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "profile_comments",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "v1 guestbook posting is signed-in only (see schemas/profile_comments.json and dbbasic-package.json for the deferred anonymous path); a commenter manages their own comment, including its own pending/approved/rejected moves via the schema's guarded transitions -- this is the same cross-user moderation gap app-forum documents: the PROFILE owner cannot moderate someone ELSE's comment through this rule, only the commenter can move their own"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_profile",
+      "reason": "public profile pages are public; visitors see the profile, its approved guestbook comments, and a sign-in prompt instead of the follow button and comment form"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_profile_edit",
+      "reason": "the edit page itself is publicly reachable; it shows a sign-in prompt to anonymous visitors and the owner-only form to a signed-in user, same posture as app-invoices' site_invoices"
+    }
+  ]
+}

@@ -1,0 +1,91 @@
+{
+  "name": "profiles",
+  "title": "Profiles",
+  "version": 1,
+  "description": "Public creator profiles: bio, free-text skills, experience, location, education, and social links. A faithful port of a private predecessor-system's worker/profile model, not part of this repo -- id is the id of the account it belongs to (one profile per user), not a separately generated record id. skills is a plain free-text field, matching the source: NOT a relation, NOT a skills-matching taxonomy. The source model also carried commented-out rating/review stub fields; those were never built there and are not built here -- see dbbasic-package.json's deferred list.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "display_name",
+      "type": "text",
+      "label": "Display Name",
+      "validation": {"max_length": 120}
+    },
+    {
+      "name": "bio",
+      "type": "textarea",
+      "label": "Bio"
+    },
+    {
+      "name": "skills",
+      "type": "text",
+      "label": "Skills",
+      "validation": {"max_length": 500},
+      "help": "Free text, e.g. \"Python, woodworking, tax prep\" -- carried from the source as-is. Not a relation to a skills collection and not matched against anything; there is no availability field and no marketplace matching in this package."
+    },
+    {
+      "name": "experience",
+      "type": "textarea",
+      "label": "Experience"
+    },
+    {
+      "name": "location",
+      "type": "text",
+      "label": "Location",
+      "validation": {"max_length": 200}
+    },
+    {
+      "name": "education",
+      "type": "text",
+      "label": "Education",
+      "validation": {"max_length": 200}
+    },
+    {
+      "name": "website",
+      "type": "text",
+      "label": "Website",
+      "validation": {"max_length": 300}
+    },
+    {
+      "name": "social_links",
+      "type": "textarea",
+      "label": "Social Links",
+      "help": "One URL per line (or a JSON array of URLs) -- either shape is accepted; this package renders whichever it finds without imposing its own format on the source data."
+    },
+    {
+      "name": "is_active",
+      "type": "boolean",
+      "default": "true",
+      "label": "Active",
+      "help": "Inactive profiles are carried but not surfaced as a hidden-from-public-page flag in v1 -- the public read rule has no row_filter on this field (see permissions/rules.json); hiding inactive profiles from /u/{username} is a straightforward later addition, not built here."
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    }
+  ],
+  "forms": {
+    "default": {
+      "fields": [
+        "display_name", "bio", "skills", "experience", "location",
+        "education", "website", "social_links", "is_active"
+      ]
+    }
+  },
+  "views": {
+    "list_mode": "cards",
+    "list_fields": ["display_name", "skills", "location"]
+  },
+  "search": {
+    "fields": ["display_name", "skills", "bio"]
+  }
+}
