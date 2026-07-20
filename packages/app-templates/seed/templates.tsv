@@ -1,1 +1,1 @@
-id	name	description	category	body	tags	is_public	owner_id
+id	name	description	category	body	schema	ui_schema	instructions	ai_prompt	ai_assistance	default_values	example_data	tags	is_public	owner_id

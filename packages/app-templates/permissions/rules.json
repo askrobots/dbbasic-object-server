@@ -15,6 +15,13 @@
       "collection": "templates",
       "row_filter": {"is_public": "true"},
       "reason": "public templates are reusable by any signed-in user"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_templates",
+      "reason": "the templates page is public; it shows a sign-in prompt to visitors"
     }
   ]
 }

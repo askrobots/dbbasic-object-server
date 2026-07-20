@@ -1,8 +1,8 @@
 {
   "name": "tasks",
   "title": "Tasks",
-  "version": 5,
-  "description": "Work items with an enforced status lifecycle. Transition guards add who-per-verb on top of row-filtered update rights.",
+  "version": 6,
+  "description": "Work items with an enforced status lifecycle. Transition guards add who-per-verb on top of row-filtered update rights. v6 adds task_type/template_id/instructions/metadata (the 'Work / CreateWork' fields reconciled against a private predecessor-system audit, not part of this repo); status/urgency and every transition guard are unchanged.",
   "fields": [
     {
       "name": "id"
@@ -18,6 +18,31 @@
       "name": "description",
       "type": "textarea",
       "label": "Description"
+    },
+    {
+      "name": "instructions",
+      "type": "textarea",
+      "label": "Instructions",
+      "help": "How-to guidance for whoever works this task, distinct from description -- the audited predecessor's create_task keeps the two separate."
+    },
+    {
+      "name": "task_type",
+      "type": "enum",
+      "label": "Task Type",
+      "default": "STANDARD",
+      "enum": ["BASIC", "STANDARD", "CONTRACT"]
+    },
+    {
+      "name": "template_id",
+      "label": "Template",
+      "relation": {"collection": "templates", "display_field": "name"},
+      "help": "Optional link to the app-templates record this task was created from or is filling out -- the Work/CreateWork link. Seeding a new task's fields from the template's schema/default_values on create is not built here (see app-tasks/objects/site/tasks.py); this field just carries the reference."
+    },
+    {
+      "name": "metadata",
+      "type": "textarea",
+      "label": "Metadata (JSON)",
+      "help": "Optional free-form structured data. Stored as a JSON string, same convention as app-templates' schema/default_values fields (this codebase's field-type contract, docs/schema-forms.md, has no dedicated json type)."
     },
     {
       "name": "project_id",
@@ -88,14 +113,15 @@
     }
   ],
   "forms": {
-    "default": {"fields": ["title", "description", "project_id", "status",
+    "default": {"fields": ["title", "description", "instructions", "project_id",
+                           "task_type", "template_id", "status",
                            "urgency", "due_date", "assigned_to"]}
   },
   "views": {
     "list_mode": "table",
-    "list_fields": ["title", "status", "urgency", "due_date", "assigned_to"]
+    "list_fields": ["title", "status", "urgency", "task_type", "due_date", "assigned_to"]
   },
   "search": {
-    "fields": ["title", "description"]
+    "fields": ["title", "description", "instructions"]
   }
 }

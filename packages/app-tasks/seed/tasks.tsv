@@ -1,1 +1,1 @@
-id	title	description	project_id	status	urgency	due_date	assigned_to	owner_id
+id	title	description	instructions	task_type	template_id	metadata	project_id	status	urgency	due_date	assigned_to	owner_id

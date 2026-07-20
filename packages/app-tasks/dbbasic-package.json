@@ -2,7 +2,7 @@
   "id": "app-tasks",
   "name": "Tasks",
   "version": "0.1.0",
-  "description": "Task lifecycle: status transitions enforced by schema, owner and assignee access, project sharing, and global search.",
+  "description": "Task lifecycle: status transitions enforced by schema, owner and assignee access, project sharing, and global search. v6 adds task_type/template_id/instructions/metadata; template_id is an optional relation into app-templates' templates collection (soft reference only, like invoices' customer_id -> contacts -- no install-order dependency is declared, matching that precedent).",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },

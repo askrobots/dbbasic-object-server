@@ -1,8 +1,8 @@
 {
   "name": "templates",
   "title": "Templates",
-  "version": 1,
-  "description": "Reusable template bodies. Edit history comes from the record changelog.",
+  "version": 2,
+  "description": "Reusable, structured-data templates. `body` remains a free-text fallback from v1; a private predecessor-system audit (not part of this repo) showed templates there are chiefly a JSON Schema (`schema`) plus optional AI-assist config, so v2 adds those fields alongside it. Edit history comes from the record changelog.",
   "fields": [
     {
       "name": "id"
@@ -33,6 +33,50 @@
       "validation": {"min_length": 1}
     },
     {
+      "name": "schema",
+      "type": "textarea",
+      "label": "Schema (JSON)",
+      "help": "JSON Schema describing this template's structured fields -- the core of a template on the audited predecessor. Stored as a JSON string, same convention as invoice_lines/invoices use plain typed fields and this codebase's field-type contract (docs/schema-forms.md) has no dedicated json type. Kept optional (not required) so v1 template records saved before this field existed stay valid to read and re-save."
+    },
+    {
+      "name": "ui_schema",
+      "type": "textarea",
+      "label": "UI Schema (JSON)",
+      "help": "Optional form-presentation hints for `schema` above, e.g. field order or widget choice. JSON string, same storage convention as `schema`."
+    },
+    {
+      "name": "instructions",
+      "type": "textarea",
+      "label": "Instructions",
+      "help": "Human-readable how-to for whoever fills out this template."
+    },
+    {
+      "name": "ai_prompt",
+      "type": "textarea",
+      "label": "AI Prompt",
+      "help": "Instructions an AI assistant would use to help fill this template. Stored config only -- this codebase has no AI auto-fill engine; nothing reads or executes this field yet."
+    },
+    {
+      "name": "ai_assistance",
+      "type": "enum",
+      "label": "AI Assistance",
+      "default": "suggestions",
+      "enum": ["none", "suggestions", "auto_fill", "full"],
+      "help": "How much AI help this template calls for, mirroring the audited predecessor's levels. Stored preference only -- deferred infra, same posture as ai_prompt."
+    },
+    {
+      "name": "default_values",
+      "type": "textarea",
+      "label": "Default Values (JSON)",
+      "help": "Values pre-filled into `schema`'s fields when starting from this template. JSON string, same storage convention as `schema`."
+    },
+    {
+      "name": "example_data",
+      "type": "textarea",
+      "label": "Example Data (JSON)",
+      "help": "A worked example matching `schema`, shown as a sample rather than used as a default. JSON string, same storage convention as `schema`."
+    },
+    {
       "name": "tags",
       "type": "text",
       "label": "Tags",
@@ -51,13 +95,15 @@
     }
   ],
   "forms": {
-    "default": {"fields": ["name", "description", "category", "body", "tags", "is_public"]}
+    "default": {"fields": ["name", "description", "category", "body", "schema",
+                           "instructions", "ai_prompt", "ai_assistance",
+                           "default_values", "tags", "is_public"]}
   },
   "views": {
     "list_mode": "table",
-    "list_fields": ["name", "category", "is_public"]
+    "list_fields": ["name", "category", "ai_assistance", "is_public"]
   },
   "search": {
-    "fields": ["name", "description", "body", "tags"]
+    "fields": ["name", "description", "body", "instructions", "tags"]
   }
 }

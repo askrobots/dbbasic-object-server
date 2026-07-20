@@ -1,12 +1,17 @@
 {
   "id": "app-templates",
   "name": "Templates",
-  "version": "0.1.0",
-  "description": "Reusable templates: named bodies with categories, tags, and public sharing. No page object — generated UIs (Scroll) manage templates from the schema.",
+  "version": "0.2.0",
+  "description": "Reusable, structured-data templates: a JSON Schema plus optional AI-assist config (stored preference only, no AI engine), categories, tags, and public sharing. Ships a /templates page (site_templates, routed by the site-routing convention -- see docs/site-routing.md) listing the signed-in owner's templates with create/edit via the generic schema-driven form (window.dbbasicForm) and list (window.dbbasicList), the same pattern as /tasks in app-tasks.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
-  "objects": [],
+  "objects": [
+    {
+      "id": "site_templates",
+      "path": "objects/site/templates.py"
+    }
+  ],
   "schemas": [
     {
       "collection": "templates",
