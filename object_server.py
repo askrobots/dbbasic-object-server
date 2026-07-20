@@ -7249,6 +7249,20 @@ async def _handle_collection_record_changes(
     await _send_json(send, {"status": "ok", **changes})
 
 
+def _collection_has_owner_field(collection: str) -> bool:
+    """True if the collection's schema declares an owner_id field.
+
+    Used to decide whether a create should be stamped with the session's
+    user as the owner. Schemaless or unknown collections return False (no
+    field to stamp).
+    """
+    try:
+        schema = object_schemas.get_schema(collection, base_dir=_data_dir())
+    except Exception:
+        return False
+    return any(f.get("name") == "owner_id" for f in (schema.get("fields") or []))
+
+
 async def _handle_collection_record_create(
     send,
     collection: str,
@@ -7296,6 +7310,17 @@ async def _handle_collection_record_create(
                 status=403,
             )
             return
+
+    # Ownership is server-authoritative. For a signed-in create on a collection
+    # that declares an owner_id field, stamp it from the session rather than
+    # trusting the client -- a client could otherwise create a record owned by
+    # someone else, or (as raw-API and agent/MCP creates did) leave it empty,
+    # which silently breaks every owner-scoped rule and owner-gated transition
+    # on that record. Admin-token writes (no session) keep any explicit
+    # owner_id so seeding and migration can set ownership deliberately.
+    session = _current_identity_session(headers)
+    if session is not None and session.user_id and _collection_has_owner_field(collection):
+        record_payload = {**record_payload, "owner_id": session.user_id}
 
     try:
         record = object_records.create_collection_record(

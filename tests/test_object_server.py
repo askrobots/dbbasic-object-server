@@ -9557,3 +9557,19 @@ def test_lifespan_startup_and_shutdown_complete():
         {"type": "lifespan.startup.complete"},
         {"type": "lifespan.shutdown.complete"},
     ]
+
+
+def test_collection_has_owner_field_detects_owner_id(tmp_path, monkeypatch):
+    """The create handler stamps owner_id from the session only for
+    collections that declare an owner_id field; this pins that detection.
+    A schemaless/unknown collection must return False (nothing to stamp)."""
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(tmp_path))
+    schemas = tmp_path / "schemas"
+    schemas.mkdir(parents=True, exist_ok=True)
+    (schemas / "owned.json").write_text(json.dumps(
+        {"name": "owned", "fields": [{"name": "id"}, {"name": "owner_id", "type": "text"}]}))
+    (schemas / "ownerless.json").write_text(json.dumps(
+        {"name": "ownerless", "fields": [{"name": "id"}, {"name": "title", "type": "text"}]}))
+    assert object_server._collection_has_owner_field("owned") is True
+    assert object_server._collection_has_owner_field("ownerless") is False
+    assert object_server._collection_has_owner_field("nonexistent_collection") is False
