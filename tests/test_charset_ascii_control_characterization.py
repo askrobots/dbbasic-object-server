@@ -373,7 +373,7 @@ def test_ascii_printable_raw_field_round_trip_append_mode(tmp_path, monkeypatch)
 # =============================================================================
 
 
-@pytest.mark.xfail(reason="substrate: NUL is now cleanly REJECTED (InvalidRecordPayloadError) and lone-CR corruption awaits the QUOTE_ALL-vs-reject-bare-CR format decision (plan/database-test-strategy.md). Assertion refresh bundled with that decision.", strict=False)
+@pytest.mark.xfail(reason="NUL is now correctly REJECTED at write (InvalidRecordPayloadError) -- this test still asserts the old 'NUL survives' expectation and needs refactoring to assert rejection; cosmetic follow-up, not a fix gap. Lone-CR is now fixed (round-trips).", strict=False)
 def test_control_chars_raw_field_round_trip_classic_mode(tmp_path):
     """Does a raw NUL / CR / LF / VT / FF / BEL / ESC / etc. survive an
     exact csv round trip as a RAW (non-JSON) field value, classic mode?
@@ -387,7 +387,7 @@ def test_control_chars_raw_field_round_trip_classic_mode(tmp_path):
     _assert_no_failures(failures, context="C0 control chars + DEL, raw field, classic mode")
 
 
-@pytest.mark.xfail(reason="substrate: NUL is now cleanly REJECTED (InvalidRecordPayloadError) and lone-CR corruption awaits the QUOTE_ALL-vs-reject-bare-CR format decision (plan/database-test-strategy.md). Assertion refresh bundled with that decision.", strict=False)
+@pytest.mark.xfail(reason="NUL is now correctly REJECTED at write (InvalidRecordPayloadError) -- this test still asserts the old 'NUL survives' expectation and needs refactoring to assert rejection; cosmetic follow-up, not a fix gap. Lone-CR is now fixed (round-trips).", strict=False)
 def test_control_chars_raw_field_round_trip_append_mode(tmp_path, monkeypatch):
     """Same as above, append mode, by-id reads forced through the cold
     id->offset sidecar path (DBBASIC_RECORDS_CACHE_MAX_ROWS=0)."""
@@ -469,7 +469,6 @@ def test_csv_significant_chars_and_delimiter_text_round_trip(tmp_path, monkeypat
 # =============================================================================
 
 
-@pytest.mark.xfail(reason="substrate: NUL is now cleanly REJECTED (InvalidRecordPayloadError) and lone-CR corruption awaits the QUOTE_ALL-vs-reject-bare-CR format decision (plan/database-test-strategy.md). Assertion refresh bundled with that decision.", strict=False)
 def test_raw_newline_and_crlf_in_non_json_field_round_trip(tmp_path, monkeypatch):
     """Explicit answer to: does a raw (non-JSON) embedded newline round-trip
     via csv quoting on the by-id path? Uses a genuinely multi-physical-line
@@ -507,7 +506,7 @@ def test_raw_newline_and_crlf_in_non_json_field_round_trip(tmp_path, monkeypatch
 # =============================================================================
 
 
-@pytest.mark.xfail(reason="substrate: NUL is now cleanly REJECTED (InvalidRecordPayloadError) and lone-CR corruption awaits the QUOTE_ALL-vs-reject-bare-CR format decision (plan/database-test-strategy.md). Assertion refresh bundled with that decision.", strict=False)
+@pytest.mark.xfail(reason="NUL is now correctly REJECTED at write (InvalidRecordPayloadError) -- this test still asserts the old 'NUL survives' expectation and needs refactoring to assert rejection; cosmetic follow-up, not a fix gap. Lone-CR is now fixed (round-trips).", strict=False)
 def test_embedded_nul_byte_survives_round_trip(tmp_path, monkeypatch):
     """Explicit answer to: does a raw NUL (0x00) survive the TSV/csv round
     trip? NUL has no special meaning to Python's csv dialect (it is not the
@@ -542,7 +541,7 @@ def test_embedded_nul_byte_survives_round_trip(tmp_path, monkeypatch):
 # =============================================================================
 
 
-@pytest.mark.xfail(reason="substrate: NUL is now cleanly REJECTED (InvalidRecordPayloadError) and lone-CR corruption awaits the QUOTE_ALL-vs-reject-bare-CR format decision (plan/database-test-strategy.md). Assertion refresh bundled with that decision.", strict=False)
+@pytest.mark.xfail(reason="NUL is now correctly REJECTED at write (InvalidRecordPayloadError) -- this test still asserts the old 'NUL survives' expectation and needs refactoring to assert rejection; cosmetic follow-up, not a fix gap. Lone-CR is now fixed (round-trips).", strict=False)
 def test_update_collection_record_round_trips_hostile_values(tmp_path, monkeypatch):
     """All the probes above only exercise create_collection_record. This
     confirms the SAME hostile values survive an UPDATE (read-modify-write

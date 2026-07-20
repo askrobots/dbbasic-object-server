@@ -1760,6 +1760,7 @@ def _write_collection_records(
                 delimiter="\t",
                 lineterminator="\n",
                 extrasaction="ignore",
+                quoting=(csv.QUOTE_ALL if _rows_need_full_quoting(records) else csv.QUOTE_MINIMAL),
             )
             writer.writeheader()
             for record in records:
@@ -1997,7 +1998,8 @@ def _append_records_rows(
     offsets: list[tuple[int, int]] = []
     with path.open("a", newline="") as handle:
         writer = csv.writer(
-            handle, delimiter="\t", lineterminator="\n", quoting=csv.QUOTE_MINIMAL
+            handle, delimiter="\t", lineterminator="\n",
+            quoting=(csv.QUOTE_ALL if _rows_need_full_quoting(rows) else csv.QUOTE_MINIMAL),
         )
         for row in rows:
             start = handle.tell()
@@ -3061,6 +3063,38 @@ def _check_field_storable(record: dict[str, Any]) -> None:
                 f"Record field '{name}' is {size} bytes, exceeding the "
                 f"{MAX_TSV_FIELD_BYTES}-byte per-field maximum"
             )
+
+
+# A bare carriage return -- "\r" NOT immediately followed by "\n". csv's
+# QUOTE_MINIMAL does not quote a field for a lone CR (it quotes only for the
+# delimiter, the quotechar, and "\n"), but csv.reader treats a bare CR in an
+# UNQUOTED field as a row terminator -- silently splitting one row into two
+# (and, in append mode, hiding every later record from the fold path). "\r\n"
+# and lone "\n" are already handled by QUOTE_MINIMAL (both contain "\n").
+_BARE_CR_RE = re.compile(r"\r(?!\n)")
+
+
+def _rows_need_full_quoting(rows: Iterable[dict[str, Any]]) -> bool:
+    """True if any field value in `rows` contains a bare CR (see _BARE_CR_RE).
+
+    When it does, that write uses csv.QUOTE_ALL so every field is quoted and
+    the CR round-trips intact; the overwhelming common case (no bare CR) stays
+    QUOTE_MINIMAL and byte-identical to before. This keeps the compact
+    plain-text format for normal data while making a lone CR lossless instead
+    of silently corrupting -- no format change for anyone who never stores a
+    bare CR. Readers parse quoted and unquoted rows alike, so a file may mix
+    both. Note: values destined for the packed `extra` JSON blob have their CR
+    escaped by json.dumps, so scanning raw values here only ever OVER-detects
+    (a harmless extra-quoted write), never misses a CR that reaches a column.
+    """
+    for row in rows:
+        for value in row.values():
+            if value is None:
+                continue
+            text = str(value)
+            if "\r" in text and _BARE_CR_RE.search(text):
+                return True
+    return False
 
 
 def _schema_fields(
