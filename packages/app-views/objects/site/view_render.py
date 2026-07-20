@@ -201,12 +201,28 @@ function renderForm(block, mount) {
 // field-layout/formatting decision lives in window.dbbasicDetail (served
 // at /detail), which itself reuses /form's own pipeline
 // (window.dbbasicForm.readOnly) in forced-read-only mode.
+//
+// Owner-aware edit/delete (Stage 6): a block may declare `editable` and/or
+// `deletable` (and optionally `delete_redirect`, `owner_field`); the detail
+// generator shows Edit/Delete only when the viewer owns the record. VIEWER_ID
+// (embedded server-side above) is passed through so the generator can make
+// that owner check -- it never widens the underlying permission gate, it only
+// decides whether to render the affordances.
 function renderDetail(block, mount) {
   if (!block.collection) { mount.innerHTML = unsupportedCard("detail block needs a collection"); return; }
   const recordId = resolveRecordId(block.record_id);
   if (!recordId) { mount.innerHTML = unsupportedCard("detail block needs a record_id"); return; }
   if (!window.dbbasicDetail) { mount.innerHTML = unsupportedCard("detail generator unavailable"); return; }
-  const load = () => window.dbbasicDetail.mount(mount, {collection: block.collection, record_id: recordId});
+  const viewerId = (typeof VIEWER_ID !== "undefined" ? VIEWER_ID : "") || null;
+  const load = () => window.dbbasicDetail.mount(mount, {
+    collection: block.collection,
+    record_id: recordId,
+    editable: !!block.editable,
+    deletable: !!block.deletable,
+    delete_redirect: block.delete_redirect || null,
+    owner_field: block.owner_field || null,
+    viewer_id: viewerId,
+  });
   (function sub() {
     if (window.dbbasicSubscribe) window.dbbasicSubscribe(block.collection, load);
     else setTimeout(sub, 400);

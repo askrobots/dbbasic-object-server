@@ -1,20 +1,16 @@
 {
   "id": "app-notes",
   "name": "Notes",
-  "version": "0.3.0",
-  "description": "Quick notes: owner-scoped with public sharing, project links, permalinks, and global search. Permalinks need a site_routes record mapping /notes/{note_id:uuid} to site_note_view.",
+  "version": "0.4.0",
+  "description": "Quick notes: owner-scoped with public sharing, project links, permalinks, and global search. The /notes/{note_id:uuid} permalink is a seeded 59 detail view (site_view_render) with an owner-aware editable/deletable detail block -- no bespoke per-note page.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
-  "dependencies": ["app-projects"],
+  "dependencies": ["app-projects", "app-views"],
   "objects": [
     {
       "id": "site_notes",
       "path": "objects/site/notes.py"
-    },
-    {
-      "id": "site_note_view",
-      "path": "objects/site/note_view.py"
     }
   ],
   "schemas": [
@@ -32,6 +28,14 @@
     {
       "collection": "notes",
       "path": "seed/notes.tsv"
+    },
+    {
+      "collection": "views",
+      "path": "seed/views.tsv"
+    },
+    {
+      "collection": "site_routes",
+      "path": "seed/site_routes.tsv"
     }
   ],
   "migrations": []

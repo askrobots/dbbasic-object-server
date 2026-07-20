@@ -1,0 +1,2 @@
+id	title	route	layout	blocks	owner_id	is_public	pinned	created_at
+view_notes_detail	Note	/notes/{note_id:uuid}	single	"[{""kind"": ""detail"", ""collection"": ""notes"", ""record_id"": ""$record_id"", ""editable"": true, ""deletable"": true, ""delete_redirect"": ""/notes""}]"		true	false	2026-01-01T00:00:00

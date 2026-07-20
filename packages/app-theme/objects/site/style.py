@@ -299,6 +299,10 @@ footer.app { margin-top: 2.5rem; color: var(--muted); font-size: 0.78rem; }
 .detaillabel { color: var(--muted); font-size: 0.82rem; }
 .detailvaluewrap, .detailvalue { word-break: break-word; }
 .detailvalue.empty { color: var(--muted); }
+/* Owner-aware Edit/Delete affordances on a detail block (59 Stage-6
+   extension) -- shown only to the record's owner by window.dbbasicDetail. */
+.detailtools { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.75rem; }
+.detailtools:empty { display: none; }
 
 /* App shell / navigation bar (injected by /nav) */
 body.has-appbar { padding-top: 3rem; }

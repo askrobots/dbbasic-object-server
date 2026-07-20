@@ -158,6 +158,57 @@ def test_view_render_detail_block_is_a_thin_mount_wrapper():
 
 
 # ---------------------------------------------------------------------
+# Owner-aware edit/delete (Stage 6 extension): the detail block gains
+# editable/deletable affordances, shown only to the record's owner, that
+# REUSE /form's existing edit pipeline -- so per-collection *_view pages
+# collapse into one view record + this renderer.
+# ---------------------------------------------------------------------
+
+
+def test_detail_owner_aware_edit_reuses_form_edit_pipeline_not_a_new_one():
+    source = _detail_source()
+    # Owner gate: compare the record's owner_field to the viewer id, both
+    # supplied by the caller (view_render passes VIEWER_ID) -- never a new
+    # permission path, just whether to render the affordance.
+    assert "opts.viewer_id" in source
+    assert 'opts.owner_field || "owner_id"' in source
+    assert "opts.editable" in source and "opts.deletable" in source
+    # Edit reuses window.dbbasicForm's edit mode (a record present => PUT)
+    # and its onSaved callback -- detail.py must not re-implement editing.
+    assert "window.dbbasicForm(collection, {" in source
+    assert "onSaved:" in source
+    # Still delegates read rendering to the shared read-only pipeline, and
+    # still re-implements no field formatting of its own.
+    assert "window.dbbasicForm.readOnly(" in source
+    for needle in ("f.relation", "f.enum", "readOnlyText"):
+        assert needle not in source, f"{needle!r} should live in form.py only, not detail.py"
+
+
+def test_detail_delete_issues_record_delete_then_redirects():
+    source = _detail_source()
+    assert '"DELETE"' in source
+    assert "opts.delete_redirect" in source
+    assert "window.confirm(" in source  # never a silent destructive action
+
+
+def test_detail_edit_state_survives_a_subscribe_reload():
+    """view_render re-mounts the detail block on any collection change; that
+    must not wipe out an edit the owner is mid-way through."""
+    source = _detail_source()
+    assert "_dbbasicEditing" in source
+    assert "if (mount._dbbasicEditing) return;" in source
+
+
+def test_view_render_detail_passes_owner_aware_options_and_viewer_id():
+    source = _view_render_source()
+    detail_fn = re.search(r"function renderDetail\(block, mount\) \{(.*?)\n\}", source, re.S)
+    assert detail_fn, "renderDetail not found"
+    body = detail_fn.group(1)
+    for needle in ("block.editable", "block.deletable", "block.delete_redirect", "VIEWER_ID"):
+        assert needle in body, f"renderDetail should forward {needle!r} to the detail generator"
+
+
+# ---------------------------------------------------------------------
 # related compiles to 58's filtered read, not a bespoke fetch
 # ---------------------------------------------------------------------
 
