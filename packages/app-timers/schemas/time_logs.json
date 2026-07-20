@@ -1,8 +1,8 @@
 {
   "name": "time_logs",
   "title": "Time Logs",
-  "version": 1,
-  "description": "Work time against tasks. A running timer is a row with is_running true and no ended_at.",
+  "version": 2,
+  "description": "Work time against tasks. A running timer is a row with is_running true and no ended_at. Server-enforced by /timers/start, /timers/stop, /timers/running (62 - Timer, plan/vocabulary/62-timer-spec.md) -- see packages/app-timers/objects/site/timer_actions.py.",
   "fields": [
     {
       "name": "id"
@@ -38,6 +38,12 @@
       "name": "owner_id",
       "type": "text",
       "label": "Owner"
+    },
+    {
+      "name": "duration_seconds",
+      "type": "integer",
+      "label": "Duration (seconds)",
+      "help": "Stamped by the stop verb: floor(ended_at - started_at). Never client-writable in practice -- omitted from forms.default, not schema read_only (update_collection_record has no preserve_read_only escape hatch; see packages/app-invoices/objects/system/invoice_totals.py for the same finding and the same workaround)."
     }
   ],
   "forms": {
@@ -45,6 +51,6 @@
   },
   "views": {
     "list_mode": "table",
-    "list_fields": ["task_id", "started_at", "ended_at", "is_running"]
+    "list_fields": ["task_id", "started_at", "ended_at", "is_running", "duration_seconds"]
   }
 }

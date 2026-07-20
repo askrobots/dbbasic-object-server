@@ -288,6 +288,47 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "start_timer",
+        "description": (
+            "Start a time log for the caller (62 - Timer). Auto-stops the "
+            "caller's already-running timer first, if any, stamping its "
+            "duration_seconds -- at most one running timer per owner is "
+            "server-enforced, never a client promise."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "Optional task this time log is against"},
+                "notes": {"type": "string", "description": "Optional notes for the new time log"},
+            },
+        },
+    },
+    {
+        "name": "stop_timer",
+        "description": (
+            "Stop the caller's running timer (62 - Timer): the caller's "
+            "current running time log by default, or a specific "
+            "time_log_id if it belongs to the caller. Stamps "
+            "duration_seconds = floor(ended_at - started_at). 409 if "
+            "there is no running timer to stop, 403 if the named timer "
+            "belongs to another owner."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "time_log_id": {
+                    "type": "string",
+                    "description": "Optional; defaults to the caller's currently running timer",
+                },
+            },
+        },
+    },
+    {
+        "name": "get_running_timer",
+        "description": "Return the caller's currently running time log (62 - Timer), or null",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "read_page",
         "description": (
             "Fetch a URL server-side and return it stripped to readable text: "
@@ -461,8 +502,46 @@ def tool_route(name: str, arguments: Mapping[str, Any]) -> tuple[str, str, str, 
     if name == "read_page":
         body = {"url": _required_str(args, "url")}
         return ("POST", "/api/read", "", _json_bytes(body))
+    if name == "start_timer":
+        payload: dict[str, Any] = {"action": "start"}
+        for key in ("task_id", "notes"):
+            payload.update(_optional_payload_str(args, key))
+        body = {"method": "POST", "payload": payload}
+        return ("POST", _timer_actions_execute_path(), "", _json_bytes(body))
+    if name == "stop_timer":
+        payload = {"action": "stop"}
+        payload.update(_optional_payload_str(args, "time_log_id"))
+        body = {"method": "POST", "payload": payload}
+        return ("POST", _timer_actions_execute_path(), "", _json_bytes(body))
+    if name == "get_running_timer":
+        body = {"method": "GET", "payload": {"action": "running"}}
+        return ("POST", _timer_actions_execute_path(), "", _json_bytes(body))
 
     raise ValueError(f"Unknown tool: {name}")
+
+
+def _timer_actions_execute_path() -> str:
+    # 62 (Timer): thin wrappers over site_timer_actions' own routes, via
+    # the same /admin/objects/{id}/execute bridge the generic
+    # execute_object tool already uses -- "a thin verb over a primitive
+    # already built" (plan/vocabulary/62-timer-spec.md's Surfaces
+    # section), no separate logic.
+    return "/admin/objects/site_timer_actions/execute"
+
+
+def _optional_payload_str(args: Mapping[str, Any], key: str) -> dict[str, str]:
+    """Return {key: value} when `args[key]` is a non-empty string, else {}.
+
+    Same optional-string-argument shape list_ops_events/list_changes
+    already use below: absent is fine (the routed object supplies its
+    own default), present-but-wrong-typed is a clear client error.
+    """
+    value = args.get(key)
+    if value is None:
+        return {}
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{key} must be a non-empty string")
+    return {key: value.strip()}
 
 
 def tool_result_content(status: int, payload: Any) -> dict[str, Any]:

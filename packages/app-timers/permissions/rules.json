@@ -7,6 +7,13 @@
       "collection": "time_logs",
       "row_filter": {"owner_id": "$user_id"},
       "reason": "signed-in users manage their own time logs"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_timer_actions",
+      "reason": "the timer start/stop/running routes are public execute, same convention as every other site object (app-theme's site_style, app-catalog's site_stock); the object itself requires a signed-in identity and scopes every read/write to $user_id before touching time_logs, same as the row-filtered collection API would"
     }
   ]
 }

@@ -1,13 +1,20 @@
 {
   "id": "app-timers",
   "name": "Timers",
-  "version": "0.1.0",
-  "description": "Time logs against tasks: start/stop rows with an is_running flag. No page object — generated UIs (Scroll) manage time logs from the schema.",
+  "version": "0.2.0",
+  "description": "Time logs against tasks: server-enforced start/stop (62 — Timer) over an is_running/duration_seconds pair, at most one running timer per owner. No page object — generated UIs (Scroll) manage time logs from the schema; start/stop/running are server routes (objects/site/timer_actions.py), not a generator page.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
-  "dependencies": ["app-tasks"],
-  "objects": [],
+  "dependencies": [
+    "app-tasks"
+  ],
+  "objects": [
+    {
+      "id": "site_timer_actions",
+      "path": "objects/site/timer_actions.py"
+    }
+  ],
   "schemas": [
     {
       "collection": "time_logs",
@@ -23,6 +30,10 @@
     {
       "collection": "time_logs",
       "path": "seed/time_logs.tsv"
+    },
+    {
+      "collection": "site_routes",
+      "path": "seed/site_routes.tsv"
     }
   ],
   "migrations": []

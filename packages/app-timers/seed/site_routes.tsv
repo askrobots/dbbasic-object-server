@@ -1,0 +1,2 @@
+id	pattern	object_id	priority
+route_timers_action	/timers/{action}	site_timer_actions	10
