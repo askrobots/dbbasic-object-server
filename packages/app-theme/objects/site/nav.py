@@ -18,7 +18,7 @@ _JS = r"""
     ["/shell", "Shell"], ["/talk", "Talk"], ["/notes", "Notes"], ["/tasks", "Tasks"],
     ["/projects", "Projects"], ["/contacts", "Contacts"], ["/articles", "Articles"],
     ["/links", "Links"], ["/calendar", "Calendar"], ["/files", "Files"],
-    ["/invoices", "Invoices"],
+    ["/invoices", "Invoices"], ["/products", "Products"],
     ["/activity", "Activity"],
     ["/dashboard", "Dashboard"], ["/appearance", "Appearance"],
   ];
@@ -30,7 +30,7 @@ _JS = r"""
     tasks: () => "/tasks", projects: () => "/projects", contacts: () => "/contacts",
     organizations: () => "/contacts", interactions: () => "/contacts",
     links: () => "/links", events: () => "/calendar",
-    invoices: () => "/invoices", templates: () => "/templates",
+    invoices: () => "/invoices", templates: () => "/templates", products: (id) => "/products/" + encodeURIComponent(id),
   };
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
     (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));

@@ -1,0 +1,140 @@
+{
+  "name": "products",
+  "title": "Products",
+  "version": 1,
+  "description": "Sellable items: physical goods, digital downloads, services, subscriptions, and depreciable assets share this one schema via product_type. v1 is catalog data only -- orders, order lines, and stock levels are a later slice (see dbbasic-package.json's description, reconciled against a private predecessor-system catalog audit); price_cents/cost_cents/salvage_value_cents are integer cents, never a float or currency type.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "name",
+      "type": "text",
+      "required": true,
+      "label": "Name",
+      "validation": {"min_length": 1, "max_length": 200}
+    },
+    {
+      "name": "sku",
+      "type": "text",
+      "label": "SKU",
+      "validation": {"max_length": 64}
+    },
+    {
+      "name": "product_type",
+      "type": "enum",
+      "label": "Type",
+      "default": "physical",
+      "enum": ["physical", "digital", "service", "subscription", "asset"],
+      "help": "Matches the predecessor system's Product model type choices (reconciled against a private source audit, not part of this repo). asset carries the depreciation fields below; behavior (a monthly depreciation schedule) is not built here, only the fields."
+    },
+    {
+      "name": "description",
+      "type": "textarea",
+      "label": "Description"
+    },
+    {
+      "name": "price_cents",
+      "type": "integer",
+      "default": "0",
+      "label": "Price (cents)"
+    },
+    {
+      "name": "cost_cents",
+      "type": "integer",
+      "default": "0",
+      "label": "Cost (cents)"
+    },
+    {
+      "name": "currency",
+      "type": "text",
+      "default": "USD",
+      "label": "Currency (ISO 4217)",
+      "validation": {"pattern": "^[A-Z]{3}$"}
+    },
+    {
+      "name": "unit",
+      "type": "text",
+      "label": "Unit",
+      "help": "e.g. \"each\", \"hour\""
+    },
+    {
+      "name": "is_active",
+      "type": "boolean",
+      "default": "true",
+      "label": "Active"
+    },
+    {
+      "name": "income_account",
+      "type": "text",
+      "label": "Income Account",
+      "help": "The real predecessor links to a finance Account (income side). No finance package exists yet in this codebase -- carried as a plain text account id so a future app-finance package has somewhere to point without a backfill."
+    },
+    {
+      "name": "expense_account",
+      "type": "text",
+      "label": "Expense Account",
+      "help": "Same provenance as income_account, expense side."
+    },
+    {
+      "name": "digital_file_id",
+      "type": "text",
+      "label": "Digital File",
+      "help": "Pointer to the downloadable file for a digital product. No enforced relation to app-files yet (this package has no dependency on it) -- carried as a plain text id so a future digital-delivery slice has somewhere to point without a backfill."
+    },
+    {
+      "name": "useful_life_months",
+      "type": "integer",
+      "label": "Useful Life (months)",
+      "help": "ASSET parity field, carried from the predecessor system's depreciation fields (reconciled against a private source audit, not part of this repo). Only meaningful when product_type is asset; depreciation math itself is not built here."
+    },
+    {
+      "name": "purchase_date",
+      "type": "date",
+      "label": "Purchase Date",
+      "help": "ASSET parity field."
+    },
+    {
+      "name": "salvage_value_cents",
+      "type": "integer",
+      "default": "0",
+      "label": "Salvage Value (cents)",
+      "help": "ASSET parity field. Integer cents, same doctrine as price_cents/cost_cents."
+    },
+    {
+      "name": "depreciation_method",
+      "type": "enum",
+      "label": "Depreciation Method",
+      "enum": ["straight_line", "declining"],
+      "help": "ASSET parity field. No default -- blank means not an asset, or an asset whose method has not been set yet; left unset rather than forced to a guessed default."
+    },
+    {
+      "name": "asset_status",
+      "type": "text",
+      "label": "Asset Status",
+      "help": "ASSET parity field. Kept as plain text (not an enum) in v1: the predecessor's asset disposal states are a later slice's concern, not reconstructed here."
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["name", "sku", "product_type", "description",
+                           "price_cents", "cost_cents", "currency", "unit", "is_active"]}
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["name", "sku", "product_type", "price_cents", "is_active"]
+  },
+  "search": {
+    "fields": ["name", "sku", "description"]
+  }
+}

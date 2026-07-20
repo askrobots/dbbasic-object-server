@@ -1,0 +1,38 @@
+{
+  "id": "app-catalog",
+  "name": "Catalog",
+  "version": "0.1.0",
+  "description": "Product catalog, v1: owner-scoped CRUD on a single products schema covering physical goods, digital downloads, services, subscriptions, and depreciable assets (product_type). Money is integer cents (price_cents/cost_cents/salvage_value_cents), never a float or currency type. Deferred to a later slice, per the reconciled predecessor catalog model (private source audit, not part of this repo): orders, order lines, stock moves and derived stock levels, warehouse/bin locations, a public storefront view (products stay owner-scoped, same posture as app-invoices), and the actual finance-account linkage / depreciation-schedule behavior behind income_account/expense_account/the ASSET fields (carried as plain fields now so nothing needs a backfill later). Product detail permalinks need a site_routes record mapping /products/{product_id:uuid} to site_product_view -- not seeded by this package, same precedent as app-notes' /notes/{note_id:uuid} and app-invoices' /invoices/{invoice_id:uuid}.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": [],
+  "objects": [
+    {
+      "id": "site_products",
+      "path": "objects/site/products.py"
+    },
+    {
+      "id": "site_product_view",
+      "path": "objects/site/product_view.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "products",
+      "path": "schemas/products.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "products",
+      "path": "seed/products.tsv"
+    }
+  ],
+  "migrations": []
+}
