@@ -1,0 +1,23 @@
+{
+  "id": "app-rollup",
+  "name": "Rollups",
+  "version": "0.1.0",
+  "description": "Declared aggregations materialized as ordinary collections (plan/vocabulary/14-rollup-spec.md). rollup_definitions (admin-owned) declares a source + filter + group_by + time_bucket + metrics + refresh; the daemon's rollup pass (object_daemon.process_rollups, object_rollups.py) computes the answer into target_collection, which renders via the existing generators for free because it IS a collection. No dedicated authoring page in v1 -- rollup_definitions already gets a generated admin form (docs/schema-forms.md). Target collections are NOT declared here: each is created dynamically per operator-authored definition, and its permission rule (the payoff -- a rollup can be public while its source is private) is the operator's own, granted separately once the definition exists.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "objects": [],
+  "schemas": [
+    {
+      "collection": "rollup_definitions",
+      "path": "schemas/rollup_definitions.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [],
+  "migrations": []
+}

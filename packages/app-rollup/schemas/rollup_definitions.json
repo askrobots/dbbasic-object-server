@@ -1,0 +1,114 @@
+{
+  "name": "rollup_definitions",
+  "title": "Rollup Definitions",
+  "version": 1,
+  "description": "Declared aggregations (plan/vocabulary/14-rollup-spec.md): one record per definition -- a source collection, an optional flat-equality filter, a group_by, an optional time_bucket, and a list of metrics. The daemon's rollup pass (object_daemon.process_rollups, object_rollups.compute_rollup) materializes the answer into target_collection, an ordinary schema-shaped collection generated from this definition. filter/group_by/metrics are stored as JSON text -- this schema does not parse or validate their structure; object_rollups.parse_definition does that at compute time, same convention app-finance's fin_recurring.template_lines uses for its own JSON-shaped field. Admin-owned, full stop (see permissions/rules.json): a definition's filter/group-by shape reveals source schema structure.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "name",
+      "type": "text",
+      "required": true,
+      "label": "Name",
+      "help": "Human label, e.g. \"Orders per day\".",
+      "validation": {"min_length": 1, "max_length": 200}
+    },
+    {
+      "name": "source_collection",
+      "type": "text",
+      "required": true,
+      "label": "Source Collection",
+      "help": "Exactly one collection -- no joins. The rollup pass reads it outside row-level permissions (daemon posture), so it must already exist."
+    },
+    {
+      "name": "filter",
+      "type": "textarea",
+      "label": "Filter (JSON)",
+      "help": "Optional flat {field: value} object, ANDed on equality -- e.g. {\"status\": \"paid\"}. No OR, no sub-query, no cross-collection join, no computed expression; a report that needs one of those is a custom object, not a rollup definition. Blank means every row."
+    },
+    {
+      "name": "group_by",
+      "type": "textarea",
+      "label": "Group By (JSON list)",
+      "help": "JSON list of source field names, e.g. [\"channel\"]. Empty or blank means one row total per bucket."
+    },
+    {
+      "name": "time_bucket",
+      "type": "textarea",
+      "label": "Time Bucket (JSON)",
+      "help": "Optional {\"field\": <source date/datetime field>, \"granularity\": none|day|week|month} object, e.g. {\"field\": \"created_at\", \"granularity\": \"day\"}. granularity defaults to \"none\" (bucket_start present, unbucketed) when omitted. Blank means no time dimension at all -- bucket_start is absent from the target. No timezone conversion: truncation happens in the field's own stored value, matching docs/schema-forms.md's date/datetime types."
+    },
+    {
+      "name": "metrics",
+      "type": "textarea",
+      "required": true,
+      "label": "Metrics (JSON list)",
+      "help": "JSON list of {\"op\": count|sum|min|max|avg, \"field\": <source field, required except for count>, \"as\": <target field name, optional>}. avg is always sum/count computed fresh from that group's exact values, never a running average."
+    },
+    {
+      "name": "target_collection",
+      "type": "text",
+      "required": true,
+      "label": "Target Collection",
+      "help": "Where the computed answer lands -- an ordinary collection whose schema is generated from this definition and regenerated on every recompute. Dedicated 1:1 to this definition; do not point two definitions at the same target."
+    },
+    {
+      "name": "min_group_size",
+      "type": "integer",
+      "label": "Minimum Group Size",
+      "help": "Groups (within a bucket) with fewer underlying rows than this are suppressed -- dropped from the target entirely, never merged into an \"other\" bucket. Blank means no suppression. See permissions/rules.json's reason field for the disclosure threat this exists to blunt: it is declared, not enforced against whatever permission rule the target collection is later granted."
+    },
+    {
+      "name": "refresh_mode",
+      "type": "enum",
+      "default": "scheduled",
+      "label": "Refresh Mode",
+      "enum": ["scheduled", "incremental"],
+      "help": "scheduled (recommended default) recomputes the whole definition every refresh_interval_seconds. incremental is accepted but v1's daemon pass has no create-fast-path yet -- an incremental definition simply behaves as scheduled-only until that lands (plan/vocabulary/14-rollup-spec.md's Events section)."
+    },
+    {
+      "name": "refresh_interval_seconds",
+      "type": "integer",
+      "required": true,
+      "label": "Refresh Interval (seconds)",
+      "help": "Required in both refresh modes -- the scheduled recompute interval, or (once incremental's fast path exists) the reconciling recompute interval that runs alongside it."
+    },
+    {
+      "name": "last_computed_at",
+      "type": "datetime",
+      "read_only": true,
+      "label": "Last Computed",
+      "help": "Server-set by the rollup pass after a successful recompute. This is both the freshness signal and the scheduled-mode due gate: a definition is due once refresh_interval_seconds have elapsed since this value (or immediately, if it has never run)."
+    },
+    {
+      "name": "enabled",
+      "type": "boolean",
+      "default": "true",
+      "label": "Enabled",
+      "help": "Per-definition kill switch, independent of the instance-wide rollup_enabled flag -- pause one noisy or broken definition without disabling every rollup."
+    }
+  ],
+  "forms": {
+    "default": {
+      "fields": [
+        "name",
+        "source_collection",
+        "filter",
+        "group_by",
+        "time_bucket",
+        "metrics",
+        "target_collection",
+        "min_group_size",
+        "refresh_mode",
+        "refresh_interval_seconds",
+        "enabled"
+      ]
+    }
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["name", "source_collection", "target_collection", "refresh_mode", "enabled", "last_computed_at"]
+  }
+}

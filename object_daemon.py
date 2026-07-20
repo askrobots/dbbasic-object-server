@@ -35,6 +35,7 @@ import object_collections
 import object_events
 import object_record_changes
 import object_records
+import object_rollups
 from object_execution import ObjectExecutionFailure, ObjectExecutionRequest, execute_object
 from object_namespace import find_trigger_file, get_object_roots, resolve_object_id
 
@@ -837,6 +838,91 @@ def process_stale_transitions(*, base_dir: Path | str = "data") -> dict | None:
     return {"checked": len(rules), "moved": total_moved, "rules": rule_results}
 
 
+# --- Rollups ---
+
+def process_rollups(*, base_dir: Path | str = "data") -> dict | None:
+    """Recompute every due, enabled rollup_definitions row.
+
+    Rides this daemon's existing poll loop as one more pass
+    (plan/vocabulary/14-rollup-spec.md's Dependencies: "No new daemon...
+    process_rollups, alongside process_compactions"), but its due-gate is
+    NOT the marker-file pattern process_compactions/process_stale_
+    transitions use above: 14 is explicit that a rollup_definitions row
+    already IS the natural place to hold that state (last_computed_at),
+    unlike compaction's collection-wide pass, which has no equivalent
+    per-collection record. So there's no marker file here and no fixed
+    poll interval either -- each ENABLED definition is checked against
+    its own last_computed_at/refresh_interval_seconds every call
+    (object_rollups.is_definition_due), which is cheap (a timestamp
+    comparison) for every definition that isn't due yet.
+
+    Returns None when the block-wide `rollup_enabled` flag is off (14's
+    Degradation: "the daemon's rollup pass is skipped entirely; existing
+    target collections keep serving their last-computed data") or when
+    the rollup_definitions collection doesn't exist yet (package not
+    installed). Otherwise returns {"checked": <definitions considered>,
+    "computed": [{"definition_id", "target_collection", "groups",
+    "suppressed", ...}, ...]} -- computed only lists definitions that
+    were actually due and enabled; a skipped/disabled/not-yet-due
+    definition doesn't appear.
+
+    Every definition's recompute is wrapped in its own try/except, same
+    isolation pattern as process_compactions: one definition with a bad
+    filter, a missing source collection, or a lock contention is logged
+    and skipped, every other definition's pass proceeds.
+    """
+    if not object_rollups.rollup_pass_enabled(base_dir=base_dir):
+        return None
+
+    try:
+        definitions = object_records.read_collection_records(
+            object_rollups.ROLLUP_DEFINITIONS_COLLECTION, base_dir=base_dir
+        )
+    except (object_collections.CollectionNotFoundError, object_collections.InvalidCollectionNameError):
+        return None
+
+    now = datetime.now(timezone.utc)
+    computed = []
+    for definition in definitions:
+        definition_id = definition.get("id") or "<unknown>"
+
+        if not object_rollups.is_definition_enabled(definition):
+            continue
+        if not object_rollups.is_definition_due(definition, now=now):
+            continue
+
+        try:
+            result = object_rollups.compute_rollup(definition, base_dir=base_dir)
+        except Exception as e:
+            log(f"Rollup: {definition_id} failed: {e}", "ERROR")
+            continue
+
+        try:
+            object_records.update_collection_record(
+                object_rollups.ROLLUP_DEFINITIONS_COLLECTION,
+                definition_id,
+                {"last_computed_at": result["computed_at"]},
+                base_dir=base_dir,
+                actor=object_rollups.ROLLUP_ACTOR,
+                preserve_read_only=True,
+            )
+        except Exception as e:
+            # The recompute itself already succeeded and is live in the
+            # target collection; failing to stamp last_computed_at only
+            # means this definition looks "due" again next call (a
+            # harmless, self-correcting re-run), never lost or corrupted
+            # data -- logged, not fatal to the rest of the pass.
+            log(f"Rollup: {definition_id} computed but failed to stamp last_computed_at: {e}", "ERROR")
+
+        log(
+            f"Rollup: {definition_id} -> {result['target_collection']} "
+            f"({result['groups']} group(s), {result['suppressed']} suppressed)"
+        )
+        computed.append(result)
+
+    return {"checked": len(definitions), "computed": computed}
+
+
 # --- Object Execution ---
 
 def _execute_target(runtime: ObjectRuntime, object_id: str, method: str, payload: dict):
@@ -906,6 +992,7 @@ def main():
         f"Auto-transition rules: {len(_startup_rules)} configured "
         f"(interval {_env_int(AUTO_TRANSITION_INTERVAL_SECONDS_ENV, _DEFAULT_AUTO_TRANSITION_INTERVAL_SECONDS)}s)"
     )
+    print(f"Rollups: {'enabled' if object_rollups.rollup_pass_enabled(base_dir=base_dir) else 'disabled (rollup_enabled flag off)'}")
     print()
     print("Press Ctrl+C to stop")
     print("=" * 60)
@@ -945,6 +1032,11 @@ def main():
             process_stale_transitions(base_dir=base_dir)
         except Exception as e:
             log(f"Auto-transition error: {e}", 'ERROR')
+
+        try:
+            process_rollups(base_dir=base_dir)
+        except Exception as e:
+            log(f"Rollup error: {e}", 'ERROR')
 
         now = time.time()
         if now - last_event_cleanup >= EVENT_CLEANUP_INTERVAL_SECONDS:

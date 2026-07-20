@@ -1,0 +1,11 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "role:admin",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "rollup_definitions",
+      "reason": "a definition's filter/group-by shape reveals source schema structure; only admins declare aggregations"
+    }
+  ]
+}

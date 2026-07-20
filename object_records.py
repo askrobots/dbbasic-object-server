@@ -540,6 +540,7 @@ def create_collection_record(
     roots: Iterable[Path] | None = None,
     actor: str | None = None,
     preserve_read_only: bool = False,
+    allow_computed_submission: bool = False,
 ) -> dict[str, str]:
     """Append one record to a collection TSV and return the stored row.
 
@@ -562,6 +563,16 @@ def create_collection_record(
     client-submitted value regardless of this flag -- see
     ``_validate_record_against_schema``. Trusted, explicit, opt-in callers
     only; never wired to an HTTP request payload.
+
+    ``allow_computed_submission`` is the narrower sibling ``preserve_read_only``
+    deliberately does not grant: a field marked ``computed`` (e.g. a rollup
+    target's metric columns, ``plan/vocabulary/14-rollup-spec.md``) is meant
+    to hold a server-derived formula's result, and no HTTP-facing caller
+    should ever be able to write one directly. The one legitimate writer is
+    the block that owns the derivation itself (the rollup daemon pass
+    writing its own computed metric columns into its own target row) --
+    trusted, explicit, opt-in, same posture as ``preserve_read_only``, never
+    wired to a request payload.
     """
     _ensure_collection_known(collection, base_dir=base_dir, roots=roots)
     extra_names = _extra_field_names(collection, base_dir=base_dir, roots=roots)
@@ -580,6 +591,7 @@ def create_collection_record(
         base_dir=base_dir,
         roots=roots,
         allow_read_only_submission=preserve_read_only,
+        allow_computed_submission=allow_computed_submission,
     )
     clean = _canonicalize_schema_values(collection, clean, base_dir=base_dir, roots=roots)
     clean = _route_extra(clean, existing_blob={}, extra_names=extra_names)
@@ -667,6 +679,8 @@ def update_collection_record(
     roots: Iterable[Path] | None = None,
     actor: str | None = None,
     transition_subject: object_permissions.PermissionSubject | None = None,
+    preserve_read_only: bool = False,
+    allow_computed_submission: bool = False,
 ) -> dict[str, str]:
     """Update one existing record by id and return the stored row.
 
@@ -680,6 +694,13 @@ def update_collection_record(
     and passes it through here; direct library callers (daemon, CLI,
     tests) that don't pass one are trusted callers -- guarded moves are
     still checked for validity, just not for who is making them.
+
+    ``preserve_read_only``/``allow_computed_submission`` mirror
+    create_collection_record's own flags, same "trusted, explicit, opt-in,
+    never wired to a request payload" posture -- an update needs them too,
+    e.g. the rollup daemon pass (plan/vocabulary/14-rollup-spec.md) stamping
+    a definition's read-only ``last_computed_at`` and a target row's
+    computed metric columns on every recompute.
     """
     _ensure_collection_known(collection, base_dir=base_dir, roots=roots)
     if not validate_record_id(record_id):
@@ -720,6 +741,8 @@ def update_collection_record(
             submitted_fields=submitted_fields,
             base_dir=base_dir,
             roots=roots,
+            allow_read_only_submission=preserve_read_only,
+            allow_computed_submission=allow_computed_submission,
         )
         _check_field_storable(updated)
         _validate_field_transitions(
@@ -3126,6 +3149,7 @@ def _validate_record_against_schema(
     base_dir: Path | str,
     roots: Iterable[Path] | None,
     allow_read_only_submission: bool = False,
+    allow_computed_submission: bool = False,
 ) -> None:
     fields = _schema_fields(collection, base_dir=base_dir, roots=roots)
     if not fields:
@@ -3136,7 +3160,12 @@ def _validate_record_against_schema(
         value = record.get(name, "")
 
         if name in submitted_fields and _is_computed_or_read_only(field):
-            if not (allow_read_only_submission and not _is_computed_field(field)):
+            is_computed = _is_computed_field(field)
+            permitted = (
+                (allow_computed_submission and is_computed)
+                or (allow_read_only_submission and not is_computed)
+            )
+            if not permitted:
                 raise InvalidRecordPayloadError(
                     f"Record field '{name}' is computed or read-only and cannot be written"
                 )

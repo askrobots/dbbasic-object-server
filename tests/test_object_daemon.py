@@ -737,6 +737,170 @@ def test_process_stale_transitions_honors_interval_marker(tmp_path, monkeypatch)
     assert current["status"] == "waiting_on_client"  # untouched
 
 
+def write_orders_schema(data_dir: Path) -> Path:
+    return write_schema(data_dir, "orders", [
+        {"name": "id"},
+        {"name": "channel", "type": "text"},
+        {"name": "status", "type": "text"},
+        {"name": "total_cents", "type": "integer"},
+        {"name": "created_at", "type": "datetime"},
+    ])
+
+
+def write_schema(data_dir: Path, collection: str, fields: list[dict]) -> Path:
+    path = data_dir / "schemas" / f"{collection}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"name": collection, "fields": fields}))
+    return path
+
+
+def _rollup_definition_row(**overrides) -> dict:
+    row = {
+        "id": "rollup_orders_by_day",
+        "name": "Orders per day",
+        "source_collection": "orders",
+        "filter": json.dumps({"status": "paid"}),
+        "group_by": json.dumps(["channel"]),
+        "time_bucket": json.dumps({"field": "created_at", "granularity": "day"}),
+        "metrics": json.dumps([{"op": "count", "as": "order_count"}]),
+        "target_collection": "rollup_orders_by_day",
+        "min_group_size": "",
+        "refresh_mode": "scheduled",
+        "refresh_interval_seconds": "3600",
+        "last_computed_at": "",
+        "enabled": "true",
+    }
+    row.update(overrides)
+    return row
+
+
+def _install_rollup_definitions(data_dir: Path, rows: list[dict]) -> None:
+    write_schema(data_dir, "rollup_definitions", [
+        {"name": "id"},
+        {"name": "name", "type": "text"},
+        {"name": "source_collection", "type": "text"},
+        {"name": "filter", "type": "textarea"},
+        {"name": "group_by", "type": "textarea"},
+        {"name": "time_bucket", "type": "textarea"},
+        {"name": "metrics", "type": "textarea"},
+        {"name": "target_collection", "type": "text"},
+        {"name": "min_group_size", "type": "integer"},
+        {"name": "refresh_mode", "type": "text"},
+        {"name": "refresh_interval_seconds", "type": "integer"},
+        {"name": "last_computed_at", "type": "datetime", "read_only": True},
+        {"name": "enabled", "type": "boolean"},
+    ])
+    for row in rows:
+        # preserve_read_only: seeding a fixture row directly, same posture
+        # as object_import.py replaying another system's history -- a real
+        # admin-authored create would omit last_computed_at entirely (the
+        # generated form never renders a read_only field), never submit it.
+        object_records.create_collection_record(
+            "rollup_definitions", row, base_dir=data_dir, roots=[], actor="tester",
+            preserve_read_only=True,
+        )
+
+
+def test_process_rollups_computes_a_due_definition_and_stamps_last_computed_at(tmp_path):
+    data_dir = tmp_path / "data"
+    write_orders_schema(data_dir)
+    object_records.create_collection_record(
+        "orders", {"id": "o1", "channel": "web", "status": "paid", "total_cents": "1000",
+                   "created_at": "2026-07-01T00:00:00Z"},
+        base_dir=data_dir, roots=[],
+    )
+    _install_rollup_definitions(data_dir, [_rollup_definition_row()])
+
+    result = object_daemon.process_rollups(base_dir=data_dir)
+
+    assert result is not None
+    assert result["checked"] == 1
+    assert [c["definition_id"] for c in result["computed"]] == ["rollup_orders_by_day"]
+
+    target_rows = object_records.read_collection_records("rollup_orders_by_day", base_dir=data_dir, roots=[])
+    assert len(target_rows) == 1
+    assert target_rows[0]["order_count"] == "1"
+
+    definition = object_records.get_collection_record("rollup_definitions", "rollup_orders_by_day", base_dir=data_dir)
+    assert definition["last_computed_at"]  # stamped, non-blank
+
+
+def test_process_rollups_skips_a_definition_not_yet_due(tmp_path):
+    data_dir = tmp_path / "data"
+    write_orders_schema(data_dir)
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    _install_rollup_definitions(data_dir, [
+        _rollup_definition_row(last_computed_at=now, refresh_interval_seconds="3600"),
+    ])
+
+    result = object_daemon.process_rollups(base_dir=data_dir)
+
+    assert result is not None
+    assert result["checked"] == 1
+    assert result["computed"] == []
+
+
+def test_process_rollups_skips_a_disabled_definition(tmp_path):
+    data_dir = tmp_path / "data"
+    write_orders_schema(data_dir)
+    _install_rollup_definitions(data_dir, [_rollup_definition_row(enabled="false")])
+
+    result = object_daemon.process_rollups(base_dir=data_dir)
+
+    assert result is not None
+    assert result["computed"] == []
+
+
+def test_process_rollups_one_bad_definition_does_not_stop_others(tmp_path):
+    data_dir = tmp_path / "data"
+    write_orders_schema(data_dir)
+    object_records.create_collection_record(
+        "orders", {"id": "o1", "channel": "web", "status": "paid", "total_cents": "1000",
+                   "created_at": "2026-07-01T00:00:00Z"},
+        base_dir=data_dir, roots=[],
+    )
+    _install_rollup_definitions(data_dir, [
+        _rollup_definition_row(id="bad", target_collection="rollup_bad", source_collection="no_such_collection"),
+        _rollup_definition_row(id="good", target_collection="rollup_good"),
+    ])
+
+    result = object_daemon.process_rollups(base_dir=data_dir)
+
+    assert result is not None
+    assert result["checked"] == 2
+    assert [c["definition_id"] for c in result["computed"]] == ["good"]
+    good_rows = object_records.read_collection_records("rollup_good", base_dir=data_dir, roots=[])
+    assert len(good_rows) == 1
+    # The bad definition's own last_computed_at is never stamped -- it
+    # never successfully computed.
+    bad_definition = object_records.get_collection_record("rollup_definitions", "bad", base_dir=data_dir)
+    assert bad_definition["last_computed_at"] == ""
+
+
+def test_process_rollups_returns_none_when_flag_off(tmp_path):
+    data_dir = tmp_path / "data"
+    write_orders_schema(data_dir)
+    write_schema(data_dir, "feature_flags", [
+        {"name": "id"}, {"name": "flag", "type": "text"}, {"name": "value", "type": "text"},
+    ])
+    object_records.create_collection_record(
+        "feature_flags", {"id": "f1", "flag": "rollup_enabled", "value": "off"}, base_dir=data_dir, roots=[],
+    )
+    _install_rollup_definitions(data_dir, [_rollup_definition_row()])
+
+    result = object_daemon.process_rollups(base_dir=data_dir)
+
+    assert result is None
+    # Untouched: no target collection was ever created.
+    assert not (data_dir / "collections" / "rollup_orders_by_day").exists()
+
+
+def test_process_rollups_returns_none_without_rollup_definitions_collection(tmp_path):
+    data_dir = tmp_path / "data"
+    result = object_daemon.process_rollups(base_dir=data_dir)
+    assert result is None
+
+
 def test_daemon_entrypoint_is_runnable_without_optional_runtime():
     """The daemon's main() must start on a bare install: no
     dbbasic_object_core, no croniter -- the storage passes (compaction,
