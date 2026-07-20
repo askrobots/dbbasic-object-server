@@ -2963,6 +2963,79 @@ def test_admin_collection_record_write_aliases_create_update_delete(tmp_path, mo
     assert [item["id"] for item in list_payload["records"]] == ["c1", "c3"]
 
 
+def test_record_get_returns_rev_and_if_match_guards_update(tmp_path, monkeypatch):
+    """63: GET carries an opaque `_rev`; a PUT with a matching If-Match
+    succeeds and returns the new `_rev`, a stale one 409s with nothing
+    written, and an absent one is last-write-wins."""
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    get_status, _, get_payload = request(
+        "/admin/collections/contacts/records/c1", headers=auth_headers()
+    )
+    assert get_status == 200
+    rev = get_payload["_rev"]
+    assert isinstance(rev, str) and rev
+
+    # Matching If-Match -> 200, and a fresh, different _rev comes back.
+    ok_status, _, ok_payload = request(
+        "/admin/collections/contacts/records/c1",
+        method="PUT",
+        body=json.dumps({"name": "Ada Lovelace"}).encode(),
+        headers=auth_headers() + [("if-match", rev)],
+    )
+    assert ok_status == 200
+    assert ok_payload["record"]["name"] == "Ada Lovelace"
+    assert ok_payload["_rev"] != rev
+
+    # The original (now stale) rev -> 409 conflict, no write.
+    conflict_status, _, conflict_payload = request(
+        "/admin/collections/contacts/records/c1",
+        method="PUT",
+        body=json.dumps({"name": "Grace"}).encode(),
+        headers=auth_headers() + [("if-match", rev)],
+    )
+    assert conflict_status == 409
+    assert conflict_payload["code"] == "conflict"
+
+    # The clobber never happened.
+    _, _, after = request(
+        "/admin/collections/contacts/records/c1", headers=auth_headers()
+    )
+    assert after["record"]["name"] == "Ada Lovelace"
+
+    # No If-Match at all -> last-write-wins, no conflict.
+    lww_status, _, _ = request(
+        "/admin/collections/contacts/records/c1",
+        method="PUT",
+        body=json.dumps({"name": "Katherine"}).encode(),
+        headers=auth_headers(),
+    )
+    assert lww_status == 200
+
+
+def test_concurrency_flag_off_ignores_if_match(tmp_path, monkeypatch):
+    """63 Degradation: with the flag off, a stale If-Match is ignored (never a
+    409) and the write proceeds as last-write-wins -- flipping a safety flag
+    under load must not turn a working write path into an error path."""
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+    monkeypatch.setenv("DBBASIC_ENABLE_CONCURRENCY", "false")
+
+    status, _, payload = request(
+        "/admin/collections/contacts/records/c1",
+        method="PUT",
+        body=json.dumps({"name": "Ada Lovelace"}).encode(),
+        headers=auth_headers() + [("if-match", "definitely-stale-token")],
+    )
+    assert status == 200
+    assert payload["record"]["name"] == "Ada Lovelace"
+
+
 def write_append_schema(data_dir, collection, fields=None):
     path = data_dir / "schemas" / f"{collection}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -3739,6 +3812,9 @@ def test_collection_record_detail_returns_one_tsv_row(tmp_path, monkeypatch):
     status, _, payload = request("/collections/contacts/records/c2", headers=auth_headers())
 
     assert status == 200
+    # 63 adds an opaque `_rev` sibling to the envelope; the meaningful body is
+    # unchanged.
+    assert isinstance(payload.pop("_rev"), str)
     assert payload == {
         "status": "ok",
         "collection": "contacts",
@@ -4100,6 +4176,9 @@ def test_collection_record_update_and_delete_require_admin_token_by_default(tmp_
     assert denied_status == 401
     assert denied_payload == {"status": "error", "error": "Unauthorized"}
     assert update_status == 200
+    # 63: the update response gains an opaque `_rev` (the new fingerprint) for
+    # read-modify-write chaining; the rest of the envelope is unchanged.
+    assert isinstance(update_payload.pop("_rev"), str)
     assert update_payload == {
         "status": "ok",
         "collection": "contacts",
@@ -4905,6 +4984,9 @@ def test_collection_record_detail_enforces_row_filter_and_fields(tmp_path, monke
     )
 
     assert allowed_status == 200
+    # 63: opaque `_rev` sibling on the envelope (computed from the full record
+    # before field-visibility trimming); body unchanged.
+    assert isinstance(allowed_payload.pop("_rev"), str)
     assert allowed_payload == {
         "status": "ok",
         "collection": "contacts",

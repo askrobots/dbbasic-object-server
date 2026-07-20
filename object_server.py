@@ -133,6 +133,11 @@ EVENT_KEEP_SECONDS_ENV = "DBBASIC_EVENT_KEEP_SECONDS"
 # filter params" (unfiltered, same as before this feature), never to a 400 --
 # see _handle_collection_records_get and 58's Degradation section.
 FILTERING_ENABLED_ENV = "DBBASIC_ENABLE_FILTERING"
+# 63 optimistic concurrency: gates whether an update's If-Match/expected_rev
+# precondition is honored. Default on; flipping it off makes writes carrying
+# a precondition behave as last-write-wins rather than turning a working
+# write path into an error path under brownout (same posture as filtering).
+CONCURRENCY_ENABLED_ENV = "DBBASIC_ENABLE_CONCURRENCY"
 # Query params the collection-records GET route reserves for pagination/
 # sort/search rather than treating as a field filter (58's Encoding
 # section); every other param is a `field` or `field.op` filter condition.
@@ -7513,6 +7518,15 @@ async def _handle_collection_record_get(
         await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
         return
 
+    # 63: fingerprint the FULL stored record, before any field-visibility
+    # policy trims it -- the write-side precondition (update_collection_record,
+    # inside the lock) compares against the full surfaced row, so the token
+    # a caller reads here must be computed over the same full record for the
+    # two to agree. A caller who can't see a field still gets a `_rev` that
+    # depends on it, which only ever fails CLOSED (a hidden-field change 409s
+    # them conservatively); the hash discloses nothing about the field's value.
+    rev = object_records.compute_record_rev(record)
+
     if _permission_checks_enabled():
         permission_check = await _collection_permission_check(
             send,
@@ -7543,6 +7557,9 @@ async def _handle_collection_record_get(
             "status": "ok",
             "collection": collection,
             "record": record,
+            # Sibling metadata, never merged into record fields (must never
+            # collide with a schema field or appear on write-back).
+            object_records.REV_FIELD: rev,
         },
     )
 
@@ -7581,6 +7598,22 @@ async def _handle_collection_record_update(
     except (object_collections.CollectionNotFoundError, object_records.RecordNotFoundError) as exc:
         await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
         return
+
+    # 63: resolve the optimistic-concurrency precondition. HTTP callers send
+    # it as an `If-Match` header; the MCP bridge (no header channel) sends it
+    # as a reserved `expected_rev` body key. Both are stripped here so neither
+    # -- nor a `_rev` a client round-tripped back from a full-record read --
+    # is ever treated as a field write. Header wins if both are present.
+    expected_rev = headers.get("if-match")
+    if isinstance(changes, dict):
+        body_expected = changes.pop("expected_rev", None)
+        changes.pop(object_records.REV_FIELD, None)
+        if expected_rev is None and isinstance(body_expected, str):
+            expected_rev = body_expected
+    if expected_rev is not None:
+        expected_rev = expected_rev.strip() or None
+    if not _concurrency_enabled():
+        expected_rev = None  # flag off: precondition ignored, last-write-wins
 
     candidate = dict(existing)
     candidate.update(changes)
@@ -7644,9 +7677,20 @@ async def _handle_collection_record_update(
             base_dir=_data_dir(),
             actor=_record_change_actor(headers),
             transition_subject=permission_check["subject"],
+            expected_rev=expected_rev,
         )
     except object_records.RecordNotFoundError as exc:
         await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return
+    except object_records.VersionConflictError as exc:
+        # 63: the record changed since the caller read it -- no write, no
+        # side effects. The caller re-GETs to see current state (and its new
+        # `_rev`) and retries; the server does not echo the current row here.
+        await _send_json(
+            send,
+            {"status": "error", "error": str(exc), "code": "conflict"},
+            status=409,
+        )
         return
     except object_records.TransitionNotAllowedError as exc:
         await _send_json(
@@ -7683,6 +7727,10 @@ async def _handle_collection_record_update(
             "status": "ok",
             "collection": collection,
             "record": record,
+            # 63: the new fingerprint after this write -- a caller doing a
+            # read-modify-write loop uses it as the If-Match for its next PUT
+            # without a separate GET round-trip.
+            object_records.REV_FIELD: object_records.compute_record_rev(record),
         },
     )
 
@@ -10529,6 +10577,17 @@ def _record_events_enabled() -> bool:
 
 def _filtering_enabled() -> bool:
     value = os.environ.get(FILTERING_ENABLED_ENV)
+    if value is None:
+        return True
+    return value.strip().lower() in TRUE_VALUES
+
+
+def _concurrency_enabled() -> bool:
+    """63: whether the If-Match/expected_rev precondition is enforced.
+    Default on; off means the precondition is ignored (never a 409) and
+    writes are last-write-wins, per the spec's Degradation section.
+    """
+    value = os.environ.get(CONCURRENCY_ENABLED_ENV)
     if value is None:
         return True
     return value.strip().lower() in TRUE_VALUES

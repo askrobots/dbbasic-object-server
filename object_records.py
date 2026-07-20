@@ -8,6 +8,7 @@ tables and forms at. Records live in
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
 import json
 import math
@@ -302,6 +303,45 @@ class TransitionNotAllowedError(InvalidRecordPayloadError):
     _validate_field_transitions) can catch this specifically to report a
     permission-style 403 instead.
     """
+
+
+class VersionConflictError(Exception):
+    """Raised when an update's ``expected_rev`` precondition does not match
+    the record's current content (63 optimistic concurrency,
+    plan/vocabulary/63-concurrency-spec.md). Deliberately NOT a subclass of
+    InvalidRecordPayloadError/ValueError so the generic write-error clauses
+    that map to 400 never swallow it -- the server maps it to a distinct
+    409, mirroring how TransitionNotAllowedError maps to 403.
+    """
+
+
+# 63: the wire name for the content fingerprint. ETag-shaped -- opaque to
+# callers, compared for equality only, never parsed, never a schema field.
+REV_FIELD = "_rev"
+
+
+def compute_record_rev(record: Mapping[str, Any]) -> str:
+    """Return an opaque content fingerprint of a record's field values.
+
+    The version signal for optimistic concurrency (63): a deterministic
+    hash of the record's current fields, computed for free from the
+    surfaced/projected row already in hand on every read and, inside the
+    write lock, from the freshly-read row at update time -- no stored
+    column, no migration, works retroactively on every record. Excludes
+    REV_FIELD itself so echoing a read's ``_rev`` back into a full-record
+    round-trip never changes the fingerprint. Sorted keys + a stable JSON
+    encoding so serialization noise (key order, whitespace) never makes two
+    logically-identical records disagree. ``default=str`` keeps mixed-type
+    surfaced values (extra-blob JSON: ints, lists) hashable deterministically.
+    """
+    payload = json.dumps(
+        {k: v for k, v in record.items() if k != REV_FIELD},
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def validate_record_id(record_id: str) -> bool:
@@ -681,6 +721,7 @@ def update_collection_record(
     transition_subject: object_permissions.PermissionSubject | None = None,
     preserve_read_only: bool = False,
     allow_computed_submission: bool = False,
+    expected_rev: str | None = None,
 ) -> dict[str, str]:
     """Update one existing record by id and return the stored row.
 
@@ -701,6 +742,17 @@ def update_collection_record(
     e.g. the rollup daemon pass (plan/vocabulary/14-rollup-spec.md) stamping
     a definition's read-only ``last_computed_at`` and a target row's
     computed metric columns on every recompute.
+
+    ``expected_rev`` is 63's optimistic-concurrency precondition
+    (plan/vocabulary/63-concurrency-spec.md): when supplied, the freshly-read
+    row's compute_record_rev is compared against it INSIDE the write lock,
+    before any validation or write; a mismatch raises VersionConflictError
+    and nothing is written. ``None`` (the default) means last-write-wins,
+    exactly as before -- the precondition is opt-in per write, never
+    mandatory. Because the check runs after the lock is held and reads the
+    same post-lock row every writer serializes behind, two racing updates
+    to the same record resolve as "first wins, second sees the changed row
+    and 409s" rather than a silent clobber -- see the spec's worked example.
     """
     _ensure_collection_known(collection, base_dir=base_dir, roots=roots)
     if not validate_record_id(record_id):
@@ -731,6 +783,19 @@ def update_collection_record(
 
         existing_blob = _parse_extra_blob(existing_row.get(EXTRA_FIELD))
         existing = _surface_extra(existing_row, extra_names=extra_names)
+
+        # 63: the precondition, checked against the row just read under the
+        # lock (the freshest possible state -- not the caller's earlier
+        # pre-lock read, which may be stale by now). `existing` is the same
+        # surfaced representation get_collection_record returns and the read
+        # side fingerprints, so the two `_rev` values are computed over
+        # identical inputs. Runs before any validation/write: a mismatch is
+        # a clean no-op.
+        if expected_rev is not None and compute_record_rev(existing) != expected_rev:
+            raise VersionConflictError(
+                f"Record {collection}/{record_id} has changed since it was read "
+                f"(expected _rev {expected_rev!r})."
+            )
 
         updated = dict(existing)
         updated.update(clean)

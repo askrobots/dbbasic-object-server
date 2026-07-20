@@ -189,6 +189,15 @@ TOOLS: list[dict[str, Any]] = [
                 "collection": _COLLECTION_ARG,
                 "record_id": _RECORD_ID_ARG,
                 "changes": {"type": "object", "description": "Fields to change"},
+                "expected_rev": {
+                    "type": "string",
+                    "description": (
+                        "Optional optimistic-concurrency precondition: the "
+                        "`_rev` returned by a prior get_record. The update "
+                        "succeeds only if the record still matches it, else "
+                        "409 (63). Omit for last-write-wins."
+                    ),
+                },
             },
             "required": ["collection", "record_id", "changes"],
         },
@@ -391,6 +400,14 @@ def tool_route(name: str, arguments: Mapping[str, Any]) -> tuple[str, str, str, 
         changes = args.get("changes")
         if not isinstance(changes, dict):
             raise ValueError("changes must be an object")
+        # 63: the MCP->HTTP bridge has no header channel, so the precondition
+        # rides a reserved `expected_rev` body key the PUT handler strips
+        # before treating the rest as field changes.
+        expected_rev = args.get("expected_rev")
+        if expected_rev is not None:
+            if not isinstance(expected_rev, str):
+                raise ValueError("expected_rev must be a string")
+            changes = {**changes, "expected_rev": expected_rev}
         return ("PUT", _record_path(args), "", _json_bytes(changes))
     if name == "delete_record":
         return ("DELETE", _record_path(args), "", b"")
