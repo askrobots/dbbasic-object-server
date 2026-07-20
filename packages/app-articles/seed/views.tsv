@@ -1,0 +1,2 @@
+id	title	route	layout	blocks	owner_id	is_public	pinned	created_at
+view_articles_detail	Article	/articles/{article_id:uuid}	single	"[{""kind"": ""detail"", ""collection"": ""articles"", ""record_id"": ""$record_id"", ""editable"": true, ""deletable"": true, ""delete_redirect"": ""/articles""}]"		true	false	2026-01-01T00:00:00

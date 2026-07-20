@@ -54,6 +54,29 @@ _JS = r"""
     return v;
   }
 
+  // Money is stored as an integer number of cents under a `_cents` field
+  // name -- the codebase's universal doctrine (price_cents, total_cents,
+  // debit_cents, ...). Every hand-written *_view page re-implemented the
+  // same cents->whole-units formatter; hoisting it here formats money on
+  // EVERY detail page (and, via readOnly, wherever this renderer is reused)
+  // with zero schema changes. Display only: the stored value stays integer
+  // cents, and edit mode keeps the raw integer input (a dollars-input with
+  // round-trip conversion is a separate, riskier change, not done here).
+  function isMoneyField(f) {
+    const t = String(f.type || "").toLowerCase();
+    return /_cents$/.test(f.name || "") && ["integer", "int", "number", "currency"].indexOf(t) >= 0;
+  }
+  function moneyText(v) {
+    if (v === "" || v == null) return "—";
+    const n = Number(v);
+    return isFinite(n) ? (n / 100).toFixed(2) : String(v);
+  }
+  // A `_cents` field's label conventionally ends with "(cents)"; drop it
+  // since the value is now shown in whole units ("Total (cents)" -> "Total").
+  function moneyLabel(f) {
+    return String(f.label || human(f.name)).replace(/\s*\(cents\)\s*$/i, "");
+  }
+
   // `readOnly`: 59's detail mode. Same schema-driven branches as edit mode
   // (relation lookup, enum, boolean, date/datetime, plain text) but
   // returns a label/value span instead of an editable control -- the one
@@ -81,7 +104,10 @@ _JS = r"""
         : '<span class="detailvalue empty">—</span>';
       return '<select name="' + name + '"' + req + '>' + opts + '</select>';
     }
-    if (readOnly) return '<span class="detailvalue">' + esc(readOnlyText(t, v)) + '</span>';
+    if (readOnly) {
+      const text = isMoneyField(f) ? moneyText(v) : readOnlyText(t, v);
+      return '<span class="detailvalue' + (isMoneyField(f) ? ' money' : '') + '">' + esc(text) + '</span>';
+    }
     if (f.enum || t === "enum") {
       let opts = f.required ? "" : '<option value="">—</option>';
       for (const o of (f.enum || [])) opts += '<option value="' + esc(o) + '"' + (String(o) === v ? " selected" : "") + '>' + esc(o) + '</option>';
@@ -196,7 +222,8 @@ _JS = r"""
     for (const f of ordered) {
       if (!(f.name in record)) continue;
       const value = await control(f, record[f.name], true);
-      rows.push('<div class="detailrow"><div class="detaillabel">' + esc(f.label || human(f.name))
+      const label = isMoneyField(f) ? moneyLabel(f) : (f.label || human(f.name));
+      rows.push('<div class="detailrow"><div class="detaillabel">' + esc(label)
         + '</div><div class="detailvaluewrap">' + value + '</div></div>');
     }
     mount.innerHTML = '<div class="detailcard">' + (rows.join("") || '<div class="state">No fields.</div>') + '</div>';

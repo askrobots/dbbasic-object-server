@@ -1,19 +1,16 @@
 {
   "id": "app-articles",
   "name": "Articles",
-  "version": "0.1.0",
-  "description": "Long-form writing: owner-drafted articles with public permalinks and global search. Permalinks need a site_routes record mapping /articles/{article_id:uuid} to site_article_view.",
+  "version": "0.2.0",
+  "description": "Long-form writing: owner-drafted articles with public permalinks and global search. The /articles/{article_id:uuid} permalink is a seeded 59 detail view (site_view_render) with an owner-aware editable/deletable detail block -- no bespoke per-article page.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
+  "dependencies": ["app-views"],
   "objects": [
     {
       "id": "site_articles",
       "path": "objects/site/articles.py"
-    },
-    {
-      "id": "site_article_view",
-      "path": "objects/site/article_view.py"
     }
   ],
   "schemas": [
@@ -31,6 +28,14 @@
     {
       "collection": "articles",
       "path": "seed/articles.tsv"
+    },
+    {
+      "collection": "views",
+      "path": "seed/views.tsv"
+    },
+    {
+      "collection": "site_routes",
+      "path": "seed/site_routes.tsv"
     }
   ],
   "migrations": []

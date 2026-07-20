@@ -675,3 +675,20 @@ def test_forum_topic_page_renders_ai_summary_when_present():
     assert 'id="ai-summary"' in source
     assert "topic.ai_summary" in source
     assert "topic.is_ai_summarized" in source
+
+
+def test_form_read_only_formats_cents_money_fields_in_whole_units():
+    """Every hand-written *_view page re-implemented cents->whole-units money
+    formatting; it is hoisted into /form's shared read-only renderer, keyed
+    on the universal `_cents` field-name doctrine, so it applies to every
+    detail page with zero schema changes."""
+    source = _form_source()
+    assert "function isMoneyField(f)" in source
+    assert "/_cents$/.test(f.name" in source
+    assert "(n / 100).toFixed(2)" in source
+    # The read-only value branch and the label both go through the money path.
+    assert "isMoneyField(f) ? moneyText(v)" in source
+    assert "isMoneyField(f) ? moneyLabel(f)" in source
+    # Display only -- edit mode still submits the raw integer cents, never a
+    # dollars value that would need round-trip conversion.
+    assert "type=\"number\"" in source
