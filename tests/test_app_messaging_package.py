@@ -49,7 +49,6 @@ def test_get_package_normalizes_app_messaging_manifest():
     }
     assert {obj["id"] for obj in package["objects"]} == {
         "site_inbox",
-        "site_message_thread",
     }
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
     assert {entry["collection"] for entry in package["seed"]} == {
@@ -57,8 +56,10 @@ def test_get_package_normalizes_app_messaging_manifest():
         "messages",
         "message_recipients",
         "message_drafts",
+        "views",
+        "site_routes",
     }
-    assert package["dependencies"] == []
+    assert package["dependencies"] == [{"id": "app-views", "version": None}]
 
 
 def test_dry_run_app_messaging_package_is_safe(tmp_path):
@@ -104,7 +105,10 @@ def test_install_app_messaging_package_loads_schemas(tmp_path):
     assert recipients_schema["name"] == "message_recipients"
     assert drafts_schema["name"] == "message_drafts"
     assert (object_root / "site" / "inbox.py").is_file()
-    assert (object_root / "site" / "message_thread.py").is_file()
+    # site_message_thread was retrofitted away: the thread permalink is now
+    # a seeded 59 detail view (site_view_render, in app-views), not a
+    # bespoke object shipped by this package.
+    assert not (object_root / "site" / "message_thread.py").exists()
 
 
 def test_schema_json_files_are_valid_and_versioned():
@@ -367,17 +371,19 @@ def test_anonymous_cannot_create_on_any_collection():
 
 
 def test_messaging_pages_are_publicly_executable():
-    """Public execute on the *page objects* (they show a sign-in prompt to
+    """Public execute on the *page object* (it shows a sign-in prompt to
     visitors), never public read on the *collections* -- same split
-    app-invoices uses for site_invoices/site_invoice_view.
+    app-invoices uses for site_invoices/site_invoice_view. The thread
+    permalink is no longer a bespoke object here -- it's a seeded 59 detail
+    view served by site_view_render (app-views), whose own execute rule
+    lives in that package, not this one.
     """
     policy = _app_messaging_policy()
 
-    for object_id in ("site_inbox", "site_message_thread"):
-        decision = object_permissions.check_permission(
-            None, object_permissions.EXECUTE, policy=policy, object_id=object_id
-        )
-        assert decision.allowed is True
+    decision = object_permissions.check_permission(
+        None, object_permissions.EXECUTE, policy=policy, object_id="site_inbox"
+    )
+    assert decision.allowed is True
 
 
 def test_seed_tsvs_have_no_data_rows_and_match_schema_field_order():

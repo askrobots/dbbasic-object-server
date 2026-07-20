@@ -1,0 +1,2 @@
+id	pattern	object_id	priority
+route_inbox_thread	/inbox/{thread_id:uuid}	site_view_render	10
