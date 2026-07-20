@@ -1,0 +1,64 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "fin_accounts",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "signed-in users manage the chart of accounts they created"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "fin_journals",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "signed-in users manage journals they created, including the draft->posted transition guarded on the schema"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "fin_journal_lines",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "signed-in users manage line items on journals they created"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "fin_recurring",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "signed-in users manage recurring journal templates they created"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_accounts",
+      "reason": "the accounts page is public; it shows a sign-in prompt to visitors"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_journals",
+      "reason": "the journals page is public; it shows a sign-in prompt to visitors"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_journal_view",
+      "reason": "the journal detail page is public; the row-filtered collection API still decides which journal is actually returned"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_trial_balance",
+      "reason": "the trial balance page is public; it shows a sign-in prompt to visitors and the page itself scopes the report to the signed-in owner (see objects/site/trial_balance.py)"
+    }
+  ]
+}

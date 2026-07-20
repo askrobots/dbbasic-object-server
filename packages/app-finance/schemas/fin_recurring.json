@@ -1,0 +1,74 @@
+{
+  "name": "fin_recurring",
+  "title": "Recurring Journals",
+  "version": 1,
+  "description": "Recurring journal templates: a JSON line template plus a schedule (frequency/next_run/last_run) and an auto_post flag. Reconciled against a private predecessor-system audit, not part of this repo (its RecurringJournal model: 'JSON template + frequency + auto_post', materialized by a daily scheduled task). This package carries the fields only -- the materialization job itself (reading due templates and creating real fin_journals/fin_journal_lines rows) is a daemon-pass concern and is NOT built here; see dbbasic-package.json's Deferred list. next_run/last_run are therefore plain owner-writable fields, not stamped by anything in this package yet.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "name",
+      "type": "text",
+      "required": true,
+      "label": "Name",
+      "validation": {"min_length": 1, "max_length": 200}
+    },
+    {
+      "name": "template_lines",
+      "type": "textarea",
+      "label": "Template Lines (JSON)",
+      "help": "The recurring line template as JSON (account/debit/credit/memo shapes), per the predecessor system's RecurringJournal.template field. Stored as opaque text -- this package does not parse or validate its structure, since nothing here materializes it yet."
+    },
+    {
+      "name": "frequency",
+      "type": "enum",
+      "label": "Frequency",
+      "default": "monthly",
+      "enum": ["daily", "weekly", "monthly", "quarterly", "yearly"]
+    },
+    {
+      "name": "next_run",
+      "type": "date",
+      "label": "Next Run",
+      "help": "When the materialization job would next create a journal from this template. No job reads or writes this field yet in this package -- see the module description's Deferred note."
+    },
+    {
+      "name": "last_run",
+      "type": "date",
+      "label": "Last Run",
+      "help": "When the materialization job last created a journal from this template. No job reads or writes this field yet in this package -- see the module description's Deferred note."
+    },
+    {
+      "name": "auto_post",
+      "type": "boolean",
+      "default": "false",
+      "label": "Auto-post",
+      "help": "Whether a materialized journal should be posted immediately rather than left in draft. Carried as a plain flag; has no effect until the materialization job exists."
+    },
+    {
+      "name": "is_active",
+      "type": "boolean",
+      "default": "true",
+      "label": "Active"
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["name", "template_lines", "frequency", "next_run", "auto_post", "is_active"]}
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["name", "frequency", "next_run", "auto_post", "is_active"]
+  }
+}

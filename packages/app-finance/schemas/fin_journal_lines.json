@@ -1,0 +1,63 @@
+{
+  "name": "fin_journal_lines",
+  "title": "Journal Lines",
+  "version": 1,
+  "storage": "append",
+  "description": "Debit/credit rows belonging to one journal. A line is a debit OR a credit -- nothing in this schema enforces that split (a row could carry both debit_cents and credit_cents nonzero), matching the source's own JournalLine model, which also never enforced it at the field level (reconciled against a private predecessor-system audit, not part of this repo: 'JournalLine (debit-or-credit, ...)' is a naming/usage convention, not a guarded constraint). Totals are never stamped back onto fin_journals -- see object_finance.journal_totals for the computed fold and packages/app-finance/schemas/fin_journals.json's status field help for why no balance check exists at post.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "journal_id",
+      "type": "relation",
+      "required": true,
+      "relation": {"collection": "fin_journals", "display_field": "description"},
+      "label": "Journal",
+      "help": "Set once at creation and not intended to change after. Not schema read_only -- same reason as app-invoices' invoice_lines.invoice_id: a required, client-submitted-at-creation field cannot also be read_only on this platform (the server rejects any client submission of a read_only field, even the first one)."
+    },
+    {
+      "name": "account_id",
+      "type": "relation",
+      "required": true,
+      "relation": {"collection": "fin_accounts", "display_field": "name"},
+      "label": "Account"
+    },
+    {
+      "name": "debit_cents",
+      "type": "integer",
+      "default": "0",
+      "label": "Debit (cents)"
+    },
+    {
+      "name": "credit_cents",
+      "type": "integer",
+      "default": "0",
+      "label": "Credit (cents)"
+    },
+    {
+      "name": "memo",
+      "type": "text",
+      "label": "Memo",
+      "validation": {"max_length": 300}
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["journal_id", "account_id", "debit_cents", "credit_cents", "memo"]}
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["account_id", "debit_cents", "credit_cents", "memo"]
+  }
+}

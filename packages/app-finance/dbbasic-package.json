@@ -1,0 +1,70 @@
+{
+  "id": "app-finance",
+  "name": "Finance",
+  "version": "0.1.0",
+  "description": "Double-entry accounting v1: owner-scoped CRUD on a chart of accounts (fin_accounts), journal headers (fin_journals) and their debit/credit lines (fin_journal_lines), and recurring-journal templates (fin_recurring), plus one report (trial balance, computed by object_finance.trial_balance() over posted journals only). Reconciled against a private predecessor-system audit, not part of this repo (its finance/ app: 'Currency, Entity ..., Account (COA hierarchy, 5 types), Journal (+lines; draft/posted; ...), JournalLine (debit-or-credit, ...), ... RecurringJournal (JSON template + frequency + auto_post)'). Journal totals (total_debits_cents/total_credits_cents/is_balanced) are COMPUTED PROPERTIES via object_finance.journal_totals(), never stamped onto a record and never enforced -- posting a journal (draft->posted, owner-gated) is a bare status flip with no balance check, matching the source's own documented weak spot exactly (reconciled against a private predecessor-system audit, not part of this repo: 'posting is a bare status flip -- balance NOT enforced at post'). There is no totals-stamping HANDLES handler in this package, unlike app-invoices' invoice_totals or app-orders' order_totals -- that absence is deliberate, not an oversight; see object_finance.py's module docstring. Deferred to a later slice, per the reconciled predecessor finance model (private source audit, not part of this repo): balance ENFORCEMENT at post (a transition guard checking is_balanced -- a real improvement over the source, tracked here, not built in this migration); auto-posting journal entries from other collections (stock moves, invoices, orders, depreciation) -- no such collection currently writes a fin_journals/fin_journal_lines row, matching the source's own gap ('journal FKs from stock/invoice/depreciation stay null -- no auto-posting integration'); the recurring-journal daemon materialization job (fin_recurring's fields are carried, the scheduled pass that reads them and creates real journals is not); profit & loss, balance sheet, and cash flow reports (same fold shape as trial_balance, addable later -- trial_balance is the only report v1 ships); statement-line bank-import reconciliation; closed/locked accounting periods; multi-currency FX (the source's JournalLine carried exchange_rate/base_amount for a line's currency to differ from its journal's; this package's lines carry only debit_cents/credit_cents in the journal's own currency -- no exchange_rate field exists here, so this is a dropped field, not a carried-but-unused one, and multi-currency journals are out of scope for v1). Chart-of-accounts entity-mode seeding (the source's Entity model auto-seeds a starter chart of accounts per books-mode) is also not built -- fin_accounts rows are created by hand like every other collection's header-only seed. Account/journal/recurring-journal detail permalinks (/accounts/{id}, /journals/{journal_id:uuid}, /trial-balance) need site_routes records -- not seeded by this package, same precedent as app-invoices' /invoices/{invoice_id:uuid} and app-catalog's /products/{product_id:uuid}. object_finance.py (journal_totals/trial_balance) lives at the repository root alongside object_records.py -- a plain importable library, not a registered object in this manifest, the same way object_records.py itself is never a package object.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": [],
+  "objects": [
+    {
+      "id": "site_accounts",
+      "path": "objects/site/accounts.py"
+    },
+    {
+      "id": "site_journals",
+      "path": "objects/site/journals.py"
+    },
+    {
+      "id": "site_journal_view",
+      "path": "objects/site/journal_view.py"
+    },
+    {
+      "id": "site_trial_balance",
+      "path": "objects/site/trial_balance.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "fin_accounts",
+      "path": "schemas/fin_accounts.json"
+    },
+    {
+      "collection": "fin_journals",
+      "path": "schemas/fin_journals.json"
+    },
+    {
+      "collection": "fin_journal_lines",
+      "path": "schemas/fin_journal_lines.json"
+    },
+    {
+      "collection": "fin_recurring",
+      "path": "schemas/fin_recurring.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "fin_accounts",
+      "path": "seed/fin_accounts.tsv"
+    },
+    {
+      "collection": "fin_journals",
+      "path": "seed/fin_journals.tsv"
+    },
+    {
+      "collection": "fin_journal_lines",
+      "path": "seed/fin_journal_lines.tsv"
+    },
+    {
+      "collection": "fin_recurring",
+      "path": "seed/fin_recurring.tsv"
+    }
+  ],
+  "migrations": []
+}
