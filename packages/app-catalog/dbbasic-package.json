@@ -1,8 +1,8 @@
 {
   "id": "app-catalog",
   "name": "Catalog",
-  "version": "0.1.0",
-  "description": "Product catalog, v1: owner-scoped CRUD on a single products schema covering physical goods, digital downloads, services, subscriptions, and depreciable assets (product_type). Money is integer cents (price_cents/cost_cents/salvage_value_cents), never a float or currency type. Deferred to a later slice, per the reconciled predecessor catalog model (private source audit, not part of this repo): orders, order lines, stock moves and derived stock levels, warehouse/bin locations, a public storefront view (products stay owner-scoped, same posture as app-invoices), and the actual finance-account linkage / depreciation-schedule behavior behind income_account/expense_account/the ASSET fields (carried as plain fields now so nothing needs a backfill later). Product detail permalinks need a site_routes record mapping /products/{product_id:uuid} to site_product_view -- not seeded by this package, same precedent as app-notes' /notes/{note_id:uuid} and app-invoices' /invoices/{invoice_id:uuid}.",
+  "version": "0.2.0",
+  "description": "Product catalog + STOCK: owner-scoped CRUD on products, locations, and stock_moves. Money is integer cents (price_cents/cost_cents/salvage_value_cents/unit_cost_cents), never a float or currency type. Locations are a self-parent hierarchy (warehouse->zone->aisle->shelf->bin) plus virtual customer/supplier/virtual counterparties, reconciled against a private predecessor-system catalog audit, not part of this repo (its Location model: 'warehouse->bin hierarchy + virtual customer/supplier'). stock_moves is an append-mode, immutable ledger (docs/append-only-storage-design.md) -- stock LEVELS are never stored, only derived by folding the log (see object_stock.py at the repo root, imported by objects/site/stock.py the same way app-orders' order_totals.py imports object_records), matching the source model's own 'StockMove immutable, levels DERIVED not stored.' /stock computes its owner-scoped summary server-side rather than adding a new API endpoint -- see objects/site/stock.py's own module docstring for why. Deferred to a later slice: orders/invoices wiring a stock_moves row on ship/receive (the source's own WEAK note: 'order confirm/deliver does NOT create StockMoves'), the actual finance-account linkage / depreciation-schedule behavior behind income_account/expense_account/the ASSET fields (carried as plain fields now so nothing needs a backfill later), and a public storefront view (products stay owner-scoped, same posture as app-invoices). Product detail permalinks need a site_routes record mapping /products/{product_id:uuid} to site_product_view -- not seeded by this package, same precedent as app-notes' /notes/{note_id:uuid} and app-invoices' /invoices/{invoice_id:uuid}.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
@@ -15,12 +15,28 @@
     {
       "id": "site_product_view",
       "path": "objects/site/product_view.py"
+    },
+    {
+      "id": "site_locations",
+      "path": "objects/site/locations.py"
+    },
+    {
+      "id": "site_stock",
+      "path": "objects/site/stock.py"
     }
   ],
   "schemas": [
     {
       "collection": "products",
       "path": "schemas/products.json"
+    },
+    {
+      "collection": "locations",
+      "path": "schemas/locations.json"
+    },
+    {
+      "collection": "stock_moves",
+      "path": "schemas/stock_moves.json"
     }
   ],
   "permissions": [
@@ -32,6 +48,14 @@
     {
       "collection": "products",
       "path": "seed/products.tsv"
+    },
+    {
+      "collection": "locations",
+      "path": "seed/locations.tsv"
+    },
+    {
+      "collection": "stock_moves",
+      "path": "seed/stock_moves.tsv"
     }
   ],
   "migrations": []

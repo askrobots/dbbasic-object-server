@@ -1,0 +1,59 @@
+{
+  "name": "locations",
+  "title": "Locations",
+  "version": 1,
+  "description": "Storage locations for the STOCK slice: a self-parent hierarchy (warehouse -> zone -> aisle -> shelf -> bin) plus virtual locations (customer, supplier) that stock_moves uses as counterparties for external origins/destinations. Reconciled against a private predecessor-system catalog audit, not part of this repo (its Location model: 'warehouse->bin hierarchy + virtual customer/supplier'). Locations themselves are ordinary owner-scoped content, unlike stock_moves (see schemas/stock_moves.json's own note on why that collection is append-mode and not content-searchable).",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "name",
+      "type": "text",
+      "required": true,
+      "label": "Name",
+      "validation": {"min_length": 1, "max_length": 200}
+    },
+    {
+      "name": "location_type",
+      "type": "enum",
+      "label": "Type",
+      "default": "warehouse",
+      "enum": ["warehouse", "zone", "aisle", "shelf", "bin", "customer", "supplier", "virtual"],
+      "help": "Matches the predecessor system's Location type choices (reconciled against a private source audit, not part of this repo): a real physical hierarchy (warehouse/zone/aisle/shelf/bin) plus virtual counterparties (customer/supplier/virtual) that stock_moves points at for external origins/destinations. object_stock.py excludes customer/supplier/virtual from on-hand totals."
+    },
+    {
+      "name": "parent_id",
+      "label": "Parent Location",
+      "relation": {"collection": "locations", "display_field": "name"},
+      "help": "Self-parent hierarchy: warehouse -> zone -> aisle -> shelf -> bin. Optional -- blank means a top-level location (e.g. a warehouse itself, or a virtual customer/supplier location with no physical parent)."
+    },
+    {
+      "name": "code",
+      "type": "text",
+      "label": "Code",
+      "validation": {"max_length": 64}
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["name", "location_type", "parent_id", "code"]}
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["name", "location_type", "code", "parent_id"]
+  },
+  "search": {
+    "fields": ["name", "code"]
+  }
+}

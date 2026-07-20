@@ -1,0 +1,92 @@
+{
+  "name": "stock_moves",
+  "title": "Stock Moves",
+  "version": 1,
+  "storage": "append",
+  "description": "Immutable ledger of inventory movement: product_id moves quantity from from_location_id to to_location_id. Never updated once written -- stock LEVELS are derived by folding this log (see object_stock.py), never stored on this collection or anywhere else. Reconciled against a private predecessor-system catalog audit, not part of this repo (its StockMove model: 'immutable, levels DERIVED not stored'). This is the textbook append-mode collection per docs/append-only-storage-design.md: write-heavy, never updated, an inspectable audit trail by design -- see docs/storage-modes.md's 'Append (opt-in per collection)' section for what that changes about how this collection is physically written and read.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "product_id",
+      "type": "relation",
+      "required": true,
+      "relation": {"collection": "products", "display_field": "name"},
+      "label": "Product"
+    },
+    {
+      "name": "from_location_id",
+      "label": "From Location",
+      "relation": {"collection": "locations", "display_field": "name"},
+      "help": "Optional -- blank means an external origin (e.g. a purchase, where stock enters from outside any tracked location)."
+    },
+    {
+      "name": "to_location_id",
+      "label": "To Location",
+      "relation": {"collection": "locations", "display_field": "name"},
+      "help": "Optional -- blank means an external destination (e.g. a sale, where stock leaves to outside any tracked location)."
+    },
+    {
+      "name": "quantity",
+      "type": "number",
+      "required": true,
+      "label": "Quantity",
+      "help": "A count/measure, not money -- may be fractional. The one deliberate float-shaped exception in this package, same as app-orders' order_lines.quantity: Decimal arithmetic everywhere this is read (object_stock.py), never a bare float."
+    },
+    {
+      "name": "unit_cost_cents",
+      "type": "integer",
+      "label": "Unit Cost (cents)",
+      "help": "Optional. Integer cents, never a float or currency type, per 00-doctrine-and-contract.md."
+    },
+    {
+      "name": "reason",
+      "type": "enum",
+      "label": "Reason",
+      "default": "transfer",
+      "enum": ["purchase", "sale", "transfer", "adjustment", "return", "count"],
+      "help": "Matches the predecessor system's stock move reasons (reconciled against a private source audit, not part of this repo)."
+    },
+    {
+      "name": "reference",
+      "type": "text",
+      "label": "Reference",
+      "help": "Free-text provenance pointer, e.g. an order id. No enforced relation -- this package has no hard dependency on app-orders."
+    },
+    {
+      "name": "occurred_at",
+      "type": "datetime",
+      "label": "Occurred"
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    }
+  ],
+  "forms": {
+    "default": {
+      "fields": [
+        "product_id",
+        "from_location_id",
+        "to_location_id",
+        "quantity",
+        "unit_cost_cents",
+        "reason",
+        "reference",
+        "occurred_at"
+      ]
+    }
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["product_id", "reason", "quantity", "occurred_at"]
+  }
+}

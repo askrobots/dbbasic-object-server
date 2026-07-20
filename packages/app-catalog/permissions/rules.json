@@ -10,6 +10,22 @@
     },
     {
       "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "locations",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "signed-in users manage the warehouse/zone/aisle/shelf/bin (and virtual customer/supplier) locations they created, same owner-scoped posture as products"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "stock_moves",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "signed-in users manage the stock moves they recorded. stock_moves is append-mode and immutable in spirit (see schemas/stock_moves.json) but this platform has no separate create-only permission action -- update/delete stay owner-scoped rather than granted to everyone, the same posture app-thread's append-mode thread_comments takes"
+    },
+    {
+      "effect": "allow",
       "principal": "public",
       "actions": ["execute"],
       "object_id": "site_products",
@@ -21,6 +37,20 @@
       "actions": ["execute"],
       "object_id": "site_product_view",
       "reason": "the product detail page is public; the row-filtered collection API still decides which product is actually returned"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_locations",
+      "reason": "the locations page is public; it shows a sign-in prompt to visitors"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_stock",
+      "reason": "the stock levels page is public; it shows a sign-in prompt to visitors, and computes the owner-scoped summary itself once signed in (see objects/site/stock.py)"
     }
   ]
 }

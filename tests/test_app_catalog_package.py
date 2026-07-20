@@ -1,10 +1,10 @@
-"""Structural tests for packages/app-catalog (products, v1).
+"""Structural tests for packages/app-catalog (products + STOCK: locations,
+stock_moves).
 
 Mirrors the package/schema/permission testing conventions used for
-packages/app-invoices in tests/test_app_invoices_package.py. v1 is
-products only -- orders, order lines, stock, and locations are a later
-slice (see dbbasic-package.json's description; reconciled against a
-private predecessor-system catalog audit, not part of this repo).
+packages/app-invoices in tests/test_app_invoices_package.py. Behavior
+tests for the derived-levels fold (object_stock.py) live in
+tests/test_object_stock.py.
 """
 
 import json
@@ -22,9 +22,21 @@ APP_CATALOG_DIR = PACKAGES_ROOT / "app-catalog"
 # -- the doctrine this package must never violate (00-doctrine-and-contract.md).
 _FLOAT_MONEY_TYPES = {"float", "number", "currency"}
 
+# quantity is the one deliberate exception: a count/measure (e.g. 2.5 kg),
+# not currency -- same exception app-orders' order_lines.quantity documents.
+_ALLOWED_FLOAT_FIELDS = {"quantity"}
+
 
 def _products_schema():
     return json.loads((APP_CATALOG_DIR / "schemas" / "products.json").read_text())
+
+
+def _locations_schema():
+    return json.loads((APP_CATALOG_DIR / "schemas" / "locations.json").read_text())
+
+
+def _stock_moves_schema():
+    return json.loads((APP_CATALOG_DIR / "schemas" / "stock_moves.json").read_text())
 
 
 def test_get_package_normalizes_app_catalog_manifest():
@@ -32,13 +44,19 @@ def test_get_package_normalizes_app_catalog_manifest():
 
     assert package["id"] == "app-catalog"
     assert package["name"] == "Catalog"
-    assert {schema["collection"] for schema in package["schemas"]} == {"products"}
+    assert {schema["collection"] for schema in package["schemas"]} == {
+        "products", "locations", "stock_moves",
+    }
     assert {obj["id"] for obj in package["objects"]} == {
         "site_products",
         "site_product_view",
+        "site_locations",
+        "site_stock",
     }
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
-    assert {entry["collection"] for entry in package["seed"]} == {"products"}
+    assert {entry["collection"] for entry in package["seed"]} == {
+        "products", "locations", "stock_moves",
+    }
 
 
 def test_dry_run_app_catalog_package_is_safe(tmp_path):
@@ -54,7 +72,9 @@ def test_dry_run_app_catalog_package_is_safe(tmp_path):
 
     assert plan["safe_to_install"] is True
     assert plan["warnings"] == []
-    assert {schema["collection"] for schema in plan["schemas"]} == {"products"}
+    assert {schema["collection"] for schema in plan["schemas"]} == {
+        "products", "locations", "stock_moves",
+    }
 
 
 def test_install_app_catalog_package_loads_schema(tmp_path):
@@ -70,10 +90,17 @@ def test_install_app_catalog_package_loads_schema(tmp_path):
     )
 
     products_schema = object_schemas.get_schema("products", base_dir=data_dir)
+    locations_schema = object_schemas.get_schema("locations", base_dir=data_dir)
+    stock_moves_schema = object_schemas.get_schema("stock_moves", base_dir=data_dir)
 
     assert products_schema["name"] == "products"
+    assert locations_schema["name"] == "locations"
+    assert stock_moves_schema["name"] == "stock_moves"
+    assert stock_moves_schema["storage"] == "append"
     assert (object_root / "site" / "products.py").is_file()
     assert (object_root / "site" / "product_view.py").is_file()
+    assert (object_root / "site" / "locations.py").is_file()
+    assert (object_root / "site" / "stock.py").is_file()
 
 
 def test_schema_json_file_is_valid_and_versioned():
@@ -203,6 +230,114 @@ def test_products_schema_field_order_matches_the_brief():
     ]
 
 
+def test_locations_schema_field_order_and_types():
+    schema = _locations_schema()
+    field_names = [f["name"] for f in schema["fields"]]
+    assert field_names == [
+        "id", "name", "location_type", "parent_id", "code", "owner_id", "created_at",
+    ]
+    by_name = {f["name"]: f for f in schema["fields"]}
+    assert by_name["name"]["type"] == "text"
+    assert by_name["name"]["required"] is True
+    assert by_name["code"]["type"] == "text"
+    assert by_name["created_at"]["read_only"] is True
+
+
+def test_locations_type_enum_matches_the_source_model():
+    """The reconciled predecessor system's Location model (private source
+    audit, not part of this repo): a real warehouse->bin hierarchy plus
+    virtual customer/supplier locations, carried verbatim -- with a plain
+    'virtual' catch-all alongside the two named virtual counterparties.
+    """
+    by_name = {f["name"]: f for f in _locations_schema()["fields"]}
+    assert by_name["location_type"]["enum"] == [
+        "warehouse", "zone", "aisle", "shelf", "bin", "customer", "supplier", "virtual",
+    ]
+    assert by_name["location_type"]["default"] == "warehouse"
+
+
+def test_locations_parent_id_is_a_self_relation():
+    """Self-parent hierarchy: warehouse -> zone -> aisle -> shelf -> bin,
+    same shape app-thread's thread_comments.reply_to_id uses to relate a
+    collection to itself. Optional -- a top-level location has no parent.
+    """
+    by_name = {f["name"]: f for f in _locations_schema()["fields"]}
+    assert by_name["parent_id"]["relation"]["collection"] == "locations"
+    assert "required" not in by_name["parent_id"] or not by_name["parent_id"]["required"]
+
+
+def test_locations_search_covers_only_content_fields():
+    schema = _locations_schema()
+    assert schema["search"]["fields"] == ["name", "code"]
+
+
+def test_stock_moves_schema_is_append_storage():
+    """stock_moves is the textbook append-mode collection
+    (docs/append-only-storage-design.md): immutable, write-heavy, never
+    updated. Declared via the schema's top-level "storage" key, the only
+    way a manual schema can opt in (object_schemas.py).
+    """
+    schema = _stock_moves_schema()
+    assert schema["storage"] == "append"
+
+
+def test_stock_moves_schema_field_order_and_relations():
+    schema = _stock_moves_schema()
+    field_names = [f["name"] for f in schema["fields"]]
+    assert field_names == [
+        "id", "product_id", "from_location_id", "to_location_id", "quantity",
+        "unit_cost_cents", "reason", "reference", "occurred_at", "owner_id", "created_at",
+    ]
+    by_name = {f["name"]: f for f in schema["fields"]}
+
+    assert by_name["product_id"]["relation"]["collection"] == "products"
+    assert by_name["product_id"]["required"] is True
+
+    for name in ("from_location_id", "to_location_id"):
+        assert by_name[name]["relation"]["collection"] == "locations"
+        assert "required" not in by_name[name] or not by_name[name]["required"]
+
+
+def test_stock_moves_reason_enum_matches_the_source_model():
+    """Matches the predecessor system's stock move reasons (private source
+    audit, not part of this repo), default transfer.
+    """
+    by_name = {f["name"]: f for f in _stock_moves_schema()["fields"]}
+    assert by_name["reason"]["enum"] == [
+        "purchase", "sale", "transfer", "adjustment", "return", "count",
+    ]
+    assert by_name["reason"]["default"] == "transfer"
+
+
+def test_stock_moves_quantity_and_cost_field_types():
+    by_name = {f["name"]: f for f in _stock_moves_schema()["fields"]}
+    assert by_name["quantity"]["type"] == "number"
+    assert by_name["quantity"]["required"] is True
+    assert by_name["unit_cost_cents"]["type"] == "integer"
+    assert "required" not in by_name["unit_cost_cents"] or not by_name["unit_cost_cents"]["required"]
+
+
+def test_stock_moves_has_no_search_config():
+    """Moves are records, not content -- unlike products/locations, this
+    collection is deliberately not globally searchable.
+    """
+    assert "search" not in _stock_moves_schema()
+
+
+def test_no_money_field_in_locations_or_stock_moves_uses_a_float_or_currency_type():
+    for schema in (_locations_schema(), _stock_moves_schema()):
+        for field in schema["fields"]:
+            name = field["name"]
+            if name in _ALLOWED_FLOAT_FIELDS:
+                continue
+            field_type = field.get("type")
+            if "_cents" in name:
+                assert field_type == "integer", f"{schema['name']}.{name} must be type integer, got {field_type!r}"
+            assert field_type not in _FLOAT_MONEY_TYPES, (
+                f"{schema['name']}.{name} uses a float-shaped type {field_type!r}"
+            )
+
+
 def _app_catalog_policy():
     payload = json.loads((APP_CATALOG_DIR / "permissions" / "rules.json").read_text())
     return object_permissions.policy_from_dict({"access_mode": "role_based", "rules": payload["rules"]})
@@ -269,18 +404,115 @@ def test_products_and_product_view_pages_are_publicly_executable():
         assert decision.allowed is True
 
 
-def test_seed_tsv_is_header_only_and_matches_schema_field_order():
+def test_owner_can_crud_own_location():
+    policy = _app_catalog_policy()
+    subject = object_permissions.PermissionSubject(user_id="7")
+    record = {"owner_id": "7", "name": "Main Warehouse", "location_type": "warehouse"}
+
+    for action in (
+        object_permissions.CREATE,
+        object_permissions.READ,
+        object_permissions.UPDATE,
+        object_permissions.DELETE,
+    ):
+        decision = object_permissions.check_permission(
+            subject, action, policy=policy, collection="locations", record=record
+        )
+        assert decision.allowed is True
+
+
+def test_others_cannot_touch_someone_elses_location():
+    policy = _app_catalog_policy()
+    subject = object_permissions.PermissionSubject(user_id="8")
+    record = {"owner_id": "7", "name": "Main Warehouse", "location_type": "warehouse"}
+
+    for action in (
+        object_permissions.READ,
+        object_permissions.UPDATE,
+        object_permissions.DELETE,
+    ):
+        decision = object_permissions.check_permission(
+            subject, action, policy=policy, collection="locations", record=record
+        )
+        assert decision.allowed is False
+
+
+def test_owner_can_crud_own_stock_move():
+    policy = _app_catalog_policy()
+    subject = object_permissions.PermissionSubject(user_id="7")
+    record = {"owner_id": "7", "product_id": "p1", "quantity": "10", "reason": "purchase"}
+
+    for action in (
+        object_permissions.CREATE,
+        object_permissions.READ,
+        object_permissions.UPDATE,
+        object_permissions.DELETE,
+    ):
+        decision = object_permissions.check_permission(
+            subject, action, policy=policy, collection="stock_moves", record=record
+        )
+        assert decision.allowed is True
+
+
+def test_others_cannot_touch_someone_elses_stock_move():
+    policy = _app_catalog_policy()
+    subject = object_permissions.PermissionSubject(user_id="8")
+    record = {"owner_id": "7", "product_id": "p1", "quantity": "10", "reason": "purchase"}
+
+    for action in (
+        object_permissions.READ,
+        object_permissions.UPDATE,
+        object_permissions.DELETE,
+    ):
+        decision = object_permissions.check_permission(
+            subject, action, policy=policy, collection="stock_moves", record=record
+        )
+        assert decision.allowed is False
+
+
+def test_anonymous_cannot_read_locations_or_stock_moves():
+    policy = _app_catalog_policy()
+
+    for collection, record in (
+        ("locations", {"owner_id": "7", "name": "Main Warehouse"}),
+        ("stock_moves", {"owner_id": "7", "product_id": "p1", "quantity": "10"}),
+    ):
+        decision = object_permissions.check_permission(
+            None, object_permissions.READ, policy=policy, collection=collection, record=record
+        )
+        assert decision.allowed is False
+
+
+def test_locations_and_stock_pages_are_publicly_executable():
+    """Same split as products/product_view: public execute on the page
+    objects only, never public read on the underlying collections.
+    """
+    policy = _app_catalog_policy()
+
+    for object_id in ("site_locations", "site_stock"):
+        decision = object_permissions.check_permission(
+            None, object_permissions.EXECUTE, policy=policy, object_id=object_id
+        )
+        assert decision.allowed is True
+
+
+def test_seed_tsvs_are_header_only_and_match_schema_field_order():
     """Header-only, matching the established precedent (app-tasks,
     app-notes, app-invoices, app-contacts all ship header-only seeds).
-    The header order matches the schema's own field order for
+    The header order matches each schema's own field order for
     readability.
     """
-    schema = _products_schema()
-    path = APP_CATALOG_DIR / "seed" / "products.tsv"
-    lines = path.read_text().splitlines()
-    assert len(lines) == 1, "products.tsv should be header-only"
-    header = lines[0].split("\t")
-    assert header == [f["name"] for f in schema["fields"]]
+    for schema_fn, filename in (
+        (_products_schema, "products.tsv"),
+        (_locations_schema, "locations.tsv"),
+        (_stock_moves_schema, "stock_moves.tsv"),
+    ):
+        schema = schema_fn()
+        path = APP_CATALOG_DIR / "seed" / filename
+        lines = path.read_text().splitlines()
+        assert len(lines) == 1, f"{filename} should be header-only"
+        header = lines[0].split("\t")
+        assert header == [f["name"] for f in schema["fields"]]
 
 
 def test_no_disallowed_org_names_leak_into_the_package():
@@ -298,3 +530,20 @@ def test_no_disallowed_org_names_leak_into_the_package():
             continue
         text = path.read_text(encoding="utf-8", errors="ignore")
         assert not banned.search(text), f"disallowed reference found in {path}"
+
+
+def test_object_stock_module_has_no_disallowed_org_names():
+    """object_stock.py lives at the repo root, not inside packages/
+    app-catalog/ (see object_stock.py's own module docstring for why --
+    same placement and same reason as object_finance.py for app-finance),
+    so the repo-hygiene sweep above never walks it -- covered here
+    explicitly instead, mirroring
+    test_app_finance_package.py::test_object_finance_module_has_no_disallowed_org_names.
+    """
+    banned = re.compile(
+        "|".join([r"\b" + "q" + "9" + r"\b", "ask" + "robots", r"\b" + "wo" + "ld" + r"\b"]),
+        re.IGNORECASE,
+    )
+    path = Path(__file__).resolve().parents[1] / "object_stock.py"
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    assert not banned.search(text), f"disallowed reference found in {path}"

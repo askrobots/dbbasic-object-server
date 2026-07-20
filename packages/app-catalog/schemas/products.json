@@ -2,7 +2,7 @@
   "name": "products",
   "title": "Products",
   "version": 1,
-  "description": "Sellable items: physical goods, digital downloads, services, subscriptions, and depreciable assets share this one schema via product_type. v1 is catalog data only -- orders, order lines, and stock levels are a later slice (see dbbasic-package.json's description, reconciled against a private predecessor-system catalog audit); price_cents/cost_cents/salvage_value_cents are integer cents, never a float or currency type.",
+  "description": "Sellable items: physical goods, digital downloads, services, subscriptions, and depreciable assets share this one schema via product_type. Locations and stock_moves (derived stock levels) now live alongside this schema in the same package -- see schemas/locations.json, schemas/stock_moves.json, and object_stock.py. Orders and order lines are a separate package (app-orders); this schema's product_id is what their order_lines optionally relate to. price_cents/cost_cents/salvage_value_cents are integer cents, never a float or currency type.",
   "fields": [
     {
       "name": "id"
