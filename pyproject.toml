@@ -65,6 +65,15 @@ addopts = [
     "--strict-markers",
     "--strict-config",
     "-v",
+    # Heavy conformance/benchmark suites are deselected from the default
+    # (per-commit) run and invoked deliberately -- `pytest -m conformance`
+    # or `pytest -m bench` -- like benchmarking. A command-line -m overrides
+    # this, so those explicit invocations still work.
+    "-m", "not conformance and not bench",
+]
+markers = [
+    "conformance: heavy correctness/charset/i18n/durability conformance suites; run deliberately, not per-commit (see plan/database-test-strategy.md)",
+    "bench: performance/scale benchmarks; a tracked trend, not a pass/fail gate",
 ]
 
 [tool.setuptools]

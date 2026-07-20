@@ -471,7 +471,7 @@ def create_collection_record(
         raise InvalidRecordIdError(f"Invalid record id: {record_id}")
     submitted_fields = frozenset(clean)
     clean = _apply_schema_defaults(collection, clean, base_dir=base_dir, roots=roots)
-    _check_field_sizes(clean)
+    _check_field_storable(clean)
     clean = _apply_auto_created_at(collection, clean, submitted_fields, base_dir=base_dir, roots=roots)
     _validate_record_against_schema(
         collection,
@@ -621,7 +621,7 @@ def update_collection_record(
             base_dir=base_dir,
             roots=roots,
         )
-        _check_field_sizes(updated)
+        _check_field_storable(updated)
         _validate_field_transitions(
             collection,
             existing,
@@ -3015,23 +3015,47 @@ def _validate_record_against_schema(
         _validate_field_relation(field, value, base_dir=base_dir)
 
 
-def _check_field_sizes(record: dict[str, Any]) -> None:
-    """Reject a write whose any field value exceeds MAX_TSV_FIELD_BYTES.
+def _check_field_storable(record: dict[str, Any]) -> None:
+    """Reject a write whose any field value cannot be safely stored in the
+    canonical plain-text TSV substrate, surfacing every case as a clean
+    InvalidRecordPayloadError (a 4xx) rather than letting a raw stdlib
+    _csv.Error or UnicodeEncodeError escape the public API. Three unstorable
+    classes:
 
-    Enforced on create/update -- the entry points for new/changed data -- so
-    a value too large to be read back is never persisted (see
-    MAX_TSV_FIELD_BYTES: without this, an oversize cell silently empties an
-    append-mode collection on read). Measured in UTF-8 bytes, the unit the
-    on-disk TSV and csv.field_size_limit both work in. Iterates the record's
-    own values rather than schema fields, so it also guards schemaless
-    collections and the packed `extra` blob. Internal rewrites (compaction,
-    transition) do not pass through here and are not size-checked -- they
-    only ever re-serialize data that already passed this gate on write.
+    - **Too large** (> MAX_TSV_FIELD_BYTES): without this, an oversize cell
+      silently empties an append-mode collection on read.
+    - **NUL (0x00)**: Python's csv writer literally cannot represent a NUL
+      under QUOTE_ALL/MINIMAL ("need to escape, but no escapechar set"), and a
+      NUL corrupts the text tooling the plain-text-durability guarantee rests
+      on -- it is not text. Legitimate JSON escapes NUL to \\u0000, so real
+      structured data never carries a raw one.
+    - **Unencodable UTF-8** (a lone surrogate, e.g. from bad input or
+      json.dumps(ensure_ascii=False) over broken data): can't be written at
+      all.
+
+    Enforced on create/update (the entry points for new/changed data);
+    internal rewrites (compaction, transition) don't pass here -- they only
+    re-serialize data that already passed this gate. Iterates the record's own
+    values, so it guards schemaless collections and the packed `extra` blob
+    too.
     """
     for name, value in record.items():
         if value is None:
             continue
-        size = len(str(value).encode("utf-8"))
+        text = str(value)
+        if "\x00" in text:
+            raise InvalidRecordPayloadError(
+                f"Record field '{name}' contains a NUL byte, which cannot be "
+                f"stored in the plain-text substrate (JSON encodes NUL as "
+                f"\\u0000)"
+            )
+        try:
+            size = len(text.encode("utf-8"))
+        except UnicodeEncodeError as exc:
+            raise InvalidRecordPayloadError(
+                f"Record field '{name}' is not valid UTF-8 (unencodable "
+                f"surrogate) and cannot be stored: {exc}"
+            ) from exc
         if size > MAX_TSV_FIELD_BYTES:
             raise InvalidRecordPayloadError(
                 f"Record field '{name}' is {size} bytes, exceeding the "
