@@ -1927,6 +1927,19 @@ def _repair_torn_tail(path: Path) -> None:
     single short row, so this is normally one small read) rather than
     reading the whole file, since this runs on every append in append
     mode and must stay cheap even on a huge collection.
+
+    KNOWN LIMITATION (substrate bug #2, deferred -- see
+    plan/parity-completion-plan.md Stage 1a): both this function's
+    "last byte == \\n" torn check and _drop_torn_tail's endswith("\\n") check
+    are QUOTE-BLIND. A crash landing right after a newline that is INSIDE an
+    open quoted field (a multi-line cell) leaves the file ending in "\\n", so
+    both checks wrongly conclude "not torn" and the fragment survives to
+    corrupt the next append. The correct fix compares file size to the id
+    sidecar's covered_bytes and quote-aware-scans only the un-covered tail
+    (staying O(1) on the common path); it is a dedicated crash-recovery
+    change, not made here. Currently reachable only by an append-mode
+    collection storing a RAW newline in a cell AND crashing mid-write of that
+    row; the compact-JSON mandate for embedded arrays keeps that path clear.
     """
     try:
         size = path.stat().st_size
