@@ -86,6 +86,10 @@ def test_schema_json_files_are_valid_and_versioned():
             # flipped to a hierarchy tree view (spec 60); additive version bump
             assert payload["version"] == 2
             assert payload["views"]["list_mode"] == "tree"
+        elif name == "fin_journals":
+            # generated_from added (spec 61, materialize); additive version bump
+            assert payload["version"] == 2
+            assert payload["views"]["list_mode"] == "table"
         else:
             assert payload["version"] == 1
             assert payload["views"]["list_mode"] == "table"

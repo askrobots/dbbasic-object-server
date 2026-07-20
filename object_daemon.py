@@ -33,6 +33,7 @@ except ImportError:
 
 import object_collections
 import object_events
+import object_materialize
 import object_record_changes
 import object_records
 import object_rollups
@@ -75,6 +76,23 @@ _DEFAULT_AUTO_TRANSITION_RULES = json.dumps([
 # isn't installed) are logged once per process, not once per poll --
 # see _apply_auto_transition_rule.
 _WARNED_UNKNOWN_AUTO_TRANSITION_COLLECTIONS: set[str] = set()
+
+# Materialize pass (plan/vocabulary/61-materialize-spec.md, object_materialize.py).
+# Unlike process_rollups (whose due-gate lives entirely on each
+# rollup_definitions row -- see process_rollups' own docstring),
+# materialize's Events section explicitly asks for process_stale_
+# transitions' marker-file-gated shape instead: "riding the exact
+# marker-file-gated, try/except-per-item pattern process_stale_
+# transitions already establishes." See process_materializations.
+MATERIALIZE_INTERVAL_SECONDS_ENV = "DBBASIC_MATERIALIZE_INTERVAL_SECONDS"
+_DEFAULT_MATERIALIZE_INTERVAL_SECONDS = 3600
+MATERIALIZE_MARKER_NAME = ".materialize_last_run"
+
+# Definitions referencing a source/output/child collection that doesn't
+# exist yet (the owning package isn't installed) are logged once per
+# process, not once per poll -- mirrors _WARNED_UNKNOWN_AUTO_TRANSITION_
+# COLLECTIONS exactly (61's Degradation section names this precedent).
+_WARNED_UNKNOWN_MATERIALIZE_COLLECTIONS: set[str] = set()
 
 
 def log(msg, level='INFO'):
@@ -923,6 +941,182 @@ def process_rollups(*, base_dir: Path | str = "data") -> dict | None:
     return {"checked": len(definitions), "computed": computed}
 
 
+# --- Materialize ---
+
+def process_materializations(*, base_dir: Path | str = "data") -> dict | None:
+    """Generate every due, enabled, non-blocked scheduled/scheduled_fixed
+    materialize_definitions row's output.
+
+    Rides this daemon's existing poll loop as one more pass
+    (plan/vocabulary/61-materialize-spec.md's Dependencies: "No new
+    daemon... process_materializations, alongside process_compactions").
+    Unlike process_rollups (whose due-gate lives entirely on the
+    definition row, no marker file needed), 61's Events section asks for
+    process_stale_transitions' marker-file-gated shape instead -- gated by
+    DBBASIC_MATERIALIZE_INTERVAL_SECONDS (default 3600), marker file
+    `.materialize_last_run` under `base_dir`, surviving a daemon restart
+    the same way every other marker-gated pass does.
+
+    Event-mode definitions (trigger.mode == "event") are never driven by
+    this pass -- they fire via materialize_seed's HANDLES dispatch (when
+    DBBASIC_ENABLE_EVENT_HANDLERS is set) or materialize_run's manual path
+    only. This pass DOES keep materialize_seed's HANDLES literal in sync
+    with the current event-mode definition set every call (object_
+    materialize.sync_materialize_seed_handles) regardless of whether that
+    flag is on, so HANDLES is always correct by the time an operator
+    flips it.
+
+    For each enabled, non-blocked, due scheduled/scheduled_fixed
+    definition: object_materialize.generate_definition reads
+    source_collection outside row-filters (daemon posture, same as
+    compaction/rollup/auto-transition), computes the due (source row,
+    period) set from first principles every call (never trusting a
+    row's own next_run/last_run as the correctness mechanism -- see that
+    module's docstring), and for each checks the deterministic header id
+    in output_collection: missing -> generate, present -> skip, not an
+    error.
+
+    Two-level isolation, per 61's Events section (drawn from process_
+    stale_transitions' _apply_auto_transition_rule, not process_rollups'
+    per-definition-only isolation): one bad DEFINITION (a malformed
+    mapping, a missing source/output/child collection) is caught here and
+    never stops any other definition; one bad SOURCE ROW within an
+    otherwise-good definition is caught inside object_materialize.
+    generate_config and surfaces as one entry in that definition's own
+    "errors" list, never stopping any other row in the same definition.
+
+    A missing source/output/child collection is logged once per process
+    (object_materialize.MissingCollectionError, warned-once via
+    _WARNED_UNKNOWN_MATERIALIZE_COLLECTIONS) -- mirrors process_stale_
+    transitions' _WARNED_UNKNOWN_AUTO_TRANSITION_COLLECTIONS exactly, to
+    avoid re-logging every poll interval.
+
+    Always logs exactly one summary line per run, even a no-op run
+    (`"Materialize: checked N definition(s), generated M record(s),
+    skipped K already-generated"`) -- every sibling pass's "activity or
+    deliberate silence is visible in the daemon log" convention.
+
+    Returns None when the block-wide `materialize_enabled` flag is off,
+    the materialize_definitions collection doesn't exist yet (package not
+    installed), or the interval hasn't elapsed. Otherwise returns
+    {"checked": <definitions considered>, "generated": <total records>,
+    "skipped_already_generated": <total>, "results": [...]}.
+    """
+    if not object_materialize.materialize_pass_enabled(base_dir=base_dir):
+        return None
+
+    interval = _env_int(MATERIALIZE_INTERVAL_SECONDS_ENV, _DEFAULT_MATERIALIZE_INTERVAL_SECONDS)
+    marker_path = Path(base_dir) / MATERIALIZE_MARKER_NAME
+    now_ts = time.time()
+    try:
+        last_run = marker_path.stat().st_mtime
+    except OSError:
+        last_run = 0.0
+
+    if now_ts - last_run < interval:
+        return None
+
+    try:
+        definitions = object_records.read_collection_records(
+            object_materialize.MATERIALIZE_DEFINITIONS_COLLECTION, base_dir=base_dir
+        )
+    except (object_collections.CollectionNotFoundError, object_collections.InvalidCollectionNameError):
+        return None
+
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    marker_path.write_text(str(now_ts))
+
+    try:
+        object_materialize.sync_materialize_seed_handles(base_dir=base_dir)
+    except Exception as e:
+        log(f"Materialize: HANDLES sync failed: {e}", "ERROR")
+
+    now = datetime.now(timezone.utc)
+    total_generated = 0
+    total_skipped = 0
+    results = []
+
+    for definition in definitions:
+        definition_id = definition.get("id") or "<unknown>"
+
+        if object_materialize.is_definition_blocked(definition):
+            continue
+        if not object_materialize.is_definition_enabled(definition):
+            continue
+        if not object_materialize.is_definition_due(definition, now=now):
+            continue
+
+        try:
+            config = object_materialize.parse_definition(definition, base_dir=base_dir)
+        except object_materialize.MissingCollectionError as e:
+            if definition_id not in _WARNED_UNKNOWN_MATERIALIZE_COLLECTIONS:
+                log(
+                    f"Materialize: {definition_id} references missing {e.role} collection "
+                    f"'{e.collection}' (package not installed?), skipping -- will keep "
+                    "checking, logged once",
+                    "WARN",
+                )
+                _WARNED_UNKNOWN_MATERIALIZE_COLLECTIONS.add(definition_id)
+            continue
+        except Exception as e:
+            log(f"Materialize: {definition_id} failed: {e}", "ERROR")
+            continue
+
+        if config.trigger_mode == "event":
+            continue  # event-mode definitions are driven by dispatch/manual only
+
+        _WARNED_UNKNOWN_MATERIALIZE_COLLECTIONS.discard(definition_id)
+
+        try:
+            result = object_materialize.generate_config(config, base_dir=base_dir, now=now)
+        except Exception as e:
+            log(f"Materialize: {definition_id} failed: {e}", "ERROR")
+            continue
+
+        for error in result["errors"]:
+            log(
+                f"Materialize: {definition_id} source={error['source_id']} "
+                f"period={error['period_start']} failed: {error['error']}",
+                "ERROR",
+            )
+
+        try:
+            object_records.update_collection_record(
+                object_materialize.MATERIALIZE_DEFINITIONS_COLLECTION,
+                definition_id,
+                {"last_run_at": _now_iso_utc()},
+                base_dir=base_dir,
+                actor=config.actor,
+                preserve_read_only=True,
+            )
+        except Exception as e:
+            # The generation itself already succeeded (whatever was due is
+            # live in output_collection); failing to stamp last_run_at only
+            # means this definition looks "due" again next call -- a
+            # harmless, self-correcting re-run (the deterministic header id
+            # is still the real gate), never lost or corrupted data.
+            log(f"Materialize: {definition_id} ran but failed to stamp last_run_at: {e}", "ERROR")
+
+        total_generated += result["generated"]
+        total_skipped += result["skipped_already_generated"]
+        results.append(result)
+
+    log(
+        f"Materialize: checked {len(definitions)} definition(s), generated "
+        f"{total_generated} record(s), skipped {total_skipped} already-generated"
+    )
+    return {
+        "checked": len(definitions),
+        "generated": total_generated,
+        "skipped_already_generated": total_skipped,
+        "results": results,
+    }
+
+
+def _now_iso_utc() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
 # --- Object Execution ---
 
 def _execute_target(runtime: ObjectRuntime, object_id: str, method: str, payload: dict):
@@ -993,6 +1187,10 @@ def main():
         f"(interval {_env_int(AUTO_TRANSITION_INTERVAL_SECONDS_ENV, _DEFAULT_AUTO_TRANSITION_INTERVAL_SECONDS)}s)"
     )
     print(f"Rollups: {'enabled' if object_rollups.rollup_pass_enabled(base_dir=base_dir) else 'disabled (rollup_enabled flag off)'}")
+    print(
+        f"Materialize: {'enabled' if object_materialize.materialize_pass_enabled(base_dir=base_dir) else 'disabled (materialize_enabled flag off)'} "
+        f"(interval {_env_int(MATERIALIZE_INTERVAL_SECONDS_ENV, _DEFAULT_MATERIALIZE_INTERVAL_SECONDS)}s)"
+    )
     print()
     print("Press Ctrl+C to stop")
     print("=" * 60)
@@ -1037,6 +1235,11 @@ def main():
             process_rollups(base_dir=base_dir)
         except Exception as e:
             log(f"Rollup error: {e}", 'ERROR')
+
+        try:
+            process_materializations(base_dir=base_dir)
+        except Exception as e:
+            log(f"Materialize error: {e}", 'ERROR')
 
         now = time.time()
         if now - last_event_cleanup >= EVENT_CLEANUP_INTERVAL_SECONDS:

@@ -901,6 +901,254 @@ def test_process_rollups_returns_none_without_rollup_definitions_collection(tmp_
     assert result is None
 
 
+# --- Materialize (plan/vocabulary/61-materialize-spec.md) ------------------
+
+def _materialize_definition_row(**overrides) -> dict:
+    row = {
+        "id": "matgen_fin_recurring",
+        "name": "Recurring journal generation",
+        "source_collection": "fin_recurring",
+        "source_filter": json.dumps({"is_active": "true"}),
+        "trigger": json.dumps({
+            "mode": "scheduled", "interval_seconds": 3600,
+            "period_field": "frequency", "anchor_field": "next_run",
+        }),
+        "output_collection": "fin_journals",
+        "child_collection": "fin_journal_lines",
+        "child_source_field": "template_lines",
+        "child_link_field": "journal_id",
+        "idempotency_key": "matgen_{definition_id}_{source_id}_{period_start}",
+        "mapping": json.dumps({
+            "date": {"from_period": "period_start"},
+            "description": {"literal": "Recurring"},
+            "status": {"literal": "draft"},
+            "currency": {"literal": "USD"},
+        }),
+        "balance_check": json.dumps({"debit_field": "debit_cents", "credit_field": "credit_cents"}),
+        "last_run_at": "",
+        "actor": "daemon:materialize",
+        "enabled": "true",
+        "block": "false",
+    }
+    row.update(overrides)
+    return row
+
+
+def _install_materialize_fixtures(data_dir: Path, definitions: list[dict], recurring_rows: list[dict]) -> None:
+    write_schema(data_dir, "materialize_definitions", [
+        {"name": "id"},
+        {"name": "name", "type": "text"},
+        {"name": "source_collection", "type": "text"},
+        {"name": "source_filter", "type": "textarea"},
+        {"name": "trigger", "type": "textarea"},
+        {"name": "output_collection", "type": "text"},
+        {"name": "child_collection", "type": "text"},
+        {"name": "child_source_field", "type": "text"},
+        {"name": "child_link_field", "type": "text"},
+        {"name": "idempotency_key", "type": "text"},
+        {"name": "mapping", "type": "textarea"},
+        {"name": "balance_check", "type": "textarea"},
+        {"name": "debit_account_id", "type": "text"},
+        {"name": "credit_account_id", "type": "text"},
+        {"name": "actor", "type": "text"},
+        {"name": "last_run_at", "type": "datetime", "read_only": True},
+        {"name": "enabled", "type": "boolean"},
+        {"name": "block", "type": "boolean"},
+    ])
+    write_schema(data_dir, "fin_recurring", [
+        {"name": "id"},
+        {"name": "name", "type": "text"},
+        {"name": "template_lines", "type": "textarea"},
+        {"name": "frequency", "type": "text"},
+        {"name": "next_run", "type": "date"},
+        {"name": "auto_post", "type": "boolean"},
+        {"name": "is_active", "type": "boolean"},
+    ])
+    write_schema(data_dir, "fin_journals", [
+        {"name": "id"}, {"name": "date", "type": "date"}, {"name": "description", "type": "text"},
+        {"name": "status", "type": "text"}, {"name": "currency", "type": "text"},
+    ])
+    write_append_schema(data_dir, "fin_journal_lines", [
+        {"name": "id"}, {"name": "journal_id", "type": "text"}, {"name": "account_id", "type": "text"},
+        {"name": "debit_cents", "type": "integer"}, {"name": "credit_cents", "type": "integer"},
+    ])
+
+    for row in recurring_rows:
+        object_records.create_collection_record("fin_recurring", row, base_dir=data_dir, roots=[], actor="tester")
+    for row in definitions:
+        object_records.create_collection_record(
+            "materialize_definitions", row, base_dir=data_dir, roots=[], actor="tester",
+            preserve_read_only=True,
+        )
+
+
+def _balanced_recurring_row(**overrides) -> dict:
+    row = {
+        "id": "rec1", "name": "Rent", "frequency": "monthly", "next_run": "2020-01-01",
+        "auto_post": "false", "is_active": "true",
+        "template_lines": json.dumps([
+            {"account_id": "acct_cash", "debit_cents": 100, "credit_cents": 0},
+            {"account_id": "acct_rev", "debit_cents": 0, "credit_cents": 100},
+        ]),
+    }
+    row.update(overrides)
+    return row
+
+
+def test_process_materializations_generates_a_due_definition_and_stamps_last_run_at(tmp_path):
+    data_dir = tmp_path / "data"
+    _install_materialize_fixtures(data_dir, [_materialize_definition_row()], [_balanced_recurring_row()])
+
+    result = object_daemon.process_materializations(base_dir=data_dir)
+
+    assert result is not None
+    assert result["checked"] == 1
+    assert result["generated"] >= 1
+
+    journals = object_records.read_collection_records("fin_journals", base_dir=data_dir, roots=[])
+    assert len(journals) >= 1
+
+    definition = object_records.get_collection_record(
+        "materialize_definitions", "matgen_fin_recurring", base_dir=data_dir,
+    )
+    assert definition["last_run_at"]
+
+
+def test_process_materializations_skips_a_disabled_definition(tmp_path):
+    data_dir = tmp_path / "data"
+    _install_materialize_fixtures(
+        data_dir, [_materialize_definition_row(enabled="false")], [_balanced_recurring_row()],
+    )
+
+    result = object_daemon.process_materializations(base_dir=data_dir)
+
+    assert result["generated"] == 0
+    assert object_records.read_collection_records("fin_journals", base_dir=data_dir, roots=[]) == []
+
+
+def test_process_materializations_refuses_a_blocked_definition(tmp_path):
+    data_dir = tmp_path / "data"
+    _install_materialize_fixtures(
+        data_dir, [_materialize_definition_row(block="true")], [_balanced_recurring_row()],
+    )
+
+    result = object_daemon.process_materializations(base_dir=data_dir)
+
+    assert result["generated"] == 0
+    assert object_records.read_collection_records("fin_journals", base_dir=data_dir, roots=[]) == []
+
+
+def test_process_materializations_skips_event_mode_definitions(tmp_path):
+    """The scheduled daemon pass never drives an event-mode definition --
+    that's materialize_seed's dispatch / materialize_run's job."""
+    data_dir = tmp_path / "data"
+    event_definition = _materialize_definition_row(
+        id="matgen_event", source_collection="fin_recurring", output_collection="fin_recurring",
+        trigger=json.dumps({"mode": "event", "on": "record.created"}),
+        child_collection="", child_source_field="", child_link_field="",
+        idempotency_key="{definition_id}_{source_id}", mapping=json.dumps({}), balance_check="",
+    )
+    _install_materialize_fixtures(data_dir, [event_definition], [_balanced_recurring_row()])
+
+    result = object_daemon.process_materializations(base_dir=data_dir)
+
+    assert result["checked"] == 1
+    assert result["generated"] == 0
+
+
+def test_process_materializations_one_bad_definition_does_not_stop_others(tmp_path):
+    data_dir = tmp_path / "data"
+    bad = _materialize_definition_row(id="bad", source_collection="no_such_collection")
+    good = _materialize_definition_row(id="good")
+    _install_materialize_fixtures(data_dir, [bad, good], [_balanced_recurring_row()])
+
+    result = object_daemon.process_materializations(base_dir=data_dir)
+
+    assert result["checked"] == 2
+    assert result["generated"] >= 1
+    good_definition = object_records.get_collection_record("materialize_definitions", "good", base_dir=data_dir)
+    assert good_definition["last_run_at"]
+    bad_definition = object_records.get_collection_record("materialize_definitions", "bad", base_dir=data_dir)
+    assert not bad_definition["last_run_at"]  # never reached the stamp step
+
+
+def test_process_materializations_returns_none_when_flag_off(tmp_path):
+    data_dir = tmp_path / "data"
+    write_schema(data_dir, "feature_flags", [
+        {"name": "id"}, {"name": "flag", "type": "text"}, {"name": "value", "type": "text"},
+    ])
+    object_records.create_collection_record(
+        "feature_flags", {"id": "f1", "flag": "materialize_enabled", "value": "off"}, base_dir=data_dir, roots=[],
+    )
+    _install_materialize_fixtures(data_dir, [_materialize_definition_row()], [_balanced_recurring_row()])
+
+    result = object_daemon.process_materializations(base_dir=data_dir)
+
+    assert result is None
+    assert object_records.read_collection_records("fin_journals", base_dir=data_dir, roots=[]) == []
+
+
+def test_process_materializations_returns_none_without_materialize_definitions_collection(tmp_path):
+    data_dir = tmp_path / "data"
+    result = object_daemon.process_materializations(base_dir=data_dir)
+    assert result is None
+
+
+def test_process_materializations_honors_interval_marker(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_MATERIALIZE_INTERVAL_SECONDS", "3600")
+    data_dir = tmp_path / "data"
+    _install_materialize_fixtures(data_dir, [_materialize_definition_row()], [_balanced_recurring_row()])
+
+    first = object_daemon.process_materializations(base_dir=data_dir)
+    assert first is not None
+    assert first["generated"] >= 1
+    journal_count = len(object_records.read_collection_records("fin_journals", base_dir=data_dir, roots=[]))
+
+    # Add another due row and call again immediately: the marker was just
+    # written, so the interval hasn't elapsed and this call must be a
+    # pure no-op (nothing new generated).
+    object_records.create_collection_record(
+        "fin_recurring", _balanced_recurring_row(id="rec2", name="Rent 2"), base_dir=data_dir, roots=[],
+    )
+    second = object_daemon.process_materializations(base_dir=data_dir)
+    assert second is None
+    assert len(object_records.read_collection_records("fin_journals", base_dir=data_dir, roots=[])) == journal_count
+
+
+def test_process_materializations_no_op_run_still_returns_zeroed_summary(tmp_path):
+    data_dir = tmp_path / "data"
+    _install_materialize_fixtures(data_dir, [], [])
+
+    result = object_daemon.process_materializations(base_dir=data_dir)
+
+    assert result == {"checked": 0, "generated": 0, "skipped_already_generated": 0, "results": []}
+
+
+def test_process_materializations_second_call_skips_already_generated(tmp_path, monkeypatch):
+    # DBBASIC_MATERIALIZE_INTERVAL_SECONDS gates the PASS's own marker file;
+    # is_definition_due (the per-definition gate) reads back last_run_at vs.
+    # the definition's own trigger.interval_seconds (3600 in this fixture),
+    # so after the first call stamps last_run_at to "now" the definition
+    # would look "not due yet" on an immediate second call -- backdate it
+    # to isolate what this test actually checks: a due-again definition
+    # whose periods were already generated reports skips, not new rows.
+    monkeypatch.setenv("DBBASIC_MATERIALIZE_INTERVAL_SECONDS", "0")
+    data_dir = tmp_path / "data"
+    _install_materialize_fixtures(data_dir, [_materialize_definition_row()], [_balanced_recurring_row()])
+
+    first = object_daemon.process_materializations(base_dir=data_dir)
+    assert first["generated"] >= 1
+
+    object_records.update_collection_record(
+        "materialize_definitions", "matgen_fin_recurring",
+        {"last_run_at": "2000-01-01T00:00:00Z"}, base_dir=data_dir, actor="tester", preserve_read_only=True,
+    )
+
+    second = object_daemon.process_materializations(base_dir=data_dir)
+    assert second["generated"] == 0
+    assert second["skipped_already_generated"] >= 1
+
+
 def test_daemon_entrypoint_is_runnable_without_optional_runtime():
     """The daemon's main() must start on a bare install: no
     dbbasic_object_core, no croniter -- the storage passes (compaction,

@@ -1,0 +1,18 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "role:admin",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "materialize_definitions",
+      "reason": "a definition's mapping/trigger shape can generate financial records (journals, depreciation postings); only admins declare generation jobs"
+    },
+    {
+      "effect": "allow",
+      "principal": "role:admin",
+      "actions": ["execute"],
+      "object_id": "system_materialize_run",
+      "reason": "manual run-now fires the same generation logic the daemon pass calls -- only an admin who could author the definition may fire it by hand"
+    }
+  ]
+}

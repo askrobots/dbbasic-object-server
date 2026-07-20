@@ -1,0 +1,37 @@
+{
+  "id": "app-materialize",
+  "name": "Materialize",
+  "version": "0.1.0",
+  "description": "Declarative generation jobs that CREATE new records (plan/vocabulary/61-materialize-spec.md), the write-side sibling of app-rollup's read-side aggregation. materialize_definitions (admin-owned) declares a source + filter + trigger (scheduled/scheduled_fixed/event) + output collection (optionally with children) + idempotency_key + mapping; the daemon's materialize pass (object_daemon.process_materializations, object_materialize.py) generates due output through the target collection's own existing create/update path, with a crash-safe children-first-header-last write order and an integer-cents balance check enforced before any write. Covers three shaped-alike gaps found by the parity audit: recurring journals, depreciation, and template-execution/CreateWork. system_materialize_run is a manual 'Run now' escape hatch (also the primary interface for event-mode definitions when DBBASIC_ENABLE_EVENT_HANDLERS is unset); system_materialize_seed is the event-mode (CreateWork) dispatch handler, its HANDLES literal kept in sync with the current event-mode definition set by object_materialize.sync_materialize_seed_handles (called every materialize pass). No dedicated authoring page in v1 -- materialize_definitions already gets a generated admin form (docs/schema-forms.md). Target collections are NOT declared here: each is an existing, already-schema'd collection the requesting app already owns.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": [],
+  "objects": [
+    {
+      "id": "system_materialize_run",
+      "path": "objects/system/materialize_run.py"
+    },
+    {
+      "id": "system_materialize_seed",
+      "path": "objects/system/materialize_seed.py"
+    },
+    {
+      "id": "site_materialize_run_button",
+      "path": "objects/site/materialize_run_button.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "materialize_definitions",
+      "path": "schemas/materialize_definitions.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [],
+  "migrations": []
+}

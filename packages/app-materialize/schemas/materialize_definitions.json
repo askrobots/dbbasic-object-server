@@ -1,0 +1,149 @@
+{
+  "name": "materialize_definitions",
+  "title": "Materialize Definitions",
+  "version": 1,
+  "description": "Declared generation jobs (plan/vocabulary/61-materialize-spec.md): one record per definition -- a source collection, an optional flat-equality filter, a trigger (scheduled/scheduled_fixed/event), an output collection (optionally with children), an idempotency_key template, and a mapping. The daemon's materialize pass (object_daemon.process_materializations, object_materialize.generate_config) generates due output; materialize_run (a slot button on this collection's own detail page) and materialize_seed (an event handler for event-mode definitions) call the identical per-source-row generation function. filter/trigger/mapping/balance_check are stored as JSON text -- this schema does not parse or validate their structure; object_materialize.parse_definition does that at generation time, same convention rollup_definitions uses for its own JSON-shaped fields. Admin-owned, full stop (see permissions/rules.json): a definition's mapping/trigger shape can generate financial records. debit_account_id/credit_account_id are this schema's own resolution of 61's Open Question on where depreciation's two posting accounts live -- on the definition record itself (fewest moving parts), only meaningful for the synthesized depreciation-lines shape (a child_collection with no child_source_field).",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "name",
+      "type": "text",
+      "required": true,
+      "label": "Name",
+      "help": "Human label, e.g. \"Recurring journal generation\".",
+      "validation": {"min_length": 1, "max_length": 200}
+    },
+    {
+      "name": "source_collection",
+      "type": "text",
+      "required": true,
+      "label": "Source Collection",
+      "help": "Exactly one collection -- no joins. The materialize pass reads it outside row-level permissions (daemon posture), so it must already exist."
+    },
+    {
+      "name": "source_filter",
+      "type": "textarea",
+      "label": "Source Filter (JSON)",
+      "help": "Optional flat {field: value} object, ANDed on equality -- e.g. {\"is_active\": true}. Blank means every row. Same flat-equality-only language as rollup_definitions.filter."
+    },
+    {
+      "name": "trigger",
+      "type": "textarea",
+      "required": true,
+      "label": "Trigger (JSON)",
+      "help": "Exactly one of three shapes: {\"mode\": \"scheduled\", \"interval_seconds\": N, \"period_field\": <source row field naming its own frequency, e.g. \"frequency\">, \"anchor_field\": <source row date field>} for a per-row-frequency recurring job; {\"mode\": \"scheduled_fixed\", \"interval_seconds\": N, \"period_field\": <a FIXED granularity, e.g. \"monthly\">, \"start_field\": <source row date field>, \"end_condition\": {\"periods_field\": <source row integer field capping total periods>}} for a depreciation-shaped job; or {\"mode\": \"event\", \"on\": \"record.created\"} for CreateWork (requires DBBASIC_ENABLE_EVENT_HANDLERS; degrades to manual-only when unset). Manual run-now is always available regardless of mode."
+    },
+    {
+      "name": "output_collection",
+      "type": "text",
+      "required": true,
+      "label": "Output Collection",
+      "help": "Where the generated top-level record lands -- an EXISTING, already-schema'd collection this package does not own. May equal source_collection (CreateWork: an in-place update, not a create)."
+    },
+    {
+      "name": "child_collection",
+      "type": "text",
+      "label": "Child Collection",
+      "help": "Optional. Present only when the generated record has child rows (append-only postings, e.g. fin_journal_lines). Absent for a plain single-record generation (e.g. CreateWork)."
+    },
+    {
+      "name": "child_source_field",
+      "type": "text",
+      "label": "Child Source Field",
+      "help": "Names the field on the SOURCE row holding the child line template data as a JSON list (e.g. fin_recurring.template_lines), parsed verbatim into child rows. Leave blank alongside a set child_collection for the synthesized depreciation-lines shape instead (see debit_account_id/credit_account_id below)."
+    },
+    {
+      "name": "child_link_field",
+      "type": "text",
+      "label": "Child Link Field",
+      "help": "Names the FK field on each generated child row back to the generated parent (e.g. fin_journal_lines.journal_id). Required whenever child_collection is set."
+    },
+    {
+      "name": "idempotency_key",
+      "type": "text",
+      "required": true,
+      "label": "Idempotency Key Template",
+      "help": "A template producing the DETERMINISTIC id of the generated top-level record: {definition_id}, {source_id}, and (scheduled/scheduled_fixed only) {period_start}, e.g. \"matgen_{definition_id}_{source_id}_{period_start}\". This key is the entire idempotency mechanism -- treat as effectively immutable once a definition has generated at least one record (operational guidance, not enforced, same posture as rollup_definitions' target_collection)."
+    },
+    {
+      "name": "mapping",
+      "type": "textarea",
+      "required": true,
+      "label": "Mapping (JSON)",
+      "help": "One entry per output field, each a small closed vocabulary: {\"from\": <source field>}, {\"from_period\": \"period_start\"|\"period_end\"|\"period_label\"}, {\"literal\": <value>}, {\"template\": \"...{source.field}...{period_label}...\"}, {\"if\": {\"source_field\":..., \"equals\":...}, \"then\":..., \"else\":...}, or the depreciation-specific {\"depreciation_amount\": {\"method\": \"straight_line\", \"cost_field\":..., \"salvage_field\":..., \"life_field\":...}} (declining is rejected, not silently mis-computed). The synthesized depreciation-lines shape reserves the key \"amount\" for this last op."
+    },
+    {
+      "name": "balance_check",
+      "type": "textarea",
+      "label": "Balance Check (JSON)",
+      "help": "Optional {\"debit_field\", \"credit_field\"} naming the child rows' amount fields. When present, generated children's debit/credit sums (exact integer cents) MUST be equal before ANY write happens -- zero rows land otherwise. Required for the synthesized depreciation-lines shape."
+    },
+    {
+      "name": "debit_account_id",
+      "type": "text",
+      "label": "Debit Account (depreciation)",
+      "help": "Only meaningful for the synthesized depreciation-lines shape (child_collection set, child_source_field blank): the account debited each period (typically Depreciation Expense)."
+    },
+    {
+      "name": "credit_account_id",
+      "type": "text",
+      "label": "Credit Account (depreciation)",
+      "help": "Only meaningful for the synthesized depreciation-lines shape: the account credited each period (typically Accumulated Depreciation)."
+    },
+    {
+      "name": "actor",
+      "type": "text",
+      "label": "Actor",
+      "help": "Attribution string stamped on every write this definition's generations make. Defaults to \"daemon:materialize\" when blank; override for finer-grained audit filtering, e.g. \"daemon:materialize:depreciation\"."
+    },
+    {
+      "name": "last_run_at",
+      "type": "datetime",
+      "read_only": true,
+      "label": "Last Run",
+      "help": "Server-set after a pass over this definition (whether or not it generated anything that pass). Freshness DISPLAY only -- the actual due-set is recomputed from first principles every pass, never trusted from this field."
+    },
+    {
+      "name": "enabled",
+      "type": "boolean",
+      "default": "true",
+      "label": "Enabled",
+      "help": "Per-definition pause, independent of the instance-wide materialize_enabled flag. Resume any time without further thought."
+    },
+    {
+      "name": "block",
+      "type": "boolean",
+      "default": "false",
+      "label": "Blocked",
+      "help": "The harder stop: refuses even materialize_run's manual path with a distinct error. For a definition an operator has identified as producing genuinely wrong output -- \"something is wrong here, don't run this even on purpose,\" unlike enabled: false's \"pause, resume later.\""
+    }
+  ],
+  "forms": {
+    "default": {
+      "fields": [
+        "name",
+        "source_collection",
+        "source_filter",
+        "trigger",
+        "output_collection",
+        "child_collection",
+        "child_source_field",
+        "child_link_field",
+        "idempotency_key",
+        "mapping",
+        "balance_check",
+        "debit_account_id",
+        "credit_account_id",
+        "actor",
+        "enabled",
+        "block"
+      ]
+    }
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["name", "source_collection", "output_collection", "enabled", "block", "last_run_at"]
+  }
+}
