@@ -92,7 +92,7 @@ def test_tasks_schema_is_now_version_6_additive_only():
     in name/type -- this schema change is purely additive.
     """
     schema = _schema("tasks")
-    assert schema["version"] == 6
+    assert schema["version"] == 7
     by_name = {f["name"]: f for f in schema["fields"]}
 
     for name in ("id", "title", "description", "project_id", "status",

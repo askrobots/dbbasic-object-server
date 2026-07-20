@@ -1,7 +1,7 @@
 {
   "name": "contacts",
   "title": "Contacts",
-  "version": 3,
+  "version": 4,
   "description": "People: the core CRM record.",
   "fields": [
     {
@@ -12,48 +12,103 @@
       "type": "text",
       "required": true,
       "label": "First Name",
-      "validation": {"min_length": 1, "max_length": 80}
+      "validation": {
+        "min_length": 1,
+        "max_length": 80
+      }
     },
     {
       "name": "last_name",
       "type": "text",
       "label": "Last Name",
-      "validation": {"max_length": 80}
+      "validation": {
+        "max_length": 80
+      }
     },
     {
       "name": "email",
       "type": "text",
       "label": "Email",
-      "validation": {"max_length": 254}
+      "validation": {
+        "max_length": 254
+      }
     },
     {
       "name": "phone",
       "type": "text",
       "label": "Phone",
-      "validation": {"max_length": 40}
+      "validation": {
+        "max_length": 40
+      }
     },
     {
       "name": "job_title",
       "type": "text",
       "label": "Job Title",
-      "validation": {"max_length": 120}
+      "validation": {
+        "max_length": 120
+      }
     },
     {
       "name": "organization_id",
       "label": "Organization",
-      "relation": {"collection": "organizations", "display_field": "name"}
+      "relation": {
+        "collection": "organizations",
+        "display_field": "name"
+      }
     },
     {
       "name": "project_id",
       "label": "Project",
-      "relation": {"collection": "projects", "display_field": "name"}
+      "relation": {
+        "collection": "projects",
+        "display_field": "name"
+      }
     },
     {
       "name": "lead_status",
       "type": "enum",
       "label": "Lead Status",
-      "enum": ["cold", "warm", "hot", "customer", "inactive"],
-      "help": "Optional pipeline stage; blank until set, no default is forced"
+      "enum": [
+        "cold",
+        "warm",
+        "hot",
+        "customer",
+        "inactive"
+      ],
+      "help": "Optional pipeline stage; blank until set, no default is forced",
+      "transitions": {
+        "cold": [
+          "warm",
+          "hot",
+          "customer",
+          "inactive"
+        ],
+        "warm": [
+          "cold",
+          "hot",
+          "customer",
+          "inactive"
+        ],
+        "hot": [
+          "cold",
+          "warm",
+          "customer",
+          "inactive"
+        ],
+        "customer": [
+          "cold",
+          "warm",
+          "hot",
+          "inactive"
+        ],
+        "inactive": [
+          "cold",
+          "warm",
+          "hot",
+          "customer"
+        ]
+      }
     },
     {
       "name": "tags",
@@ -79,19 +134,56 @@
     }
   ],
   "forms": {
-    "default": {"fields": ["first_name", "last_name", "email", "phone", "job_title",
-                           "organization_id", "project_id", "lead_status", "tags", "notes"]}
+    "default": {
+      "fields": [
+        "first_name",
+        "last_name",
+        "email",
+        "phone",
+        "job_title",
+        "organization_id",
+        "project_id",
+        "lead_status",
+        "tags",
+        "notes"
+      ]
+    }
   },
   "views": {
-    "list_mode": "cards",
-    "list_fields": ["first_name", "last_name", "email", "organization_id", "lead_status"],
-    "detail_fields": ["first_name", "last_name", "email", "phone", "job_title",
-                      "organization_id", "project_id", "lead_status", "tags", "notes"],
+    "list_mode": "board",
+    "list_fields": [
+      "first_name",
+      "last_name",
+      "email",
+      "organization_id",
+      "lead_status"
+    ],
+    "detail_fields": [
+      "first_name",
+      "last_name",
+      "email",
+      "phone",
+      "job_title",
+      "organization_id",
+      "project_id",
+      "lead_status",
+      "tags",
+      "notes"
+    ],
     "related": [
-      {"collection": "interactions", "fk_field": "contact_id"}
+      {
+        "collection": "interactions",
+        "fk_field": "contact_id"
+      }
     ]
   },
   "search": {
-    "fields": ["first_name", "last_name", "email", "tags", "notes"]
+    "fields": [
+      "first_name",
+      "last_name",
+      "email",
+      "tags",
+      "notes"
+    ]
   }
 }

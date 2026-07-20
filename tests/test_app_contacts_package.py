@@ -95,7 +95,7 @@ def test_contacts_schema_is_now_version_3_additive_only():
     optional field on a schemaless TSV collection).
     """
     schema = _schema("contacts")
-    assert schema["version"] == 3
+    assert schema["version"] == 4
     by_name = {f["name"]: f for f in schema["fields"]}
 
     # Fields present since v2, untouched.

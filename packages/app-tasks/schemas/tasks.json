@@ -1,7 +1,7 @@
 {
   "name": "tasks",
   "title": "Tasks",
-  "version": 6,
+  "version": 7,
   "description": "Work items with an enforced status lifecycle. Transition guards add who-per-verb on top of row-filtered update rights. v6 adds task_type/template_id/instructions/metadata (the 'Work / CreateWork' fields reconciled against a private predecessor-system audit, not part of this repo); status/urgency and every transition guard are unchanged.",
   "fields": [
     {
@@ -12,7 +12,10 @@
       "type": "text",
       "required": true,
       "label": "Title",
-      "validation": {"min_length": 1, "max_length": 200}
+      "validation": {
+        "min_length": 1,
+        "max_length": 200
+      }
     },
     {
       "name": "description",
@@ -30,12 +33,19 @@
       "type": "enum",
       "label": "Task Type",
       "default": "STANDARD",
-      "enum": ["BASIC", "STANDARD", "CONTRACT"]
+      "enum": [
+        "BASIC",
+        "STANDARD",
+        "CONTRACT"
+      ]
     },
     {
       "name": "template_id",
       "label": "Template",
-      "relation": {"collection": "templates", "display_field": "name"},
+      "relation": {
+        "collection": "templates",
+        "display_field": "name"
+      },
       "help": "Optional link to the app-templates record this task was created from or is filling out -- the Work/CreateWork link. Seeding a new task's fields from the template's schema/default_values on create is not built here (see app-tasks/objects/site/tasks.py); this field just carries the reference."
     },
     {
@@ -47,37 +57,103 @@
     {
       "name": "project_id",
       "label": "Project",
-      "relation": {"collection": "projects", "display_field": "name"}
+      "relation": {
+        "collection": "projects",
+        "display_field": "name"
+      }
     },
     {
       "name": "status",
       "type": "enum",
       "label": "Status",
       "default": "open",
-      "enum": ["draft", "open", "assigned", "waiting_on_client", "approved", "disputed", "cancelled"],
+      "enum": [
+        "draft",
+        "open",
+        "assigned",
+        "waiting_on_client",
+        "approved",
+        "disputed",
+        "cancelled"
+      ],
       "transitions": {
         "draft": [
-          {"to": "open", "when": {"owner_id": "$user_id"}},
-          {"to": "assigned", "when": {"owner_id": "$user_id"}},
-          {"to": "cancelled", "when": {"owner_id": "$user_id"}}
+          {
+            "to": "open",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          },
+          {
+            "to": "assigned",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          },
+          {
+            "to": "cancelled",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          }
         ],
         "open": [
           "assigned",
-          {"to": "cancelled", "when": {"owner_id": "$user_id"}}
+          {
+            "to": "cancelled",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          }
         ],
         "assigned": [
-          {"to": "waiting_on_client", "when": {"assigned_to": "$user_id"}},
-          {"to": "open", "when": {"assigned_to": "$user_id"}},
-          {"to": "cancelled", "when": {"owner_id": "$user_id"}}
+          {
+            "to": "waiting_on_client",
+            "when": {
+              "assigned_to": "$user_id"
+            }
+          },
+          {
+            "to": "open",
+            "when": {
+              "assigned_to": "$user_id"
+            }
+          },
+          {
+            "to": "cancelled",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          }
         ],
         "waiting_on_client": [
-          {"to": "approved", "when": {"owner_id": "$user_id"}},
-          {"to": "disputed", "when": {"owner_id": "$user_id"}},
+          {
+            "to": "approved",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          },
+          {
+            "to": "disputed",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          },
           "assigned"
         ],
         "disputed": [
-          {"to": "assigned", "when": {"owner_id": "$user_id"}},
-          {"to": "cancelled", "when": {"owner_id": "$user_id"}}
+          {
+            "to": "assigned",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          },
+          {
+            "to": "cancelled",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          }
         ]
       },
       "help": "approved and cancelled are terminal. draft moves and cancelling require the task owner; returning or submitting an assigned task requires the current assignee; resolving waiting_on_client or a dispute requires the owner. Anyone with update rights may accept an open task."
@@ -87,7 +163,12 @@
       "type": "enum",
       "label": "Urgency",
       "default": "normal",
-      "enum": ["low", "normal", "high", "critical"]
+      "enum": [
+        "low",
+        "normal",
+        "high",
+        "critical"
+      ]
     },
     {
       "name": "due_date",
@@ -113,21 +194,58 @@
     }
   ],
   "forms": {
-    "default": {"fields": ["title", "description", "instructions", "project_id",
-                           "task_type", "template_id", "status",
-                           "urgency", "due_date", "assigned_to"]}
+    "default": {
+      "fields": [
+        "title",
+        "description",
+        "instructions",
+        "project_id",
+        "task_type",
+        "template_id",
+        "status",
+        "urgency",
+        "due_date",
+        "assigned_to"
+      ]
+    }
   },
   "views": {
-    "list_mode": "table",
-    "list_fields": ["title", "status", "urgency", "task_type", "due_date", "assigned_to"],
-    "detail_fields": ["title", "description", "instructions", "project_id", "task_type",
-                      "status", "urgency", "due_date", "assigned_to"],
+    "list_mode": "board",
+    "list_fields": [
+      "title",
+      "status",
+      "urgency",
+      "task_type",
+      "due_date",
+      "assigned_to"
+    ],
+    "detail_fields": [
+      "title",
+      "description",
+      "instructions",
+      "project_id",
+      "task_type",
+      "status",
+      "urgency",
+      "due_date",
+      "assigned_to"
+    ],
     "related": [
-      {"collection": "task_comments", "fk_field": "task_id"},
-      {"collection": "files", "fk_field": "task_id"}
+      {
+        "collection": "task_comments",
+        "fk_field": "task_id"
+      },
+      {
+        "collection": "files",
+        "fk_field": "task_id"
+      }
     ]
   },
   "search": {
-    "fields": ["title", "description", "instructions"]
+    "fields": [
+      "title",
+      "description",
+      "instructions"
+    ]
   }
 }
