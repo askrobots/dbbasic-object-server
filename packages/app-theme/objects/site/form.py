@@ -143,6 +143,13 @@ _JS = r"""
     opts = opts || {};
     const mount = qs(opts.mount);
     const record = opts.record || null;
+    // Fixed fields: a caller (e.g. a `form` block composing a child under a
+    // parent) locks certain fields to a context value -- the classic
+    // "prefill topic_id/invoice_id/order_id to the page's record and hide it"
+    // shape every parent->child compose needs. Locked fields are neither
+    // rendered nor collected from the DOM; their value is injected on submit.
+    // A shared capability of the generic renderer, not a bespoke per-page form.
+    const fixed = (opts.fixed && typeof opts.fixed === "object") ? opts.fixed : {};
     const [ok, meta] = await api("GET", "/api/schema/" + collection);
     if (!ok || !meta.schema) { mount.innerHTML = '<p class="error">Could not load form.</p>'; return; }
     const schema = meta.schema;
@@ -150,8 +157,9 @@ _JS = r"""
     const order = (schema.forms && schema.forms.default && schema.forms.default.fields)
       || (schema.fields || []).map((f) => f.name);
     // Create mode (no record) shows every field -- there's no value to test
-    // visible_when against yet; edit mode honors it against the record.
-    const ordered = order.map((n) => byName[n]).filter((f) => f && !skip(f) && (!record || fieldVisible(f, record)));
+    // visible_when against yet; edit mode honors it against the record. Fixed
+    // fields are excluded from the UI entirely (locked to their context value).
+    const ordered = order.map((n) => byName[n]).filter((f) => f && !skip(f) && !(f.name in fixed) && (!record || fieldVisible(f, record)));
 
     const slotHtml = (name, ctx) => {
       let out = "";
@@ -200,6 +208,8 @@ _JS = r"""
         }
       }
       if (bad) return;
+      // Inject the context-locked values (they were never in the DOM).
+      for (const k in fixed) rec[k] = fixed[k];
       let ok2, body2;
       if (record) {
         [ok2, body2] = await api("PUT", "/collections/" + collection + "/records/" + encodeURIComponent(record.id), rec);

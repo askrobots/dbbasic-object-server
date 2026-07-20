@@ -40,15 +40,20 @@ def test_get_package_normalizes_app_forum_manifest():
         "forum_topics",
         "forum_replies",
     }
+    # site_forum_topic was removed in the Stage-6 retrofit: the topic
+    # permalink is now a seeded 59 detail view (site_view_render) composed of
+    # detail + related(flat replies) + FK-locked form blocks -- see
+    # tests/test_app_forum_detail_retrofit.py.
     assert {obj["id"] for obj in package["objects"]} == {
         "site_forum",
-        "site_forum_topic",
     }
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
     assert {entry["collection"] for entry in package["seed"]} == {
         "forum_categories",
         "forum_topics",
         "forum_replies",
+        "views",
+        "site_routes",
     }
 
 
@@ -92,14 +97,20 @@ def test_install_app_forum_package_loads_schemas(tmp_path):
     assert topics_schema["name"] == "forum_topics"
     assert replies_schema["name"] == "forum_replies"
     assert (object_root / "site" / "forum.py").is_file()
-    assert (object_root / "site" / "forum_topic.py").is_file()
+    # forum_topic.py was removed in the Stage-6 retrofit (replaced by a
+    # seeded detail view); it must no longer be installed.
+    assert not (object_root / "site" / "forum_topic.py").exists()
 
 
 def test_schema_json_files_are_valid_and_versioned():
+    # forum_topics/forum_replies went v1 -> v2 in the Stage-6 retrofit
+    # (ai_summary gained visible_when; forum_replies' compose form went flat,
+    # dropping parent_id from forms.default). forum_categories is untouched.
+    expected_version = {"forum_categories": 1, "forum_topics": 2, "forum_replies": 2}
     for name in ("forum_categories", "forum_topics", "forum_replies"):
         payload = json.loads((APP_FORUM_DIR / "schemas" / f"{name}.json").read_text())
         assert payload["name"] == name
-        assert payload["version"] == 1
+        assert payload["version"] == expected_version[name]
 
 
 def test_three_collections_present_with_expected_field_names():
@@ -261,13 +272,14 @@ def test_others_cannot_write_someone_elses_category_topic_or_reply():
 
 
 def test_forum_pages_are_publicly_executable():
+    # The topic permalink is now a seeded detail view (site_view_render),
+    # not a bespoke site_forum_topic object -- only the landing page remains.
     policy = _app_forum_policy()
 
-    for object_id in ("site_forum", "site_forum_topic"):
-        decision = object_permissions.check_permission(
-            None, object_permissions.EXECUTE, policy=policy, object_id=object_id
-        )
-        assert decision.allowed is True
+    decision = object_permissions.check_permission(
+        None, object_permissions.EXECUTE, policy=policy, object_id="site_forum"
+    )
+    assert decision.allowed is True
 
 
 def test_seed_tsvs_have_no_data_rows_and_match_schema_field_order():

@@ -184,7 +184,27 @@ function renderList(block, mount) {
 function renderForm(block, mount) {
   if (!block.collection) { mount.innerHTML = unsupportedCard("form block needs a collection"); return; }
   if (!window.dbbasicForm) { mount.innerHTML = unsupportedCard("form generator unavailable"); return; }
-  const go = (record) => window.dbbasicForm(block.collection, {mount, record});
+  const viewerId = (typeof VIEWER_ID !== "undefined" ? VIEWER_ID : "") || undefined;
+  // `fixed`: lock fields to a context value for parent->child compose --
+  // {"topic_id": "$record_id"} prefills+hides topic_id to the page's record.
+  // Values run through the same $record_id resolution the detail/related
+  // blocks use; the generic form renderer (opts.fixed) does the rest.
+  const fixed = {};
+  if (block.fixed && typeof block.fixed === "object") {
+    for (const k in block.fixed) {
+      const rv = resolveRecordId(block.fixed[k]);
+      if (rv) fixed[k] = rv;
+    }
+  }
+  const base = {mount: mount, owner: viewerId};
+  if (Object.keys(fixed).length) base.fixed = fixed;
+  // A compose form (no record_id) resets to empty after each save so another
+  // child can be posted; a sibling `related` block re-renders on the record
+  // event. An edit form (record_id) keeps the default post-save behavior.
+  const go = (record) => window.dbbasicForm(block.collection, Object.assign({}, base, {
+    record: record,
+    onSaved: block.record_id ? undefined : function () { go(null); },
+  }));
   if (block.record_id) {
     fetch("/collections/" + encodeURIComponent(block.collection) + "/records/" + encodeURIComponent(block.record_id),
       {credentials: "same-origin", headers: {accept: "application/json"}})

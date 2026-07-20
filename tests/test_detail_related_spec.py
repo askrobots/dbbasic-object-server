@@ -670,11 +670,18 @@ def test_profile_page_composes_followers_and_following_as_related_lists():
     assert "loadFollowGraph();" in source
 
 
-def test_forum_topic_page_renders_ai_summary_when_present():
-    source = (PACKAGES_ROOT / "app-forum" / "objects" / "site" / "forum_topic.py").read_text()
-    assert 'id="ai-summary"' in source
-    assert "topic.ai_summary" in source
-    assert "topic.is_ai_summarized" in source
+def test_forum_topic_ai_summary_renders_via_visible_when_not_a_bespoke_page():
+    """59's Purpose called out the forum topic page finally rendering its
+    stored-but-orphaned ai_summary. The bespoke page that did that (with
+    hand-written show/hide JS) is gone; the seeded detail view renders every
+    field, and ai_summary shows only when is_ai_summarized via the field's
+    own `visible_when` -- the general primitive, not a per-page renderer."""
+    schema = json.loads(
+        (PACKAGES_ROOT / "app-forum" / "schemas" / "forum_topics.json").read_text()
+    )
+    ai = next(f for f in schema["fields"] if f["name"] == "ai_summary")
+    assert ai["visible_when"] == {"field": "is_ai_summarized", "equals": "true"}
+    assert not (PACKAGES_ROOT / "app-forum" / "objects" / "site" / "forum_topic.py").exists()
 
 
 def test_form_read_only_formats_cents_money_fields_in_whole_units():
@@ -709,3 +716,32 @@ def test_form_honors_conditional_field_visibility_visible_when():
     # Supports equals and in, the same tiny vocabulary 58's filter uses.
     assert '"equals" in cond' in source
     assert "Array.isArray(cond.in)" in source
+
+
+def test_form_supports_fk_locked_fields_for_child_compose():
+    """A `form` block can lock fields to a context value (opts.fixed) -- the
+    parent->child compose shape (reply.topic_id, line.invoice_id, ...) every
+    hand-written page re-implemented as prefill+hide. A shared capability of
+    the generic form renderer, not a bespoke per-page form: locked fields are
+    excluded from the UI and injected on submit."""
+    form_source = _form_source()
+    # excluded from the rendered/ordered fields...
+    assert "!(f.name in fixed)" in form_source
+    # ...and injected into the record on submit.
+    assert "for (const k in fixed) rec[k] = fixed[k];" in form_source
+    assert "opts.fixed" in form_source
+
+
+def test_view_render_form_block_resolves_fixed_from_record_id():
+    """The form block resolves $record_id in its `fixed` map (same resolution
+    detail/related use) and passes it + the viewer as owner to the generic
+    form renderer -- so [detail, related, form] compose one child-bearing page
+    from generic block renderers, no bespoke code."""
+    source = _view_render_source()
+    form_fn = re.search(r"function renderForm\(block, mount\) \{(.*?)\n\}", source, re.S)
+    assert form_fn, "renderForm not found"
+    body = form_fn.group(1)
+    assert "block.fixed" in body
+    assert "resolveRecordId(block.fixed[k])" in body
+    assert "base.fixed = fixed" in body
+    assert "owner: viewerId" in body

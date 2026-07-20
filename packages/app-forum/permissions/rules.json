@@ -51,13 +51,6 @@
       "actions": ["execute"],
       "object_id": "site_forum",
       "reason": "the forum landing page is public; visitors see categories and recent topics"
-    },
-    {
-      "effect": "allow",
-      "principal": "public",
-      "actions": ["execute"],
-      "object_id": "site_forum_topic",
-      "reason": "topic permalinks are public; visitors read the topic and its replies, and see a sign-in prompt instead of the reply form"
     }
   ]
 }
