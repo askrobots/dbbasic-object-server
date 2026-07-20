@@ -19,6 +19,8 @@ _JS = r"""
     ["/projects", "Projects"], ["/contacts", "Contacts"], ["/articles", "Articles"],
     ["/links", "Links"], ["/calendar", "Calendar"], ["/files", "Files"],
     ["/invoices", "Invoices"], ["/products", "Products"], ["/orders", "Orders"],
+    ["/stock", "Stock"], ["/locations", "Locations"],
+    ["/accounts", "Accounts"], ["/journals", "Journals"], ["/trial-balance", "Trial Balance"],
     ["/activity", "Activity"],
     ["/dashboard", "Dashboard"], ["/appearance", "Appearance"],
   ];
@@ -31,6 +33,7 @@ _JS = r"""
     organizations: () => "/contacts", interactions: () => "/contacts",
     links: () => "/links", events: () => "/calendar",
     invoices: () => "/invoices", templates: () => "/templates", products: (id) => "/products/" + encodeURIComponent(id), orders: (id) => "/orders/" + encodeURIComponent(id),
+    fin_accounts: () => "/accounts", fin_journals: (id) => "/journals/" + encodeURIComponent(id), locations: () => "/locations",
   };
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
     (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
