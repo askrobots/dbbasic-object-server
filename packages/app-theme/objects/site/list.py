@@ -627,12 +627,21 @@ _JS = r"""
         if (!res.ok) { render([]); return; }
         const body = await res.json(); all = body.records || []; render(all);
       }
+      // Last-request-wins: each keystroke bumps a sequence token so a slow
+      // in-flight /api/search response can't land AFTER a newer input (or a
+      // backspace-to-empty) and overwrite the current view with stale
+      // filtered results -- the "clear the box but it still shows filtered"
+      // bug. Both the empty path and every await checkpoint honor the token.
+      let searchSeq = 0;
       async function search(q) {
+        const seq = ++searchSeq;
         if (!q) { render(all); return; }
         const res = await fetch("/api/search?q=" + encodeURIComponent(q) + "&collections=" + collection + "&limit=50",
           {credentials: "same-origin", headers: {accept: "application/json"}});
-        if (!res.ok) return;
-        const body = await res.json(); render((body.results || {})[collection] || []);
+        if (seq !== searchSeq || !res.ok) return;
+        const body = await res.json();
+        if (seq !== searchSeq) return;
+        render((body.results || {})[collection] || []);
       }
 
       if (searchEl) searchEl.addEventListener("input", (e) => search(e.target.value.trim()));
