@@ -1,0 +1,11 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_dashboard",
+      "reason": "the dashboard page is public; it shows a sign-in prompt to visitors, same as site_tasks/site_activity -- the data it fetches client-side stays governed by each source collection's own rules"
+    }
+  ]
+}

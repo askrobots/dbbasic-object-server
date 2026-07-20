@@ -1,0 +1,24 @@
+{
+  "id": "app-dashboard",
+  "name": "Dashboard",
+  "version": "0.1.0",
+  "description": "User home dashboard: a page that folds existing collections into stats, not a new data model. Owns no collection and no schema -- it reads ai_usage (AI spend, grouped by model), tasks (counts by status), /api/activity (recent activity), and one-line counts from a few other collections (notes/contacts/invoices), all fetched from the browser with the caller's own session so each collection's own permissions/rules.json governs what shows up. Served at /dashboard by the single-segment site-object convention (/dashboard -> site_dashboard, same as site_activity -> /activity and site_tasks -> /tasks) -- no site_routes record is seeded or required. Ported from a private predecessor-system audit, not part of this repo: that system's dashboard also folded in a wallet/billing balance, which is infra-deferred here (no Stripe integration is built) and left out of this v1.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": [],
+  "objects": [
+    {
+      "id": "site_dashboard",
+      "path": "objects/site/dashboard.py"
+    }
+  ],
+  "schemas": [],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [],
+  "migrations": []
+}
