@@ -1,0 +1,1 @@
+id	doc_type	number	customer_id	customer_name	customer_email	currency	status	order_date	expected_date	subtotal_cents	tax_cents	total_cents	invoice_id	notes	owner_id	created_at

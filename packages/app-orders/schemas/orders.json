@@ -1,0 +1,142 @@
+{
+  "name": "orders",
+  "title": "Orders",
+  "version": 1,
+  "description": "Sales and purchase orders (doc_type on one shared schema, mirroring app-invoices' doc_type split). Lines live in order_lines; subtotal/tax/total are stamped by the order_totals handler, never typed by hand. Reconciled against a private predecessor-system audit, not part of this repo (its Order+Lines note: 'SO/PO; convert_to_invoice').",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "doc_type",
+      "type": "enum",
+      "label": "Document Type",
+      "default": "sale",
+      "enum": ["sale", "purchase"],
+      "help": "sale/purchase share this schema -- the real predecessor's SO/PO split, carried as one field the same way app-invoices folds invoice/credit_note/quote into doc_type."
+    },
+    {
+      "name": "number",
+      "type": "text",
+      "required": true,
+      "label": "Number",
+      "help": "Human order number, e.g. SO-0001 or PO-0001. v1 is typed by the owner, not auto-assigned -- a sequenced counter + closed create route is a later slice, same deferral app-invoices documents for its own number field."
+    },
+    {
+      "name": "customer_id",
+      "label": "Customer (contact)",
+      "relation": {"collection": "contacts", "display_field": "first_name"},
+      "help": "Optional cross-reference only. The snapshot fields below are what every surface renders -- editing the contact later never rewrites an already-placed order. Same snapshot decision as app-invoices' customer_id."
+    },
+    {
+      "name": "customer_name",
+      "type": "text",
+      "required": true,
+      "label": "Customer",
+      "validation": {"min_length": 1, "max_length": 200}
+    },
+    {
+      "name": "customer_email",
+      "type": "text",
+      "label": "Customer Email",
+      "validation": {"max_length": 254}
+    },
+    {
+      "name": "currency",
+      "type": "text",
+      "default": "USD",
+      "label": "Currency (ISO 4217)",
+      "validation": {"pattern": "^[A-Z]{3}$"}
+    },
+    {
+      "name": "status",
+      "type": "enum",
+      "label": "Status",
+      "default": "draft",
+      "enum": ["draft", "confirmed", "processing", "shipped", "delivered", "cancelled"],
+      "transitions": {
+        "draft": [
+          {"to": "confirmed", "when": {"owner_id": "$user_id"}},
+          {"to": "cancelled", "when": {"owner_id": "$user_id"}}
+        ],
+        "confirmed": [
+          {"to": "processing", "when": {"owner_id": "$user_id"}},
+          {"to": "cancelled", "when": {"owner_id": "$user_id"}}
+        ],
+        "processing": [
+          {"to": "shipped", "when": {"owner_id": "$user_id"}},
+          {"to": "cancelled", "when": {"owner_id": "$user_id"}}
+        ],
+        "shipped": [
+          {"to": "delivered", "when": {"owner_id": "$user_id"}}
+        ]
+      },
+      "help": "delivered and cancelled are terminal. Every other move requires the order owner. Matches the real order lifecycle (reconciled against a private predecessor-system audit, not part of this repo): draft->confirmed/cancelled, confirmed->processing/cancelled, processing->shipped/cancelled, shipped->delivered."
+    },
+    {
+      "name": "order_date",
+      "type": "date",
+      "label": "Order Date"
+    },
+    {
+      "name": "expected_date",
+      "type": "date",
+      "label": "Expected Date"
+    },
+    {
+      "name": "subtotal_cents",
+      "type": "integer",
+      "default": "0",
+      "label": "Subtotal (cents)",
+      "help": "Stamped by the order_totals handler: sum of every line's line_total_cents. Never user-entered -- not schema read_only for the same reason invoice_totals' fields aren't; see objects/system/order_totals.py's module docstring."
+    },
+    {
+      "name": "tax_cents",
+      "type": "integer",
+      "default": "0",
+      "label": "Tax (cents)",
+      "help": "Stamped by order_totals: sum of every line's line_tax_cents (line_total_cents * tax_rate_bps // 10000, floored)."
+    },
+    {
+      "name": "total_cents",
+      "type": "integer",
+      "default": "0",
+      "label": "Total (cents)",
+      "help": "Stamped by order_totals: subtotal_cents + tax_cents."
+    },
+    {
+      "name": "invoice_id",
+      "type": "text",
+      "label": "Converted Invoice",
+      "help": "Provenance link recorded once this order has been converted to an invoice (real predecessor's convert_to_invoice). The conversion ACTION itself is deferred -- not built in this slice -- but the field is kept now so a future convert-to-invoice flow has somewhere to write without a backfill."
+    },
+    {
+      "name": "notes",
+      "type": "textarea",
+      "label": "Notes"
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["doc_type", "number", "customer_id", "customer_name",
+                           "customer_email", "currency", "order_date", "expected_date",
+                           "status", "notes"]}
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["number", "customer_name", "status", "total_cents", "expected_date"]
+  },
+  "search": {
+    "fields": ["number", "customer_name"]
+  }
+}

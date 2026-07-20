@@ -1,0 +1,50 @@
+{
+  "id": "app-orders",
+  "name": "Orders",
+  "version": "0.1.0",
+  "description": "Sales and purchase orders (doc_type on one shared schema, the real SO/PO split): owner-scoped CRUD, guarded status lifecycle (draft/confirmed/processing/shipped/delivered/cancelled), and a HANDLES totals handler (system_order_totals) that stamps subtotal/tax/total from order_lines in integer cents on every line change. Order lines optionally relate to app-catalog's products collection but do not require it -- a line may be free-text. Reconciled against a private predecessor-system audit, not part of this repo. Deferred to a later slice: auto-numbered sequences per doc_type (an order_counters collection + a closed orders create route), the convert_to_invoice ACTION (invoice_id exists on orders so the provenance link has somewhere to land once that flow is built), stock decrement on ship, and purchase-order receiving. subtotal_cents/tax_cents/total_cents/line_total_cents/line_tax_cents are deliberately NOT schema read_only -- see objects/system/order_totals.py's module docstring for why (update_collection_record has no read_only write exception, so a truly read_only field could never be re-stamped). Order detail permalinks need a site_routes record mapping /orders/{order_id:uuid} to site_order_view -- not seeded by this package, same precedent as app-invoices' /invoices/{invoice_id:uuid} and app-catalog's /products/{product_id:uuid}.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": [],
+  "objects": [
+    {
+      "id": "site_orders",
+      "path": "objects/site/orders.py"
+    },
+    {
+      "id": "site_order_view",
+      "path": "objects/site/order_view.py"
+    },
+    {
+      "id": "system_order_totals",
+      "path": "objects/system/order_totals.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "orders",
+      "path": "schemas/orders.json"
+    },
+    {
+      "collection": "order_lines",
+      "path": "schemas/order_lines.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "orders",
+      "path": "seed/orders.tsv"
+    },
+    {
+      "collection": "order_lines",
+      "path": "seed/order_lines.tsv"
+    }
+  ],
+  "migrations": []
+}

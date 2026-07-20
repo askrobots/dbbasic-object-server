@@ -1,0 +1,103 @@
+{
+  "name": "order_lines",
+  "title": "Order Lines",
+  "version": 1,
+  "description": "Line items belonging to one order. line_total_cents and line_tax_cents are stamped by the order_totals handler on every create/update/delete. See objects/system/order_totals.py.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "order_id",
+      "type": "relation",
+      "required": true,
+      "relation": {
+        "collection": "orders",
+        "display_field": "number"
+      },
+      "label": "Order",
+      "help": "Set once at creation and not intended to change after. Not schema read_only -- same reason as app-invoices' invoice_lines.invoice_id: a required, client-submitted-at-creation field cannot also be read_only on this platform (the server rejects any client submission of a read_only field, even the first one)."
+    },
+    {
+      "name": "product_id",
+      "label": "Product",
+      "relation": {"collection": "products", "display_field": "name"},
+      "help": "Optional cross-reference to app-catalog's products collection. A line may reference a catalog product or stand alone as a free-text description -- optional, not required, so this package has no hard dependency on app-catalog."
+    },
+    {
+      "name": "description",
+      "type": "text",
+      "required": true,
+      "label": "Description",
+      "validation": {
+        "min_length": 1,
+        "max_length": 300
+      }
+    },
+    {
+      "name": "quantity",
+      "type": "number",
+      "default": "1",
+      "label": "Quantity",
+      "help": "A count/measure, not money -- may be fractional. This is the one deliberate use of a float-shaped field in this package; every *_cents field stays integer. Same exception app-invoices' invoice_lines.quantity documents."
+    },
+    {
+      "name": "unit_price_cents",
+      "type": "integer",
+      "required": true,
+      "label": "Unit Price (cents)"
+    },
+    {
+      "name": "line_total_cents",
+      "type": "integer",
+      "default": "0",
+      "label": "Line Total (cents)",
+      "help": "Stamped by order_totals: floor(quantity * unit_price_cents). Never user-entered."
+    },
+    {
+      "name": "tax_rate_bps",
+      "type": "integer",
+      "label": "Tax Rate (bps)",
+      "help": "Basis points, e.g. 825 = 8.25%. Optional; blank or 0 means no tax on this line."
+    },
+    {
+      "name": "line_tax_cents",
+      "type": "integer",
+      "default": "0",
+      "label": "Line Tax (cents)",
+      "help": "Stamped by order_totals: line_total_cents * tax_rate_bps // 10000 (floor, not round)."
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    }
+  ],
+  "forms": {
+    "default": {
+      "fields": [
+        "order_id",
+        "product_id",
+        "description",
+        "quantity",
+        "unit_price_cents",
+        "tax_rate_bps"
+      ]
+    }
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": [
+      "description",
+      "quantity",
+      "unit_price_cents",
+      "line_total_cents"
+    ]
+  }
+}
