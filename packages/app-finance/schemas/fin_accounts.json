@@ -1,7 +1,7 @@
 {
   "name": "fin_accounts",
   "title": "Chart of Accounts",
-  "version": 1,
+  "version": 2,
   "description": "Double-entry chart of accounts: the 5 real account types (asset/liability/equity/income/expense), optionally arranged into a parent/child hierarchy via parent_id. Reconciled against a private predecessor-system audit, not part of this repo (its Account model: 'COA hierarchy, 5 types'). No account seeding/entity-mode behavior is built here (the source's Entity model seeds a starter chart of accounts per books-mode; this package carries plain accounts only -- see dbbasic-package.json's Deferred list).",
   "fields": [
     {
@@ -12,13 +12,18 @@
       "type": "text",
       "required": true,
       "label": "Name",
-      "validation": {"min_length": 1, "max_length": 200}
+      "validation": {
+        "min_length": 1,
+        "max_length": 200
+      }
     },
     {
       "name": "code",
       "type": "text",
       "label": "Code",
-      "validation": {"max_length": 32},
+      "validation": {
+        "max_length": 32
+      },
       "help": "Optional account code/number, e.g. \"1000\". Not auto-assigned or required -- an owner may leave it blank."
     },
     {
@@ -26,14 +31,23 @@
       "type": "enum",
       "required": true,
       "label": "Type",
-      "enum": ["asset", "liability", "equity", "income", "expense"],
+      "enum": [
+        "asset",
+        "liability",
+        "equity",
+        "income",
+        "expense"
+      ],
       "help": "The 5 real double-entry account types, matching the predecessor system's Account model exactly (reconciled against a private source audit, not part of this repo)."
     },
     {
       "name": "parent_id",
       "type": "relation",
       "label": "Parent Account",
-      "relation": {"collection": "fin_accounts", "display_field": "name"},
+      "relation": {
+        "collection": "fin_accounts",
+        "display_field": "name"
+      },
       "help": "Optional self-relation for a parent/child chart-of-accounts hierarchy (e.g. \"Bank Accounts\" under \"Assets\"). Nothing in this package enforces a parent's account_type matches its children's, or guards against a cycle -- the source's own Account model did not enforce either (reconciled against a private predecessor-system audit, not part of this repo), so neither is added here."
     },
     {
@@ -41,7 +55,9 @@
       "type": "text",
       "default": "USD",
       "label": "Currency (ISO 4217)",
-      "validation": {"pattern": "^[A-Z]{3}$"}
+      "validation": {
+        "pattern": "^[A-Z]{3}$"
+      }
     },
     {
       "name": "is_active",
@@ -62,13 +78,31 @@
     }
   ],
   "forms": {
-    "default": {"fields": ["name", "code", "account_type", "parent_id", "currency", "is_active"]}
+    "default": {
+      "fields": [
+        "name",
+        "code",
+        "account_type",
+        "parent_id",
+        "currency",
+        "is_active"
+      ]
+    }
   },
   "views": {
-    "list_mode": "table",
-    "list_fields": ["name", "code", "account_type", "currency", "is_active"]
+    "list_mode": "tree",
+    "list_fields": [
+      "name",
+      "code",
+      "account_type",
+      "currency",
+      "is_active"
+    ]
   },
   "search": {
-    "fields": ["name", "code"]
+    "fields": [
+      "name",
+      "code"
+    ]
   }
 }

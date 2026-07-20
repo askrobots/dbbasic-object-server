@@ -664,9 +664,17 @@ _JS = r"""
     // back to table with a visible notice, never a silent empty page).
     (async function boot() {
       const resolved = await resolveListMode(collection);
-      if (resolved.kind === "board") { activeReload = renderBoard(collection, cfg, mount, resolved.config); return; }
-      if (resolved.kind === "tree") { activeReload = renderTree(collection, cfg, mount, resolved.config); return; }
-      if (resolved.kind === "calendar") { activeReload = renderCalendar(collection, cfg, mount, resolved.config); return; }
+      if (resolved.kind === "board" || resolved.kind === "tree" || resolved.kind === "calendar") {
+        // The page's newest/oldest sort and its text-search box are wired only
+        // to the row list; in these grouped/nested/date-bucketed modes they'd
+        // be dead controls, so hide them for a clean surface. (Per-board
+        // filtering is a follow-on -- it would re-wire the search box here.)
+        if (sortEl) sortEl.style.display = "none";
+        if (searchEl) searchEl.style.display = "none";
+        if (resolved.kind === "board") { activeReload = renderBoard(collection, cfg, mount, resolved.config); return; }
+        if (resolved.kind === "tree") { activeReload = renderTree(collection, cfg, mount, resolved.config); return; }
+        activeReload = renderCalendar(collection, cfg, mount, resolved.config); return;
+      }
       activeReload = startRowList(resolved.notice);
     })();
 

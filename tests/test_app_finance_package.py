@@ -82,8 +82,13 @@ def test_schema_json_files_are_valid_and_versioned():
     for name in _SCHEMA_NAMES:
         payload = _schema(name)
         assert payload["name"] == name
-        assert payload["version"] == 1
-        assert payload["views"]["list_mode"] == "table"
+        if name == "fin_accounts":
+            # flipped to a hierarchy tree view (spec 60); additive version bump
+            assert payload["version"] == 2
+            assert payload["views"]["list_mode"] == "tree"
+        else:
+            assert payload["version"] == 1
+            assert payload["views"]["list_mode"] == "table"
 
 
 def test_no_money_field_uses_a_float_or_currency_type():
