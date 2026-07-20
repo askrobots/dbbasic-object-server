@@ -241,6 +241,46 @@ footer.app { margin-top: 2.5rem; color: var(--muted); font-size: 0.78rem; }
 .rowbtn:hover { border-color: var(--accent); color: var(--text); }
 .rowbtn.danger:hover { border-color: var(--danger); color: var(--danger); }
 
+/* 60: board (kanban / lead-pipeline), tree (self-relation nesting), and
+   calendar (month grid) -- the three schema-driven list_mode renderers in
+   window.dbbasicList (list.py). */
+.board { display: flex; gap: var(--gap); align-items: flex-start; overflow-x: auto; padding-bottom: 0.25rem; }
+.boardcol { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md);
+            flex: none; width: 260px; padding: 0.6rem; }
+.boardcolhead { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+                font-weight: 600; font-size: 0.85rem; margin-bottom: 0.5rem; color: var(--muted); }
+.boardcolcount { background: var(--panel-2); border-radius: 999px; padding: 0.05rem 0.5rem; font-size: 0.72rem; }
+.boardcolbody { display: grid; gap: 0.5rem; min-height: 2rem; }
+.boardcard { background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-sm);
+             padding: 0.6rem 0.7rem; cursor: grab; word-break: break-word; }
+.boardcard:active { cursor: grabbing; }
+.boardcardtitle { font-weight: 600; font-size: 0.88rem; }
+.boardcardfield { color: var(--muted); font-size: 0.78rem; margin-top: 0.2rem; }
+
+.tree { display: grid; gap: 0.2rem; }
+.treenode { }
+.treerow { display: flex; align-items: center; gap: 0.4rem; padding: 0.35rem 0.2rem;
+           padding-left: calc(var(--depth, 0) * 1.25rem); }
+.treetoggle { background: transparent; border: 0; color: var(--muted); cursor: pointer; font: inherit;
+              width: 1.2rem; text-align: center; }
+.treeleaf { display: inline-block; width: 1.2rem; }
+.treetitle { font-weight: 500; }
+.treekids.collapsed { display: none; }
+
+.calheader { display: flex; align-items: center; justify-content: center; gap: 1rem; margin-bottom: 0.6rem; }
+.calmonth { font-weight: 600; min-width: 10rem; text-align: center; }
+.calundated { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md);
+              padding: 0.5rem 0.7rem; margin-bottom: 0.6rem; }
+.calundatedlabel { display: block; color: var(--muted); font-size: 0.75rem; margin-bottom: 0.3rem; }
+.calgrid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; background: var(--line);
+           border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden; }
+.calcell { background: var(--panel); min-height: 5.5rem; padding: 0.3rem; font-size: 0.78rem; }
+.calcell.dim { background: var(--bg); color: var(--muted); }
+.caldate { font-size: 0.75rem; color: var(--muted); margin-bottom: 0.2rem; }
+.calevent { background: var(--panel-2); border-radius: 4px; padding: 0.1rem 0.35rem; margin-top: 0.15rem;
+            font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.state.notice { border-color: var(--warning); color: var(--warning); margin-bottom: var(--gap); }
+
 /* Generated form (window.dbbasicForm) */
 .genform { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md);
            padding: var(--pad); }

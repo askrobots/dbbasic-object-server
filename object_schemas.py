@@ -386,6 +386,14 @@ def _normalize_schema(
         "table",
         "diagram",
         "validation",
+        # 10-flow-spec.md's root-level `flow` key (which field on this
+        # collection owns a `transitions` map, plus who/what annotations on
+        # top of it) -- no shipped schema declares this yet, but it must
+        # survive normalization for 60-list-modes-spec.md's board mode to
+        # honor its own documented default-group-field chain the moment one
+        # does. Passed through unchanged, same as every other metadata key
+        # here: this whitelists the key, it does not interpret it.
+        "flow",
     )
     for key in metadata_keys:
         if key in payload:

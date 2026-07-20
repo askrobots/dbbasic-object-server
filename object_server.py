@@ -7937,7 +7937,7 @@ async def _handle_schema_meta(send, method: str, collection: str) -> None:
         await _send_json(send, {"status": "error", "error": "Schema not found"}, status=404)
         return
 
-    meta = {key: schema.get(key) for key in ("name", "title", "fields", "forms", "views", "search")}
+    meta = {key: schema.get(key) for key in ("name", "title", "fields", "forms", "views", "search", "flow")}
     await _send_json(send, {"status": "ok", "schema": meta})
 
 
