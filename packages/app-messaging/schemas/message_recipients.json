@@ -1,0 +1,50 @@
+{
+  "name": "message_recipients",
+  "title": "Message Recipients",
+  "version": 1,
+  "description": "Normalized To/Cc/Bcc addressing for one message -- one row per address. A faithful port of a private predecessor-system audit's MessageRecipient model, not part of this repo: the source normalized recipients into their own table rather than flattening an address list onto Message, and this package follows that same split (see schemas/messages.json's description). No page in this package creates a message_recipients row directly in v1 -- addresses only ever get attached to a message by hand, by a seed, or by the deferred send/sync transport (see dbbasic-package.json's deferred list); forms.default is kept for schema-generator consistency, same posture as messages.json's own unused form.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "message_id",
+      "type": "relation",
+      "required": true,
+      "relation": {"collection": "messages", "display_field": "subject"},
+      "label": "Message"
+    },
+    {
+      "name": "kind",
+      "type": "enum",
+      "default": "to",
+      "enum": ["to", "cc", "bcc"],
+      "label": "Kind"
+    },
+    {
+      "name": "address",
+      "type": "text",
+      "required": true,
+      "label": "Address",
+      "validation": {"max_length": 254}
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["message_id", "kind", "address"]}
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["address", "kind", "message_id"]
+  }
+}

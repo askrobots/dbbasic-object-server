@@ -1,0 +1,62 @@
+{
+  "id": "app-messaging",
+  "name": "Messaging",
+  "version": "0.1.0",
+  "description": "Mailbox / unified-inbox data model: threads, messages, normalized recipients, and drafts -- owner-scoped CRUD, no public read anywhere (a mailbox is private). A faithful port of a private predecessor-system audit, not part of this repo -- that source's messaging was fundamentally an email inbox backed by external mail infrastructure (IMAP/SMTP/mailcow) plus an AI triage layer. This package ports the DATA MODEL ONLY, at the level the audit documented it: message_threads (thread_type, subject, participant snapshot, star/archive/trash flags, an unread rollup, a running message count), messages (thread_id, direction inbound/outbound, from_address, subject, body_text, is_read, sent_at/received_at, in_reply_to/external_message_id for a future IMAP linkage), message_recipients (normalized To/Cc/Bcc addressing per message, matching the source's own MessageRecipient normalization), and message_drafts (an unsent message, kept as its own model rather than a status value on messages, again matching the source's own split). messages.json opts into \"storage\": \"append\" -- a message is a write-hot, rarely-content-edited log entry once sent or received (only is_read flips), the same profile that put app-thread's thread_comments and app-catalog's stock_moves on append storage; every other collection here stays classic (default), matching forum_topics' choice for a smaller, frequently-flag-toggled container. Deferred entirely, on purpose, not built here: IMAP/SMTP transport and the mailcow admin layer (the audit's separate email_hosting/ control panel -- an adapter around an external system, same category as a locked/adapter package), AI email triage/summarization/rules-engine (the audit's dove/ layer sitting over messaging -- thread classification states, sender reputation, an actions-as-data rules engine; a real feature, just not this package's job), SMS/Twilio conversational intake (the audit's separate twilio_integration/ -- inbound voice/SMS, infra-bound, unrelated to the inbox data model), and message attachments (the audit's MessageAttachment pointed at a file_manager.File model this codebase has no package for yet -- no attachment field or collection is invented here to avoid a dangling relation). Also carried-but-inert, matching the same fields-not-behavior posture forum_topics uses for ai_summary: message_count is a running total nothing here increments (a UI/page-load or handler concern, not built); is_read on both message_threads and messages defaults true because this package ships no inbound-transport insertion path, so nothing created here (by hand, seed, or draft save) needs an unread badge -- a future sync job is what should flip it false on newly-synced inbound mail. Read-only viewing plus mark-read is the v1 UI; composing/sending a real message is deferred, but message_drafts is built and wired into both pages as a \"Save Draft\" action so nothing is lost -- it is explicit in both pages that saving a draft sends nothing. Two site routes this package needs, not seeded here (same precedent as app-invoices' /invoices/{invoice_id:uuid}): /inbox -> site_inbox (the owner's threads, newest-first) and /inbox/{thread_id:uuid} -> site_message_thread (one thread's messages, threaded reply-free since the source had no reply-to-a-message nesting at this grain -- unlike app-forum's self-threaded replies, a mailbox thread's messages are a flat chronological list).",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": [],
+  "objects": [
+    {
+      "id": "site_inbox",
+      "path": "objects/site/inbox.py"
+    },
+    {
+      "id": "site_message_thread",
+      "path": "objects/site/message_thread.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "message_threads",
+      "path": "schemas/message_threads.json"
+    },
+    {
+      "collection": "messages",
+      "path": "schemas/messages.json"
+    },
+    {
+      "collection": "message_recipients",
+      "path": "schemas/message_recipients.json"
+    },
+    {
+      "collection": "message_drafts",
+      "path": "schemas/message_drafts.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "message_threads",
+      "path": "seed/message_threads.tsv"
+    },
+    {
+      "collection": "messages",
+      "path": "seed/messages.tsv"
+    },
+    {
+      "collection": "message_recipients",
+      "path": "seed/message_recipients.tsv"
+    },
+    {
+      "collection": "message_drafts",
+      "path": "seed/message_drafts.tsv"
+    }
+  ],
+  "migrations": []
+}

@@ -1,0 +1,63 @@
+{
+  "name": "message_drafts",
+  "title": "Message Drafts",
+  "version": 1,
+  "description": "An unsent message the owner is composing -- a faithful port of a private predecessor-system audit's separate MessageDraft model, not part of this repo. The source kept drafts as their own model rather than a status value on Message, and this package follows that same split rather than adding a draft status to schemas/messages.json. thread_id is optional: a reply-in-progress sets it (see objects/site/message_thread.py's Save Draft action); a brand-new compose leaves it blank. Saving a draft here never sends anything -- no SMTP transport exists in this package (see dbbasic-package.json's deferred list); a draft is data only, same as every other collection in this package.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "thread_id",
+      "type": "relation",
+      "relation": {"collection": "message_threads", "display_field": "subject"},
+      "label": "Thread",
+      "help": "Blank for a new compose not yet attached to any thread."
+    },
+    {
+      "name": "to_addresses",
+      "type": "text",
+      "label": "To",
+      "validation": {"max_length": 500},
+      "help": "Comma-separated address snapshot, same convention as messages.json carries for addressing."
+    },
+    {
+      "name": "cc_addresses",
+      "type": "text",
+      "label": "Cc",
+      "validation": {"max_length": 500}
+    },
+    {
+      "name": "subject",
+      "type": "text",
+      "label": "Subject",
+      "validation": {"max_length": 300}
+    },
+    {
+      "name": "body_text",
+      "type": "textarea",
+      "label": "Body"
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["thread_id", "to_addresses", "cc_addresses", "subject", "body_text"]}
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["subject", "to_addresses", "created_at"]
+  },
+  "search": {
+    "fields": ["subject", "body_text"]
+  }
+}

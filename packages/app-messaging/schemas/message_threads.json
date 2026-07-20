@@ -1,0 +1,98 @@
+{
+  "name": "message_threads",
+  "title": "Message Threads",
+  "version": 1,
+  "description": "One conversation: a subject, a denormalized participant snapshot, and the flags an inbox needs (star/archive/trash, an unread rollup, a running message count) -- a faithful port of a private predecessor-system audit's unified-inbox thread model, not part of this repo. That source handled BOTH internal user-to-user DMs and real external email through the same thread shape (thread_type); this package carries that same split even though the external half has no transport wired up yet (see dbbasic-package.json's deferred list). participant_summary is a plain display snapshot, not a participants relation/M2M -- this codebase has no user-directory join built for that, and a snapshot is the same trade-off app-invoices' invoices.customer_name makes for its customer relation. labels is free text (comma-separated), not a labels/taxonomy collection -- same call app-worker's profiles.skills makes for free-text skills, not a relation.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "thread_type",
+      "type": "enum",
+      "default": "email",
+      "enum": ["internal", "email"],
+      "label": "Thread Type",
+      "help": "internal = a DM between this codebase's own users; email = external mail. Carried from the source model's own split. No IMAP/SMTP sync exists yet (deferred -- see dbbasic-package.json), so an email-type thread's messages are only ever created here by hand, by a seed, or by a future sync job."
+    },
+    {
+      "name": "subject",
+      "type": "text",
+      "label": "Subject",
+      "validation": {"max_length": 300}
+    },
+    {
+      "name": "participant_summary",
+      "type": "text",
+      "label": "Participants",
+      "validation": {"max_length": 300},
+      "help": "Denormalized display string (e.g. names or addresses, comma-separated) -- not a relation. See this schema's own description for why."
+    },
+    {
+      "name": "last_message_at",
+      "type": "datetime",
+      "label": "Last Message"
+    },
+    {
+      "name": "message_count",
+      "type": "number",
+      "default": "0",
+      "label": "Message Count",
+      "help": "Running total, carried like forum_topics.views: this package does not stamp or increment it -- see dbbasic-package.json's deferred list."
+    },
+    {
+      "name": "is_read",
+      "type": "boolean",
+      "default": "true",
+      "label": "Read",
+      "help": "Unread rollup for the thread as a whole. Defaults true because this package ships no inbound-transport insertion path (IMAP sync is deferred) -- a record created here by hand, seed, or draft save is never something the owner needs to \"catch up on\". A future sync job is what should set this false on a newly-synced inbound thread. Toggled by the thread page's mark-read action, and independently by each message's own is_read (see schemas/messages.json)."
+    },
+    {
+      "name": "is_starred",
+      "type": "boolean",
+      "default": "false",
+      "label": "Starred"
+    },
+    {
+      "name": "is_archived",
+      "type": "boolean",
+      "default": "false",
+      "label": "Archived"
+    },
+    {
+      "name": "is_trashed",
+      "type": "boolean",
+      "default": "false",
+      "label": "Trashed",
+      "help": "v1 posture: a flag the owner sets and unsets, same as is_archived. There is no separate trash-empty/purge behavior built here -- see dbbasic-package.json's deferred list."
+    },
+    {
+      "name": "labels",
+      "type": "text",
+      "label": "Labels",
+      "validation": {"max_length": 300},
+      "help": "Free text, comma-separated. No labels/taxonomy collection exists -- see this schema's own description."
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["thread_type", "subject", "labels"]}
+  },
+  "views": {
+    "list_mode": "feed",
+    "list_fields": ["subject", "participant_summary", "last_message_at", "is_read"]
+  },
+  "search": {
+    "fields": ["subject", "participant_summary", "labels"]
+  }
+}

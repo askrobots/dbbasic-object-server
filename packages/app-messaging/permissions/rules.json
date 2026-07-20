@@ -1,0 +1,50 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "message_threads",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "a mailbox is private -- signed-in users manage only their own threads, no public read"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "messages",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "a mailbox is private -- signed-in users manage only their own messages, no public read"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "message_recipients",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "a mailbox is private -- signed-in users manage only the recipient rows on their own messages, no public read"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "message_drafts",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "a mailbox is private -- signed-in users manage only their own drafts, no public read"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_inbox",
+      "reason": "the inbox page is public; it shows a sign-in prompt to visitors -- the row-filtered collection API never returns anyone else's mail"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_message_thread",
+      "reason": "the thread page is public; it shows a sign-in prompt to visitors -- the row-filtered collection API never returns anyone else's mail"
+    }
+  ]
+}

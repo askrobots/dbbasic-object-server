@@ -21,7 +21,7 @@ _JS = r"""
     ["/invoices", "Invoices"], ["/products", "Products"], ["/orders", "Orders"],
     ["/stock", "Stock"], ["/locations", "Locations"],
     ["/accounts", "Accounts"], ["/journals", "Journals"], ["/trial-balance", "Trial Balance"],
-    ["/activity", "Activity"], ["/forum", "Forum"], ["/profile/edit", "Profile"],
+    ["/activity", "Activity"], ["/forum", "Forum"], ["/profile/edit", "Profile"], ["/inbox", "Inbox"],
     ["/dashboard", "Dashboard"], ["/appearance", "Appearance"],
   ];
   const HIT_URL = {
@@ -33,7 +33,7 @@ _JS = r"""
     organizations: () => "/contacts", interactions: () => "/contacts",
     links: () => "/links", events: () => "/calendar",
     invoices: () => "/invoices", templates: () => "/templates", products: (id) => "/products/" + encodeURIComponent(id), orders: (id) => "/orders/" + encodeURIComponent(id),
-    forum_categories: () => "/forum", forum_topics: (id) => "/forum/topics/" + encodeURIComponent(id), profiles: (id) => "/u/" + encodeURIComponent(id), fin_accounts: () => "/accounts", fin_journals: (id) => "/journals/" + encodeURIComponent(id), locations: () => "/locations",
+    forum_categories: () => "/forum", forum_topics: (id) => "/forum/topics/" + encodeURIComponent(id), profiles: (id) => "/u/" + encodeURIComponent(id), message_threads: (id) => "/inbox/" + encodeURIComponent(id), fin_accounts: () => "/accounts", fin_journals: (id) => "/journals/" + encodeURIComponent(id), locations: () => "/locations",
   };
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
     (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));

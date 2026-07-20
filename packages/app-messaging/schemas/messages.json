@@ -1,0 +1,100 @@
+{
+  "name": "messages",
+  "title": "Messages",
+  "version": 1,
+  "storage": "append",
+  "description": "One message within a thread: direction, the address it came from, its body, and the deferred-transport linkage fields (in_reply_to, external_message_id) a future IMAP sync would populate. A faithful port of a private predecessor-system audit's Message model, not part of this repo -- that source stored \"content + external email fields/headers/direction\" on one row; this schema keeps that same grain (no separate body_html field -- the audit gave no evidence the source split html from text at this level of detail, so this package carries one body_text field rather than inventing a split it can't confirm). \"storage\": \"append\" because a message, once sent or received, is (mostly) a write-once log entry -- the only field that ever flips after creation is is_read -- the same profile that put app-thread's thread_comments and app-catalog's stock_moves on append storage (docs/append-only-storage-design.md): write-hot, rarely-if-ever content-edited, an inspectable history in the raw file. Per-recipient To/Cc/Bcc addressing is normalized out to message_recipients, not flattened onto this row -- the source system normalized recipients into their own MessageRecipient table too (see schemas/message_recipients.json), and this package follows that same split rather than the alternative of flattening address lists onto Message. forms.default is not rendered by any page in this package in v1 -- composing/sending a real message is deferred (see dbbasic-package.json) -- it is kept for schema-generator consistency and a future compose page, same as forum_topics carries ai_summary unwritten.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "thread_id",
+      "type": "relation",
+      "required": true,
+      "relation": {"collection": "message_threads", "display_field": "subject"},
+      "label": "Thread"
+    },
+    {
+      "name": "direction",
+      "type": "enum",
+      "required": true,
+      "enum": ["inbound", "outbound"],
+      "label": "Direction",
+      "help": "inbound = received mail (the deferred IMAP sync's future insertion path); outbound = sent by this mailbox's owner (the deferred SMTP send's future insertion path). v1 has no page that creates a message directly through either path -- see dbbasic-package.json's deferred list."
+    },
+    {
+      "name": "from_address",
+      "type": "text",
+      "required": true,
+      "label": "From",
+      "validation": {"max_length": 254}
+    },
+    {
+      "name": "subject",
+      "type": "text",
+      "label": "Subject",
+      "validation": {"max_length": 300},
+      "help": "A message can carry its own subject distinct from the thread's (e.g. a \"Re:\" prefix on a reply), same as real email."
+    },
+    {
+      "name": "body_text",
+      "type": "textarea",
+      "label": "Body"
+    },
+    {
+      "name": "is_read",
+      "type": "boolean",
+      "default": "true",
+      "label": "Read",
+      "help": "Same default reasoning as message_threads.is_read: v1 ships no inbound-transport insertion path, so a message created here by hand, seed, or draft save defaults to already-read. A future sync job is what should set this false on newly-synced inbound mail."
+    },
+    {
+      "name": "sent_at",
+      "type": "datetime",
+      "label": "Sent At",
+      "help": "Set for an outbound message once the deferred SMTP send exists. Carried as a field now (same posture as app-invoices' paid_at) even though nothing in this package writes it yet."
+    },
+    {
+      "name": "received_at",
+      "type": "datetime",
+      "label": "Received At",
+      "help": "Set for an inbound message once the deferred IMAP sync exists. Carried as a field now, not written by anything in this package yet."
+    },
+    {
+      "name": "in_reply_to",
+      "type": "text",
+      "label": "In Reply To",
+      "validation": {"max_length": 998},
+      "help": "The external mail system's Message-ID this message replies to (RFC 5322 shape), for the deferred IMAP threading linkage. Carried, not validated or resolved by anything here."
+    },
+    {
+      "name": "external_message_id",
+      "type": "text",
+      "label": "External Message ID",
+      "validation": {"max_length": 998},
+      "help": "This message's identity in the external mail system (IMAP/mailcow) once the deferred sync exists. Carried, not populated by anything in this package."
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["subject", "body_text"]}
+  },
+  "views": {
+    "list_mode": "cards",
+    "list_fields": ["subject", "from_address", "direction", "received_at"]
+  },
+  "search": {
+    "fields": ["subject", "body_text", "from_address"]
+  }
+}
