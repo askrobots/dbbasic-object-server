@@ -4986,6 +4986,549 @@ def test_collection_records_enforcement_applies_schema_field_permissions(tmp_pat
     }
 
 
+# --- 58 query/filter: field filtering on GET /collections/{c}/records -----
+
+
+def test_collection_records_filter_eq_default_operator(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(
+        data_dir,
+        "contacts",
+        "id\tname\tstatus\nc1\tAda\thot\nc2\tGrace\tcold\nc3\tKatherine\thot\n",
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/collections/contacts/records",
+        query_string="status=hot",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert [r["id"] for r in payload["records"]] == ["c1", "c3"]
+    assert payload["total"] == 2
+
+
+def test_collection_records_filter_ne_operator(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(
+        data_dir,
+        "contacts",
+        "id\tname\tstatus\nc1\tAda\thot\nc2\tGrace\tcold\n",
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/collections/contacts/records",
+        query_string="status.ne=hot",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert [r["id"] for r in payload["records"]] == ["c2"]
+
+
+def test_collection_records_filter_in_operator(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(
+        data_dir,
+        "contacts",
+        "id\tname\tstatus\nc1\tAda\topen\nc2\tGrace\tassigned\nc3\tKatherine\tclosed\n",
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/collections/contacts/records",
+        query_string="status.in=open,assigned",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert [r["id"] for r in payload["records"]] == ["c1", "c2"]
+
+
+def test_collection_records_filter_range_query_ands_same_field(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(
+        data_dir,
+        "postings",
+        "id\tposted_at\np1\t2026-06-15\np2\t2026-07-10\np3\t2026-08-01\n",
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/collections/postings/records",
+        query_string="posted_at.gte=2026-07-01&posted_at.lte=2026-07-31",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert [r["id"] for r in payload["records"]] == ["p2"]
+
+
+def test_collection_records_filter_gt_lt_operators(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "deals", "id\tamount\nd1\t50\nd2\t100\nd3\t150\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    gt_status, _, gt_payload = request(
+        "/collections/deals/records", query_string="amount.gt=100", headers=auth_headers()
+    )
+    lt_status, _, lt_payload = request(
+        "/collections/deals/records", query_string="amount.lt=100", headers=auth_headers()
+    )
+
+    assert gt_status == 200
+    assert [r["id"] for r in gt_payload["records"]] == ["d3"]
+    assert lt_status == 200
+    assert [r["id"] for r in lt_payload["records"]] == ["d1"]
+
+
+def test_collection_records_filter_ignores_reserved_params(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(
+        data_dir,
+        "contacts",
+        "id\tname\tstatus\nc1\tAda\thot\nc2\tGrace\tcold\n",
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/collections/contacts/records",
+        query_string="status=hot&sort=-name&q=anything&limit=10&offset=0",
+        headers=auth_headers(),
+    )
+
+    # sort/q/limit/offset keep their own meaning (or are simply not yet
+    # implemented) rather than being rejected as unknown filter fields.
+    assert status == 200
+    assert [r["id"] for r in payload["records"]] == ["c1"]
+
+
+def test_collection_records_filter_matching_nothing_is_empty_not_an_error(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\tstatus\nc1\tAda\thot\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/collections/contacts/records",
+        query_string="status=nonexistent",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert payload["records"] == []
+    assert payload["total"] == 0
+
+
+def test_collection_records_filter_unknown_field_returns_400(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\tstatus\nc1\tAda\thot\n")
+    schema_file = data_dir / "schemas" / "contacts.json"
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text(
+        json.dumps({"fields": [{"name": "id"}, {"name": "name"}, {"name": "status"}]})
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/collections/contacts/records",
+        query_string="nickname=Ada",
+        headers=auth_headers(),
+    )
+
+    assert status == 400
+    assert payload["status"] == "error"
+    assert payload["code"] == "invalid_filter"
+    assert payload["param"] == "nickname"
+
+
+def test_collection_records_filter_unknown_operator_returns_400(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/collections/contacts/records",
+        query_string="name.like=Ad",
+        headers=auth_headers(),
+    )
+
+    assert status == 400
+    assert payload["code"] == "invalid_filter"
+    assert payload["param"] == "name.like"
+
+
+def test_collection_records_filter_bad_type_value_returns_400(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\ttotal\nc1\tAda\t150\n")
+    schema_file = data_dir / "schemas" / "contacts.json"
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text(
+        json.dumps(
+            {"fields": [{"name": "id"}, {"name": "name"}, {"name": "total", "type": "integer"}]}
+        )
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/collections/contacts/records",
+        query_string="total=not-a-number",
+        headers=auth_headers(),
+    )
+
+    assert status == 400
+    assert payload["code"] == "invalid_filter"
+    assert payload["param"] == "total"
+
+
+def test_collection_records_filter_ordered_op_on_unsupported_type_returns_400(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+    schema_file = data_dir / "schemas" / "contacts.json"
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text(json.dumps({"fields": [{"name": "id"}, {"name": "name"}]}))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/collections/contacts/records",
+        query_string="name.gte=A",
+        headers=auth_headers(),
+    )
+
+    assert status == 400
+    assert payload["code"] == "invalid_filter"
+    assert payload["param"] == "name.gte"
+
+
+def test_collection_records_filter_in_list_cap_returns_400(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tstatus\nc1\thot\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    too_many = ",".join(f"v{i}" for i in range(object_server.FILTER_IN_MAX_VALUES + 1))
+    status, _, payload = request(
+        "/collections/contacts/records",
+        query_string=f"status.in={too_many}",
+        headers=auth_headers(),
+    )
+
+    assert status == 400
+    assert payload["code"] == "invalid_filter"
+    assert payload["param"] == "status.in"
+
+
+def test_collection_records_filter_in_list_rejects_blank_items(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tstatus\nc1\thot\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/collections/contacts/records",
+        query_string="status.in=hot,,cold",
+        headers=auth_headers(),
+    )
+
+    assert status == 400
+    assert payload["code"] == "invalid_filter"
+    assert payload["param"] == "status.in"
+
+
+def test_collection_records_filter_disabled_degrades_to_unfiltered(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(
+        data_dir,
+        "contacts",
+        "id\tname\tstatus\nc1\tAda\thot\nc2\tGrace\tcold\n",
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.FILTERING_ENABLED_ENV, "false")
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/collections/contacts/records",
+        query_string="status=hot",
+        headers=auth_headers(),
+    )
+
+    # Degrades to unfiltered (both rows), never a 400 -- 58's Degradation:
+    # turning the flag off can't break a page that already added a filter.
+    assert status == 200
+    assert [r["id"] for r in payload["records"]] == ["c1", "c2"]
+
+
+def test_collection_records_filter_disabled_still_400s_on_unrelated_errors(tmp_path, monkeypatch):
+    """Filtering-disabled only ignores filter PARAMS; it doesn't relax
+    unrelated validation like limit/offset."""
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.FILTERING_ENABLED_ENV, "false")
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/collections/contacts/records",
+        query_string="limit=0&status=hot",
+        headers=auth_headers(),
+    )
+
+    assert status == 400
+    assert payload["error"] == "Query parameter 'limit' must be at least 1"
+
+
+def test_admin_status_reports_filtering_capability(tmp_path, monkeypatch):
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "data"))
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request("/admin/status", headers=auth_headers())
+
+    assert status == 200
+    assert payload["capabilities"]["filtering"] == {
+        "enabled": True,
+        "env": "DBBASIC_ENABLE_FILTERING",
+    }
+
+
+# --- 58 SECURITY properties: filter can only narrow, never widen ---------
+
+
+def test_collection_records_filter_never_leaks_across_row_filter_boundary(tmp_path, monkeypatch):
+    """A field filter can only narrow the row-permission-filtered set,
+    never widen it. Filtering for a value that only exists on a row
+    outside the subject's row filter (a different owner) must come back
+    empty -- never that other owner's row -- even though the field itself
+    (`name`) is fully readable, not hidden."""
+    data_dir = tmp_path / "data"
+    write_records(
+        data_dir,
+        "contacts",
+        "id\tname\towner_id\n1\tAlice\t7\n2\tBob\t8\n3\tCarol\t7\n",
+    )
+    save_permission_policy(
+        data_dir,
+        {
+            "access_mode": "role_based",
+            "rules": [
+                {
+                    "effect": "allow",
+                    "principal": "role:sales",
+                    "actions": ["read"],
+                    "collection": "contacts",
+                    "row_filter": {"owner_id": "$user_id"},
+                }
+            ],
+        },
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+    monkeypatch.setenv(object_server.PERMISSION_TRUST_HEADERS_ENV, "true")
+    enable_admin_token(monkeypatch)
+    headers = [("x-dbbasic-user-id", "7"), ("x-dbbasic-roles", "sales")]
+
+    # "Bob" (id 2) belongs to owner_id 8 -- outside subject 7's row filter.
+    out_of_scope_status, _, out_of_scope_payload = request(
+        "/collections/contacts/records",
+        query_string="name=Bob",
+        headers=headers,
+    )
+    # An in-scope filter still works normally for the same subject.
+    in_scope_status, _, in_scope_payload = request(
+        "/collections/contacts/records",
+        query_string="name=Alice",
+        headers=headers,
+    )
+    # And an admin (bypasses row filtering entirely) really can reach Bob,
+    # proving the row filter -- not some other accident -- is what hid him
+    # from the sales subject above.
+    admin_status, _, admin_payload = request(
+        "/collections/contacts/records",
+        query_string="name=Bob",
+        headers=auth_headers(),
+    )
+
+    assert out_of_scope_status == 200
+    assert out_of_scope_payload["records"] == []
+    assert out_of_scope_payload["total"] == 0
+
+    assert in_scope_status == 200
+    assert [r["id"] for r in in_scope_payload["records"]] == ["1"]
+
+    assert admin_status == 200
+    assert [r["id"] for r in admin_payload["records"]] == ["2"]
+
+
+def test_collection_records_filter_denied_field_from_matched_rule_returns_400(tmp_path, monkeypatch):
+    """Filterable fields = readable fields (58's Permissions Posture),
+    checked against the matched row-permission rule's own denied_fields --
+    not just schema-level hidden fields."""
+    data_dir = tmp_path / "data"
+    write_records(
+        data_dir,
+        "contacts",
+        "id\tname\towner_id\tsecret\n1\tAlice\t7\tred\n2\tBob\t8\tblue\n",
+    )
+    save_permission_policy(
+        data_dir,
+        {
+            "access_mode": "role_based",
+            "rules": [
+                {
+                    "effect": "allow",
+                    "principal": "role:sales",
+                    "actions": ["read"],
+                    "collection": "contacts",
+                    "row_filter": {"owner_id": "$user_id"},
+                    "denied_fields": ["secret"],
+                }
+            ],
+        },
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+    monkeypatch.setenv(object_server.PERMISSION_TRUST_HEADERS_ENV, "true")
+    enable_admin_token(monkeypatch)
+    headers = [("x-dbbasic-user-id", "7"), ("x-dbbasic-roles", "sales")]
+
+    denied_status, _, denied_payload = request(
+        "/collections/contacts/records",
+        query_string="secret=red",
+        headers=headers,
+    )
+    allowed_status, _, allowed_payload = request(
+        "/collections/contacts/records",
+        query_string="name=Alice",
+        headers=headers,
+    )
+
+    assert denied_status == 400
+    assert denied_payload["code"] == "invalid_filter"
+    assert denied_payload["param"] == "secret"
+
+    assert allowed_status == 200
+    assert [r["id"] for r in allowed_payload["records"]] == ["1"]
+
+
+def test_collection_records_filter_hidden_field_rejected_and_admin_bypasses(tmp_path, monkeypatch):
+    """58's Permissions Posture, verbatim: a field hidden by schema is not
+    filterable by a non-privileged subject (400, not a silent empty
+    result -- the inference-channel guard: probing a hidden field's value
+    via filter results would otherwise leak it). An admin-role subject
+    bypasses that gate entirely, exactly like the permission engine's own
+    row-level admin short-circuit already bypasses rule matching -- even
+    when the schema grants admin no explicit exception for the field."""
+    data_dir = tmp_path / "data"
+    write_records(
+        data_dir,
+        "invoices",
+        "id\towner_id\tmemo\tcost_price\ni1\t7\tHosting\t100\ni2\t7\tDomain\t9\n",
+    )
+    schema_file = data_dir / "schemas" / "invoices.json"
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text(
+        json.dumps(
+            {
+                "fields": [
+                    {"name": "id"},
+                    {"name": "owner_id"},
+                    {"name": "memo"},
+                    # Hidden for EVERYONE -- no admin exception carved out.
+                    {"name": "cost_price", "type": "integer", "permissions": {"default": "hidden"}},
+                ]
+            }
+        )
+    )
+    save_permission_policy(
+        data_dir,
+        {
+            "access_mode": "role_based",
+            "rules": [
+                {
+                    "effect": "allow",
+                    "principal": "role:sales",
+                    "actions": ["read"],
+                    "collection": "invoices",
+                    "row_filter": {"owner_id": "$user_id"},
+                }
+            ],
+        },
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+    monkeypatch.setenv(object_server.PERMISSION_TRUST_HEADERS_ENV, "true")
+    enable_admin_token(monkeypatch)
+
+    sales_status, _, sales_payload = request(
+        "/collections/invoices/records",
+        query_string="cost_price=100",
+        headers=[("x-dbbasic-user-id", "7"), ("x-dbbasic-roles", "sales")],
+    )
+    # role:admin via trusted headers -- no admin TOKEN, no explicit schema
+    # exception for cost_price, and no rule in the policy for role:admin
+    # at all: the ONLY thing making this work is check_permission's (and
+    # now _filterable_field_predicate's) admin-role short-circuit.
+    admin_status, _, admin_payload = request(
+        "/collections/invoices/records",
+        query_string="cost_price=100",
+        headers=[("x-dbbasic-user-id", "1"), ("x-dbbasic-roles", "admin")],
+    )
+
+    assert sales_status == 400
+    assert sales_payload["code"] == "invalid_filter"
+    assert sales_payload["param"] == "cost_price"
+
+    assert admin_status == 200
+    assert [r["id"] for r in admin_payload["records"]] == ["i1"]
+
+
+def test_collection_records_filter_admin_token_bypasses_hidden_field_gate(tmp_path, monkeypatch):
+    """Same as the role:admin case above, but via the raw admin-token
+    bearer (which resolves to a subject with role "admin" -- see
+    _permission_identity) rather than a trusted-header role."""
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "invoices", "id\tcost_price\ni1\t100\ni2\t9\n")
+    schema_file = data_dir / "schemas" / "invoices.json"
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text(
+        json.dumps(
+            {
+                "fields": [
+                    {"name": "id"},
+                    {"name": "cost_price", "type": "integer", "permissions": {"default": "hidden"}},
+                ]
+            }
+        )
+    )
+    save_permission_policy(
+        data_dir,
+        {"access_mode": "role_based", "rules": []},
+    )
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv(object_server.PERMISSION_ENFORCEMENT_ENV, "true")
+    enable_admin_token(monkeypatch)
+
+    status, _, payload = request(
+        "/collections/invoices/records",
+        query_string="cost_price=100",
+        headers=auth_headers(),
+    )
+
+    assert status == 200
+    assert [r["id"] for r in payload["records"]] == ["i1"]
+
+
 def test_collection_record_update_enforces_schema_edit_permissions(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     write_records(data_dir, "invoices", "id\towner_id\tmemo\tstatus\tmargin\ni1\t7\tHosting\tdraft\t30\n")

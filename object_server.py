@@ -18,6 +18,7 @@ import mimetypes
 import os
 import re
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -28,7 +29,7 @@ from collections import Counter, deque
 from datetime import datetime, timezone
 from importlib import metadata as importlib_metadata
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import http_api_contract
 import object_activity
@@ -127,6 +128,18 @@ DEFAULT_METRICS_SNAPSHOT_SECONDS = 60
 RECORD_EVENTS_ENV = "DBBASIC_ENABLE_RECORD_EVENTS"
 EVENT_KEEP_COUNT_ENV = "DBBASIC_EVENT_KEEP_COUNT"
 EVENT_KEEP_SECONDS_ENV = "DBBASIC_EVENT_KEEP_SECONDS"
+# 58's <block>_enabled kill switch, default ON: field-filter query params are
+# read and applied unless explicitly disabled. Off degrades to "ignore the
+# filter params" (unfiltered, same as before this feature), never to a 400 --
+# see _handle_collection_records_get and 58's Degradation section.
+FILTERING_ENABLED_ENV = "DBBASIC_ENABLE_FILTERING"
+# Query params the collection-records GET route reserves for pagination/
+# sort/search rather than treating as a field filter (58's Encoding
+# section); every other param is a `field` or `field.op` filter condition.
+FILTER_RESERVED_PARAMS = frozenset({"limit", "offset", "sort", "q"})
+# `field.in=a,b,c,...` cap (58's Open Questions: bound the list so `in`
+# can't become an unbounded OR by the back door).
+FILTER_IN_MAX_VALUES = 50
 PACKAGES_DIR_ENV = "DBBASIC_PACKAGES_DIR"
 PACKAGE_INSTALLS_ENABLED_ENV = "DBBASIC_ENABLE_PACKAGE_INSTALLS"
 PACKAGE_RESTORE_ENABLED_ENV = "DBBASIC_ENABLE_PACKAGE_RESTORE"
@@ -3798,6 +3811,10 @@ def _admin_capabilities_payload() -> dict[str, Any]:
             "keep_count": _event_keep_count(),
             "keep_seconds": _event_keep_seconds(),
         },
+        "filtering": {
+            "enabled": _filtering_enabled(),
+            "env": FILTERING_ENABLED_ENV,
+        },
         "event_handlers": {
             "enabled": object_handlers.handlers_enabled(),
             "env": object_handlers.HANDLERS_ENABLED_ENV,
@@ -7137,9 +7154,74 @@ async def _handle_collection_records_get(
         await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
         return
 
-    if permission_check is not None and permission_check["enforced"]:
+    enforced = permission_check is not None and permission_check["enforced"]
+
+    # 58's field filter (plan/vocabulary/58-query-filter-spec.md). Parsed
+    # here, against the schema now known-valid (the read above already
+    # confirmed the collection exists), but APPLIED below only after the
+    # permission row filter has already run -- see the ordering note there.
+    normalized_where: dict[str, list[dict[str, Any]]] = {}
+    if _filtering_enabled():
+        is_filterable = (
+            _filterable_field_predicate(
+                collection,
+                subject=permission_check["subject"],
+                policy=permission_check["policy"],
+                decision=permission_check["decision"],
+            )
+            if enforced
+            else _always_filterable
+        )
         try:
+            normalized_where = _parse_collection_record_filters(
+                query,
+                collection=collection,
+                is_filterable=is_filterable,
+            )
+        except FilterParamError as exc:
+            await _send_json(
+                send,
+                {
+                    "status": "error",
+                    "error": str(exc),
+                    "code": "invalid_filter",
+                    "param": exc.param,
+                },
+                status=400,
+            )
+            return
+    elif any(key not in FILTER_RESERVED_PARAMS for key in query):
+        _note_filtering_disabled_once()
+
+    if enforced:
+        try:
+            # The permission row filter: applied first, unconditionally,
+            # over every record read above. redact=False: field redaction
+            # is deferred past the field filter below, so a filter on a
+            # field an admin may filter but not see (schema-hidden) can
+            # still match against its real value -- see
+            # _filter_records_for_permission's docstring.
             records = _filter_records_for_permission(
+                records,
+                collection=collection,
+                subject=permission_check["subject"],
+                policy=permission_check["policy"],
+                redact=False,
+            )
+        except ValueError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=500)
+            return
+
+    if normalized_where:
+        # The field filter: an ADDITIONAL AND over the row filter's own
+        # output only (never the original `records`), which is what
+        # structurally guarantees it can narrow the readable set but
+        # never widen it -- see object_records.filter_records.
+        records = object_records.filter_records(records, normalized_where)
+
+    if enforced:
+        try:
+            records = _redact_records_for_permission(
                 records,
                 collection=collection,
                 subject=permission_check["subject"],
@@ -9733,13 +9815,207 @@ async def _collection_permission_check(
     }
 
 
+class FilterParamError(ValueError):
+    """One 58 field-filter query param failed validation.
+
+    Covers every case 58's Degradation section calls out as a 400: an
+    unknown field, a non-filterable (hidden) field, an unknown operator,
+    an oversize `in` list, or a value that fails schema type validation.
+    Carries the offending param name so the 400 response can point at it
+    rather than making the caller guess which of several filter params
+    was the problem.
+    """
+
+    def __init__(self, param: str, message: str):
+        super().__init__(message)
+        self.param = param
+
+
+def _split_filter_param(raw_key: str) -> tuple[str, str]:
+    """Split one query param name into (field, op).
+
+    58's Encoding: `field=value` is an implicit `eq`; `field.op=value` is
+    the dotted-suffix form (`status.in=open,assigned`,
+    `created_at.gte=2026-07-01`). Schema field names never contain a dot
+    (object_schemas._FIELD_NAME_RE), so splitting on the LAST dot is
+    unambiguous.
+    """
+    if "." in raw_key:
+        field_name, _, op = raw_key.rpartition(".")
+        return field_name, op.strip().lower()
+    return raw_key, "eq"
+
+
+def _schema_field_defs(collection: str) -> dict[str, dict[str, Any]]:
+    """Return {field_name: field_def} for a collection's declared schema.
+
+    Empty for a schemaless/derived collection (no manual schema file) --
+    callers treat that the same way every other schema-optional check in
+    this codebase does: permissive, since there is no declared field list
+    to validate a filter's field name or hidden-ness against.
+    """
+    try:
+        schema = object_schemas.get_schema(collection, base_dir=_data_dir())
+    except (object_schemas.InvalidSchemaNameError, object_schemas.SchemaNotFoundError):
+        return {}
+    fields = schema.get("fields") if isinstance(schema, dict) else None
+    if not isinstance(fields, list):
+        return {}
+    return {
+        field["name"]: field
+        for field in fields
+        if isinstance(field, dict) and isinstance(field.get("name"), str)
+    }
+
+
+def _always_filterable(_name: str) -> bool:
+    return True
+
+
+def _filterable_field_predicate(
+    collection: str,
+    *,
+    subject: object_permissions.PermissionSubject,
+    policy: object_permissions.PermissionPolicy,
+    decision: object_permissions.PermissionDecision,
+) -> Callable[[str], bool]:
+    """Return a predicate: may `subject` use field `name` in a 58 filter?
+
+    58's Permissions Posture: filterable fields = readable fields. A
+    field this subject can't read is not filterable either, closing the
+    inference channel where filtering a hidden field would probe its
+    value via which already-readable rows come back. A field is unreadable
+    here for either of two independent reasons, both checked:
+
+    - the matched row-permission rule scopes reads to an explicit
+      `fields` allow-list, or denies specific fields via `denied_fields`
+      (`decision.fields`/`decision.denied_fields`, from the same READ
+      decision `_filter_records_for_permission` uses for row/field
+      redaction -- this is the general, record-independent shape of that
+      decision, from `_collection_permission_check`);
+    - the schema marks the field `hidden` for this subject
+      (`object_field_permissions.field_access`, the same check
+      `redact_record` applies per record on the way out).
+
+    Admins bypass both, mirroring `check_permission`'s own admin
+    short-circuit (an admin's decision already carries no row_filter/
+    fields/denied_fields, and admins see every field here too).
+    """
+    if object_permissions.subject_has_admin_role(subject, policy):
+        return _always_filterable
+
+    denied = set(decision.denied_fields)
+    allowed = set(decision.fields) if decision.fields is not None else None
+
+    for name, field in _schema_field_defs(collection).items():
+        access = object_field_permissions.field_access(
+            field, subject=subject, policy=policy, record=None
+        )
+        if access == object_field_permissions.HIDDEN:
+            denied.add(name)
+
+    def is_filterable(name: str) -> bool:
+        if name in denied:
+            return False
+        if allowed is not None and name not in allowed:
+            return False
+        return True
+
+    return is_filterable
+
+
+def _parse_collection_record_filters(
+    query: dict[str, str],
+    *,
+    collection: str,
+    is_filterable: Callable[[str], bool],
+) -> dict[str, list[dict[str, Any]]]:
+    """Parse a collection-records GET query string into a normalized 58
+    field filter.
+
+    Returns {field: [condition, ...]} -- a LIST of conditions per field
+    (each `object_permissions.filter_condition`-shaped) so a range
+    (`created_at.gte=X&created_at.lte=Y`, two different query params that
+    both name `created_at`) ANDs both conditions instead of the second
+    silently overwriting the first. Raises FilterParamError -- caught by
+    the caller and turned into a structured 400 -- on any of 58's
+    Degradation cases: unknown field, non-filterable field, unknown
+    operator, an oversize `in` list, or a value that fails schema type
+    validation. Reserved params (FILTER_RESERVED_PARAMS) are skipped, not
+    treated as filters.
+    """
+    field_defs = _schema_field_defs(collection)
+    normalized: dict[str, list[dict[str, Any]]] = {}
+
+    for raw_key, raw_value in query.items():
+        if raw_key in FILTER_RESERVED_PARAMS:
+            continue
+
+        field_name, op = _split_filter_param(raw_key)
+        if op not in object_permissions.FILTER_OPERATORS:
+            raise FilterParamError(
+                raw_key, f"Unknown filter operator '{op}' on field '{field_name}'"
+            )
+        if field_defs and field_name not in field_defs:
+            raise FilterParamError(raw_key, f"Unknown filter field '{field_name}'")
+        if not is_filterable(field_name):
+            raise FilterParamError(
+                raw_key, f"Field '{field_name}' is not filterable for this subject"
+            )
+
+        field_def = field_defs.get(field_name)
+        try:
+            if op == "in":
+                raw_values = [item.strip() for item in raw_value.split(",")]
+                if not raw_values or any(item == "" for item in raw_values):
+                    raise FilterParamError(
+                        raw_key,
+                        "Filter operator 'in' requires a non-empty comma-separated list",
+                    )
+                if len(raw_values) > FILTER_IN_MAX_VALUES:
+                    raise FilterParamError(
+                        raw_key,
+                        f"Filter operator 'in' supports at most {FILTER_IN_MAX_VALUES} values",
+                    )
+                value: Any = tuple(
+                    object_records.normalize_filter_value(field_def, op, item)
+                    for item in raw_values
+                )
+            else:
+                value = object_records.normalize_filter_value(field_def, op, raw_value)
+        except object_records.InvalidRecordPayloadError as exc:
+            raise FilterParamError(raw_key, str(exc)) from exc
+
+        normalized.setdefault(field_name, []).append(
+            object_permissions.filter_condition(op, value)
+        )
+
+    return normalized
+
+
 def _filter_records_for_permission(
     records: list[dict[str, str]],
     *,
     collection: str,
     subject: object_permissions.PermissionSubject,
     policy: object_permissions.PermissionPolicy,
+    redact: bool = True,
 ) -> list[dict[str, str]]:
+    """Return the records `subject` may read from `collection` -- the
+    permission ROW filter, applied first and unconditionally (58's
+    Permissions Posture) ahead of any field filter a caller adds on top.
+
+    `redact=False` skips the per-record field-redaction step (schema
+    hidden-field stripping plus the matched rule's fields/denied_fields)
+    and returns the row-permitted records with every field still present.
+    A 58 field filter MUST be applied to that unredacted form -- see
+    _handle_collection_records_get -- so a filter an admin is allowed to
+    use on an otherwise-hidden field (_filterable_field_predicate) can
+    still see the value to match against; call
+    _redact_records_for_permission once filtering is done to get the same
+    caller-facing shape a plain read (redact=True, the default) already
+    produces in one pass.
+    """
     allowed_records: list[dict[str, str]] = []
     for record in records:
         decision = object_permissions.check_permission(
@@ -9749,7 +10025,9 @@ def _filter_records_for_permission(
             collection=collection,
             record=record,
         )
-        if decision.allowed:
+        if not decision.allowed:
+            continue
+        if redact:
             allowed_records.append(
                 _apply_record_field_policy(
                     record,
@@ -9759,7 +10037,43 @@ def _filter_records_for_permission(
                     policy=policy,
                 )
             )
+        else:
+            allowed_records.append(dict(record))
     return allowed_records
+
+
+def _redact_records_for_permission(
+    records: list[dict[str, str]],
+    *,
+    collection: str,
+    subject: object_permissions.PermissionSubject,
+    policy: object_permissions.PermissionPolicy,
+) -> list[dict[str, str]]:
+    """Apply field redaction to an already row-permitted record list.
+
+    The other half of what _filter_records_for_permission's default
+    (redact=True) does in one pass, split out so a 58 field filter can run
+    BETWEEN row-permission filtering and redaction -- see there.
+    """
+    redacted: list[dict[str, str]] = []
+    for record in records:
+        decision = object_permissions.check_permission(
+            subject,
+            object_permissions.READ,
+            policy=policy,
+            collection=collection,
+            record=record,
+        )
+        redacted.append(
+            _apply_record_field_policy(
+                record,
+                decision,
+                collection=collection,
+                subject=subject,
+                policy=policy,
+            )
+        )
+    return redacted
 
 
 def _apply_record_field_policy(
@@ -10211,6 +10525,33 @@ def _record_events_enabled() -> bool:
     if value is None:
         return True
     return value.strip().lower() in TRUE_VALUES
+
+
+def _filtering_enabled() -> bool:
+    value = os.environ.get(FILTERING_ENABLED_ENV)
+    if value is None:
+        return True
+    return value.strip().lower() in TRUE_VALUES
+
+
+_FILTERING_DISABLED_LOGGED = False
+
+
+def _note_filtering_disabled_once() -> None:
+    """Log once (not per-request) that filter params are being ignored
+    because FILTERING_ENABLED_ENV is off -- 58's Degradation section asks
+    for this so an operator who flipped the flag can find out why filters
+    stopped narrowing results, without a log line on every list request.
+    """
+    global _FILTERING_DISABLED_LOGGED
+    if _FILTERING_DISABLED_LOGGED:
+        return
+    _FILTERING_DISABLED_LOGGED = True
+    print(
+        f"[dbbasic] Filtering is disabled ({FILTERING_ENABLED_ENV}=false); "
+        f"field-filter query params are being ignored.",
+        file=sys.stderr,
+    )
 
 
 def _event_keep_count() -> int | None:

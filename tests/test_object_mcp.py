@@ -1,6 +1,7 @@
 """Tests for the MCP endpoint and tool routing."""
 
 import json
+import urllib.parse
 
 import pytest
 
@@ -212,6 +213,120 @@ def test_mcp_record_and_schema_tools(tmp_path, monkeypatch):
     assert not updated_error and updated["response"]["record"]["name"] == "Ada Lovelace"
     assert not deleted_error and deleted["response"]["deleted"] is True
     assert not changes_error and changes["response"]["count"] >= 3
+
+
+def test_mcp_tool_route_translates_where_eq_shorthand_to_query_param():
+    method, path, query, body = object_mcp.tool_route(
+        "list_records", {"collection": "contacts", "where": {"lead_status": "hot"}}
+    )
+
+    assert method == "GET"
+    assert path == "/admin/collections/contacts/records"
+    assert dict(urllib.parse.parse_qsl(query))["lead_status"] == "hot"
+    assert body == b""
+
+
+def test_mcp_tool_route_translates_where_explicit_op_to_dotted_param():
+    method, path, query, body = object_mcp.tool_route(
+        "list_records",
+        {"collection": "contacts", "where": {"status": {"op": "in", "value": ["open", "assigned"]}}},
+    )
+
+    assert dict(urllib.parse.parse_qsl(query))["status.in"] == "open,assigned"
+
+
+def test_mcp_tool_route_translates_where_range_query_as_two_params():
+    """A range (two conditions on the same field) round-trips as two
+    separate query params -- urlencode keeps repeated keys distinct, and
+    the HTTP handler ANDs same-field conditions from separate params."""
+    method, path, query, body = object_mcp.tool_route(
+        "list_records",
+        {
+            "collection": "postings",
+            "where": {
+                "posted_at": [
+                    {"op": "gte", "value": "2026-07-01"},
+                    {"op": "lte", "value": "2026-07-31"},
+                ]
+            },
+        },
+    )
+
+    pairs = urllib.parse.parse_qsl(query)
+    assert ("posted_at.gte", "2026-07-01") in pairs
+    assert ("posted_at.lte", "2026-07-31") in pairs
+
+
+def test_mcp_tool_route_rejects_non_object_where():
+    with pytest.raises(ValueError, match="where must be an object"):
+        object_mcp.tool_route("list_records", {"collection": "contacts", "where": "bogus"})
+
+
+def test_mcp_tool_route_rejects_where_condition_missing_op():
+    with pytest.raises(ValueError, match="op"):
+        object_mcp.tool_route(
+            "list_records", {"collection": "contacts", "where": {"status": {"value": "hot"}}}
+        )
+
+
+def test_mcp_list_records_where_filters_end_to_end(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(
+        data_dir,
+        "contacts",
+        "id\tname\tlead_status\nc1\tAda\thot\nc2\tGrace\tcold\nc3\tKatherine\thot\n",
+    )
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    error, result = call_tool(
+        "list_records", {"collection": "contacts", "where": {"lead_status": "hot"}}
+    )
+
+    assert not error
+    assert result["http_status"] == 200
+    assert [r["id"] for r in result["response"]["records"]] == ["c1", "c3"]
+
+
+def test_mcp_list_records_where_explicit_op_end_to_end(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    write_records(
+        data_dir,
+        "contacts",
+        "id\tname\tstatus\nc1\tAda\topen\nc2\tGrace\tclosed\nc3\tKatherine\tassigned\n",
+    )
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    error, result = call_tool(
+        "list_records",
+        {"collection": "contacts", "where": {"status": {"op": "in", "value": ["open", "assigned"]}}},
+    )
+
+    assert not error
+    assert [r["id"] for r in result["response"]["records"]] == ["c1", "c3"]
+
+
+def test_mcp_list_records_where_unknown_field_surfaces_structured_400(tmp_path, monkeypatch):
+    """A bad filter still comes back as the same structured 400 a direct
+    HTTP caller gets -- MCP adds no new validation of its own, per this
+    module's "nothing new runs underneath" doctrine."""
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", "id\tname\nc1\tAda\n")
+    schema_file = data_dir / "schemas" / "contacts.json"
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text('{"fields": [{"name": "id"}, {"name": "name"}]}')
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(data_dir))
+    enable_admin_token(monkeypatch)
+
+    error, result = call_tool(
+        "list_records", {"collection": "contacts", "where": {"nickname": "Ada"}}
+    )
+
+    assert error is True
+    assert result["http_status"] == 400
+    assert result["response"]["code"] == "invalid_filter"
+    assert result["response"]["param"] == "nickname"
 
 
 def test_mcp_global_search_tool(tmp_path, monkeypatch):

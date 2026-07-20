@@ -2832,3 +2832,233 @@ def test_record_change_entry_shape_is_unchanged(tmp_path):
         "after",
     }
     UUID(entry["change_id"])
+
+
+# --- 58 query/filter: filter_records, list_collection_records(where=...), ---
+# --- normalize_filter_value --------------------------------------------
+
+
+def cond(op, value):
+    return object_permissions.filter_condition(op, value)
+
+
+CONTACTS_TSV = (
+    "id\tname\tstatus\towner_id\ttotal\tcreated_at\n"
+    "c1\tAda\thot\t7\t150\t2026-07-01\n"
+    "c2\tGrace\tcold\t7\t50\t2026-07-15\n"
+    "c3\tKatherine\thot\t8\t300\t2026-07-20\n"
+    "c4\tHedy\topen\t8\t20\t2026-06-01\n"
+)
+
+
+def test_filter_records_eq_default_operator(tmp_path):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", CONTACTS_TSV)
+    records = object_records.read_collection_records("contacts", base_dir=data_dir, roots=[])
+
+    matched = object_records.filter_records(records, {"status": "hot"})
+
+    assert [r["id"] for r in matched] == ["c1", "c3"]
+
+
+def test_filter_records_ne(tmp_path):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", CONTACTS_TSV)
+    records = object_records.read_collection_records("contacts", base_dir=data_dir, roots=[])
+
+    matched = object_records.filter_records(records, {"status": cond("ne", "hot")})
+
+    assert [r["id"] for r in matched] == ["c2", "c4"]
+
+
+def test_filter_records_in(tmp_path):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", CONTACTS_TSV)
+    records = object_records.read_collection_records("contacts", base_dir=data_dir, roots=[])
+
+    matched = object_records.filter_records(records, {"status": cond("in", ("hot", "open"))})
+
+    assert [r["id"] for r in matched] == ["c1", "c3", "c4"]
+
+
+def test_filter_records_ordered_operators(tmp_path):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", CONTACTS_TSV)
+    records = object_records.read_collection_records("contacts", base_dir=data_dir, roots=[])
+
+    assert [r["id"] for r in object_records.filter_records(records, {"total": cond("gte", "150")})] == [
+        "c1",
+        "c3",
+    ]
+    assert [r["id"] for r in object_records.filter_records(records, {"total": cond("lte", "50")})] == [
+        "c2",
+        "c4",
+    ]
+    assert [r["id"] for r in object_records.filter_records(records, {"total": cond("gt", "150")})] == ["c3"]
+    assert [r["id"] for r in object_records.filter_records(records, {"total": cond("lt", "50")})] == ["c4"]
+
+
+def test_filter_records_multiple_conditions_are_anded_range_query(tmp_path):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", CONTACTS_TSV)
+    records = object_records.read_collection_records("contacts", base_dir=data_dir, roots=[])
+
+    where = {"created_at": [cond("gte", "2026-07-01"), cond("lte", "2026-07-15")]}
+    matched = object_records.filter_records(records, where)
+
+    assert [r["id"] for r in matched] == ["c1", "c2"]
+
+
+def test_filter_records_no_where_returns_full_copy_not_alias(tmp_path):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", CONTACTS_TSV)
+    records = object_records.read_collection_records("contacts", base_dir=data_dir, roots=[])
+
+    matched_none = object_records.filter_records(records, None)
+    matched_empty = object_records.filter_records(records, {})
+
+    assert matched_none == records
+    assert matched_empty == records
+    assert matched_none[0] is not records[0]
+    matched_none[0]["name"] = "mutated"
+    assert records[0]["name"] == "Ada"
+
+
+def test_filter_records_matching_nothing_is_an_empty_list_not_an_error(tmp_path):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", CONTACTS_TSV)
+    records = object_records.read_collection_records("contacts", base_dir=data_dir, roots=[])
+
+    matched = object_records.filter_records(records, {"status": "nonexistent"})
+
+    assert matched == []
+
+
+def test_filter_records_can_only_narrow_its_own_input_never_widen(tmp_path):
+    """The structural narrow-only guarantee (58's Permissions Posture):
+    filter_records only ever removes rows from what it is handed. Feed it
+    an already-narrowed (e.g. row-permission-filtered) subset and a filter
+    that -- if it read the ORIGINAL collection -- would match a row outside
+    that subset; the excluded row can never reappear."""
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", CONTACTS_TSV)
+    all_records = object_records.read_collection_records("contacts", base_dir=data_dir, roots=[])
+    # Simulate a permission row filter that already excluded c3/c4 (owner_id 8).
+    row_filtered = [r for r in all_records if r["owner_id"] == "7"]
+
+    # A field filter matching owner_id=8 rows (c3, c4) against the FULL
+    # collection would return them -- but applied to the already-narrowed
+    # input, it can only ever be a subset of that input.
+    matched = object_records.filter_records(row_filtered, {"owner_id": "8"})
+
+    assert matched == []
+    assert all(record["id"] in {"c1", "c2"} for record in row_filtered)
+
+
+def test_list_collection_records_where_filters_before_pagination(tmp_path):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", CONTACTS_TSV)
+
+    result = object_records.list_collection_records(
+        "contacts",
+        base_dir=data_dir,
+        roots=[],
+        where={"status": "hot"},
+        limit=1,
+        offset=1,
+    )
+
+    assert result["total"] == 2
+    assert result["count"] == 1
+    assert result["records"] == [{"id": "c3", "name": "Katherine", "status": "hot", "owner_id": "8", "total": "300", "created_at": "2026-07-20"}]
+    assert result["has_more"] is False
+
+
+def test_list_collection_records_where_none_is_unaffected(tmp_path):
+    data_dir = tmp_path / "data"
+    write_records(data_dir, "contacts", CONTACTS_TSV)
+
+    result = object_records.list_collection_records("contacts", base_dir=data_dir, roots=[], limit=2)
+
+    assert result["total"] == 4
+    assert result["count"] == 2
+
+
+def test_list_collection_records_where_on_append_mode_sees_folded_state(tmp_path):
+    """58's Storage/Append-mode note: a filter applies to the folded
+    (current) view, never a superseded physical version or a tombstone."""
+    data_dir = tmp_path / "data"
+    write_append_schema(
+        data_dir,
+        "widgets",
+        [{"name": "id"}, {"name": "name"}, {"name": "status"}],
+    )
+
+    object_records.create_collection_record(
+        "widgets", {"id": "w1", "name": "Alpha", "status": "draft"}, base_dir=data_dir, roots=[]
+    )
+    object_records.create_collection_record(
+        "widgets", {"id": "w2", "name": "Beta", "status": "live"}, base_dir=data_dir, roots=[]
+    )
+    object_records.create_collection_record(
+        "widgets", {"id": "w3", "name": "Gamma", "status": "live"}, base_dir=data_dir, roots=[]
+    )
+    # w1 supersedes to "live" -- an unfiltered pre-update read would have
+    # missed it under status=live; the fold must happen before filtering.
+    object_records.update_collection_record(
+        "widgets", "w1", {"status": "live"}, base_dir=data_dir, roots=[]
+    )
+    # w3 is tombstoned -- must never show up in a filtered result either.
+    object_records.delete_collection_record("widgets", "w3", base_dir=data_dir, roots=[])
+
+    result = object_records.list_collection_records(
+        "widgets", base_dir=data_dir, roots=[], where={"status": "live"}
+    )
+
+    assert sorted(r["id"] for r in result["records"]) == ["w1", "w2"]
+    assert result["total"] == 2
+
+
+def test_normalize_filter_value_validates_and_normalizes_boolean(tmp_path):
+    field = {"name": "is_public", "type": "boolean"}
+
+    assert object_records.normalize_filter_value(field, "eq", "1") == "true"
+    assert object_records.normalize_filter_value(field, "eq", "yes") == "true"
+    assert object_records.normalize_filter_value(field, "eq", "0") == "false"
+    with pytest.raises(object_records.InvalidRecordPayloadError):
+        object_records.normalize_filter_value(field, "eq", "maybe")
+
+
+def test_normalize_filter_value_validates_types(tmp_path):
+    int_field = {"name": "total", "type": "integer"}
+    date_field = {"name": "created_at", "type": "date"}
+    enum_field = {"name": "status", "type": "enum", "enum": ["draft", "live"]}
+
+    assert object_records.normalize_filter_value(int_field, "gte", "150") == "150"
+    with pytest.raises(object_records.InvalidRecordPayloadError):
+        object_records.normalize_filter_value(int_field, "eq", "not-a-number")
+
+    assert object_records.normalize_filter_value(date_field, "gte", "2026-07-01") == "2026-07-01"
+    with pytest.raises(object_records.InvalidRecordPayloadError):
+        object_records.normalize_filter_value(date_field, "eq", "not-a-date")
+
+    assert object_records.normalize_filter_value(enum_field, "eq", "live") == "live"
+    with pytest.raises(object_records.InvalidRecordPayloadError):
+        object_records.normalize_filter_value(enum_field, "eq", "bogus")
+
+
+def test_normalize_filter_value_rejects_ordered_op_on_unsupported_type(tmp_path):
+    text_field = {"name": "name", "type": "text"}
+
+    with pytest.raises(object_records.InvalidRecordPayloadError, match="does not support operator"):
+        object_records.normalize_filter_value(text_field, "gte", "A")
+
+    # eq/ne/in stay fine for text.
+    assert object_records.normalize_filter_value(text_field, "eq", "Ada") == "Ada"
+
+
+def test_normalize_filter_value_permissive_when_field_is_none(tmp_path):
+    """A schemaless/derived collection has no field def to validate
+    against; 58 treats that as permissive, matching every other
+    schema-optional check in this module."""
+    assert object_records.normalize_filter_value(None, "gte", "anything") == "anything"

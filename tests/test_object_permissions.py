@@ -532,3 +532,128 @@ def test_policy_from_dict_rejects_unknown_access_mode():
         assert "Permission access_mode must be one of:" in str(exc)
     else:
         raise AssertionError("Expected unknown access mode to fail")
+
+
+# --- 58 query/filter operators (record_matches_filter extension) ----------
+
+
+def test_filter_condition_builds_op_value_dict():
+    assert permissions.filter_condition("gte", "5") == {"op": "gte", "value": "5"}
+
+
+def test_record_matches_filter_eq_is_still_the_bare_literal_default():
+    subject = permissions.PermissionSubject.anonymous()
+    assert permissions.record_matches_filter({"status": "hot"}, {"status": "hot"}, subject) is True
+    assert permissions.record_matches_filter({"status": "cold"}, {"status": "hot"}, subject) is False
+    # Explicit eq condition matches the bare-literal shorthand exactly.
+    condition = permissions.filter_condition("eq", "hot")
+    assert permissions.record_matches_filter({"status": "hot"}, {"status": condition}, subject) is True
+
+
+def test_record_matches_filter_ne():
+    subject = permissions.PermissionSubject.anonymous()
+    condition = permissions.filter_condition("ne", "hot")
+    assert permissions.record_matches_filter({"status": "cold"}, {"status": condition}, subject) is True
+    assert permissions.record_matches_filter({"status": "hot"}, {"status": condition}, subject) is False
+    # A record missing the field entirely is "not hot" too.
+    assert permissions.record_matches_filter({}, {"status": condition}, subject) is True
+
+
+def test_record_matches_filter_in():
+    subject = permissions.PermissionSubject.anonymous()
+    condition = permissions.filter_condition("in", ("open", "assigned"))
+    assert permissions.record_matches_filter({"status": "open"}, {"status": condition}, subject) is True
+    assert permissions.record_matches_filter({"status": "assigned"}, {"status": condition}, subject) is True
+    assert permissions.record_matches_filter({"status": "closed"}, {"status": condition}, subject) is False
+    assert permissions.record_matches_filter({}, {"status": condition}, subject) is False
+
+
+def test_record_matches_filter_ordered_ops_numeric():
+    subject = permissions.PermissionSubject.anonymous()
+    record = {"total": "150"}
+    assert permissions.record_matches_filter(
+        record, {"total": permissions.filter_condition("gte", "100")}, subject
+    ) is True
+    assert permissions.record_matches_filter(
+        record, {"total": permissions.filter_condition("gt", "150")}, subject
+    ) is False
+    assert permissions.record_matches_filter(
+        record, {"total": permissions.filter_condition("lte", "150")}, subject
+    ) is True
+    assert permissions.record_matches_filter(
+        record, {"total": permissions.filter_condition("lt", "150")}, subject
+    ) is False
+    # Numeric comparison, not string comparison: "9" > "10" as strings but
+    # not as numbers.
+    assert permissions.record_matches_filter(
+        {"total": "9"}, {"total": permissions.filter_condition("gt", "10")}, subject
+    ) is False
+
+
+def test_record_matches_filter_ordered_ops_dates():
+    subject = permissions.PermissionSubject.anonymous()
+    record = {"created_at": "2026-07-15"}
+    assert permissions.record_matches_filter(
+        record, {"created_at": permissions.filter_condition("gte", "2026-07-01")}, subject
+    ) is True
+    assert permissions.record_matches_filter(
+        record, {"created_at": permissions.filter_condition("lte", "2026-07-31")}, subject
+    ) is True
+    assert permissions.record_matches_filter(
+        record, {"created_at": permissions.filter_condition("lt", "2026-07-01")}, subject
+    ) is False
+
+
+def test_record_matches_filter_ordered_op_on_missing_field_never_matches():
+    subject = permissions.PermissionSubject.anonymous()
+    assert permissions.record_matches_filter(
+        {}, {"total": permissions.filter_condition("gte", "1")}, subject
+    ) is False
+
+
+def test_record_matches_filter_multiple_conditions_on_one_field_are_anded():
+    """A date range (created_at.gte=X&created_at.lte=Y) is two conditions on
+    the SAME field; both must hold -- this is why the normalized filter
+    shape is a LIST of conditions per field, not a single value."""
+    subject = permissions.PermissionSubject.anonymous()
+    row_filter = {
+        "created_at": [
+            permissions.filter_condition("gte", "2026-07-01"),
+            permissions.filter_condition("lte", "2026-07-31"),
+        ]
+    }
+    assert permissions.record_matches_filter({"created_at": "2026-07-15"}, row_filter, subject) is True
+    assert permissions.record_matches_filter({"created_at": "2026-08-01"}, row_filter, subject) is False
+    assert permissions.record_matches_filter({"created_at": "2026-06-30"}, row_filter, subject) is False
+
+
+def test_record_matches_filter_unknown_operator_raises():
+    subject = permissions.PermissionSubject.anonymous()
+    condition = {"op": "like", "value": "x"}
+    try:
+        permissions.record_matches_filter({"name": "x"}, {"name": condition}, subject)
+    except ValueError as exc:
+        assert "like" in str(exc)
+    else:
+        raise AssertionError("Expected an unknown operator to raise")
+
+
+def test_record_matches_filter_preserves_existing_dollar_var_row_filter_behavior():
+    """Extending the matcher for 58 must not change row-filter/transition-
+    guard semantics: $-variable resolution, tuple membership from
+    $accessible_projects-style variables, and empty-string non-matching
+    all still behave exactly as before."""
+    subject = permissions.PermissionSubject(user_id="7", project_ids=("p1", "p2"))
+
+    assert permissions.record_matches_filter(
+        {"owner_id": "7"}, {"owner_id": "$user_id"}, subject
+    ) is True
+    assert permissions.record_matches_filter(
+        {"owner_id": ""}, {"owner_id": "$user_id"}, subject
+    ) is False
+    assert permissions.record_matches_filter(
+        {"project_id": "p1"}, {"project_id": "$accessible_projects"}, subject
+    ) is True
+    assert permissions.record_matches_filter(
+        {"project_id": "p9"}, {"project_id": "$accessible_projects"}, subject
+    ) is False

@@ -6,6 +6,7 @@ but clients should not be trusted to enforce them.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping
@@ -13,6 +14,16 @@ from typing import Any, Iterable, Mapping
 from object_namespace import parse_user_object_id
 
 PUBLIC_USER_ID = "public"
+
+# Query/filter operator vocabulary (plan/vocabulary/58-query-filter-spec.md).
+# `eq` is the implicit default everywhere a filter condition omits an
+# operator (a bare literal or $-variable, the pre-existing row-filter/
+# transition-guard shape). The others are additive: `record_matches_filter`
+# below is the ONE evaluator for all of it -- row filters, transition
+# guards, and 58's field filters all reuse it rather than each carrying
+# their own condition matcher.
+FILTER_OPERATORS = frozenset({"eq", "ne", "in", "gte", "lte", "gt", "lt"})
+_ORDERED_FILTER_OPERATORS = frozenset({"gte", "lte", "gt", "lt"})
 
 READ = "read"
 CREATE = "create"
@@ -471,12 +482,33 @@ def record_matches_filter(
 ) -> bool:
     """Return True when a record's stored values satisfy a filter/guard.
 
-    Shared by row filters and schema transition guards: every key
-    resolves its expected value through the same closed set of
-    $-variables (see ``_resolve_filter_value``) or treats it as a
-    literal string. An empty stored field never matches a $-variable.
+    Shared by row filters, schema transition guards, and 58's query/filter
+    layer -- the one flat-condition evaluator in the codebase. Each key's
+    value is one of:
+
+    - a literal string, or a $-variable (see ``_resolve_filter_value``):
+      the pre-existing row-filter/transition-guard shape, an implicit
+      ``eq``. An empty stored field never matches a $-variable.
+    - a single condition, ``{"op": <FILTER_OPERATORS>, "value": ...}``
+      (see ``filter_condition``).
+    - a list of such conditions, ANDed -- lets one field carry more than
+      one clause (a date range: ``created_at.gte=X&created_at.lte=Y``).
+
+    ``in``'s value (and a $-variable that resolves to a tuple, e.g.
+    ``$accessible_projects``) is treated as a membership set. ``gte``/
+    ``lte``/``gt``/``lt`` compare numerically when both sides parse as a
+    number, then as an ISO date/datetime, else fall back to string
+    comparison -- callers that need a guaranteed-correct ordered compare
+    (58's HTTP/MCP surfaces) type-validate the value against the field's
+    schema type before it ever reaches this matcher.
     """
     return _record_matches_filter(record, row_filter, subject)
+
+
+def filter_condition(op: str, value: Any) -> dict[str, Any]:
+    """Build one ``{"op": op, "value": value}`` condition for a row_filter/
+    query-filter value passed to ``record_matches_filter``."""
+    return {"op": op, "value": value}
 
 
 def principal_matches(
@@ -680,14 +712,109 @@ def _record_matches_filter(
     subject: PermissionSubject,
 ) -> bool:
     for key, expected in row_filter.items():
-        resolved = _resolve_filter_value(expected, subject)
         actual = _string_value(record.get(key))
-        if isinstance(resolved, tuple):
-            if actual is None or actual not in {_string_value(item) for item in resolved}:
+        for condition in _iter_conditions(expected):
+            op, raw_value = _condition_op_value(condition)
+            resolved = _resolve_filter_value(raw_value, subject)
+            if not _condition_matches(op, actual, resolved):
                 return False
-        elif actual != _string_value(resolved):
-            return False
     return True
+
+
+def _is_condition(value: Any) -> bool:
+    return isinstance(value, Mapping) and "op" in value
+
+
+def _iter_conditions(expected: Any) -> list[Any]:
+    """Split one row_filter value into its ANDed conditions.
+
+    A list is only ever treated as multiple conditions when EVERY item is
+    condition-shaped (``{"op": ...}``) -- anything else (a literal, a
+    $-variable string, one condition, or a $-variable already resolved to
+    a tuple by a caller) stays a single condition, so this never changes
+    behavior for the pre-existing row-filter/transition-guard callers,
+    none of which ever pass a list.
+    """
+    if isinstance(expected, list) and expected and all(_is_condition(item) for item in expected):
+        return list(expected)
+    return [expected]
+
+
+def _condition_op_value(condition: Any) -> tuple[str, Any]:
+    if _is_condition(condition):
+        op = str(condition.get("op") or "eq").strip().lower() or "eq"
+        return op, condition.get("value")
+    return "eq", condition
+
+
+def _condition_matches(op: str, actual: str | None, resolved: Any) -> bool:
+    if op == "in":
+        members = resolved if isinstance(resolved, (tuple, list, set, frozenset)) else (resolved,)
+        allowed = {_string_value(item) for item in members}
+        return actual is not None and actual in allowed
+    if op == "eq":
+        if isinstance(resolved, tuple):
+            # A $-variable (e.g. $accessible_projects) resolved to a
+            # membership set: matches the pre-existing eq-with-tuple
+            # behavior row filters have always relied on.
+            return actual is not None and actual in {_string_value(item) for item in resolved}
+        return actual == _string_value(resolved)
+    if op == "ne":
+        if isinstance(resolved, tuple):
+            return actual is None or actual not in {_string_value(item) for item in resolved}
+        return actual != _string_value(resolved)
+    if op in _ORDERED_FILTER_OPERATORS:
+        return _ordered_condition_matches(op, actual, resolved)
+    raise ValueError(f"Unknown filter operator: {op}")
+
+
+def _ordered_condition_matches(op: str, actual: str | None, resolved: Any) -> bool:
+    if actual is None:
+        return False
+    expected = _string_value(resolved)
+    if expected is None:
+        return False
+    left, right = _comparable_filter_pair(actual, expected)
+    try:
+        if op == "gte":
+            return left >= right
+        if op == "lte":
+            return left <= right
+        if op == "gt":
+            return left > right
+        return left < right
+    except TypeError:
+        return False
+
+
+def _comparable_filter_pair(actual: str, expected: str) -> tuple[Any, Any]:
+    """Return both sides coerced to the same comparable type.
+
+    Tries a numeric parse first, then an ISO date/datetime parse (which
+    also accepts a date-only string); falls back to the raw strings, which
+    still compares correctly for zero-padded ISO date/datetime text.
+    """
+    for parse in (_filter_number, _filter_datetime):
+        left = parse(actual)
+        right = parse(expected)
+        if left is not None and right is not None:
+            return left, right
+    return actual, expected
+
+
+def _filter_number(value: str) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _filter_datetime(value: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
 
 
 def _resolve_filter_value(value: Any, subject: PermissionSubject) -> Any:

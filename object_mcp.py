@@ -139,13 +139,22 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "list_records",
-        "description": "List records in one collection",
+        "description": "List records in one collection, optionally filtered",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "collection": _COLLECTION_ARG,
                 "limit": _LIMIT_ARG,
                 "offset": {"type": "integer", "default": 0},
+                "where": {
+                    "type": "object",
+                    "description": (
+                        "Field filter, ANDed: {field: value} for equality, or "
+                        "{field: {\"op\": op, \"value\": value}} for "
+                        "ne/in/gte/lte/gt/lt. `in`'s value is a list. Only "
+                        "fields you may read are filterable."
+                    ),
+                },
             },
             "required": ["collection"],
         },
@@ -365,7 +374,11 @@ def tool_route(name: str, arguments: Mapping[str, Any]) -> tuple[str, str, str, 
     if name == "list_collections":
         return ("GET", "/admin/collections", "", b"")
     if name == "list_records":
-        query = f"limit={_limit(args)}&offset={_offset(args)}"
+        pairs = [("limit", str(_limit(args))), ("offset", str(_offset(args)))]
+        where = args.get("where")
+        if where is not None:
+            pairs.extend(_where_query_pairs(where))
+        query = urllib.parse.urlencode(pairs)
         return ("GET", f"{_collection_path(args)}/records", query, b"")
     if name == "get_record":
         return ("GET", _record_path(args), "", b"")
@@ -484,6 +497,81 @@ def _limit(args: Mapping[str, Any]) -> int:
 
 def _offset(args: Mapping[str, Any]) -> int:
     return _bounded_int(args.get("offset"), default=0, minimum=0, maximum=1_000_000, name="offset")
+
+
+def _where_query_pairs(where: Any) -> list[tuple[str, str]]:
+    """Translate `list_records`' `where` argument into the query params
+    the collection-records GET route already understands (58's
+    query-filter language): {field: value} -> field=value (eq);
+    {field: {"op": op, "value": value}} -> field.op=value; {field: [cond,
+    cond, ...]} -> one query param per condition, so a range
+    (`created_at.gte=X&created_at.lte=Y`) round-trips as two params on
+    the same field rather than one overwriting the other.
+
+    Structural validation only (object shape, non-empty strings) -- the
+    routed HTTP handler is the single place that validates field names,
+    operators, and value types against the collection's schema and the
+    caller's permissions, so a bad filter still comes back as the exact
+    same structured 400 a direct HTTP caller would get. Nothing new runs
+    underneath, per this module's own doctrine.
+    """
+    if not isinstance(where, dict):
+        raise ValueError("where must be an object")
+
+    pairs: list[tuple[str, str]] = []
+    for field, condition in where.items():
+        if not isinstance(field, str) or not field.strip():
+            raise ValueError("where field names must be non-empty strings")
+        field_name = field.strip()
+
+        for op, value in _where_field_conditions(field_name, condition):
+            param = field_name if op == "eq" else f"{field_name}.{op}"
+            pairs.append((param, _where_value_to_string(field_name, value)))
+    return pairs
+
+
+def _where_field_conditions(field: str, condition: Any) -> list[tuple[str, Any]]:
+    """Split one `where[field]` value into its (op, value) conditions.
+
+    A list of condition-shaped dicts is multiple ANDed conditions on the
+    same field, mirroring object_records/object_permissions' own
+    normalized-filter shape. Anything else is a single condition: a bare
+    value is an implicit `eq`; one {"op": ..., "value": ...} dict is that
+    operator (whose value may itself be a list, for `in`). A dict is
+    never a valid bare filter VALUE (only str/int/float/bool/a list of
+    those are), so any dict encountered here is always treated as an
+    attempted condition object, not a literal -- which is what lets a
+    condition missing "op" raise a clear, on-topic error instead of
+    falling through to a confusing "not a valid value" one.
+    """
+    if isinstance(condition, list) and condition and all(
+        isinstance(item, dict) for item in condition
+    ):
+        return [_where_condition_op_value(field, item) for item in condition]
+    return [_where_condition_op_value(field, condition)]
+
+
+def _where_condition_op_value(field: str, condition: Any) -> tuple[str, Any]:
+    if isinstance(condition, dict):
+        op = condition.get("op")
+        if not isinstance(op, str) or not op.strip():
+            raise ValueError(f"where.{field}.op must be a non-empty string")
+        return op.strip().lower(), condition.get("value")
+    return "eq", condition
+
+
+def _where_value_to_string(field: str, value: Any) -> str:
+    if isinstance(value, (list, tuple)):
+        return ",".join(_where_scalar_to_string(field, item) for item in value)
+    return _where_scalar_to_string(field, value)
+
+
+def _where_scalar_to_string(field: str, value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (str, int, float)):
+        return str(value)
+    raise ValueError(f"where.{field} value must be a string, number, boolean, or a list of those")
 
 
 def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int, name: str) -> int:

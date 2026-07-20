@@ -18,7 +18,7 @@ from collections import OrderedDict
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 import object_collections
 import object_correlation
@@ -323,6 +323,7 @@ def list_collection_records(
     roots: Iterable[Path] | None = None,
     limit: int = DEFAULT_RECORD_LIMIT,
     offset: int = 0,
+    where: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return a paginated record list for one collection.
 
@@ -333,13 +334,41 @@ def list_collection_records(
     collections for a window that is thrown away 99% copied. `total` is
     computed from the cache's own record count, not from the copied
     window.
+
+    `where` (plan/vocabulary/58-query-filter-spec.md) is an optional
+    normalized field filter, evaluated with `filter_records` -- see there
+    for the shape. It is purely a field filter with no permission
+    awareness of its own: callers that also need row-level permission
+    filtering (object_server's HTTP/MCP surfaces) apply that FIRST and
+    pass only the already-permitted records through the same evaluator
+    (`filter_records`), so a field filter can only narrow what a caller
+    already decided is readable, never widen it -- this function's own
+    `where` follows the identical narrow-only contract, just without a
+    row filter of its own to narrow. When `where` is given, the windowing
+    optimization above no longer applies (a filtered window can't be
+    known without first testing every row), so the whole collection is
+    read and filtered before slicing -- same O(rows) cost as any other
+    full-collection read (see 58's Storage section).
     """
     _ensure_collection_known(collection, base_dir=base_dir, roots=roots)
     _validate_page(limit=limit, offset=offset)
 
     records_ref = _cached_records_ref(collection, base_dir=base_dir)
-    total = len(records_ref)
     extra_names = _extra_field_names(collection, base_dir=base_dir, roots=roots)
+
+    if where:
+        matching = [
+            _surface_extra(dict(record), extra_names=extra_names)
+            for record in records_ref
+            if object_permissions.record_matches_filter(
+                record, where, object_permissions.PermissionSubject.anonymous()
+            )
+        ]
+        total = len(matching)
+        window = matching[offset:offset + limit]
+        return _build_records_payload(collection, window, total=total, limit=limit, offset=offset)
+
+    total = len(records_ref)
     # Copy + surface only the window's records: entries in `records_ref`
     # are the module cache's own dicts (see _RECORDS_CACHE ALIASING
     # SAFETY above) and _surface_extra mutates its argument in place, so
@@ -350,6 +379,77 @@ def list_collection_records(
         for record in records_ref[offset:offset + limit]
     ]
     return _build_records_payload(collection, window, total=total, limit=limit, offset=offset)
+
+
+def filter_records(
+    records: Iterable[Mapping[str, Any]],
+    where: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Return the subset of `records` matching a normalized field filter.
+
+    Pure and in-memory: no read, no schema/permission awareness of its
+    own. Reuses `object_permissions.record_matches_filter` -- the same
+    flat-condition evaluator that backs guarded transitions and
+    permission row filters -- so there is exactly one filter evaluator in
+    the codebase (plan/vocabulary/58-query-filter-spec.md).
+
+    Callers that also apply a permission row filter MUST do so first and
+    pass only its output here: this function can only remove rows from
+    what it is given, never add any back, so "row filter's output is
+    this function's input" is what structurally guarantees a field
+    filter can narrow the readable set but never widen it (58's
+    Permissions Posture).
+    """
+    if not where:
+        return [dict(record) for record in records]
+    anonymous = object_permissions.PermissionSubject.anonymous()
+    return [
+        dict(record)
+        for record in records
+        if object_permissions.record_matches_filter(record, where, anonymous)
+    ]
+
+
+_ORDERED_FILTER_OPERATORS = frozenset({"gte", "lte", "gt", "lt"})
+_ORDERED_FILTERABLE_TYPES = _INTEGER_TYPES | _FLOAT_TYPES | {"date", "datetime", "timestamp"}
+
+
+def normalize_filter_value(field: dict[str, Any] | None, op: str, value: str) -> str:
+    """Validate one query-filter condition's value against a schema field
+    and return its canonical stored-string form.
+
+    `field` is the schema field definition (or None for a schemaless/
+    derived collection, which has no type to validate against and is
+    treated as permissive -- consistent with every other schema-optional
+    check in this module). Raises InvalidRecordPayloadError -- the same
+    exception schema validation already raises -- naming the field on a
+    bad type, or on an ordered operator (gte/lte/gt/lt) against a field
+    type that doesn't support ordered comparison (58 restricts those to
+    date/datetime/integer/number fields). Reuses `_validate_field_type`,
+    the same per-type parser create/update already validates against, so
+    there is exactly one value-type validator, not a second one for
+    filters.
+
+    A boolean field's value is normalized to "true"/"false" -- the same
+    canonical form `_canonicalize_schema_values` stores on write -- so an
+    `eq`/`ne` filter written as `?is_public=1` still string-matches a
+    stored "true" rather than silently never matching.
+    """
+    if field is None:
+        return value
+
+    name = field.get("name", "")
+    field_type = str(field.get("type") or "text").lower()
+    if op in _ORDERED_FILTER_OPERATORS and field_type not in _ORDERED_FILTERABLE_TYPES:
+        raise InvalidRecordPayloadError(
+            f"Record field '{name}' does not support operator '{op}' "
+            f"(only date, datetime, integer, and number fields support "
+            f"ordered comparison)"
+        )
+    _validate_field_type(field, value)
+    if field_type in _BOOLEAN_TYPES:
+        return "true" if _parse_boolean(value, field_name=name) else "false"
+    return value
 
 
 def read_collection_records(
