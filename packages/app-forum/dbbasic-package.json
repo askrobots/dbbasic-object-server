@@ -1,0 +1,54 @@
+{
+  "id": "app-forum",
+  "name": "Forum",
+  "version": "0.1.0",
+  "description": "Discussion forum: categories/boards, topics, and self-threaded replies -- a faithful port of a private predecessor-system audit, not part of this repo. Public read on all three collections; owner writes their own categories/topics/replies (row_filter owner_id=$user_id) -- v1 has no separate moderator queue, matching the source: moderation is the flags themselves (is_pinned/is_locked/is_solved on a topic, is_solution on a reply) plus who may set them. Topic permalinks need a site_routes record mapping /forum/topics/{topic_id:uuid} to site_forum_topic -- not seeded by this package, same precedent as app-notes' /notes/{note_id:uuid}. Deferred to a later slice (fields are carried, behavior is not): AI topic summaries (ai_summary/is_ai_summarized were written by a scheduled job in the source system; no generation is built here), topic view-count incrementing (views exists; nothing increments it -- that is a UI page-load concern), cross-user moderation (an admin/moderator pinning, locking, or marking someone else's topic/reply -- needs a moderator-role permission rule this package does not define), and category slug auto-generation (slug is a plain field, not derived from name).",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": [],
+  "objects": [
+    {
+      "id": "site_forum",
+      "path": "objects/site/forum.py"
+    },
+    {
+      "id": "site_forum_topic",
+      "path": "objects/site/forum_topic.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "forum_categories",
+      "path": "schemas/forum_categories.json"
+    },
+    {
+      "collection": "forum_topics",
+      "path": "schemas/forum_topics.json"
+    },
+    {
+      "collection": "forum_replies",
+      "path": "schemas/forum_replies.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "forum_categories",
+      "path": "seed/forum_categories.tsv"
+    },
+    {
+      "collection": "forum_topics",
+      "path": "seed/forum_topics.tsv"
+    },
+    {
+      "collection": "forum_replies",
+      "path": "seed/forum_replies.tsv"
+    }
+  ],
+  "migrations": []
+}

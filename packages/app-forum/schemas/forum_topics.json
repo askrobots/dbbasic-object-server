@@ -1,0 +1,97 @@
+{
+  "name": "forum_topics",
+  "title": "Forum Topics",
+  "version": 1,
+  "description": "Discussion threads within a forum category. A faithful port of a private predecessor-system's forum topic model, not part of this repo: a views counter, moderation flags (is_pinned/is_locked/is_solved), and AI-summary fields carried but not generated -- see dbbasic-package.json's deferred list.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "category_id",
+      "type": "relation",
+      "required": true,
+      "relation": {"collection": "forum_categories", "display_field": "name"},
+      "label": "Category"
+    },
+    {
+      "name": "project_id",
+      "type": "text",
+      "label": "Project",
+      "help": "Optional project link carried from the source model. A plain text field, not a relation -- app-forum has no dependency on app-projects."
+    },
+    {
+      "name": "title",
+      "type": "text",
+      "required": true,
+      "label": "Title",
+      "validation": {"min_length": 1, "max_length": 200}
+    },
+    {
+      "name": "content",
+      "type": "textarea",
+      "required": true,
+      "label": "Content",
+      "validation": {"min_length": 1}
+    },
+    {
+      "name": "views",
+      "type": "number",
+      "default": "0",
+      "label": "Views",
+      "help": "View counter. Incrementing it is a UI concern (a page-load side effect); this package carries the field but does not increment it -- see dbbasic-package.json's deferred list."
+    },
+    {
+      "name": "is_pinned",
+      "type": "boolean",
+      "default": "false",
+      "label": "Pinned"
+    },
+    {
+      "name": "is_locked",
+      "type": "boolean",
+      "default": "false",
+      "label": "Locked"
+    },
+    {
+      "name": "is_solved",
+      "type": "boolean",
+      "default": "false",
+      "label": "Solved"
+    },
+    {
+      "name": "ai_summary",
+      "type": "textarea",
+      "label": "AI Summary",
+      "help": "Carried from the source model, where it was written by a scheduled job. No generation is built here -- see dbbasic-package.json's deferred list."
+    },
+    {
+      "name": "is_ai_summarized",
+      "type": "boolean",
+      "default": "false",
+      "label": "AI Summarized",
+      "help": "Companion flag to ai_summary; also carried, not generated."
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["category_id", "project_id", "title", "content"]}
+  },
+  "views": {
+    "list_mode": "feed",
+    "list_fields": ["title", "category_id", "views", "is_pinned", "is_solved"]
+  },
+  "search": {
+    "fields": ["title", "content"]
+  }
+}

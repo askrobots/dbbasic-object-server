@@ -1,0 +1,61 @@
+{
+  "name": "forum_replies",
+  "title": "Forum Replies",
+  "version": 1,
+  "storage": "classic",
+  "description": "Replies to a forum topic, with a self-referencing parent_id for threaded/nested replies -- a faithful port of the source model. \"storage\": \"classic\" (the default, spelled out here deliberately) rather than \"append\": unlike app-thread's thread_comments, forum replies are expected to be edited by their author after posting, which append-mode's docs/append-only-storage-design.md treats as a rewrite anyway -- classic storage matches that reality directly.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "topic_id",
+      "type": "relation",
+      "required": true,
+      "relation": {"collection": "forum_topics", "display_field": "title"},
+      "label": "Topic"
+    },
+    {
+      "name": "parent_id",
+      "type": "relation",
+      "relation": {"collection": "forum_replies", "display_field": "content"},
+      "label": "In reply to",
+      "help": "Self-referencing parent for threaded/nested replies. Blank for a top-level reply to the topic itself."
+    },
+    {
+      "name": "content",
+      "type": "textarea",
+      "required": true,
+      "label": "Content",
+      "validation": {"min_length": 1}
+    },
+    {
+      "name": "is_solution",
+      "type": "boolean",
+      "default": "false",
+      "label": "Marked as Solution",
+      "help": "v1 posture: a reply's author can mark their own reply as the solution (owner-write, same as every other field here). A topic owner marking someone else's reply as the solution is cross-user moderation, deferred -- see dbbasic-package.json's deferred list."
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["topic_id", "parent_id", "content"]}
+  },
+  "views": {
+    "list_mode": "cards",
+    "list_fields": ["content", "created_at"]
+  },
+  "search": {
+    "fields": ["content"]
+  }
+}

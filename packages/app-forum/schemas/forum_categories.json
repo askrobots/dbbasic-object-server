@@ -1,0 +1,69 @@
+{
+  "name": "forum_categories",
+  "title": "Forum Categories",
+  "version": 1,
+  "description": "Discussion boards. A faithful port of a private predecessor-system's forum category model, not part of this repo: name/slug/description/icon plus a display_order and is_active flag for showing/hiding a board without deleting it.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "name",
+      "type": "text",
+      "required": true,
+      "label": "Name",
+      "validation": {"min_length": 1, "max_length": 120}
+    },
+    {
+      "name": "slug",
+      "type": "text",
+      "label": "Slug",
+      "help": "URL-friendly identifier. Not auto-generated from name yet -- see dbbasic-package.json's deferred list."
+    },
+    {
+      "name": "description",
+      "type": "textarea",
+      "label": "Description"
+    },
+    {
+      "name": "icon",
+      "type": "text",
+      "label": "Icon",
+      "help": "A FA-style icon name (e.g. \"comments\"), carried from the source model. No icon rendering is wired up in this slice."
+    },
+    {
+      "name": "display_order",
+      "type": "number",
+      "default": "0",
+      "label": "Display Order"
+    },
+    {
+      "name": "is_active",
+      "type": "boolean",
+      "default": "true",
+      "label": "Active",
+      "help": "Inactive categories are hidden from the board list; the flag exists so a category can be retired without deleting its topics."
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["name", "slug", "description", "icon", "display_order", "is_active"]}
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["name", "description", "display_order", "is_active"]
+  },
+  "search": {
+    "fields": ["name", "description"]
+  }
+}

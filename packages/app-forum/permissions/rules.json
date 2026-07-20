@@ -1,0 +1,63 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["read"],
+      "collection": "forum_categories",
+      "reason": "the forum is public read; anyone can browse categories, no row_filter needed since every category is visible"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["read"],
+      "collection": "forum_topics",
+      "reason": "the forum is public read; anyone can read topics, no row_filter needed since every topic is visible"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["read"],
+      "collection": "forum_replies",
+      "reason": "the forum is public read; anyone can read replies, no row_filter needed since every reply is visible"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "forum_categories",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "signed-in users manage the categories they created. v1 = author manages their own; cross-user moderation (e.g. an admin/moderator retiring someone else's category) needs a moderator-role rule, deferred -- see dbbasic-package.json"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "forum_topics",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "signed-in users manage the topics they authored, including their own pin/lock/solved flags. v1 = author manages their own; cross-user moderation (an admin/moderator pinning, locking, or marking someone else's topic solved) needs a moderator-role rule, deferred -- see dbbasic-package.json"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "forum_replies",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "signed-in users manage the replies they authored, including marking their own reply as the solution. v1 = author manages their own; a topic owner marking someone else's reply as the solution needs a moderator-role rule, deferred -- see dbbasic-package.json"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_forum",
+      "reason": "the forum landing page is public; visitors see categories and recent topics"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_forum_topic",
+      "reason": "topic permalinks are public; visitors read the topic and its replies, and see a sign-in prompt instead of the reply form"
+    }
+  ]
+}
