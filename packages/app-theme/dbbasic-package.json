@@ -32,6 +32,10 @@
       "path": "objects/site/list.py"
     },
     {
+      "id": "site_detail",
+      "path": "objects/site/detail.py"
+    },
+    {
       "id": "site_flags",
       "path": "objects/site/flags.py"
     },

@@ -2,7 +2,7 @@
   "id": "app-contacts",
   "name": "Contacts",
   "version": "0.1.0",
-  "description": "CRM records: contacts, organizations, interactions, and tags, owner-scoped with project sharing and global search.",
+  "description": "CRM records: contacts, organizations, interactions, and tags, owner-scoped with project sharing and global search. Seeds one 59 detail view + site_routes row per collection (/contacts/{id}, /organizations/{id}, /interactions/{id}, /tags/{id}), each routed through app-views' site_view_render -- a soft reference like template_id's, not a hard dependency: without app-views installed the routes simply 404, the same graceful degrade site routing already has for any unresolved path.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
@@ -52,6 +52,14 @@
     {
       "collection": "tags",
       "path": "seed/tags.tsv"
+    },
+    {
+      "collection": "views",
+      "path": "seed/views.tsv"
+    },
+    {
+      "collection": "site_routes",
+      "path": "seed/site_routes.tsv"
     }
   ],
   "migrations": []

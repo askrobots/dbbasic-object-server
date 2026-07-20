@@ -36,7 +36,11 @@
   },
   "views": {
     "list_mode": "table",
-    "list_fields": ["name", "website"]
+    "list_fields": ["name", "website"],
+    "detail_fields": ["name", "website", "notes"],
+    "related": [
+      {"collection": "contacts", "fk_field": "organization_id"}
+    ]
   },
   "search": {
     "fields": ["name", "website", "notes"]

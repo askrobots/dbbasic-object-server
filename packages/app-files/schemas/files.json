@@ -36,6 +36,12 @@
       "relation": {"collection": "projects", "display_field": "name"}
     },
     {
+      "name": "task_id",
+      "label": "Task",
+      "relation": {"collection": "tasks", "display_field": "title"},
+      "help": "Optional attachment link into app-tasks' tasks collection -- a soft reference only, like tasks.json's own template_id -> templates (no install-order dependency declared). Lets a task detail page compose its attached files via a plain 59 `related` block ({\"collection\": \"files\", \"fk_field\": \"task_id\"}) -- files have independent identity/lifecycle (uploaded, downloaded, shared on their own), so this is a true related child, not document-composition."
+    },
+    {
       "name": "is_public",
       "type": "boolean",
       "label": "Public",

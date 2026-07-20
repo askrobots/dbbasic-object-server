@@ -1,0 +1,5 @@
+id	title	route	layout	blocks	owner_id	is_public	pinned	created_at
+view_contacts_detail	Contact	/contacts/{contact_id:uuid}	single	"[{""kind"": ""detail"", ""collection"": ""contacts"", ""record_id"": ""$record_id""}, {""kind"": ""related"", ""collection"": ""interactions"", ""fk_field"": ""contact_id"", ""match"": ""$record_id""}]"		true	false	2026-01-01T00:00:00
+view_organizations_detail	Organization	/organizations/{organization_id:uuid}	single	"[{""kind"": ""detail"", ""collection"": ""organizations"", ""record_id"": ""$record_id""}, {""kind"": ""related"", ""collection"": ""contacts"", ""fk_field"": ""organization_id"", ""match"": ""$record_id""}]"		true	false	2026-01-01T00:00:00
+view_interactions_detail	Interaction	/interactions/{interaction_id:uuid}	single	"[{""kind"": ""detail"", ""collection"": ""interactions"", ""record_id"": ""$record_id""}]"		true	false	2026-01-01T00:00:00
+view_tags_detail	Tag	/tags/{tag_id:uuid}	single	"[{""kind"": ""detail"", ""collection"": ""tags"", ""record_id"": ""$record_id""}]"		true	false	2026-01-01T00:00:00

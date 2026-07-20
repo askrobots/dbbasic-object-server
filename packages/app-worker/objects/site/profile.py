@@ -33,6 +33,19 @@ dbbasic-package.json, and the fetch below fails silently (the section is
 simply omitted) if that collection doesn't exist in this install. Notes,
 links, files, and templates aggregation are left for a later slice -- see
 dbbasic-package.json's deferred list.
+
+Followers/following (59): before this, the follow button above was the
+whole story -- a visitor could follow someone but never SEE the social
+graph (the audit's "profile drops the follow graph" finding). This is an
+ordinary 59 `related` block over `follows` in each direction --
+`{collection: "follows", fk_field: "following_id"}` for followers,
+`{collection: "follows", fk_field: "follower_id"}` for following, both
+matched against PROFILE_ID -- mounted directly with window.dbbasicList's
+`where` option (list.py) rather than through the views/site_routes system,
+because this page is a bespoke object (see the routing note above), not a
+`views` record; the compilation target is identical either way, a 58
+filtered read, just called straight from this page's own script instead
+of through view_render.py's `related` block.
 """
 
 import re
@@ -48,6 +61,9 @@ h1#name { font-size: 1.6rem; margin: 0 0 0.25rem; }
 #social a { display: inline-block; margin: 0.15rem 0.5rem 0.15rem 0; }
 .owner-tools { margin: 1rem 0; display: none; gap: 0.5rem; flex-wrap: wrap; }
 #follow-area { margin: 1rem 0; }
+.follow-graph { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1rem 0; }
+.follow-graph-col h3 { font-size: 0.85rem; color: var(--muted); margin: 0 0 0.4rem; }
+@media (max-width: 560px) { .follow-graph { grid-template-columns: 1fr; } }
 .guestbook { margin-top: 2rem; }
 .comment { border-top: 1px solid var(--line, #38384a); padding: 0.75rem 0; }
 .comment .body { white-space: pre-wrap; word-break: break-word; }
@@ -117,6 +133,7 @@ async function loadProfile() {
   profile = body.record || body;
   renderProfile();
   loadFollowState();
+  loadFollowGraph();
   loadComments();
   loadArticles();
 }
@@ -139,6 +156,24 @@ async function loadFollowState() {
 function renderFollowButton() {
   el("follow-area").style.display = "block";
   el("follow-btn").textContent = myFollowEdgeId ? "Unfollow" : "Follow";
+}
+
+// 59 related blocks over `follows`, one per direction, both matched
+// against PROFILE_ID -- see the module docstring's Followers/following
+// note. window.dbbasicList's `where` option is 58's real server-side
+// filter (list.py), the exact compilation `related` uses in view_render.py.
+function loadFollowGraph() {
+  if (!window.dbbasicList) return;
+  window.dbbasicList("follows", {
+    mount: "#followers-list",
+    where: {following_id: PROFILE_ID},
+    title: (r) => r.follower_id,
+  });
+  window.dbbasicList("follows", {
+    mount: "#following-list",
+    where: {follower_id: PROFILE_ID},
+    title: (r) => r.following_id,
+  });
 }
 
 el("follow-btn").addEventListener("click", async () => {
@@ -297,6 +332,10 @@ def GET(request):
 <div id="follow-area" style="display:none">
 <button class="btn primary" id="follow-btn">Follow</button>
 </div>
+<div class="follow-graph">
+<div class="follow-graph-col"><h3>Followers</h3><div id="followers-list"></div></div>
+<div class="follow-graph-col"><h3>Following</h3><div id="following-list"></div></div>
+</div>
 <div class="articles-section" id="articles-section" style="display:none">
 <h3>Recent Public Articles</h3>
 <ul id="articles-list"></ul>
@@ -310,6 +349,7 @@ def GET(request):
 </div>
 </div>
 <script>const PROFILE_ID = {username!r}; const VIEWER_ID = {(user_id or "")!r};</script>
+<script src="/list"></script>
 <script src="/form"></script>
 <script>{_SCRIPT}</script>
 <script src="/nav"></script>

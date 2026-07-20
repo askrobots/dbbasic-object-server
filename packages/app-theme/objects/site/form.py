@@ -9,6 +9,16 @@ Create (POST) and edit (PUT) modes; id, owner_id, and created_at are set
 automatically; computed/read_only fields are never written. One generator,
 every collection — the web counterpart of Scroll's schema_form.
 
+`window.dbbasicForm.readOnly(collection, opts)` is the same pipeline run
+in forced-read-only mode over one record for `59-detail-related-spec.md`'s
+detail generator (served at /detail): same schema fetch, same field
+order/labels, same relation display-field resolution and type-aware value
+formatting (`control()` below, shared by both modes) — just a plain
+`<div>` of label/value rows instead of editable controls, and no submit.
+This is the "delete a layer, don't add one" move: a second field-renderer
+in detail.py would be a second place to keep that formatting logic
+correct, so /detail calls back into this one instead.
+
 Defined once here, so no page hand-writes a form again.
 """
 
@@ -33,7 +43,23 @@ _JS = r"""
       || t === "computed" || f.computed || f.read_only || f.readonly || f.readOnly;
   }
 
-  async function control(f, value) {
+  // Type-aware read-only text, shared by every non-relation field kind.
+  // Kept next to control()'s edit-mode branches so a new field type only
+  // ever needs one new `if` here, not a second renderer to keep in sync.
+  function readOnlyText(t, v) {
+    if (!v) return "—";
+    if (t === "boolean") return v === "true" ? "Yes" : "No";
+    if (t === "date") return v.slice(0, 10);
+    if (t === "datetime" || t === "timestamp") return v.slice(0, 16).replace("T", " ");
+    return v;
+  }
+
+  // `readOnly`: 59's detail mode. Same schema-driven branches as edit mode
+  // (relation lookup, enum, boolean, date/datetime, plain text) but
+  // returns a label/value span instead of an editable control -- the one
+  // place relation display-field resolution and type formatting live for
+  // both modes.
+  async function control(f, value, readOnly) {
     const t = String(f.type || "text").toLowerCase();
     const name = esc(f.name);
     const req = f.required ? " required" : "";
@@ -44,11 +70,18 @@ _JS = r"""
       const col = typeof f.relation === "string" ? f.relation : f.relation.collection;
       const disp = (typeof f.relation === "object" && f.relation.display_field) || "name";
       let opts = '<option value="">—</option>';
+      let displayText = v;
       const [ok, body] = await api("GET", "/collections/" + col + "/records?limit=500");
-      if (ok) for (const r of (body.records || []))
+      if (ok) for (const r of (body.records || [])) {
         opts += '<option value="' + esc(r.id) + '"' + (r.id === v ? " selected" : "") + '>' + esc(r[disp] || r.id) + '</option>';
+        if (r.id === v) displayText = r[disp] || r.id;
+      }
+      if (readOnly) return v
+        ? '<span class="detailvalue">' + esc(displayText) + '</span>'
+        : '<span class="detailvalue empty">—</span>';
       return '<select name="' + name + '"' + req + '>' + opts + '</select>';
     }
+    if (readOnly) return '<span class="detailvalue">' + esc(readOnlyText(t, v)) + '</span>';
     if (f.enum || t === "enum") {
       let opts = f.required ? "" : '<option value="">—</option>';
       for (const o of (f.enum || [])) opts += '<option value="' + esc(o) + '"' + (String(o) === v ? " selected" : "") + '>' + esc(o) + '</option>';
@@ -133,6 +166,40 @@ _JS = r"""
       if (!ok2) { if (fe) fe.textContent = (body2 && body2.error) || "Save failed"; return; }
       if (opts.onSaved) opts.onSaved((body2 && body2.record) || rec);
     });
+  };
+
+  // 59's detail mode: one record, read-only, every readable field labeled
+  // and laid out -- no submit control, no second field-renderer. Field
+  // order is `views.detail_fields` when the schema declares it (the same
+  // schema-key convention `views.list_fields`/`views.filter_fields`
+  // already establish), else plain schema declaration order -- NOT
+  // forms.default.fields (that's edit mode's own convention) and no
+  // skip(): detail mode shows every field the record has, id included,
+  // unless the schema opts out via detail_fields. "Visible = readable"
+  // falls out for free -- a field the viewer can't read is already
+  // missing from `opts.record` (the platform's own redaction strips the
+  // key on the way out), so this never needs its own permission check.
+  window.dbbasicForm.readOnly = async function (collection, opts) {
+    opts = opts || {};
+    const mount = qs(opts.mount);
+    const record = opts.record || null;
+    if (!record) { mount.innerHTML = '<div class="state">Not found.</div>'; return; }
+    const [ok, meta] = await api("GET", "/api/schema/" + collection);
+    if (!ok || !meta.schema) { mount.innerHTML = '<div class="viewblock-error">Could not load record.</div>'; return; }
+    const schema = meta.schema;
+    const byName = {}; (schema.fields || []).forEach((f) => byName[f.name] = f);
+    const order = (schema.views && schema.views.detail_fields)
+      || (schema.fields || []).map((f) => f.name);
+    const ordered = order.map((n) => byName[n]).filter(Boolean);
+
+    const rows = [];
+    for (const f of ordered) {
+      if (!(f.name in record)) continue;
+      const value = await control(f, record[f.name], true);
+      rows.push('<div class="detailrow"><div class="detaillabel">' + esc(f.label || human(f.name))
+        + '</div><div class="detailvaluewrap">' + value + '</div></div>');
+    }
+    mount.innerHTML = '<div class="detailcard">' + (rows.join("") || '<div class="state">No fields.</div>') + '</div>';
   };
 })();
 """

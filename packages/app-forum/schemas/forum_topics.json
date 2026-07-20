@@ -89,7 +89,9 @@
   },
   "views": {
     "list_mode": "feed",
-    "list_fields": ["title", "category_id", "views", "is_pinned", "is_solved"]
+    "list_fields": ["title", "category_id", "views", "is_pinned", "is_solved"],
+    "detail_fields": ["category_id", "title", "content", "ai_summary",
+                      "is_pinned", "is_locked", "is_solved", "views"]
   },
   "search": {
     "fields": ["title", "content"]

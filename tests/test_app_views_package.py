@@ -17,7 +17,7 @@ import python_object_runtime
 PACKAGES_ROOT = Path(__file__).resolve().parents[1] / "packages"
 APP_VIEWS_DIR = PACKAGES_ROOT / "app-views"
 
-CLOSED_VOCABULARY = {"list", "form", "detail", "count", "markdown", "reader"}
+CLOSED_VOCABULARY = {"list", "form", "detail", "related", "thread", "count", "markdown", "reader"}
 
 
 def test_get_package_normalizes_app_views_manifest():
@@ -238,7 +238,7 @@ def test_renderer_returns_404_shape_for_a_missing_view_id(tmp_path):
 def test_renderer_source_covers_the_closed_block_vocabulary():
     source = (APP_VIEWS_DIR / "objects" / "site" / "view_render.py").read_text()
 
-    assert 'KNOWN_KINDS = ["list", "form", "detail", "count", "markdown", "reader"]' in source
+    assert 'KNOWN_KINDS = ["list", "form", "detail", "related", "thread", "count", "markdown", "reader"]' in source
     for kind in CLOSED_VOCABULARY:
         assert f'"{kind}": render' in source or f"render{kind.capitalize()}" in source
     assert "unsupported" in source.lower()

@@ -62,7 +62,9 @@
   },
   "views": {
     "list_mode": "feed",
-    "list_fields": ["contact_id", "kind", "subject", "occurred_on", "summary"]
+    "list_fields": ["contact_id", "kind", "subject", "occurred_on", "summary"],
+    "detail_fields": ["contact_id", "kind", "subject", "occurred_on",
+                      "duration_minutes", "outcome", "summary"]
   },
   "search": {
     "fields": ["summary"]

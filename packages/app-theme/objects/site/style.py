@@ -248,6 +248,18 @@ footer.app { margin-top: 2.5rem; color: var(--muted); font-size: 0.78rem; }
 .switch { display: flex; align-items: center; gap: 0.5rem; color: var(--muted); font-size: 0.9rem; }
 .switch input { width: auto; }
 
+/* Generated detail (window.dbbasicForm.readOnly / /detail, 59) — global
+   so a detail block renders correctly wherever it's mounted, not just
+   inside view_render's own page shell. */
+.detailcard { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md);
+              padding: 0.25rem 1rem; }
+.detailrow { display: grid; grid-template-columns: 10rem 1fr; gap: 0.5rem; padding: 0.5rem 0;
+             border-bottom: 1px solid var(--line); }
+.detailrow:last-child { border-bottom: 0; }
+.detaillabel { color: var(--muted); font-size: 0.82rem; }
+.detailvaluewrap, .detailvalue { word-break: break-word; }
+.detailvalue.empty { color: var(--muted); }
+
 /* App shell / navigation bar (injected by /nav) */
 body.has-appbar { padding-top: 3rem; }
 .appbar { position: fixed; top: 0; left: 0; right: 0; height: 3rem; display: flex; align-items: center;

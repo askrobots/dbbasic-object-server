@@ -38,7 +38,11 @@ def test_get_package_normalizes_app_tasks_manifest():
     assert {schema["collection"] for schema in package["schemas"]} == set(_SCHEMA_NAMES)
     assert {obj["id"] for obj in package["objects"]} == {"site_tasks"}
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
-    assert {entry["collection"] for entry in package["seed"]} == set(_SCHEMA_NAMES)
+    # Plus "views"/"site_routes": one 59 detail view + route (/tasks/{id})
+    # composing task_comments and files as related children.
+    assert {entry["collection"] for entry in package["seed"]} == set(_SCHEMA_NAMES) | {
+        "views", "site_routes",
+    }
     assert package["migrations"] == []
     # template_id is a soft/optional relation (see dbbasic-package.json's
     # description) -- no install-order dependency on app-templates is

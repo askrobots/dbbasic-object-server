@@ -13,6 +13,14 @@ invoice_view.py uses for invoice_lines) and are nested into a tree by
 parent_id in this page's own JS — the "small client-side nesting" the
 package brief calls for, not a generator feature.
 
+ai_summary/is_ai_summarized (schemas/forum_topics.json) were carried from
+the source model but never rendered anywhere — the exact gap
+`59-detail-related-spec.md` calls out by name ("forum topic detail page
+finally rendering its stored-but-orphaned ai_summary field"). This page
+now shows it, right under the topic content, when set; nothing generates
+it (see dbbasic-package.json's deferred list — still true, this only
+displays a value that already exists).
+
 is_pinned/is_locked/is_solved are moderation flags carried faithfully from
 the source model, which had no separate moderator queue: the flags *are*
 the moderation state. is_locked is enforced here only at the UI layer (the
@@ -31,6 +39,11 @@ _STYLE = """
 h1#title { font-size: 1.6rem; margin: 0 0 0.25rem; }
 #meta { color: var(--muted); font-size: 0.8rem; margin-bottom: 1.25rem; }
 #content { white-space: pre-wrap; word-break: break-word; margin-bottom: 1rem; }
+#ai-summary { display: none; background: var(--panel); border: 1px solid var(--line, #38384a);
+              border-radius: var(--radius-md, 8px); padding: 0.75rem 1rem; margin: 0 0 1rem;
+              font-size: 0.9rem; white-space: pre-wrap; word-break: break-word; }
+#ai-summary .label { color: var(--muted); font-size: 0.72rem; text-transform: uppercase;
+                      letter-spacing: 0.03em; margin-bottom: 0.25rem; }
 .owner-tools { margin: 1rem 0; display: none; gap: 0.5rem; flex-wrap: wrap; }
 textarea.edit, input.edit-title { display: none; margin-top: 0.75rem; }
 textarea.edit { min-height: 10rem; }
@@ -62,6 +75,9 @@ function renderTopic() {
   bits.push((topic.views || "0") + " views");
   el("meta").textContent = bits.join(" \\u00b7 ");
   el("content").textContent = topic.content;
+  const summary = topic.is_ai_summarized === "true" && topic.ai_summary;
+  el("ai-summary").style.display = summary ? "block" : "none";
+  if (summary) el("ai-summary-text").textContent = topic.ai_summary;
   const mine = VIEWER_ID && topic.owner_id === VIEWER_ID;
   el("owner-tools").style.display = mine ? "flex" : "none";
   if (mine) {
@@ -287,6 +303,7 @@ def GET(request):
 <h1 id="title">loading&hellip;</h1>
 <div class="meta" id="meta"></div>
 <div id="content"></div>
+<div id="ai-summary"><div class="label">AI Summary</div><div id="ai-summary-text"></div></div>
 </div>
 <input class="edit-title" id="edit-title">
 <textarea class="edit" id="edit-box"></textarea>

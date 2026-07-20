@@ -8,6 +8,15 @@ in another tab, by another user, or by an agent — a thing the old stack's
 lists did not do. Display accessors come from a small config; search and
 live updates are automatic.
 
+`cfg.where` (optional, `{field: value}`) narrows the fetch to
+`58-query-filter-spec.md`'s `field=value` (implicit `eq`) query encoding —
+the same server-side filter `/collections/{c}/records` already applies
+after its own permission row filter, so a `where`'d list can only narrow
+what the caller could already see, never widen it. This is what
+`59-detail-related-spec.md`'s `related` block compiles to: one `where`
+entry, `{fk_field: parent_record_id}`, no bespoke fetch. Plain lists
+(no `where`) are unaffected.
+
 Defined once here — every list page reuses it instead of hand-writing rows.
 """
 
@@ -81,8 +90,18 @@ _JS = r"""
       const body = rows || slotHtml("empty", ctx) || '<div class="state">Nothing yet.</div>';
       mount.innerHTML = slotHtml("before_list", ctx) + body + slotHtml("after_list", ctx);
     }
+    function whereQuery() {
+      // 58's field=value encoding (implicit eq) -- one query param per
+      // `where` entry, ANDed by the server after its own permission row
+      // filter. No operators needed here: every current caller (the
+      // `related` block) matches a foreign key to one parent id.
+      if (!cfg.where) return "";
+      return Object.entries(cfg.where)
+        .map(([k, v]) => "&" + encodeURIComponent(k) + "=" + encodeURIComponent(v))
+        .join("");
+    }
     async function load() {
-      const res = await fetch("/collections/" + collection + "/records?limit=500",
+      const res = await fetch("/collections/" + collection + "/records?limit=500" + whereQuery(),
         {credentials: "same-origin", headers: {accept: "application/json"}});
       if (!res.ok) { render([]); return; }
       const body = await res.json(); all = body.records || []; render(all);

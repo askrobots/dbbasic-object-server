@@ -8,13 +8,14 @@ own data the same way, so a public view over a private collection renders
 its frame plus an empty/denied block for anonymous visitors: it can never
 show what the engine would not otherwise serve.
 
-Blocks are DATA, not code: a closed v1 vocabulary of six kinds --
-list, form, detail, count, markdown, reader -- read from the record's
-`blocks` JSON and rendered through the existing generators
-(window.dbbasicList, window.dbbasicForm) or small renderers here. An
-unknown kind, a malformed block, or invalid blocks JSON never becomes a
-blank page or raw markup: it becomes a visible placeholder card, and the
-rest of the view still renders.
+Blocks are DATA, not code: a closed v1 vocabulary of eight kinds --
+list, form, detail, related, thread, count, markdown, reader -- read from
+the record's `blocks` JSON and rendered through the existing generators
+(window.dbbasicList, window.dbbasicForm, window.dbbasicDetail,
+window.dbbasicThread) or small renderers here. An unknown kind, a
+malformed block, or invalid blocks JSON never becomes a blank page or raw
+markup: it becomes a visible placeholder card, and the rest of the view
+still renders.
 
 `reader` ({kind:'reader', url}) is client-side like every other block
 here: it POSTs the url to /api/read (object_server's flag-gated,
@@ -24,6 +25,31 @@ flag, a signed-out visitor, or a refused/failed fetch all come back as a
 normal JSON error body, which renders as the same placeholder card as any
 other broken block -- no separate error path needed here.
 
+`detail` (`59-detail-related-spec.md`) renders ONE record, read-only,
+composed -- it does not re-derive field layout itself, it mounts
+window.dbbasicDetail (served at /detail), which in turn reuses /form's
+own field-rendering pipeline in forced-read-only mode
+(window.dbbasicForm.readOnly). `related` renders a CHILD collection
+filtered by a foreign key back to the record the page's `detail` block is
+showing -- it is exactly a 58 filtered read (`{"kind":"list","filters":
+{fk_field: match}}`), compiled here to a plain window.dbbasicList mount
+with a `where` option (see list.py); no bespoke fetch. `thread` is sugar
+over 22's comment widget (window.dbbasicThread) for the one shape
+`related`'s single `fk_field` cannot express: `thread_comments`'
+polymorphic `parent_collection`/`parent_id` pair. All three lean on
+`$record_id`, a template token (mirroring `22`'s `$user_id` permission
+row-filter convention) that resolves at render time to the id captured by
+this view's own parameterized route -- see resolveRecordId and the
+Python GET() below for how that capture is found.
+
+**Scope boundary (per `plan/parity-completion-plan.md`'s document-
+modeling rubric):** `related` is for TRUE CHILDREN with independent
+identity and lifecycle -- interactions, comments, followers/following,
+task<->files. It is NOT for document-composition items (order/invoice
+lines): those embed as a JSON array field on the parent (a `line-items`
+block, `66-line-items-spec.md`, not this one) and have no `collection` +
+`fk_field` of their own for a `related` block to point at.
+
 Two of the block options ask more of the generators than they currently
 offer:
   - `list`'s `filters` and `limit` have no equivalent in window.dbbasicList
@@ -32,7 +58,9 @@ offer:
     fetch + filter + sort + slice here instead of pretending the option
     works -- see renderFilteredList. Filter-less, limit-less list blocks
     use the real window.dbbasicList and get its full feature set (search
-    box, live edit/delete, row styling) for free.
+    box, live edit/delete, row styling) for free. `related` never takes
+    this path -- it always compiles to window.dbbasicList's `where` option
+    (58's real, server-side filter), never the client-side fallback.
   - `form`'s optional `form` key (an alternate form name) has no
     equivalent either -- window.dbbasicForm always renders
     schema.forms.default. Only `record_id` is honored.
@@ -58,13 +86,10 @@ _STYLE = """
 .countcard.danger { border-color: var(--danger); color: var(--danger); }
 .countnum { font-size: 2.25rem; font-weight: 700; line-height: 1; }
 .countlabel { color: var(--muted); font-size: 0.85rem; margin-top: 0.25rem; }
-.detailcard { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md);
-              padding: 0.25rem 1rem; }
-.detailrow { display: grid; grid-template-columns: 10rem 1fr; gap: 0.5rem; padding: 0.5rem 0;
-             border-bottom: 1px solid var(--line); }
-.detailrow:last-child { border-bottom: 0; }
-.detaillabel { color: var(--muted); font-size: 0.82rem; }
-.detailvalue { word-break: break-word; }
+/* .detailcard/.detailrow/.detaillabel/.detailvalue: global now, in /style
+   (app-theme/objects/site/style.py) -- window.dbbasicForm.readOnly (via
+   window.dbbasicDetail) can be mounted outside this page too, so those
+   rules moved out of this page-local stylesheet. */
 .markdownblock { line-height: 1.6; }
 .readertitle { margin: 0 0 0.5rem; font-size: 1.3rem; }
 .readertext p { line-height: 1.6; margin: 0 0 0.85rem; }
@@ -79,10 +104,26 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
 const human = (n) => String(n || "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 const el = (id) => document.getElementById(id);
 
-const KNOWN_KINDS = ["list", "form", "detail", "count", "markdown", "reader"];
+const KNOWN_KINDS = ["list", "form", "detail", "related", "thread", "count", "markdown", "reader"];
 
 function unsupportedCard(msg) {
   return '<div class="viewblock-error">' + esc(msg || "unsupported block") + "</div>";
+}
+
+// 59's $record_id template token: a block field may hold the literal
+// string "$record_id", resolved here to RECORD_ID -- the id GET() below
+// captured from this view's own parameterized route (mirroring 22's
+// $user_id permission row-filter convention, at render time instead of
+// query time). Anything else (a literal id, e.g. an admin dashboard block
+// pinned to one record) passes through unchanged. Returns null when the
+// token can't resolve (no RECORD_ID for this render -- zero or multiple
+// route captures, or the view was reached without going through its
+// registered route) so callers can show the same visible error state
+// "target collection missing" already uses, never a runtime crash on an
+// empty filter/record id.
+function resolveRecordId(value) {
+  if (value !== "$record_id") return value || null;
+  return RECORD_ID || null;
 }
 
 function matchesFilters(record, filters) {
@@ -155,25 +196,58 @@ function renderForm(block, mount) {
   }
 }
 
-async function renderDetail(block, mount) {
-  if (!block.collection || !block.record_id) { mount.innerHTML = unsupportedCard("detail block needs a collection and record_id"); return; }
-  const [schemaRes, recordRes] = await Promise.all([
-    fetch("/api/schema/" + encodeURIComponent(block.collection), {credentials: "same-origin", headers: {accept: "application/json"}}),
-    fetch("/collections/" + encodeURIComponent(block.collection) + "/records/" + encodeURIComponent(block.record_id),
-      {credentials: "same-origin", headers: {accept: "application/json"}}),
-  ]);
-  if (!schemaRes.ok || !recordRes.ok) { mount.innerHTML = unsupportedCard("could not load record"); return; }
-  const schemaBody = await schemaRes.json();
-  const recordBody = await recordRes.json();
-  const schema = schemaBody.schema;
-  const record = recordBody.record || recordBody;
-  if (!schema || !record) { mount.innerHTML = unsupportedCard("could not load record"); return; }
-  const rows = (schema.fields || [])
-    .filter((f) => !f.hidden && !f.internal)
-    .map((f) => '<div class="detailrow"><div class="detaillabel">' + esc(f.label || human(f.name))
-      + '</div><div class="detailvalue">' + esc(record[f.name]) + "</div></div>")
-    .join("");
-  mount.innerHTML = '<div class="detailcard">' + (rows || '<div class="state">No fields.</div>') + "</div>";
+// 59's detail mode: renders ONE record, read-only, composed -- not a
+// second field-renderer. This block is a thin mount wrapper; every
+// field-layout/formatting decision lives in window.dbbasicDetail (served
+// at /detail), which itself reuses /form's own pipeline
+// (window.dbbasicForm.readOnly) in forced-read-only mode.
+function renderDetail(block, mount) {
+  if (!block.collection) { mount.innerHTML = unsupportedCard("detail block needs a collection"); return; }
+  const recordId = resolveRecordId(block.record_id);
+  if (!recordId) { mount.innerHTML = unsupportedCard("detail block needs a record_id"); return; }
+  if (!window.dbbasicDetail) { mount.innerHTML = unsupportedCard("detail generator unavailable"); return; }
+  const load = () => window.dbbasicDetail.mount(mount, {collection: block.collection, record_id: recordId});
+  (function sub() {
+    if (window.dbbasicSubscribe) window.dbbasicSubscribe(block.collection, load);
+    else setTimeout(sub, 400);
+  })();
+  load();
+}
+
+// 59's related block: a CHILD collection filtered by a foreign key back
+// to the record the page's `detail` block is showing. This compiles
+// directly to 58's filtered read -- window.dbbasicList's `where` option
+// (list.py), never the client-side renderFilteredList fallback `list`
+// itself sometimes needs -- so a related block is always the real,
+// server-side, permission-narrowed filter, one query param:
+// {fk_field: resolved match}.
+function renderRelated(block, mount) {
+  if (!block.collection || !block.fk_field) {
+    mount.innerHTML = unsupportedCard("related block needs a collection and fk_field");
+    return;
+  }
+  const match = resolveRecordId(block.match);
+  if (!match) { mount.innerHTML = unsupportedCard("related block's match did not resolve"); return; }
+  if (!window.dbbasicList) { mount.innerHTML = unsupportedCard("list generator unavailable"); return; }
+  const heading = block.title ? '<h3 class="blocktitle">' + esc(block.title) + "</h3>" : "";
+  mount.innerHTML = heading + '<div class="listmount"></div>';
+  const listMount = mount.querySelector(".listmount");
+  window.dbbasicList(block.collection, {mount: listMount, where: {[block.fk_field]: match}});
+}
+
+// 59's thread block: pure sugar over 22's comment widget for the one
+// composition shape `related`'s single fk_field cannot express
+// (thread_comments' polymorphic parent_collection/parent_id pair). 22
+// still owns every behavior behind window.dbbasicThread (moderation,
+// anon mode, realtime, markdown escaping) -- this only resolves
+// $record_id and mounts it, the same "widget any page includes and
+// mounts explicitly" shape 22's own Surfaces section documents.
+function renderThread(block, mount) {
+  if (!block.collection) { mount.innerHTML = unsupportedCard("thread block needs a collection"); return; }
+  const recordId = resolveRecordId(block.record_id);
+  if (!recordId) { mount.innerHTML = unsupportedCard("thread block needs a record_id"); return; }
+  if (!window.dbbasicThread) { mount.innerHTML = unsupportedCard("thread widget unavailable"); return; }
+  window.dbbasicThread.mount(mount, {parent_collection: block.collection, parent_id: recordId});
 }
 
 function renderCount(block, mount) {
@@ -241,7 +315,8 @@ function renderReader(block, mount) {
     .catch(() => { mount.innerHTML = unsupportedCard("could not read page"); });
 }
 
-const RENDERERS = {list: renderList, form: renderForm, detail: renderDetail, count: renderCount, markdown: renderMarkdown, reader: renderReader};
+const RENDERERS = {list: renderList, form: renderForm, detail: renderDetail, related: renderRelated,
+  thread: renderThread, count: renderCount, markdown: renderMarkdown, reader: renderReader};
 
 function renderBlocks(view) {
   const container = el("blocks");
@@ -303,19 +378,115 @@ load();
 """
 
 
+import os
 import re
 
+import object_records
+import object_site_routes
+
 _RECORD_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+_DATA_DIR_ENV = "DBBASIC_DATA_DIR"
+
+# Request keys that are never a route capture, whatever a package's route
+# pattern happens to name its one param -- see _resolve_view_and_record.
+_RESERVED_REQUEST_KEYS = {"_identity", "embed", "view_id"}
+
+
+def _data_dir():
+    # Mirrors app-catalog's stock.py: standalone, reads the env var
+    # object_server.py sets for every execution rather than depending on
+    # it directly.
+    return os.environ.get(_DATA_DIR_ENV, object_records.DEFAULT_DATA_DIR)
+
+
+def _views_records(base_dir):
+    try:
+        return object_records.read_collection_records("views", base_dir=base_dir)
+    except (LookupError, OSError, ValueError):
+        return []
+
+
+def _route_capture_name(route):
+    """Return the one {name} capture in a views.route pattern, or None.
+
+    Reuses object_site_routes' own pattern parser -- docs/site-routing.md's
+    {name}/{name:uuid} syntax, no second pattern language (59's Route-
+    Seeding). None covers "no route", "no capture" (a plain path like
+    /stuck), and "more than one capture" alike: 59 pins $record_id
+    resolution to routes with EXACTLY one capture, so none of those three
+    cases can ever supply a record id -- same degrade, no need to tell
+    them apart here.
+    """
+    if not route:
+        return None
+    parsed = object_site_routes._parse_pattern(route)
+    if not parsed:
+        return None
+    params = [name for kind, name, _constraint in parsed if kind == "param"]
+    if len(params) != 1:
+        return None
+    return params[0]
+
+
+def _resolve_view_and_record(request, base_dir):
+    """Return (view_id, record_id) for this request.
+
+    Direct case: request["view_id"] is set -- the plain
+    /views/{view_id:uuid} convention (55) a site_routes row maps straight
+    to this object. record_id still resolves the same way below (a view
+    reached this way carries no captures of its own unless the caller
+    also supplied one, e.g. hit directly with an extra query param -- rare
+    but harmless, since every read past this point is permission-gated
+    the same as any other route).
+
+    Routed-detail case (59): no "view_id" key, but package-seeded routes
+    like /contacts/{contact_id:uuid} land a DIFFERENT captured key
+    (docs/site-routing.md's request[name] convention). Resolved by
+    scanning the (small, one-row-per-collection) `views` collection for
+    the record whose own `route` field declares a single capture matching
+    one of the keys actually present -- the views record stays the single
+    source of truth for which route maps to which view; no second route
+    table, no new site_routes column.
+    """
+    view_id = str(request.get("view_id") or "").strip()
+    candidates = {
+        key: str(value).strip()
+        for key, value in request.items()
+        if key not in _RESERVED_REQUEST_KEYS
+        and isinstance(value, str)
+        and value.strip()
+    }
+
+    records = _views_records(base_dir)
+    if view_id:
+        record_id = ""
+        for record in records:
+            if record.get("id") == view_id:
+                capture = _route_capture_name(record.get("route"))
+                if capture and capture in candidates:
+                    record_id = candidates[capture]
+                break
+        return view_id, record_id
+
+    for record in records:
+        capture = _route_capture_name(record.get("route"))
+        if capture and capture in candidates:
+            return str(record.get("id") or ""), candidates[capture]
+    return "", ""
 
 
 def GET(request):
-    view_id = str(request.get("view_id") or "").strip()
+    base_dir = _data_dir()
+    view_id, record_id = _resolve_view_and_record(request, base_dir)
     if view_id and not _RECORD_ID_RE.fullmatch(view_id):
         view_id = ""
+        record_id = ""
+    if record_id and not _RECORD_ID_RE.fullmatch(record_id):
+        record_id = ""
     identity = request.get("_identity", {})
     user_id = identity.get("user_id")
     _logger.info("site_view_render served", view_id=view_id or "missing",
-                 user_id=user_id or "anonymous")
+                 record_id=record_id or "none", user_id=user_id or "anonymous")
 
     if not view_id:
         return {
@@ -355,7 +526,8 @@ def GET(request):
 </div>
 <script src="/list"></script>
 <script src="/form"></script>
-<script>const VIEW_ID = {view_id!r}; const VIEWER_ID = {(user_id or "")!r};{_SCRIPT}</script>
+<script src="/detail"></script>
+<script>const VIEW_ID = {view_id!r}; const VIEWER_ID = {(user_id or "")!r}; const RECORD_ID = {record_id!r};{_SCRIPT}</script>
 {nav_html}
 </body>
 </html>"""

@@ -119,7 +119,13 @@
   },
   "views": {
     "list_mode": "table",
-    "list_fields": ["title", "status", "urgency", "task_type", "due_date", "assigned_to"]
+    "list_fields": ["title", "status", "urgency", "task_type", "due_date", "assigned_to"],
+    "detail_fields": ["title", "description", "instructions", "project_id", "task_type",
+                      "status", "urgency", "due_date", "assigned_to"],
+    "related": [
+      {"collection": "task_comments", "fk_field": "task_id"},
+      {"collection": "files", "fk_field": "task_id"}
+    ]
   },
   "search": {
     "fields": ["title", "description", "instructions"]

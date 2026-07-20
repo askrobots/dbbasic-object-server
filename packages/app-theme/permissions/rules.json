@@ -60,6 +60,15 @@
       "actions": [
         "execute"
       ],
+      "object_id": "site_detail",
+      "reason": "the shared detail generator is a public static script; permission enforcement happens on the underlying record read, same as /list and /form"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": [
+        "execute"
+      ],
       "object_id": "site_flags",
       "reason": "the shared feature-flag helper is a public static script; it only reads flags the caller's own session is entitled to via /api/flags"
     },

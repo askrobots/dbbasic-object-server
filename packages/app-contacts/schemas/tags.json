@@ -25,6 +25,7 @@
   },
   "views": {
     "list_mode": "table",
-    "list_fields": ["name"]
+    "list_fields": ["name"],
+    "detail_fields": ["name"]
   }
 }

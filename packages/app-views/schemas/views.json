@@ -18,7 +18,7 @@
       "name": "route",
       "type": "text",
       "label": "Route",
-      "help": "optional site path, e.g. /stuck; served via site_routes"
+      "help": "optional site path, e.g. /stuck; served via site_routes. May carry one capture segment (e.g. /contacts/{contact_id:uuid}, docs/site-routing.md's pattern syntax) -- the captured value resolves as $record_id in this view's detail/related/thread blocks."
     },
     {
       "name": "layout",
@@ -31,7 +31,7 @@
       "name": "blocks",
       "type": "textarea",
       "label": "Blocks",
-      "help": "JSON list of block descriptors, validated server-side. Each block has a \"kind\" of list, form, detail, count, markdown, or reader -- unknown kinds render as a placeholder, never as raw markup.",
+      "help": "JSON list of block descriptors, validated server-side. Each block has a \"kind\" of list, form, detail, related, thread, count, markdown, or reader -- unknown kinds render as a placeholder, never as raw markup.",
       "validation": {"max_length": 32768}
     },
     {

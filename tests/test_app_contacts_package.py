@@ -36,7 +36,13 @@ def test_get_package_normalizes_app_contacts_manifest():
     assert {schema["collection"] for schema in package["schemas"]} == set(_SCHEMA_NAMES)
     assert {obj["id"] for obj in package["objects"]} == {"site_contacts"}
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
-    assert {entry["collection"] for entry in package["seed"]} == set(_SCHEMA_NAMES)
+    # Plus "views"/"site_routes": one 59 detail view + route per collection,
+    # seeded into app-views'/site routing's own shared collections (a soft
+    # reference, like template_id's into app-templates -- see
+    # dbbasic-package.json's description).
+    assert {entry["collection"] for entry in package["seed"]} == set(_SCHEMA_NAMES) | {
+        "views", "site_routes",
+    }
     # No migration mechanism is exercised here: additive field-adds don't
     # need one (see test_additive_field_adds_need_no_migration_entry below).
     assert package["migrations"] == []
