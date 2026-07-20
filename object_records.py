@@ -1465,24 +1465,66 @@ def _parse_classic_records(
     return records
 
 
-def _drop_torn_tail(text: str) -> str:
-    """Return `text` with any unterminated final physical line removed.
+def _committed_prefix_len(text: str) -> int:
+    """Char length of the prefix of `text` ending at the last CSV ROW
+    TERMINATOR -- a "\\n" seen OUTSIDE a quoted field.
 
-    Append-mode writers only ever consider a row committed once it is
-    followed by "\\n" (see _append_records_rows / _repair_torn_tail): a
-    physical line at EOF that isn't followed by "\\n" represents a write
-    interrupted before it completed and must not be treated as data (the
-    classic log torn-tail rule -- docs/append-only-storage-design.md Crash
-    Safety). This is a plain text-level trim: it does not need to
-    understand CSV quoting, because a completed row's own writer always
-    terminates it with "\\n" regardless of what its quoted content
-    contains, so "does the file end with \\n" is a reliable, cheap signal
-    on its own.
+    QUOTE-AWARE, single O(len) forward pass tracking csv quote state: a "\\n"
+    INSIDE a quoted field (a multi-line cell) is field content, never a row
+    boundary. "" inside a quoted field is an escaped quote (stays quoted),
+    matching csv QUOTE_MINIMAL/QUOTE_ALL. Everything after the last real
+    terminator is an incomplete (torn) trailing row -- an interrupted write --
+    and is excluded. This can only ever trim a torn TAIL, never bisect a
+    committed row.
     """
-    if text == "" or text.endswith("\n"):
+    in_quote = False
+    last_row_end = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if in_quote:
+            if c == '"':
+                if i + 1 < n and text[i + 1] == '"':
+                    i += 2          # escaped "" -- stays inside the quoted field
+                    continue
+                in_quote = False
+            i += 1
+        else:
+            if c == '"':
+                in_quote = True
+            elif c == "\n":
+                last_row_end = i + 1
+            i += 1
+    return last_row_end
+
+
+def _drop_torn_tail(text: str) -> str:
+    """Return `text` truncated to the end of its last COMPLETE csv row.
+
+    QUOTE-AWARE. This was previously a quote-BLIND check ("ends with \\n", else
+    rfind the last \\n) which mistook a "\\n" INSIDE a quoted multi-line field
+    for a row boundary -- silently resurrecting a torn multi-line row and, in
+    append mode, cascading to swallow later writes (the torn-write durability
+    characterization mapped this to ~97% of a multi-line row's write window).
+    A row is committed only when a row-terminating "\\n" (outside any quoted
+    field) follows it; anything after the last such terminator is an
+    interrupted write and is dropped.
+
+    Fast path: a text containing no '"' at all has no quoted fields, so every
+    "\\n" is a row terminator and the cheap check is exact -- this keeps
+    collections whose cells never need quoting (no tab/quote/newline in any
+    value) on the original O(1)/rfind path. Only text with quoting pays the
+    O(len) quote-aware scan, and that path is already parsing the same text.
+    """
+    if text == "":
         return text
-    cut = text.rfind("\n")
-    return text[: cut + 1] if cut >= 0 else ""
+    if '"' not in text:
+        if text.endswith("\n"):
+            return text
+        cut = text.rfind("\n")
+        return text[: cut + 1] if cut >= 0 else ""
+    return text[:_committed_prefix_len(text)]
 
 
 def _parse_append_body(
@@ -1914,33 +1956,27 @@ def _refresh_records_cache_after_append(
 def _repair_torn_tail(path: Path) -> None:
     """Ensure `path` ends with a complete row before an append lands.
 
-    A write interrupted mid-row leaves a fragment after the last real
-    "\\n". Merely appending a "\\n" after that fragment would make the
-    byte stream *look* terminated while leaving the fragment's bytes in
-    place as ordinary (wrong) data -- a later parse could then misread it
-    as a legitimately short row and resurrect it. Instead, this finds the
-    newline ending the last COMPLETE row and truncates everything after
-    it, so the fragment can never resurface. After this call the file
-    always ends with "\\n" (or is empty), so the append that follows never
-    has to think about the torn-tail case itself.
+    A write interrupted mid-row leaves a fragment; appending after it would
+    concatenate the next row onto the fragment -- and if the fragment holds an
+    unclosed quoted field, silently swallow that next row. This truncates the
+    file to the end of its last COMPLETE csv row, computed QUOTE-AWARE
+    (_committed_prefix_len), so a "\\n" INSIDE a quoted multi-line field is
+    never mistaken for a row boundary. That was the old backward
+    rfind(b"\\n")'s bug (substrate bug #2): it could cut mid-quoted-field,
+    leave an open-quote fragment, and let the next append be swallowed.
 
-    Scans backward from EOF in growing chunks (most torn fragments are a
-    single short row, so this is normally one small read) rather than
-    reading the whole file, since this runs on every append in append
-    mode and must stay cheap even on a huge collection.
-
-    KNOWN LIMITATION (substrate bug #2, deferred -- see
-    plan/parity-completion-plan.md Stage 1a): both this function's
-    "last byte == \\n" torn check and _drop_torn_tail's endswith("\\n") check
-    are QUOTE-BLIND. A crash landing right after a newline that is INSIDE an
-    open quoted field (a multi-line cell) leaves the file ending in "\\n", so
-    both checks wrongly conclude "not torn" and the fragment survives to
-    corrupt the next append. The correct fix compares file size to the id
-    sidecar's covered_bytes and quote-aware-scans only the un-covered tail
-    (staying O(1) on the common path); it is a dedicated crash-recovery
-    change, not made here. Currently reachable only by an append-mode
-    collection storing a RAW newline in a cell AND crashing mid-write of that
-    row; the compact-JSON mandate for embedded arrays keeps that path clear.
+    Cheap common case: the in-memory oidx cache records how many bytes of the
+    file the last completed write covered. A torn tail can only appear after a
+    process DEATH, which clears the in-memory cache -- so a WARM cache whose
+    covered_bytes equals the current size proves the file ends exactly at a
+    committed row, and we return without reading it. The quote-aware whole-file
+    scan below runs only when the cache is cold (the first append after a
+    restart -- exactly when a torn tail might exist and repair matters) or
+    stale (e.g. a concurrent cross-process append this process hasn't cached);
+    in the stale case the scan simply finds the file already clean and trims
+    nothing. Correctness rests entirely on _committed_prefix_len, which only
+    ever trims a torn TAIL and never bisects a committed row; the cache gate
+    affects only WHEN the scan runs, never its result.
     """
     try:
         size = path.stat().st_size
