@@ -35,13 +35,6 @@
       "effect": "allow",
       "principal": "public",
       "actions": ["execute"],
-      "object_id": "site_product_view",
-      "reason": "the product detail page is public; the row-filtered collection API still decides which product is actually returned"
-    },
-    {
-      "effect": "allow",
-      "principal": "public",
-      "actions": ["execute"],
       "object_id": "site_locations",
       "reason": "the locations page is public; it shows a sign-in prompt to visitors"
     },

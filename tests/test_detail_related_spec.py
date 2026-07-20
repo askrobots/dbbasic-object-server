@@ -692,3 +692,20 @@ def test_form_read_only_formats_cents_money_fields_in_whole_units():
     # Display only -- edit mode still submits the raw integer cents, never a
     # dollars value that would need round-trip conversion.
     assert "type=\"number\"" in source
+
+
+def test_form_honors_conditional_field_visibility_visible_when():
+    """A field's `visible_when` = {field, equals|in} hides it unless the
+    record's value matches -- replacing every *_view page's bespoke show/hide
+    CSS+JS with one field-level declaration honored on every generated
+    surface. Fails OPEN (unknown/absent condition => visible)."""
+    source = _form_source()
+    assert "function fieldVisible(f, record)" in source
+    assert "f.visible_when" in source
+    # Applied in read-only (detail) mode AND edit mode (against an existing
+    # record; create shows all).
+    assert "if (!fieldVisible(f, record)) continue;" in source
+    assert "(!record || fieldVisible(f, record))" in source
+    # Supports equals and in, the same tiny vocabulary 58's filter uses.
+    assert '"equals" in cond' in source
+    assert "Array.isArray(cond.in)" in source

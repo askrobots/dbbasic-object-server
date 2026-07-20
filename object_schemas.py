@@ -444,6 +444,14 @@ def _normalize_field(payload: Any, *, schema: str) -> dict[str, Any]:
         "placeholder",
         "help",
         "store",
+        # Conditional field visibility (Stage-6 extraction): a field may
+        # declare `visible_when` = {field, equals|in} so the /form renderer
+        # shows it only when another field on the record holds a given value
+        # (e.g. product asset fields visible only when product_type ==
+        # "asset"). Must survive normalization or install would strip it and
+        # every field would always show. Whitelisted, not interpreted here --
+        # same posture as the root-level `blocks`/`flow`/`views` keys.
+        "visible_when",
     )
     for key in metadata_keys:
         if key in payload:

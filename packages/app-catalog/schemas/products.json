@@ -1,7 +1,7 @@
 {
   "name": "products",
   "title": "Products",
-  "version": 1,
+  "version": 2,
   "description": "Sellable items: physical goods, digital downloads, services, subscriptions, and depreciable assets share this one schema via product_type. Locations and stock_moves (derived stock levels) now live alongside this schema in the same package -- see schemas/locations.json, schemas/stock_moves.json, and object_stock.py. Orders and order lines are a separate package (app-orders); this schema's product_id is what their order_lines optionally relate to. price_cents/cost_cents/salvage_value_cents are integer cents, never a float or currency type.",
   "fields": [
     {
@@ -12,20 +12,31 @@
       "type": "text",
       "required": true,
       "label": "Name",
-      "validation": {"min_length": 1, "max_length": 200}
+      "validation": {
+        "min_length": 1,
+        "max_length": 200
+      }
     },
     {
       "name": "sku",
       "type": "text",
       "label": "SKU",
-      "validation": {"max_length": 64}
+      "validation": {
+        "max_length": 64
+      }
     },
     {
       "name": "product_type",
       "type": "enum",
       "label": "Type",
       "default": "physical",
-      "enum": ["physical", "digital", "service", "subscription", "asset"],
+      "enum": [
+        "physical",
+        "digital",
+        "service",
+        "subscription",
+        "asset"
+      ],
       "help": "Matches the predecessor system's Product model type choices (reconciled against a private source audit, not part of this repo). asset carries the depreciation fields below; behavior (a monthly depreciation schedule) is not built here, only the fields."
     },
     {
@@ -50,7 +61,9 @@
       "type": "text",
       "default": "USD",
       "label": "Currency (ISO 4217)",
-      "validation": {"pattern": "^[A-Z]{3}$"}
+      "validation": {
+        "pattern": "^[A-Z]{3}$"
+      }
     },
     {
       "name": "unit",
@@ -86,33 +99,56 @@
       "name": "useful_life_months",
       "type": "integer",
       "label": "Useful Life (months)",
-      "help": "ASSET parity field, carried from the predecessor system's depreciation fields (reconciled against a private source audit, not part of this repo). Only meaningful when product_type is asset; depreciation math itself is not built here."
+      "help": "ASSET parity field, carried from the predecessor system's depreciation fields (reconciled against a private source audit, not part of this repo). Only meaningful when product_type is asset; depreciation math itself is not built here.",
+      "visible_when": {
+        "field": "product_type",
+        "equals": "asset"
+      }
     },
     {
       "name": "purchase_date",
       "type": "date",
       "label": "Purchase Date",
-      "help": "ASSET parity field."
+      "help": "ASSET parity field.",
+      "visible_when": {
+        "field": "product_type",
+        "equals": "asset"
+      }
     },
     {
       "name": "salvage_value_cents",
       "type": "integer",
       "default": "0",
       "label": "Salvage Value (cents)",
-      "help": "ASSET parity field. Integer cents, same doctrine as price_cents/cost_cents."
+      "help": "ASSET parity field. Integer cents, same doctrine as price_cents/cost_cents.",
+      "visible_when": {
+        "field": "product_type",
+        "equals": "asset"
+      }
     },
     {
       "name": "depreciation_method",
       "type": "enum",
       "label": "Depreciation Method",
-      "enum": ["straight_line", "declining"],
-      "help": "ASSET parity field. No default -- blank means not an asset, or an asset whose method has not been set yet; left unset rather than forced to a guessed default."
+      "enum": [
+        "straight_line",
+        "declining"
+      ],
+      "help": "ASSET parity field. No default -- blank means not an asset, or an asset whose method has not been set yet; left unset rather than forced to a guessed default.",
+      "visible_when": {
+        "field": "product_type",
+        "equals": "asset"
+      }
     },
     {
       "name": "asset_status",
       "type": "text",
       "label": "Asset Status",
-      "help": "ASSET parity field. Kept as plain text (not an enum) in v1: the predecessor's asset disposal states are a later slice's concern, not reconstructed here."
+      "help": "ASSET parity field. Kept as plain text (not an enum) in v1: the predecessor's asset disposal states are a later slice's concern, not reconstructed here.",
+      "visible_when": {
+        "field": "product_type",
+        "equals": "asset"
+      }
     },
     {
       "name": "owner_id",
@@ -127,14 +163,35 @@
     }
   ],
   "forms": {
-    "default": {"fields": ["name", "sku", "product_type", "description",
-                           "price_cents", "cost_cents", "currency", "unit", "is_active"]}
+    "default": {
+      "fields": [
+        "name",
+        "sku",
+        "product_type",
+        "description",
+        "price_cents",
+        "cost_cents",
+        "currency",
+        "unit",
+        "is_active"
+      ]
+    }
   },
   "views": {
     "list_mode": "table",
-    "list_fields": ["name", "sku", "product_type", "price_cents", "is_active"]
+    "list_fields": [
+      "name",
+      "sku",
+      "product_type",
+      "price_cents",
+      "is_active"
+    ]
   },
   "search": {
-    "fields": ["name", "sku", "description"]
+    "fields": [
+      "name",
+      "sku",
+      "description"
+    ]
   }
 }

@@ -77,6 +77,24 @@ _JS = r"""
     return String(f.label || human(f.name)).replace(/\s*\(cents\)\s*$/i, "");
   }
 
+  // Conditional field visibility. A field may declare
+  // visible_when = {field, equals} or {field, in:[...]} and renders only when
+  // the record's value for that other field matches -- e.g. a product's asset
+  // fields visible only when product_type == "asset". Every hand-written
+  // *_view page did this with bespoke show/hide CSS+JS; as a field-level
+  // declaration it applies on every generated surface for free. Unknown or
+  // absent condition => always visible (fail OPEN, never hide by accident).
+  // A hidden field is simply not rendered, so in edit mode it is not
+  // submitted and its stored value is preserved untouched.
+  function fieldVisible(f, record) {
+    const cond = f.visible_when;
+    if (!cond || typeof cond !== "object") return true;
+    const actual = String((record && record[cond.field] != null) ? record[cond.field] : "");
+    if ("equals" in cond) return actual === String(cond.equals);
+    if (Array.isArray(cond.in)) return cond.in.map(String).indexOf(actual) >= 0;
+    return true;
+  }
+
   // `readOnly`: 59's detail mode. Same schema-driven branches as edit mode
   // (relation lookup, enum, boolean, date/datetime, plain text) but
   // returns a label/value span instead of an editable control -- the one
@@ -131,7 +149,9 @@ _JS = r"""
     const byName = {}; (schema.fields || []).forEach((f) => byName[f.name] = f);
     const order = (schema.forms && schema.forms.default && schema.forms.default.fields)
       || (schema.fields || []).map((f) => f.name);
-    const ordered = order.map((n) => byName[n]).filter((f) => f && !skip(f));
+    // Create mode (no record) shows every field -- there's no value to test
+    // visible_when against yet; edit mode honors it against the record.
+    const ordered = order.map((n) => byName[n]).filter((f) => f && !skip(f) && (!record || fieldVisible(f, record)));
 
     const slotHtml = (name, ctx) => {
       let out = "";
@@ -221,6 +241,7 @@ _JS = r"""
     const rows = [];
     for (const f of ordered) {
       if (!(f.name in record)) continue;
+      if (!fieldVisible(f, record)) continue;
       const value = await control(f, record[f.name], true);
       const label = isMoneyField(f) ? moneyLabel(f) : (f.label || human(f.name));
       rows.push('<div class="detailrow"><div class="detaillabel">' + esc(label)

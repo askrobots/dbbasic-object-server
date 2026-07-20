@@ -47,15 +47,17 @@ def test_get_package_normalizes_app_catalog_manifest():
     assert {schema["collection"] for schema in package["schemas"]} == {
         "products", "locations", "stock_moves",
     }
+    # site_product_view was removed in the Stage-6 retrofit: the product
+    # permalink is now a seeded 59 detail view (site_view_render), not a
+    # bespoke page object -- see tests/test_app_catalog_detail_retrofit.py.
     assert {obj["id"] for obj in package["objects"]} == {
         "site_products",
-        "site_product_view",
         "site_locations",
         "site_stock",
     }
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
     assert {entry["collection"] for entry in package["seed"]} == {
-        "products", "locations", "stock_moves",
+        "products", "locations", "stock_moves", "views", "site_routes",
     }
 
 
@@ -98,7 +100,9 @@ def test_install_app_catalog_package_loads_schema(tmp_path):
     assert stock_moves_schema["name"] == "stock_moves"
     assert stock_moves_schema["storage"] == "append"
     assert (object_root / "site" / "products.py").is_file()
-    assert (object_root / "site" / "product_view.py").is_file()
+    # product_view.py was removed in the Stage-6 retrofit (replaced by a
+    # seeded detail view); it must no longer be installed.
+    assert not (object_root / "site" / "product_view.py").exists()
     assert (object_root / "site" / "locations.py").is_file()
     assert (object_root / "site" / "stock.py").is_file()
 
@@ -106,8 +110,22 @@ def test_install_app_catalog_package_loads_schema(tmp_path):
 def test_schema_json_file_is_valid_and_versioned():
     payload = _products_schema()
     assert payload["name"] == "products"
-    assert payload["version"] == 1
+    # v1 -> v2: the ASSET-only fields gained `visible_when` so a detail/edit
+    # surface hides them for non-asset products (Stage-6 conditional-visibility
+    # extraction), replacing product_view.py's bespoke show/hide CSS+JS.
+    assert payload["version"] == 2
     assert payload["views"]["list_mode"] == "table"
+
+
+def test_asset_fields_are_conditionally_visible_on_asset_products_only():
+    payload = _products_schema()
+    by_name = {f["name"]: f for f in payload["fields"]}
+    for name in ("useful_life_months", "purchase_date", "salvage_value_cents",
+                 "depreciation_method", "asset_status"):
+        assert by_name[name]["visible_when"] == {"field": "product_type", "equals": "asset"}, name
+    # Non-asset fields must NOT carry the condition (they always show).
+    assert "visible_when" not in by_name["name"]
+    assert "visible_when" not in by_name["price_cents"]
 
 
 def test_no_money_field_uses_a_float_or_currency_type():
@@ -390,18 +408,18 @@ def test_anonymous_cannot_read_any_product():
     assert decision.allowed is False
 
 
-def test_products_and_product_view_pages_are_publicly_executable():
-    """Public execute on the *page objects* (they show a sign-in prompt to
+def test_products_list_page_is_publicly_executable():
+    """Public execute on the *page object* (it shows a sign-in prompt to
     visitors), never public read on the *collection* -- same split
-    app-invoices and app-notes use.
+    app-invoices and app-notes use. (The product permalink is now a seeded
+    detail view via site_view_render, not a bespoke page object.)
     """
     policy = _app_catalog_policy()
 
-    for object_id in ("site_products", "site_product_view"):
-        decision = object_permissions.check_permission(
-            None, object_permissions.EXECUTE, policy=policy, object_id=object_id
-        )
-        assert decision.allowed is True
+    decision = object_permissions.check_permission(
+        None, object_permissions.EXECUTE, policy=policy, object_id="site_products"
+    )
+    assert decision.allowed is True
 
 
 def test_owner_can_crud_own_location():
