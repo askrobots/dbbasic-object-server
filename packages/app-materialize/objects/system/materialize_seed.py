@@ -13,21 +13,23 @@ created unseeded, same as pre-materialize behavior exactly (61's
 Degradation); materialize_run (manual) still works and can be fired by
 hand on that record's id.
 
-HANDLES below is a placeholder, static list literal -- this codebase's
-HANDLES mechanism (object_handlers.extract_handles) is a pure AST parse
-of a module-level list literal, with no dynamic/computed form. Keeping it
-correct as the definition set changes is object_materialize.
-sync_materialize_seed_handles's job: it rewrites THIS list, right here,
-in the installed copy of this file, then calls object_handlers.
-invalidate() and re-stamps this package's baseline hash for this object
-(so a future package upgrade doesn't mistake the rewrite for an operator
-customization -- see that function's own docstring for the full
-reasoning). object_daemon.process_materializations calls it once per
-materialize pass, so HANDLES tracks the definition set with the same
-"recompute from scratch every pass" discipline the rest of this block
-uses, regardless of whether DBBASIC_ENABLE_EVENT_HANDLERS is currently
-on -- the list is kept correct so dispatch is right the moment an
-operator flips that flag.
+HANDLES below is an empty static list literal, and in v1 NOTHING keeps it
+in sync with the event-mode definition set: this codebase's HANDLES
+mechanism (object_handlers.extract_handles) is a pure AST parse of a
+module-level list literal, and the platform deliberately does NOT rewrite
+an installed object's source at runtime to track the definitions
+(rewriting an existing object under the daemon poll loop is the wrong
+shape -- expensive, surprising, self-modifying). So automatic on-create
+dispatch is effectively off in v1 and every event-mode definition runs via
+the manual path (materialize_run) -- exactly 61's degrade-to-manual
+posture, just made the always-on default rather than only the
+DBBASIC_ENABLE_EVENT_HANDLERS-unset case.
+
+The EVENT method below is fully implemented and tested and would dispatch
+correctly the moment HANDLES named a collection -- left ready for a future
+DELIBERATE, scheduled, separately-tested HANDLES-sync job (whose input is
+object_materialize.compute_event_handles), or a hand-edited wiring, rather
+than a per-pass source rewrite. Until then this object is inert.
 """
 from __future__ import annotations
 

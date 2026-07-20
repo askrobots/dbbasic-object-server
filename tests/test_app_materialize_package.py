@@ -15,7 +15,6 @@ from pathlib import Path
 
 import object_handlers
 import object_materialize
-import object_package_baselines
 import object_packages
 import object_permissions
 import object_records
@@ -114,10 +113,11 @@ def test_no_disallowed_org_names_leak_into_the_package():
         assert not banned.search(text), f"disallowed reference found in {path}"
 
 
-def test_materialize_seed_object_source_declares_no_handles_by_default():
-    """HANDLES ships empty (a placeholder) -- object_materialize.
-    sync_materialize_seed_handles is what keeps it correct against the
-    live definition set; the shipped file never hand-lists collections.
+def test_materialize_seed_object_source_declares_no_handles():
+    """HANDLES ships empty and stays empty: v1 does NOT rewrite the installed
+    object at runtime to track the definition set (no self-modifying source
+    under the poll loop). Event-mode runs via the manual path instead; the
+    shipped file never hand-lists collections.
     """
     text = (APP_MATERIALIZE_DIR / "objects" / "system" / "materialize_seed.py").read_text()
     assert object_handlers.extract_handles(text) == []
@@ -183,7 +183,10 @@ def test_materialize_run_execute_denied_to_non_admin_and_allowed_for_admin():
     assert allowed.allowed is True
 
 
-# --- HANDLES regeneration against the REAL installed materialize_seed.py --
+# --- Event-mode fixtures + CreateWork worked example ---------------------
+# (No HANDLES-rewrite tests: v1 deliberately has no runtime source rewriter;
+# event-mode runs through the manual path, exercised by the worked example
+# below.)
 
 def _install_with_tasks_fixture(data_dir, object_root):
     object_packages.install_package(
@@ -211,95 +214,29 @@ def _event_definition(**overrides):
     return base
 
 
-def test_sync_materialize_seed_handles_rewrites_installed_object_and_invalidates_cache(tmp_path):
+def test_event_mode_definition_runs_through_the_manual_path(tmp_path):
+    """Event-mode is valid but v1 runs it manually (no auto HANDLES): a
+    definition with trigger.mode == "event" generates correctly when driven
+    through generate_one_event, the same call the (inert) seed handler would
+    make -- proving degrade-to-manual works without any source rewriting."""
     data_dir = tmp_path / "data"
     object_root = tmp_path / "objects"
     object_root.mkdir()
     _install_with_tasks_fixture(data_dir, object_root)
-
+    definition = _event_definition()
     object_records.create_collection_record(
-        "materialize_definitions", _event_definition(), base_dir=data_dir, roots=[object_root], actor="admin",
+        "materialize_definitions", definition, base_dir=data_dir, roots=[object_root], actor="admin",
     )
-
-    # Populate the cache with the pre-sync (empty) HANDLES index.
-    assert object_handlers.get_handlers("tasks.record.created", roots=[object_root]) == []
-
-    result = object_materialize.sync_materialize_seed_handles(base_dir=data_dir, roots=[object_root])
-    assert result["updated"] is True
-    assert result["handles"] == ["tasks.record.created"]
-
-    installed_text = (object_root / "system" / "materialize_seed.py").read_text()
-    assert object_handlers.extract_handles(installed_text) == ["tasks.record.created"]
-
-    # invalidate() was called -- the cached index reflects the rewrite
-    # without needing a process restart.
-    assert object_handlers.get_handlers("tasks.record.created", roots=[object_root]) == ["system_materialize_seed"]
-
-
-def test_sync_materialize_seed_handles_updates_package_baseline(tmp_path):
-    """The rewrite re-stamps this ONE object's baseline hash so a future
-    package reconcile sees "matches recorded baseline" (fast-forward or
-    unchanged) rather than mistaking the daemon's own legitimate rewrite
-    for an operator customization that would get parked.
-    """
-    data_dir = tmp_path / "data"
-    object_root = tmp_path / "objects"
-    object_root.mkdir()
-    _install_with_tasks_fixture(data_dir, object_root)
-    object_records.create_collection_record(
-        "materialize_definitions", _event_definition(), base_dir=data_dir, roots=[object_root], actor="admin",
-    )
-
-    object_materialize.sync_materialize_seed_handles(base_dir=data_dir, roots=[object_root])
-
-    baseline = object_package_baselines.load_baseline("app-materialize", base_dir=data_dir)
-    installed_text = (object_root / "system" / "materialize_seed.py").read_text()
-    expected_sha = object_package_baselines.sha256_text(installed_text)
-    assert baseline["objects"]["system_materialize_seed"] == expected_sha
-
-
-def test_sync_materialize_seed_handles_is_a_noop_when_already_correct(tmp_path):
-    data_dir = tmp_path / "data"
-    object_root = tmp_path / "objects"
-    object_root.mkdir()
-    _install_with_tasks_fixture(data_dir, object_root)
-    object_records.create_collection_record(
-        "materialize_definitions", _event_definition(), base_dir=data_dir, roots=[object_root], actor="admin",
-    )
-
-    first = object_materialize.sync_materialize_seed_handles(base_dir=data_dir, roots=[object_root])
-    assert first["updated"] is True
-
-    second = object_materialize.sync_materialize_seed_handles(base_dir=data_dir, roots=[object_root])
-    assert second["updated"] is False
-    assert second["handles"] == ["tasks.record.created"]
-
-
-def test_sync_materialize_seed_handles_clears_list_when_definition_removed(tmp_path):
-    data_dir = tmp_path / "data"
-    object_root = tmp_path / "objects"
-    object_root.mkdir()
-    _install_with_tasks_fixture(data_dir, object_root)
-    object_records.create_collection_record(
-        "materialize_definitions", _event_definition(), base_dir=data_dir, roots=[object_root], actor="admin",
-    )
-    object_materialize.sync_materialize_seed_handles(base_dir=data_dir, roots=[object_root])
-
-    object_records.delete_collection_record(
-        "materialize_definitions", "matgen_task_seed", base_dir=data_dir, roots=[object_root], actor="admin",
-    )
-    result = object_materialize.sync_materialize_seed_handles(base_dir=data_dir, roots=[object_root])
-    assert result["updated"] is True
-    assert result["handles"] == []
-
+    # The seed object ships inert -- nothing rewrote it.
     installed_text = (object_root / "system" / "materialize_seed.py").read_text()
     assert object_handlers.extract_handles(installed_text) == []
 
-
-def test_sync_materialize_seed_handles_noop_when_object_not_installed(tmp_path):
-    data_dir = tmp_path / "data"
-    result = object_materialize.sync_materialize_seed_handles(base_dir=data_dir, roots=[tmp_path / "no_objects_here"])
-    assert result["updated"] is False
+    # compute_event_handles still reports what a future deliberate sync WOULD
+    # wire, but it is pure computation with no side effect on the object.
+    assert object_materialize.compute_event_handles(base_dir=data_dir, roots=[object_root]) == [
+        "tasks.record.created"
+    ]
+    assert (object_root / "system" / "materialize_seed.py").read_text() == installed_text
 
 
 # --- Worked example: CreateWork end-to-end through the real package -------

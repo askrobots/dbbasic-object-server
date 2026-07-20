@@ -958,13 +958,17 @@ def process_materializations(*, base_dir: Path | str = "data") -> dict | None:
     the same way every other marker-gated pass does.
 
     Event-mode definitions (trigger.mode == "event") are never driven by
-    this pass -- they fire via materialize_seed's HANDLES dispatch (when
-    DBBASIC_ENABLE_EVENT_HANDLERS is set) or materialize_run's manual path
-    only. This pass DOES keep materialize_seed's HANDLES literal in sync
-    with the current event-mode definition set every call (object_
-    materialize.sync_materialize_seed_handles) regardless of whether that
-    flag is on, so HANDLES is always correct by the time an operator
-    flips it.
+    this pass -- in v1 they run via materialize_run's manual path only
+    (degrade-to-manual, per 61's Degradation section). The automatic
+    on-create dispatch (materialize_seed's HANDLES) is deliberately NOT
+    auto-wired: this pass does not rewrite materialize_seed's source to
+    track the definition set. Rewriting an installed object at runtime --
+    and doing it every poll -- is the wrong shape (expensive, surprising,
+    self-modifying code); if auto-synced HANDLES is ever wanted it belongs
+    in a deliberate scheduled job with its own tests, not the poll loop.
+    materialize_seed ships inert (HANDLES == []); the event-dispatch logic
+    it would call still exists and is tested, ready for that future
+    mechanism or a manual wiring.
 
     For each enabled, non-blocked, due scheduled/scheduled_fixed
     definition: object_materialize.generate_definition reads
@@ -1025,11 +1029,6 @@ def process_materializations(*, base_dir: Path | str = "data") -> dict | None:
 
     marker_path.parent.mkdir(parents=True, exist_ok=True)
     marker_path.write_text(str(now_ts))
-
-    try:
-        object_materialize.sync_materialize_seed_handles(base_dir=base_dir)
-    except Exception as e:
-        log(f"Materialize: HANDLES sync failed: {e}", "ERROR")
 
     now = datetime.now(timezone.utc)
     total_generated = 0

@@ -116,9 +116,6 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Mapping
 
 import object_collections
-import object_handlers
-import object_namespace
-import object_package_baselines
 import object_records
 import object_schemas
 
@@ -127,20 +124,10 @@ FEATURE_FLAGS_COLLECTION = "feature_flags"
 MATERIALIZE_ENABLED_FLAG = "materialize_enabled"
 DEFAULT_ACTOR = "daemon:materialize"
 
-# The event-mode handler object this module's HANDLES-regeneration keeps in
-# sync -- see sync_materialize_seed_handles. Object id derived from its
-# path, packages/app-materialize/objects/system/materialize_seed.py ->
-# object_namespace.object_id_from_path's "_".join(parts) convention.
-MATERIALIZE_SEED_OBJECT_ID = "system_materialize_seed"
-APP_MATERIALIZE_PACKAGE_ID = "app-materialize"
-# Keep in sync with packages/app-materialize/dbbasic-package.json's version.
-APP_MATERIALIZE_PACKAGE_VERSION = "0.1.0"
-
 _GRANULARITIES = frozenset({"daily", "weekly", "monthly", "quarterly", "yearly"})
 _TRIGGER_MODES = frozenset({"scheduled", "scheduled_fixed", "event"})
 _MAPPING_OP_KEYS = frozenset({"from", "from_period", "literal", "template", "if", "depreciation_amount"})
 _TEMPLATE_TOKEN_RE = re.compile(r"\{([a-zA-Z0-9_.]+)\}")
-_HANDLES_LINE_RE = re.compile(r"^HANDLES\s*=\s*\[.*\]\s*$", re.MULTILINE)
 
 # Safety valve against a malformed/huge span producing an unbounded period
 # loop (e.g. an anchor_field decades in the past with a daily granularity).
@@ -1214,8 +1201,16 @@ def generate_one_event(
 def compute_event_handles(*, base_dir: Any, roots: Any = None) -> list[str]:
     """Return the sorted, de-duplicated ``<collection>.record.created``
     event list every currently enabled, non-blocked, event-mode definition
-    implies -- what ``materialize_seed``'s static ``HANDLES`` literal
-    SHOULD read right now (see ``sync_materialize_seed_handles``).
+    implies -- i.e. what ``materialize_seed``'s static ``HANDLES`` literal
+    WOULD need to contain for automatic on-create dispatch.
+
+    Pure computation, no side effects. In v1 nothing wires this into the
+    object's source at runtime (we do NOT rewrite installed objects under
+    the poll loop -- see object_daemon.process_materializations); it exists
+    for inspection/tests and as the input a future *deliberate, scheduled*
+    HANDLES-sync mechanism (with its own tests and a real performance
+    rationale) would use. Event-mode definitions run via the manual path
+    (materialize_run) until then.
     """
     try:
         definitions = object_records.read_collection_records(
@@ -1237,76 +1232,14 @@ def compute_event_handles(*, base_dir: Any, roots: Any = None) -> list[str]:
     return sorted(events)
 
 
-def sync_materialize_seed_handles(*, base_dir: Any, roots: Any = None) -> dict[str, Any]:
-    """Regenerate ``materialize_seed.py``'s static ``HANDLES`` literal to
-    match the currently enabled event-mode definitions, then invalidate
-    ``object_handlers``' cached index -- 61's Events section: "regenerated
-    and object_handlers.invalidate()'d whenever the definition set
-    changes, not an operator customization."
-
-    ``HANDLES`` is extracted by ``object_handlers.extract_handles`` via a
-    pure AST parse of a module-level list LITERAL -- there is no dynamic/
-    computed HANDLES mechanism in this codebase, so making it track the
-    definition set means literally rewriting the installed object's
-    source file. Doing that naively would make ``object_packages``'
-    baseline/reconcile machinery (docs/upgrade-and-customization.md Rule 1)
-    see this file as operator-modified on the next package upgrade attempt
-    (a live-content hash mismatch against the recorded baseline) -- so
-    this function ALSO re-stamps the baseline for this one object via
-    ``object_package_baselines.update_artifact`` (the same public API
-    reconcile-resolution already uses) immediately after rewriting it,
-    keeping "this rewrite is legitimate, not a customization" honest
-    rather than accidentally corrupting upgrade state.
-
-    A no-op (returns ``{"updated": False, ...}``) when the object isn't
-    installed yet, or when the desired HANDLES list already matches what's
-    on disk -- cheap to call every daemon pass regardless.
-    """
-    search_roots = list(roots) if roots is not None else object_namespace.get_object_roots()
-    path = object_namespace.resolve_object_id(MATERIALIZE_SEED_OBJECT_ID, search_roots)
-    if path is None:
-        return {"updated": False, "reason": "materialize_seed object is not installed"}
-
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        return {"updated": False, "reason": f"could not read {path}: {exc}"}
-
-    desired = compute_event_handles(base_dir=base_dir, roots=roots)
-    current = object_handlers.extract_handles(text)
-    if current == desired:
-        return {"updated": False, "handles": desired}
-
-    new_line = f"HANDLES = {json.dumps(desired)}"
-    if _HANDLES_LINE_RE.search(text):
-        new_text = _HANDLES_LINE_RE.sub(new_line, text, count=1)
-    else:
-        new_text = text.rstrip("\n") + "\n\n" + new_line + "\n"  # pragma: no cover -- shipped file always has one
-
-    try:
-        path.write_text(new_text, encoding="utf-8")
-    except OSError as exc:
-        return {"updated": False, "reason": f"could not write {path}: {exc}"}
-
-    object_handlers.invalidate()
-
-    try:
-        object_package_baselines.update_artifact(
-            APP_MATERIALIZE_PACKAGE_ID,
-            kind="object",
-            key=MATERIALIZE_SEED_OBJECT_ID,
-            sha=object_package_baselines.sha256_text(new_text),
-            version=APP_MATERIALIZE_PACKAGE_VERSION,
-            base_dir=base_dir,
-        )
-    except Exception:
-        # Best-effort: a failure here means a future package upgrade might
-        # park this file for reconcile (thinking it was hand-edited) --
-        # annoying, never destructive, and never blocks HANDLES from being
-        # correct right now (invalidate() already ran above).
-        pass
-
-    return {"updated": True, "handles": desired}
+# NOTE: there is deliberately no runtime "sync HANDLES by rewriting the
+# installed materialize_seed.py" function here. Rewriting an existing
+# object's source under the daemon poll loop is the wrong shape (expensive,
+# surprising, self-modifying). materialize_seed ships inert (HANDLES == [])
+# and event-mode runs manually (materialize_run). If automatic on-create
+# dispatch is ever worth wiring, compute_event_handles above is the input a
+# separate, scheduled, tested job would consume -- not this module at import
+# or the poll loop at runtime.
 
 
 # --- Small shared helpers -------------------------------------------------
