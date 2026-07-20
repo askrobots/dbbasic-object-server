@@ -1,0 +1,24 @@
+{
+  "id": "app-feed",
+  "name": "Feed",
+  "version": "0.1.0",
+  "description": "64 - Feed: a personalized read over the follow graph. For a signed-in viewer, shows recent PUBLIC content authored by the accounts they follow, newest-first -- \"follows\" becomes a filter, not a dead boolean (plan/vocabulary/64-feed-spec.md). Owns no collection and no schema of its own: it is a pure permission-gated composition of two existing filtered reads (58), both riding the caller's own session through _internal_request -- `follows` (who does the viewer follow) and any collection that opts in via a `blocks.feed` schema key (app-articles' `articles` is the worked example, wired in this same slice; see its schema for the shape). No new access path is opened anywhere: every source read goes through the real /collections/{c}/records permission gate as the viewer's own identity, so a followed account's private rows can never enter the feed -- following only changes which already-PUBLIC rows get selected in (object_server.py's _handle_feed carries the full argument). Served at /feed by the single-segment site-object convention (/feed -> site_feed), same as site_dashboard (/dashboard) and site_activity (/activity) -- no site_routes record is seeded or required. The JSON composition itself lives at GET /api/feed (mirroring /api/activity's split between a bare page path and an /api/ data path, since both /feed page and /feed data can't share one literal route in this dispatch); the page here is presentation only, fetching that endpoint client-side with the visitor's own session. v1 is fan-out-on-read only, per the spec; the materialized `feed_items` collection and its fan-out HANDLES object are designed there but not built in this package.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": [],
+  "objects": [
+    {
+      "id": "site_feed",
+      "path": "objects/site/feed.py"
+    }
+  ],
+  "schemas": [],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [],
+  "migrations": []
+}

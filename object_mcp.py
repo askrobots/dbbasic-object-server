@@ -329,6 +329,24 @@ TOOLS: list[dict[str, Any]] = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
+        "name": "get_feed",
+        "description": (
+            "64 - Feed: recent PUBLIC content from accounts the caller follows, "
+            "newest-first. A thin wrapper over GET /api/feed -- the caller's own "
+            "credentials are forwarded, so this can never surface a followed "
+            "account's private content, only what a direct read of that account "
+            "would already show the caller. Empty for an anonymous caller or "
+            "when the caller follows no one."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "Max items (default 50)", "default": 50},
+                "offset": {"type": "integer", "description": "Pagination offset", "default": 0},
+            },
+        },
+    },
+    {
         "name": "read_page",
         "description": (
             "Fetch a URL server-side and return it stripped to readable text: "
@@ -499,6 +517,15 @@ def tool_route(name: str, arguments: Mapping[str, Any]) -> tuple[str, str, str, 
                     raise ValueError(f"{key} must be a non-empty string")
                 pairs.append((key, value.strip()))
         return ("GET", "/admin/changes", urllib.parse.urlencode(pairs), b"")
+    if name == "get_feed":
+        # 64 (feed): thin wrapper over the same composed read GET /api/feed
+        # serves, no separate logic -- mirrors list_records' limit/offset
+        # handling above.
+        pairs = [
+            ("limit", str(_bounded_int(args.get("limit"), default=50, minimum=1, maximum=200, name="limit"))),
+            ("offset", str(_bounded_int(args.get("offset"), default=0, minimum=0, maximum=1_000_000, name="offset"))),
+        ]
+        return ("GET", "/api/feed", urllib.parse.urlencode(pairs), b"")
     if name == "read_page":
         body = {"url": _required_str(args, "url")}
         return ("POST", "/api/read", "", _json_bytes(body))

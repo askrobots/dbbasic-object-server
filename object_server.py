@@ -138,6 +138,11 @@ FILTERING_ENABLED_ENV = "DBBASIC_ENABLE_FILTERING"
 # a precondition behave as last-write-wins rather than turning a working
 # write path into an error path under brownout (same posture as filtering).
 CONCURRENCY_ENABLED_ENV = "DBBASIC_ENABLE_CONCURRENCY"
+# 64 (feed): the <block>_enabled kill switch for GET /api/feed and the
+# get_feed MCP verb. Default on; off degrades to an empty, non-error
+# response (spec's Degradation section) -- `follows` itself, and the
+# follow button, are untouched by this flag, only the composed read is.
+FEED_ENABLED_ENV = "DBBASIC_ENABLE_FEED"
 # Query params the collection-records GET route reserves for pagination/
 # sort/search rather than treating as a field filter (58's Encoding
 # section); every other param is a `field` or `field.op` filter condition.
@@ -637,6 +642,16 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
 
         if path == http_api_contract.ACTIVITY_PATH:
             await _handle_activity(send, method, query, headers)
+            return
+
+        # 64 (feed): the composed follow-graph read. Lives at /api/feed, not
+        # bare /feed, because /feed is this feature's own PAGE route (site_feed,
+        # packages/app-feed), resolved further down by the site-route
+        # convention -- the same /api/{x} (data) vs /{x} (page) split
+        # /api/activity above already uses opposite site_activity, so the two
+        # surfaces never collide on one path.
+        if path == "/api/feed":
+            await _handle_feed(send, method, query, headers)
             return
 
         if path == http_api_contract.PREFS_PATH:
@@ -8242,6 +8257,239 @@ async def _handle_activity(
         base_dir=_data_dir(), actor=session.user_id, limit=limit
     )
     await _send_json(send, {"status": "ok", "activity": entries})
+
+
+async def _handle_feed(
+    send,
+    method: str,
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    """GET /api/feed -> 64's composed, permission-gated follow-graph read.
+
+    For the signed-in caller V: recent PUBLIC content authored by the
+    accounts V follows, newest-first (plan/vocabulary/64-feed-spec.md).
+    v1 is a pure filtered-read COMPOSITION -- two existing permission-gated
+    /collections/{c}/records reads (58), riding V's own forwarded
+    credentials through _internal_request -- never a direct read of the
+    record layer. That is what guarantees the core privacy invariant: a
+    followed account's PRIVATE content can never enter the feed, because
+    every source read is subject to that collection's own row-filtered
+    permission rule (e.g. articles' `public read where is_public=true`)
+    exactly as if V had queried it directly. Following someone grants no
+    additional read access -- it only adds an `owner_id IN (followed set)`
+    predicate on top of the row filter that already applies.
+
+    No 401 for an anonymous caller (unlike /api/activity above): the spec's
+    Surfaces section says the feed is simply "not rendered" for anonymous
+    visitors, and Degradation asks for an empty, non-error response in
+    every degraded case (feed disabled, no viewer, no follows) -- so every
+    early-return here is a 200 with an empty `items` list plus a flag
+    saying why, never a 4xx/5xx.
+    """
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    subject = _permission_subject(headers)
+    viewer_id = subject.user_id
+    if not viewer_id:
+        await _send_json(
+            send,
+            {"status": "ok", "items": [], "count": 0, "authenticated": False},
+        )
+        return
+
+    if not _feed_enabled():
+        await _send_json(
+            send,
+            {"status": "ok", "items": [], "count": 0, "enabled": False},
+        )
+        return
+
+    try:
+        limit = _query_int(query, "limit", default=50, minimum=1, maximum=200)
+        offset = _query_int(query, "offset", default=0, minimum=0)
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+
+    # Forward V's own credentials to every sub-read: a bearer/admin token
+    # header if present, else the session cookie re-expressed as a bearer
+    # token (_internal_request only carries an Authorization header, no
+    # cookie jar) -- see _permission_identity for the same cookie-or-token
+    # resolution order used to build `subject` above.
+    authorization = headers.get("authorization") or ""
+    if not authorization:
+        cookie_token = _session_cookie_token(headers)
+        if cookie_token:
+            authorization = f"Bearer {cookie_token}"
+
+    follows_query = urllib.parse.urlencode([("follower_id.eq", viewer_id), ("limit", "500")])
+    follows_status, follows_payload = await _internal_request(
+        "GET",
+        "/collections/follows/records",
+        follows_query,
+        b"",
+        authorization=authorization,
+    )
+
+    following_ids: list[str] = []
+    if follows_status == 200 and isinstance(follows_payload, dict):
+        for row in follows_payload.get("records") or []:
+            following_id = row.get("following_id") if isinstance(row, dict) else None
+            if following_id and following_id not in following_ids:
+                following_ids.append(following_id)
+
+    # 58's `in` cap (FILTER_IN_MAX_VALUES) directly bounds how many followed
+    # accounts one feed read can scan. Over the cap: truncate to the first
+    # N and say so, rather than silently dropping accounts or raising 58's
+    # cap on this call site's behalf -- the spec's Storage section names
+    # this exact cap-hit as the forcing function for the materialized
+    # feed_items path, not something to paper over here.
+    truncated_following = len(following_ids) > FILTER_IN_MAX_VALUES
+    if truncated_following:
+        following_ids = following_ids[:FILTER_IN_MAX_VALUES]
+
+    response: dict[str, Any] = {"status": "ok", "authenticated": True}
+    if truncated_following:
+        response["truncated_following"] = True
+
+    if not following_ids:
+        response.update({"items": [], "count": 0})
+        await _send_json(send, response)
+        return
+
+    items: list[dict[str, Any]] = []
+    for source in _feed_sources():
+        pairs = [(f"{source['owner_field']}.in", ",".join(following_ids))]
+        if source["visibility_field"] and source["visibility_true_value"] is not None:
+            pairs.append(
+                (f"{source['visibility_field']}.eq", str(source["visibility_true_value"]))
+            )
+        pairs.append(("limit", "200"))
+        source_status, source_payload = await _internal_request(
+            "GET",
+            f"/collections/{source['collection']}/records",
+            urllib.parse.urlencode(pairs),
+            b"",
+            authorization=authorization,
+        )
+        if source_status != 200 or not isinstance(source_payload, dict):
+            # One bad/missing/disallowed source degrades to fewer sources,
+            # never an error -- same isolation 14's rollup definitions use
+            # for "one bad definition is logged and skipped", applied here
+            # to feed sources (spec's Degradation section).
+            continue
+        for record in source_payload.get("records") or []:
+            if not isinstance(record, dict):
+                continue
+            items.append(
+                {
+                    "source_collection": source["collection"],
+                    "source_id": record.get(source["link_field"]) or record.get("id"),
+                    "author_id": record.get(source["owner_field"]),
+                    "time": record.get(source["time_field"]) or "",
+                    "summary": _feed_item_summary(record, source["summary_fields"]),
+                    "record": record,
+                }
+            )
+
+    # Step 3 of the spec's read shape: merge every source's already-small,
+    # already-filtered rows by time_field, newest first -- no server sort
+    # param exists for /collections/{c}/records (58's own Open Questions),
+    # so this handler does the k-way merge itself.
+    items.sort(key=lambda item: item["time"], reverse=True)
+    total = len(items)
+    window = items[offset : offset + limit]
+    response.update({"items": window, "count": len(window), "total": total})
+    await _send_json(send, response)
+
+
+def _feed_enabled() -> bool:
+    value = os.environ.get(FEED_ENABLED_ENV)
+    if value is None:
+        return True
+    return value.strip().lower() in TRUE_VALUES
+
+
+def _feed_sources() -> list[dict[str, Any]]:
+    """Discover feed-source collections via schema metadata (64's `blocks.feed`).
+
+    A collection opts into the feed by declaring `blocks.feed` in its
+    schema (plan/vocabulary/64-feed-spec.md's Parameterization section) --
+    additive-opt-in, same posture as every other block key in this
+    vocabulary; nothing is swept in by default.
+
+    `blocks` is a first-class schema metadata key (whitelisted in
+    object_schemas._normalize_schema alongside `flow`/`views`), so it
+    survives normalization and install and is read through the ordinary,
+    cached get_schema path -- never a raw side-channel file read.
+    """
+    sources: list[dict[str, Any]] = []
+    try:
+        summaries = object_schemas.list_schemas(base_dir=_data_dir())
+    except (OSError, ValueError):
+        return sources
+
+    for summary in summaries:
+        if summary.get("source") != "manual":
+            continue  # blocks.feed can only be declared in a manual schema
+        name = summary.get("name")
+        if not name or not object_schemas.validate_schema_name(name):
+            continue
+        try:
+            raw = object_schemas.get_schema(name, base_dir=_data_dir())
+        except (object_schemas.SchemaNotFoundError, OSError, ValueError):
+            continue
+        if not isinstance(raw, dict):
+            continue
+
+        blocks = raw.get("blocks")
+        feed_block = blocks.get("feed") if isinstance(blocks, dict) else None
+        if not isinstance(feed_block, dict):
+            continue
+
+        owner_field = feed_block.get("owner_field")
+        time_field = feed_block.get("time_field")
+        if not isinstance(owner_field, str) or not owner_field:
+            continue
+        if not isinstance(time_field, str) or not time_field:
+            continue
+
+        summary_fields = feed_block.get("summary_fields")
+        if not isinstance(summary_fields, list) or not summary_fields:
+            views = raw.get("views")
+            summary_fields = views.get("list_fields") if isinstance(views, dict) else None
+        if not isinstance(summary_fields, list):
+            summary_fields = []
+        summary_fields = [field for field in summary_fields if isinstance(field, str)]
+
+        link_field = feed_block.get("link_field")
+        if not isinstance(link_field, str) or not link_field:
+            link_field = "id"
+
+        visibility_field = feed_block.get("visibility_field")
+        if not isinstance(visibility_field, str) or not visibility_field:
+            visibility_field = None
+
+        sources.append(
+            {
+                "collection": name,
+                "owner_field": owner_field,
+                "visibility_field": visibility_field,
+                "visibility_true_value": feed_block.get("visibility_true_value"),
+                "time_field": time_field,
+                "summary_fields": summary_fields,
+                "link_field": link_field,
+            }
+        )
+    return sources
+
+
+def _feed_item_summary(record: dict[str, Any], summary_fields: list[str]) -> str:
+    parts = [str(record[field]).strip() for field in summary_fields if record.get(field)]
+    return " — ".join(part for part in parts if part)
 
 
 async def _handle_schema(

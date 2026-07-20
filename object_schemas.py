@@ -394,6 +394,12 @@ def _normalize_schema(
         # does. Passed through unchanged, same as every other metadata key
         # here: this whitelists the key, it does not interpret it.
         "flow",
+        # 64-feed-spec.md's root-level `blocks` key (a collection opts into a
+        # block -- e.g. `blocks.feed` names the owner/visibility/time fields
+        # that make it a feed source). Must survive normalization or install
+        # would strip it from the stored schema and the feed would find zero
+        # sources. Whitelisted, not interpreted -- same posture as `flow`.
+        "blocks",
     )
     for key in metadata_keys:
         if key in payload:

@@ -1,8 +1,8 @@
 {
   "name": "articles",
   "title": "Articles",
-  "version": 2,
-  "description": "Long-form writing. Schema versions and record changelogs provide edit history.",
+  "version": 3,
+  "description": "Long-form writing. Schema versions and record changelogs provide edit history. v3 adds blocks.feed (64 - Feed), opting articles into the follow-graph feed as its worked-example feed source; purely additive metadata, no field/behavior change.",
   "fields": [
     {
       "name": "id"
@@ -55,5 +55,15 @@
   "search": {
     "fields": ["title", "content"],
     "result_fields": ["id", "title", "published_on", "is_public"]
+  },
+  "blocks": {
+    "feed": {
+      "owner_field": "owner_id",
+      "visibility_field": "is_public",
+      "visibility_true_value": "true",
+      "time_field": "published_on",
+      "summary_fields": ["title"],
+      "link_field": "id"
+    }
   }
 }
