@@ -12,9 +12,12 @@ Polling the change log instead makes notify work with no event-handler
 dependency, at-least-once (the same delivery bar 01/12 accept), reading the
 same before/after/changed_fields/actor the change entry already carries.
 
-v1 ships the `in_app` channel only (append a `notifications` row, which the
-nav bell + realtime already render). `email` waits on 01-email-adapter; digest
-batching waits too. Both are recognized-and-skipped, not errors.
+Two channels ship: `in_app` (append a `notifications` row, which the nav bell +
+realtime already render) and `email` (enqueue into the GENERIC 01 outbox --
+object_email -- so notify depends only on the open adapter, never a mail
+package). This module stays side-effect-free: it names WHO and WHAT per channel
+(`notifications_for_change`, `email_intents_for_change`); the daemon performs
+the writes and the address lookup + enqueue. Digest batching still waits.
 """
 
 from __future__ import annotations
@@ -169,22 +172,20 @@ def render_template(template: str, record: Mapping[str, Any]) -> str:
         return str(template or "")
 
 
-def notifications_for_change(
+def _match_and_recipients(
     rule: Mapping[str, Any], change: Mapping[str, Any], *, base_dir: Any,
-) -> list[dict[str, str]]:
-    """Every notification record ONE rule implies for ONE change (v1: in_app
-    only). Empty when the rule doesn't match, no recipient resolves, or the
-    rule declares no in_app channel."""
+) -> tuple[list[str], dict[str, Any]]:
+    """Shared gating for every channel: apply the enabled flag, event-pattern,
+    transition-aware match, recipient resolution, suppress_self, and de-dup.
+    Returns (recipients, record), or ([], {}) if this rule doesn't fire on this
+    change. Keeps in_app and email delivery from drifting apart."""
     if not _truthy(rule.get("enabled"), default=True):
-        return []
-    collection = change.get("collection")
-    action = _event_action(change)
-    if not event_pattern_matches(rule.get("event_pattern"), collection, action):
-        return []
+        return [], {}
+    if not event_pattern_matches(rule.get("event_pattern"), change.get("collection"), _event_action(change)):
+        return [], {}
     record = _record_for(change)
     if not _match_ok(rule, change, record):
-        return []
-
+        return [], {}
     recipients = resolve_recipients(rule, record, base_dir=base_dir)
     if _truthy(rule.get("suppress_self"), default=True):
         actor = change.get("actor")
@@ -192,18 +193,56 @@ def notifications_for_change(
     # de-dup while preserving order (a role rule could name the same user twice)
     seen: set[str] = set()
     recipients = [r for r in recipients if not (r in seen or seen.add(r))]
+    return recipients, record
+
+
+def _channel(rule: Mapping[str, Any], name: str) -> dict[str, Any] | None:
+    for channel in _json_field(rule.get("channels"), []):
+        if isinstance(channel, dict) and channel.get("channel") == name:
+            return channel
+    return None
+
+
+def notifications_for_change(
+    rule: Mapping[str, Any], change: Mapping[str, Any], *, base_dir: Any,
+) -> list[dict[str, str]]:
+    """Every in_app notification record ONE rule implies for ONE change. Empty
+    when the rule doesn't match, no recipient resolves, or the rule declares no
+    in_app channel."""
+    recipients, record = _match_and_recipients(rule, change, base_dir=base_dir)
     if not recipients:
         return []
-
-    channels = _json_field(rule.get("channels"), [])
-    in_app = next((c for c in channels if isinstance(c, dict) and c.get("channel") == "in_app"), None)
+    in_app = _channel(rule, "in_app")
     if not in_app:
-        return []  # v1: email/other channels recognized but not delivered yet
+        return []
 
-    body_template = in_app.get("body_template") or ""
-    target = f"{collection}/{change.get('record_id')}"
-    body = render_template(body_template, record)
+    body = render_template(in_app.get("body_template") or "", record)
+    target = f"{change.get('collection')}/{change.get('record_id')}"
     return [
         {"user_id": uid, "kind": "notify", "body": body, "target": target, "is_read": "false"}
+        for uid in recipients
+    ]
+
+
+def email_intents_for_change(
+    rule: Mapping[str, Any], change: Mapping[str, Any], *, base_dir: Any,
+) -> list[dict[str, str]]:
+    """The email messages ONE rule implies for ONE change: `{user_id, subject,
+    body}` per recipient. Empty when the rule doesn't fire or declares no email
+    channel. The engine stays side-effect-free of the actual send -- it names
+    WHO and WHAT; the daemon maps user_id -> address and enqueues via
+    object_email (01 outbox)."""
+    recipients, record = _match_and_recipients(rule, change, base_dir=base_dir)
+    if not recipients:
+        return []
+    email = _channel(rule, "email")
+    if not email:
+        return []
+
+    subject = render_template(email.get("subject_template") or "", record)
+    body = render_template(email.get("body_template") or "", record)
+    target = f"{change.get('collection')}/{change.get('record_id')}"
+    return [
+        {"user_id": uid, "subject": subject, "body": body, "target": target}
         for uid in recipients
     ]

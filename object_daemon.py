@@ -35,6 +35,7 @@ import object_collections
 import object_connectors
 import object_email
 import object_events
+import object_identity
 import object_materialize
 import object_notify
 import object_packages
@@ -1205,6 +1206,7 @@ def process_notifications(*, base_dir: Path | str = "data") -> dict | None:
     fresh.sort(key=lambda c: str(c.get("timestamp") or ""))
 
     written = 0
+    emailed = 0
     max_ts = cursor
     for change in fresh:
         # Per-change try/except: one malformed rule or change never stops the
@@ -1217,6 +1219,12 @@ def process_notifications(*, base_dir: Path | str = "data") -> dict | None:
                         base_dir=base_dir, actor=object_notify.DEFAULT_ACTOR,
                     )
                     written += 1
+                # The email channel rides the GENERIC 01 outbox (object_email),
+                # never the private mail package -- notify depends only on the
+                # open adapter; whatever SMTP relay is configured delivers it.
+                for intent in object_notify.email_intents_for_change(rule, change, base_dir=base_dir):
+                    if _enqueue_notify_email(intent, base_dir=base_dir):
+                        emailed += 1
         except Exception as exc:  # noqa: BLE001 -- isolate one bad change
             log(f"Notify: change {change.get('change_id')} failed: {exc}", "ERROR")
         ts = str(change.get("timestamp") or "")
@@ -1225,9 +1233,34 @@ def process_notifications(*, base_dir: Path | str = "data") -> dict | None:
 
     if max_ts != cursor:
         cursor_path.write_text(max_ts)
-    if fresh or written:
-        log(f"Notify: processed {len(fresh)} change(s), wrote {written} notification(s)")
-    return {"changes": len(fresh), "notifications": written}
+    if fresh or written or emailed:
+        log(f"Notify: processed {len(fresh)} change(s), wrote {written} notification(s), queued {emailed} email(s)")
+    return {"changes": len(fresh), "notifications": written, "emails": emailed}
+
+
+def _enqueue_notify_email(intent: dict, *, base_dir: Path | str) -> bool:
+    """Map a notify email intent's user_id to an address and enqueue it into the
+    generic 01 outbox. Returns False (skips) when the user has no address on
+    file or the email_outbox isn't installed -- email is best-effort, never
+    blocks the in_app write."""
+    try:
+        user = object_identity.get_user(intent["user_id"], base_dir=base_dir)
+    except (object_identity.UserNotFoundError, OSError, ValueError):
+        return False
+    address = (user.get("email") or "").strip()
+    if not address:
+        return False
+    try:
+        object_email.enqueue(
+            address, intent.get("subject") or "", intent.get("body") or "",
+            source_object_id="notify",
+            extra={"user_id": intent["user_id"], "target": intent.get("target", "")},
+            base_dir=base_dir,
+        )
+    except (object_collections.CollectionNotFoundError,
+            object_collections.InvalidCollectionNameError):
+        return False  # app-email not installed -> email delivery unavailable
+    return True
 
 
 # 01 email adapter: rolling per-minute send-rate window, persisted as JSON

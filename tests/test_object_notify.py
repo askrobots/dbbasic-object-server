@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 import object_daemon
+import object_identity
 import object_notify
 import object_packages
 import object_records
@@ -80,12 +81,38 @@ def test_suppress_self_skips_the_actor_only():
     assert len(object_notify.notifications_for_change(_rule(), other, base_dir="/x")) == 1
 
 
-def test_no_in_app_channel_writes_nothing_yet():
-    # email-only rule: recognized but not delivered in v1
-    rule = _rule(channels=json.dumps([{"channel": "email", "subject_template": "s", "body_template": "b"}]))
+def test_no_in_app_channel_writes_no_in_app_notification():
+    # email-only rule: no in_app notification record...
+    rule = _rule(channels=json.dumps([{"channel": "email", "subject_template": "s {title}", "body_template": "b"}]))
     change = {"collection": "tasks", "action": "update", "record_id": "t1", "changed_fields": ["status"],
-              "after": {"status": "assigned", "assigned_to": "7"}, "actor": "1"}
+              "after": {"status": "assigned", "assigned_to": "7", "title": "T"}, "actor": "1"}
     assert object_notify.notifications_for_change(rule, change, base_dir="/x") == []
+    # ...but the email channel DOES produce an intent
+    intents = object_notify.email_intents_for_change(rule, change, base_dir="/x")
+    assert intents == [{"user_id": "7", "subject": "s T", "body": "b", "target": "tasks/t1"}]
+
+
+def test_email_intents_render_per_recipient_and_gate_on_match():
+    rule = _rule(channels=json.dumps([
+        {"channel": "in_app", "body_template": "in-app {title}"},
+        {"channel": "email", "subject_template": "Task: {title}", "body_template": "You got {title} ({urgency})"},
+    ]))
+    fires = {"collection": "tasks", "action": "update", "record_id": "t1",
+             "changed_fields": ["status", "assigned_to"],
+             "after": {"status": "assigned", "assigned_to": "7", "title": "Fix bug", "urgency": "high"}, "actor": "1"}
+    intents = object_notify.email_intents_for_change(rule, fires, base_dir="/x")
+    assert intents[0]["user_id"] == "7" and intents[0]["subject"] == "Task: Fix bug"
+    assert intents[0]["body"] == "You got Fix bug (high)"
+    # a later edit that no longer satisfies the transition doesn't re-fire email
+    later = {"collection": "tasks", "action": "update", "record_id": "t1", "changed_fields": ["title"],
+             "after": {"status": "assigned", "assigned_to": "7", "title": "renamed"}, "actor": "1"}
+    assert object_notify.email_intents_for_change(rule, later, base_dir="/x") == []
+
+
+def test_email_intents_empty_without_email_channel():
+    change = {"collection": "tasks", "action": "update", "record_id": "t1", "changed_fields": ["status", "assigned_to"],
+              "after": {"status": "assigned", "assigned_to": "7", "title": "T"}, "actor": "1"}
+    assert object_notify.email_intents_for_change(_rule(), change, base_dir="/x") == []  # _rule() is in_app only
 
 
 def test_recipient_modes_users_and_owner_and_field():
@@ -143,6 +170,54 @@ def test_daemon_pass_notifies_on_assignment_and_is_idempotent(tmp_path):
     # re-run: cursor has advanced past the change -> nothing new, no duplicate
     assert object_daemon.process_notifications(base_dir=data_dir)["notifications"] == 0
     assert len(_notes(data_dir)) == 1
+
+
+def _install_with_email(tmp_path):
+    data_dir = tmp_path / "data"
+    object_root = tmp_path / "objects"
+    object_root.mkdir()
+    for pkg in ("app-tasks", "app-collab", "app-notify", "app-projects", "app-email"):
+        object_packages.install_package(pkg, root=PACKAGES_ROOT, base_dir=data_dir, object_roots=[object_root], allow_replace=True)
+    return data_dir
+
+
+def test_daemon_queues_email_via_generic_outbox(tmp_path):
+    data_dir = _install_with_email(tmp_path)
+    dan = object_identity.create_user(
+        {"user_id": "usr_dan", "email": "dan@example.com", "display_name": "Dan"}, base_dir=data_dir)
+    object_daemon.process_notifications(base_dir=data_dir)  # stamp cursor at now
+
+    t = object_records.create_collection_record(
+        "tasks", {"title": "Fix bug", "status": "open", "owner_id": "1", "urgency": "high", "due_date": "2026-02-01"},
+        base_dir=data_dir, actor="user:1")
+    object_records.update_collection_record(
+        "tasks", t["id"], {"status": "assigned", "assigned_to": dan["user_id"]}, base_dir=data_dir, actor="user:1")
+
+    result = object_daemon.process_notifications(base_dir=data_dir)
+    assert result["notifications"] == 1 and result["emails"] == 1
+    # the seeded rule's email channel enqueued into the GENERIC outbox
+    outbox = object_records.read_collection_records("email_outbox", base_dir=data_dir)
+    assert len(outbox) == 1
+    row = outbox[0]
+    assert row["to"] == "dan@example.com" and row["status"] == "queued"
+    assert "Fix bug" in row["subject"] and row["source_object_id"] == "notify"
+
+
+def test_daemon_skips_email_when_recipient_has_no_address(tmp_path):
+    data_dir = _install_with_email(tmp_path)
+    ghost = object_identity.create_user(
+        {"user_id": "usr_ghost", "display_name": "No Email"}, base_dir=data_dir)  # no email
+    object_daemon.process_notifications(base_dir=data_dir)
+
+    t = object_records.create_collection_record(
+        "tasks", {"title": "T", "status": "open", "owner_id": "1"}, base_dir=data_dir, actor="user:1")
+    object_records.update_collection_record(
+        "tasks", t["id"], {"status": "assigned", "assigned_to": ghost["user_id"]}, base_dir=data_dir, actor="user:1")
+
+    result = object_daemon.process_notifications(base_dir=data_dir)
+    # in_app still fires; email is skipped (no deliverable address)
+    assert result["notifications"] == 1 and result["emails"] == 0
+    assert object_records.read_collection_records("email_outbox", base_dir=data_dir) == []
 
 
 def test_daemon_pass_returns_none_when_no_rules(tmp_path):
