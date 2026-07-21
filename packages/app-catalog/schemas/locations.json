@@ -1,7 +1,7 @@
 {
   "name": "locations",
   "title": "Locations",
-  "version": 2,
+  "version": 3,
   "description": "Storage locations for the STOCK slice: a self-parent hierarchy (warehouse -> zone -> aisle -> shelf -> bin) plus virtual locations (customer, supplier) that stock_moves uses as counterparties for external origins/destinations. Reconciled against a private predecessor-system catalog audit, not part of this repo (its Location model: 'warehouse->bin hierarchy + virtual customer/supplier'). Locations themselves are ordinary owner-scoped content, unlike stock_moves (see schemas/stock_moves.json's own note on why that collection is append-mode and not content-searchable).",
   "fields": [
     {
@@ -55,6 +55,16 @@
       "name": "owner_id",
       "type": "text",
       "label": "Owner"
+    },
+    {
+      "name": "entity_id",
+      "type": "text",
+      "label": "Entity",
+      "relation": {
+        "collection": "entities",
+        "display_field": "name"
+      },
+      "help": "The set of books this belongs to (65 multi-entity). Optional during rollout; backfilled to the owner's default entity, set by the entity switcher on new writes."
     },
     {
       "name": "created_at",

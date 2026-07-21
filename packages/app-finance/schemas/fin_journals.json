@@ -1,7 +1,7 @@
 {
   "name": "fin_journals",
   "title": "Journals",
-  "version": 2,
+  "version": 3,
   "description": "Double-entry transaction headers; the actual debit/credit rows live in fin_journal_lines. Reconciled against a private predecessor-system audit, not part of this repo (its Journal model: '+lines; draft/posted; contact/project/document links; period_locked'). Whether a journal balances (total_debits_cents == total_credits_cents) is a COMPUTED property (see object_finance.journal_totals), never enforced here -- see the status field's help below for why, matching the source's own weak spot exactly (reconciled against a private predecessor-system audit, not part of this repo: 'posting is a bare status flip -- balance NOT enforced at post'). v2 adds generated_from (plan/vocabulary/61-materialize-spec.md, additive): a small optional JSON provenance stamp on a journal materialize generated (definition id, source row id, period), left blank on a hand-created journal.",
   "fields": [
     {
@@ -17,17 +17,27 @@
       "name": "description",
       "type": "text",
       "label": "Description",
-      "validation": {"max_length": 300}
+      "validation": {
+        "max_length": 300
+      }
     },
     {
       "name": "status",
       "type": "enum",
       "label": "Status",
       "default": "draft",
-      "enum": ["draft", "posted"],
+      "enum": [
+        "draft",
+        "posted"
+      ],
       "transitions": {
         "draft": [
-          {"to": "posted", "when": {"owner_id": "$user_id"}}
+          {
+            "to": "posted",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          }
         ]
       },
       "help": "posted is terminal (no move back to draft) -- matches the predecessor system exactly, which never offered one either. Posting is a bare status flip, owner-gated, and nothing more: it does NOT check total_debits_cents == total_credits_cents first. This is not an oversight -- the source's own posting flow never enforced or even computed a balance at post time (reconciled against a private predecessor-system audit, not part of this repo, whose own words are: 'posting is a bare status flip -- balance NOT enforced at post'). journal_totals()/is_balanced (object_finance.py) is available for a caller (a report, a warning banner) to check before or after posting, but nothing in this schema or package blocks an unbalanced journal from being posted. See dbbasic-package.json's Deferred list -- adding that check would be a real improvement over the source, tracked there as future work, not built in this migration."
@@ -42,7 +52,9 @@
       "name": "reference",
       "type": "text",
       "label": "Reference",
-      "validation": {"max_length": 200},
+      "validation": {
+        "max_length": 200
+      },
       "help": "Free-text external reference (invoice number, check number, bank reference, etc.)."
     },
     {
@@ -50,7 +62,9 @@
       "type": "text",
       "default": "USD",
       "label": "Currency (ISO 4217)",
-      "validation": {"pattern": "^[A-Z]{3}$"}
+      "validation": {
+        "pattern": "^[A-Z]{3}$"
+      }
     },
     {
       "name": "generated_from",
@@ -64,6 +78,16 @@
       "label": "Owner"
     },
     {
+      "name": "entity_id",
+      "type": "text",
+      "label": "Entity",
+      "relation": {
+        "collection": "entities",
+        "display_field": "name"
+      },
+      "help": "The set of books this belongs to (65 multi-entity). Optional during rollout; backfilled to the owner's default entity, set by the entity switcher on new writes."
+    },
+    {
       "name": "created_at",
       "type": "datetime",
       "label": "Created",
@@ -71,10 +95,24 @@
     }
   ],
   "forms": {
-    "default": {"fields": ["date", "description", "status", "contact_id", "reference", "currency"]}
+    "default": {
+      "fields": [
+        "date",
+        "description",
+        "status",
+        "contact_id",
+        "reference",
+        "currency"
+      ]
+    }
   },
   "views": {
     "list_mode": "table",
-    "list_fields": ["date", "description", "status", "currency"]
+    "list_fields": [
+      "date",
+      "description",
+      "status",
+      "currency"
+    ]
   }
 }

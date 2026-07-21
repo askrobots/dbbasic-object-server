@@ -1,7 +1,7 @@
 {
   "name": "fin_accounts",
   "title": "Chart of Accounts",
-  "version": 2,
+  "version": 3,
   "description": "Double-entry chart of accounts: the 5 real account types (asset/liability/equity/income/expense), optionally arranged into a parent/child hierarchy via parent_id. Reconciled against a private predecessor-system audit, not part of this repo (its Account model: 'COA hierarchy, 5 types'). No account seeding/entity-mode behavior is built here (the source's Entity model seeds a starter chart of accounts per books-mode; this package carries plain accounts only -- see dbbasic-package.json's Deferred list).",
   "fields": [
     {
@@ -69,6 +69,16 @@
       "name": "owner_id",
       "type": "text",
       "label": "Owner"
+    },
+    {
+      "name": "entity_id",
+      "type": "text",
+      "label": "Entity",
+      "relation": {
+        "collection": "entities",
+        "display_field": "name"
+      },
+      "help": "The set of books this belongs to (65 multi-entity). Optional during rollout; backfilled to the owner's default entity, set by the entity switcher on new writes."
     },
     {
       "name": "created_at",

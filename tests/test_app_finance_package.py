@@ -79,19 +79,27 @@ def test_install_app_finance_package_loads_schemas(tmp_path):
 
 
 def test_schema_json_files_are_valid_and_versioned():
+    # Every finance collection gained an entity_id scoping FK (65 multi-entity)
+    # -- an additive relation field -- so each version bumped by one from its
+    # prior value: fin_accounts 2->3, fin_journals 2->3, the rest 1->2.
     for name in _SCHEMA_NAMES:
         payload = _schema(name)
         assert payload["name"] == name
+        # entity_id is present on every finance collection, a relation into
+        # the entities collection (scoping FK, not composition).
+        by_name = {f["name"]: f for f in payload["fields"]}
+        assert by_name["entity_id"]["relation"]["collection"] == "entities", name
         if name == "fin_accounts":
-            # flipped to a hierarchy tree view (spec 60); additive version bump
-            assert payload["version"] == 2
+            # hierarchy tree view (60) + generated_from (61) history, now + entity_id
+            assert payload["version"] == 3
             assert payload["views"]["list_mode"] == "tree"
         elif name == "fin_journals":
-            # generated_from added (spec 61, materialize); additive version bump
-            assert payload["version"] == 2
+            # generated_from (61) + entity_id (65)
+            assert payload["version"] == 3
             assert payload["views"]["list_mode"] == "table"
         else:
-            assert payload["version"] == 1
+            # fin_journal_lines / fin_recurring: 1 -> 2 (entity_id)
+            assert payload["version"] == 2
             assert payload["views"]["list_mode"] == "table"
 
 

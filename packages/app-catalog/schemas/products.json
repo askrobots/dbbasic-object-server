@@ -1,7 +1,7 @@
 {
   "name": "products",
   "title": "Products",
-  "version": 2,
+  "version": 3,
   "description": "Sellable items: physical goods, digital downloads, services, subscriptions, and depreciable assets share this one schema via product_type. Locations and stock_moves (derived stock levels) now live alongside this schema in the same package -- see schemas/locations.json, schemas/stock_moves.json, and object_stock.py. Orders and order lines are a separate package (app-orders); this schema's product_id is what their order_lines optionally relate to. price_cents/cost_cents/salvage_value_cents are integer cents, never a float or currency type.",
   "fields": [
     {
@@ -154,6 +154,16 @@
       "name": "owner_id",
       "type": "text",
       "label": "Owner"
+    },
+    {
+      "name": "entity_id",
+      "type": "text",
+      "label": "Entity",
+      "relation": {
+        "collection": "entities",
+        "display_field": "name"
+      },
+      "help": "The set of books this belongs to (65 multi-entity). Optional during rollout; backfilled to the owner's default entity, set by the entity switcher on new writes."
     },
     {
       "name": "created_at",

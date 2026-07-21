@@ -1,7 +1,7 @@
 {
   "name": "fin_recurring",
   "title": "Recurring Journals",
-  "version": 1,
+  "version": 2,
   "description": "Recurring journal templates: a JSON line template plus a schedule (frequency/next_run/last_run) and an auto_post flag. Reconciled against a private predecessor-system audit, not part of this repo (its RecurringJournal model: 'JSON template + frequency + auto_post', materialized by a daily scheduled task). This package carries the fields only -- the materialization job itself (reading due templates and creating real fin_journals/fin_journal_lines rows) is a daemon-pass concern and is NOT built here; see dbbasic-package.json's Deferred list. next_run/last_run are therefore plain owner-writable fields, not stamped by anything in this package yet.",
   "fields": [
     {
@@ -12,7 +12,10 @@
       "type": "text",
       "required": true,
       "label": "Name",
-      "validation": {"min_length": 1, "max_length": 200}
+      "validation": {
+        "min_length": 1,
+        "max_length": 200
+      }
     },
     {
       "name": "template_lines",
@@ -25,7 +28,13 @@
       "type": "enum",
       "label": "Frequency",
       "default": "monthly",
-      "enum": ["daily", "weekly", "monthly", "quarterly", "yearly"]
+      "enum": [
+        "daily",
+        "weekly",
+        "monthly",
+        "quarterly",
+        "yearly"
+      ]
     },
     {
       "name": "next_run",
@@ -58,6 +67,16 @@
       "label": "Owner"
     },
     {
+      "name": "entity_id",
+      "type": "text",
+      "label": "Entity",
+      "relation": {
+        "collection": "entities",
+        "display_field": "name"
+      },
+      "help": "The set of books this belongs to (65 multi-entity). Optional during rollout; backfilled to the owner's default entity, set by the entity switcher on new writes."
+    },
+    {
       "name": "created_at",
       "type": "datetime",
       "label": "Created",
@@ -65,10 +84,25 @@
     }
   ],
   "forms": {
-    "default": {"fields": ["name", "template_lines", "frequency", "next_run", "auto_post", "is_active"]}
+    "default": {
+      "fields": [
+        "name",
+        "template_lines",
+        "frequency",
+        "next_run",
+        "auto_post",
+        "is_active"
+      ]
+    }
   },
   "views": {
     "list_mode": "table",
-    "list_fields": ["name", "frequency", "next_run", "auto_post", "is_active"]
+    "list_fields": [
+      "name",
+      "frequency",
+      "next_run",
+      "auto_post",
+      "is_active"
+    ]
   }
 }

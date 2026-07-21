@@ -110,11 +110,13 @@ def test_install_app_catalog_package_loads_schema(tmp_path):
 def test_schema_json_file_is_valid_and_versioned():
     payload = _products_schema()
     assert payload["name"] == "products"
-    # v1 -> v2: the ASSET-only fields gained `visible_when` so a detail/edit
-    # surface hides them for non-asset products (Stage-6 conditional-visibility
-    # extraction), replacing product_view.py's bespoke show/hide CSS+JS.
-    assert payload["version"] == 2
+    # v1 -> v2: ASSET-only fields gained `visible_when` (Stage-6). v2 -> v3:
+    # entity_id scoping FK (65 multi-entity). Both additive.
+    assert payload["version"] == 3
     assert payload["views"]["list_mode"] == "table"
+    # entity_id is a relation into the entities collection (scoping FK).
+    by_name = {f["name"]: f for f in payload["fields"]}
+    assert by_name["entity_id"]["relation"]["collection"] == "entities"
 
 
 def test_asset_fields_are_conditionally_visible_on_asset_products_only():
@@ -244,7 +246,7 @@ def test_products_schema_field_order_matches_the_brief():
         "price_cents", "cost_cents", "currency", "unit", "is_active",
         "income_account", "expense_account", "digital_file_id",
         "useful_life_months", "purchase_date", "salvage_value_cents",
-        "depreciation_method", "asset_status", "owner_id", "created_at",
+        "depreciation_method", "asset_status", "owner_id", "entity_id", "created_at",
     ]
 
 
@@ -252,7 +254,7 @@ def test_locations_schema_field_order_and_types():
     schema = _locations_schema()
     field_names = [f["name"] for f in schema["fields"]]
     assert field_names == [
-        "id", "name", "location_type", "parent_id", "code", "owner_id", "created_at",
+        "id", "name", "location_type", "parent_id", "code", "owner_id", "entity_id", "created_at",
     ]
     by_name = {f["name"]: f for f in schema["fields"]}
     assert by_name["name"]["type"] == "text"
@@ -304,7 +306,7 @@ def test_stock_moves_schema_field_order_and_relations():
     field_names = [f["name"] for f in schema["fields"]]
     assert field_names == [
         "id", "product_id", "from_location_id", "to_location_id", "quantity",
-        "unit_cost_cents", "reason", "reference", "occurred_at", "owner_id", "created_at",
+        "unit_cost_cents", "reason", "reference", "occurred_at", "owner_id", "entity_id", "created_at",
     ]
     by_name = {f["name"]: f for f in schema["fields"]}
 

@@ -1,1 +1,1 @@
-id	journal_id	account_id	debit_cents	credit_cents	memo	owner_id	created_at
+id	journal_id	account_id	debit_cents	credit_cents	memo	owner_id	entity_id	created_at

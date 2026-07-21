@@ -1,7 +1,7 @@
 {
   "name": "stock_moves",
   "title": "Stock Moves",
-  "version": 1,
+  "version": 2,
   "storage": "append",
   "description": "Immutable ledger of inventory movement: product_id moves quantity from from_location_id to to_location_id. Never updated once written -- stock LEVELS are derived by folding this log (see object_stock.py), never stored on this collection or anywhere else. Reconciled against a private predecessor-system catalog audit, not part of this repo (its StockMove model: 'immutable, levels DERIVED not stored'). This is the textbook append-mode collection per docs/append-only-storage-design.md: write-heavy, never updated, an inspectable audit trail by design -- see docs/storage-modes.md's 'Append (opt-in per collection)' section for what that changes about how this collection is physically written and read.",
   "fields": [
@@ -12,19 +12,28 @@
       "name": "product_id",
       "type": "relation",
       "required": true,
-      "relation": {"collection": "products", "display_field": "name"},
+      "relation": {
+        "collection": "products",
+        "display_field": "name"
+      },
       "label": "Product"
     },
     {
       "name": "from_location_id",
       "label": "From Location",
-      "relation": {"collection": "locations", "display_field": "name"},
+      "relation": {
+        "collection": "locations",
+        "display_field": "name"
+      },
       "help": "Optional -- blank means an external origin (e.g. a purchase, where stock enters from outside any tracked location)."
     },
     {
       "name": "to_location_id",
       "label": "To Location",
-      "relation": {"collection": "locations", "display_field": "name"},
+      "relation": {
+        "collection": "locations",
+        "display_field": "name"
+      },
       "help": "Optional -- blank means an external destination (e.g. a sale, where stock leaves to outside any tracked location)."
     },
     {
@@ -45,7 +54,14 @@
       "type": "enum",
       "label": "Reason",
       "default": "transfer",
-      "enum": ["purchase", "sale", "transfer", "adjustment", "return", "count"],
+      "enum": [
+        "purchase",
+        "sale",
+        "transfer",
+        "adjustment",
+        "return",
+        "count"
+      ],
       "help": "Matches the predecessor system's stock move reasons (reconciled against a private source audit, not part of this repo)."
     },
     {
@@ -63,6 +79,16 @@
       "name": "owner_id",
       "type": "text",
       "label": "Owner"
+    },
+    {
+      "name": "entity_id",
+      "type": "text",
+      "label": "Entity",
+      "relation": {
+        "collection": "entities",
+        "display_field": "name"
+      },
+      "help": "The set of books this belongs to (65 multi-entity). Optional during rollout; backfilled to the owner's default entity, set by the entity switcher on new writes."
     },
     {
       "name": "created_at",
@@ -87,6 +113,11 @@
   },
   "views": {
     "list_mode": "table",
-    "list_fields": ["product_id", "reason", "quantity", "occurred_at"]
+    "list_fields": [
+      "product_id",
+      "reason",
+      "quantity",
+      "occurred_at"
+    ]
   }
 }
