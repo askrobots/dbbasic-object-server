@@ -60,8 +60,9 @@ def _install(tmp_path):
     data_dir = tmp_path / "data"
     object_root = tmp_path / "objects"
     object_root.mkdir()
-    object_packages.install_package("app-analytics", root=PACKAGES_ROOT, base_dir=data_dir,
-                                    object_roots=[object_root], allow_replace=True)
+    for pkg in ("app-views", "app-rollup", "app-analytics"):
+        object_packages.install_package(pkg, root=PACKAGES_ROOT, base_dir=data_dir,
+                                        object_roots=[object_root], allow_replace=True)
     return data_dir
 
 
@@ -138,7 +139,7 @@ def test_rollups_aggregate_traffic_and_exclude_owner(tmp_path):
     data_dir = tmp_path / "data"
     object_root = tmp_path / "objects"
     object_root.mkdir()
-    for pkg in ("app-rollup", "app-analytics"):
+    for pkg in ("app-views", "app-rollup", "app-analytics"):
         object_packages.install_package(pkg, root=PACKAGES_ROOT, base_dir=data_dir,
                                         object_roots=[object_root], allow_replace=True)
     # the reporting rollups seeded cleanly into the shared rollup_definitions
@@ -166,6 +167,26 @@ def test_rollups_aggregate_traffic_and_exclude_owner(tmp_path):
     assert top_ips.get("6.6.6.6") == 3       # the bot is visible, ranked
     status = {r["status"]: int(r["hits"]) for r in object_records.read_collection_records("analytics_status", base_dir=data_dir)}
     assert status.get("404") == 1 and status.get("200") == 3
+
+
+def test_conversions_collection_and_analytics_view_seeded(tmp_path):
+    import json
+    data_dir = _install(tmp_path)
+    # conversions collection installs and records a goal event (app-driven write)
+    conv = object_records.create_collection_record(
+        "conversions", {"event_type": "signup", "session_id": "s1", "metadata": json.dumps({"plan": "pro"})},
+        base_dir=data_dir, actor="app")
+    assert conv["event_type"] == "signup"
+    assert object_records.read_collection_records("conversions", base_dir=data_dir)[0]["event_type"] == "signup"
+
+    # the /analytics generative view + route seeded
+    views = {v["id"]: v for v in object_records.read_collection_records("views", base_dir=data_dir)}
+    assert "view_analytics" in views and views["view_analytics"]["route"] == "/analytics"
+    blocks = json.loads(views["view_analytics"]["blocks"])
+    listed = {b["collection"] for b in blocks if b.get("kind") == "list"}
+    assert listed == {"analytics_top_ips", "analytics_top_paths", "analytics_status", "analytics_daily"}
+    routes = {r["pattern"]: r["object_id"] for r in object_records.read_collection_records("site_routes", base_dir=data_dir)}
+    assert routes.get("/analytics") == "site_view_render"
 
 
 def test_capture_hook_noop_when_disabled(tmp_path, monkeypatch):

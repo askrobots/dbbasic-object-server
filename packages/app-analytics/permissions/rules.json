@@ -6,6 +6,13 @@
       "actions": ["read"],
       "collection": "page_views",
       "reason": "traffic analytics is an admin inspection surface; capture is server-side, never a public write"
+    },
+    {
+      "effect": "allow",
+      "principal": "role:admin",
+      "actions": ["read"],
+      "collection": "conversions",
+      "reason": "conversion events are an admin analytics surface; recorded server-side, never a public write"
     }
   ]
 }

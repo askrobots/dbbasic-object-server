@@ -1,0 +1,2 @@
+id	pattern	object_id	priority
+route_analytics	/analytics	site_view_render	10

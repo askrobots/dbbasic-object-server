@@ -1,0 +1,20 @@
+{
+  "name": "conversions",
+  "title": "Conversions",
+  "version": 1,
+  "description": "Goal/conversion events (q9 analytics parity): an app records one row when something worth counting happens (signup, purchase, form submit) -- event_type + optional session/user + a JSON metadata blob. append storage, admin-read; a rollup can group_by event_type for a funnel. Recorded server-side by whatever app owns the goal (generic create), never a public write. See app-analytics.",
+  "storage": "append",
+  "fields": [
+    { "name": "id" },
+    { "name": "event_type", "type": "text", "required": true, "label": "Event" },
+    { "name": "session_id", "type": "text", "label": "Session" },
+    { "name": "user_id", "type": "text", "label": "User" },
+    { "name": "metadata", "type": "text", "label": "Metadata" },
+    { "name": "created_at", "type": "datetime", "read_only": true, "label": "Time" }
+  ],
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["created_at", "event_type", "session_id"]
+  },
+  "search": { "fields": ["event_type"] }
+}
