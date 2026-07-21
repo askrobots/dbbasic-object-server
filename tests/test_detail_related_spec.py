@@ -745,3 +745,18 @@ def test_view_render_form_block_resolves_fixed_from_record_id():
     assert "resolveRecordId(block.fixed[k])" in body
     assert "base.fixed = fixed" in body
     assert "owner: viewerId" in body
+
+
+def test_form_auto_scopes_new_records_to_the_current_entity():
+    """65 multi-entity: a NEW record in an entity-scoped collection (schema has
+    an entity_id field) is auto-locked to the nav switcher's current entity
+    (window.dbbasicEntity) via the same `fixed` mechanism a caller-supplied FK
+    uses -- only on create, only when an entity is selected. No per-form wiring;
+    every generator create form writes into the current set of books."""
+    source = _form_source()
+    assert 'byName["entity_id"]' in source
+    assert "window.dbbasicEntity" in source
+    assert '!("entity_id" in fixed)' in source
+    # opts.fixed is COPIED, never mutated, so auto-scoping never leaks back to
+    # the caller's object.
+    assert "Object.assign({}, opts.fixed)" in source

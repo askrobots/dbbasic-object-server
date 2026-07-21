@@ -149,11 +149,22 @@ _JS = r"""
     // shape every parent->child compose needs. Locked fields are neither
     // rendered nor collected from the DOM; their value is injected on submit.
     // A shared capability of the generic renderer, not a bespoke per-page form.
-    const fixed = (opts.fixed && typeof opts.fixed === "object") ? opts.fixed : {};
+    const fixed = (opts.fixed && typeof opts.fixed === "object") ? Object.assign({}, opts.fixed) : {};
     const [ok, meta] = await api("GET", "/api/schema/" + collection);
     if (!ok || !meta.schema) { mount.innerHTML = '<p class="error">Could not load form.</p>'; return; }
     const schema = meta.schema;
     const byName = {}; (schema.fields || []).forEach((f) => byName[f.name] = f);
+    // 65 multi-entity: a NEW record in an entity-scoped collection is auto-
+    // scoped to the current entity (the nav switcher's client-held selection),
+    // by locking entity_id the same way a caller-supplied fixed FK is -- unless
+    // the caller already fixed it. Only on create (an edit keeps the row's own
+    // entity), only when an entity is actually selected, and only when the
+    // collection has an entity_id field. So every generator create form writes
+    // into the current set of books with no per-form wiring.
+    if (!record && byName["entity_id"] && !("entity_id" in fixed)) {
+      const cur = (window.dbbasicEntity && window.dbbasicEntity()) || "";
+      if (cur) fixed["entity_id"] = cur;
+    }
     const order = (schema.forms && schema.forms.default && schema.forms.default.fields)
       || (schema.fields || []).map((f) => f.name);
     // Create mode (no record) shows every field -- there's no value to test

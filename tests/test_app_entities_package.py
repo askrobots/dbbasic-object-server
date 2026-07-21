@@ -119,3 +119,18 @@ def test_dry_run_is_safe(tmp_path):
     )
     assert plan["safe_to_install"] is True
     assert plan["warnings"] == []
+
+
+def test_nav_ships_an_entity_switcher():
+    """65 multi-entity: the nav bar (app-theme/nav.py) gains a "Books" switcher
+    that lists the user's entities and stores the chosen one in localStorage
+    (window.dbbasicEntity) -- the client-held current entity the list/form
+    generators scope by. Hidden when the user has no entities."""
+    nav = (PACKAGES_ROOT / "app-theme" / "objects" / "site" / "nav.py").read_text()
+    assert "nav-books" in nav
+    assert "window.dbbasicEntity" in nav
+    assert 'ENTITY_KEY = "dbbasic_entity"' in nav
+    assert "/collections/entities/records" in nav
+    # An "All entities" option clears the scope, and there's a way to manage.
+    assert "All entities" in nav
+    assert 'href="/entities"' in nav

@@ -39,12 +39,23 @@ _JS = r"""
     (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const api = (path) => fetch(path, { credentials: "same-origin", headers: { accept: "application/json" } });
 
+  // 65 multi-entity: the "current entity" (set of books) is a client-held
+  // value in localStorage, read here and by the list/form generators to
+  // scope every entity-scoped collection. A convenience getter -- the
+  // generators read the same localStorage key directly, so they never depend
+  // on the nav having loaded first. Empty string = "All entities" (no scope).
+  var ENTITY_KEY = "dbbasic_entity";
+  window.dbbasicEntity = function () {
+    try { return localStorage.getItem(ENTITY_KEY) || ""; } catch (e) { return ""; }
+  };
+
   const bar = document.createElement("div");
   bar.className = "appbar";
   bar.id = "dbbasic-appbar";
   bar.innerHTML =
     '<a class="brand" href="/">DBBASIC</a>' +
     '<button class="navbtn" id="nav-apps">Apps ▾</button>' +
+    '<button class="navbtn" id="nav-books" style="display:none"></button>' +
     '<div class="search"><input id="nav-search" placeholder="Search everything…" autocomplete="off">' +
     '<span class="kbd">⌘K</span></div>' +
     '<span class="spacer"></span>' +
@@ -99,6 +110,43 @@ _JS = r"""
       appsMenu.innerHTML += pinned.map((v) =>
         '<a href="' + esc(v.route || ("/views/" + v.id)) + '">' + esc(v.title || "View") + "</a>").join("");
     } catch (e) { /* app-views not installed -- the switcher still works without it */ }
+  })();
+
+  // Entity switcher (65 multi-entity): a "Books" picker listing the signed-in
+  // user's entities. Selecting one stores its id in localStorage; the list/
+  // form generators read that key and scope every entity-scoped collection to
+  // it (filter on read, FK-lock on new writes). "All entities" clears the
+  // scope. Hidden entirely when the user has no entities (nothing to switch),
+  // so a fresh/unused install shows no extra chrome -- same silent-degrade
+  // posture as the pinned-views loader above.
+  const booksBtn = document.getElementById("nav-books");
+  const booksMenu = menu("nav-books-menu");
+  (async function loadEntities() {
+    try {
+      const res = await api("/collections/entities/records?limit=200");
+      if (!res.ok) return;
+      const entities = ((await res.json()).records) || [];
+      if (!entities.length) return;  // no books -> no switcher
+      const current = window.dbbasicEntity();
+      const currentName = (entities.find((e) => e.id === current) || {}).name;
+      booksBtn.textContent = "Books: " + (currentName || "All") + " ▾";
+      booksBtn.style.display = "";
+      const setEntity = (id) => {
+        try { id ? localStorage.setItem(ENTITY_KEY, id) : localStorage.removeItem(ENTITY_KEY); } catch (e) {}
+        location.reload();
+      };
+      booksMenu.innerHTML =
+        '<div class="head">books</div>' +
+        '<a href="#" data-eid="">All entities</a>' +
+        entities.map((e) => '<a href="#" data-eid="' + esc(e.id) + '">' + esc(e.name || e.id) + "</a>").join("") +
+        '<div class="head"><a href="/entities">Manage entities…</a></div>';
+      booksMenu.querySelectorAll("a[data-eid]").forEach((a) =>
+        a.addEventListener("click", (ev) => { ev.preventDefault(); setEntity(a.dataset.eid); }));
+      booksBtn.addEventListener("click", () => {
+        const open = booksMenu.classList.contains("open"); closeAll();
+        if (!open) { place(booksMenu, booksBtn); booksMenu.classList.add("open"); }
+      });
+    } catch (e) { /* entities collection not installed -- no switcher, nav still works */ }
   })();
 
   // Global search
