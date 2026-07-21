@@ -171,6 +171,19 @@ function renderList(block, mount) {
     return;
   }
   const cfg = {mount: listMount};
+  // A collection without a `title`/`name` field (e.g. a rollup target keyed by
+  // path/ip/status) would otherwise render each row as its raw id. `title_field`
+  // / `subtitle_field` point the row label at real columns -- so an analytics
+  // rollup, or any data-shaped collection, lists meaningfully with zero JS.
+  if (block.title_field) {
+    const tf = block.title_field;
+    cfg.title = (r) => (r[tf] == null || r[tf] === "" ? "(none)" : String(r[tf]));
+  }
+  if (block.subtitle_field) {
+    const sf = block.subtitle_field;
+    const lbl = block.subtitle_label ? String(block.subtitle_label) + ": " : "";
+    cfg.subtitle = (r) => (r[sf] == null ? "" : lbl + String(r[sf]));
+  }
   if (block.sort === "oldest" || block.sort === "asc") {
     // dbbasicList's real sort option is a bound <select> element, not a
     // value -- synthesize a hidden one already set to "oldest" so the
