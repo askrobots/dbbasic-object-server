@@ -57,6 +57,48 @@ def test_invalid_service_key_payloads_rejected(tmp_path, service, key):
         object_service_keys.set_service_key("dan", service, key, base_dir=tmp_path)
 
 
+def test_is_reserved_service_marks_platform_prefixes():
+    assert object_service_keys.is_reserved_service("sys-mailbox-abc") is True
+    assert object_service_keys.is_reserved_service("sys-anything") is True
+    # a user's own BYO key is never reserved
+    assert object_service_keys.is_reserved_service("openai") is False
+    assert object_service_keys.is_reserved_service("anthropic") is False
+    assert object_service_keys.is_reserved_service("") is False
+    assert object_service_keys.is_reserved_service(None) is False
+
+
+def test_reserved_service_names_are_server_side_only(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(data_dir))
+    enable_admin_token(monkeypatch)
+    token, _ = create_identity_session({"user_id": "dan"})
+    bearer = [("authorization", f"Bearer {token}")]
+
+    # A user cannot SET a platform-owned (reserved) secret via the self-service
+    # endpoint -- so they can never overwrite one the platform provisioned.
+    status, _, denied = request(
+        "/identity/users/dan/service-keys",
+        method="PUT",
+        body=json.dumps({"service": "sys-mailbox-1", "key": "hunter2"}).encode(),
+        headers=bearer + [("content-type", "application/json")],
+    )
+    assert status == 403 and "reserved" in denied["error"].lower()
+
+    # Nor DELETE one.
+    status, _, denied = request(
+        "/identity/users/dan/service-keys/sys-mailbox-1",
+        method="DELETE",
+        headers=bearer,
+    )
+    assert status == 403
+
+    # But in-process server code (a connector/provisioning verb) still may --
+    # the restriction lives only at the HTTP boundary, and the value round-trips
+    # for the server to use, while the endpoint never exposes it.
+    object_service_keys.set_service_key("dan", "sys-mailbox-1", "provisioned-pw", base_dir=data_dir)
+    assert object_service_keys.get_service_key("dan", "sys-mailbox-1", base_dir=data_dir) == "provisioned-pw"
+
+
 def test_service_key_routes_are_self_service(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     monkeypatch.setenv(object_server.DATA_DIR_ENV, str(data_dir))

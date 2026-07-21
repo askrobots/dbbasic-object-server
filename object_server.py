@@ -1412,6 +1412,13 @@ async def _handle_identity_user_service_keys(
         except ValueError as exc:
             await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
             return
+        if object_service_keys.is_reserved_service(payload.get("service")):
+            await _send_json(
+                send,
+                {"status": "error", "error": "That service name is reserved for platform-owned secrets."},
+                status=403,
+            )
+            return
         try:
             result = object_service_keys.set_service_key(
                 user_id,
@@ -1431,6 +1438,13 @@ async def _handle_identity_user_service_keys(
         return
 
     if method == "DELETE" and service is not None:
+        if object_service_keys.is_reserved_service(service):
+            await _send_json(
+                send,
+                {"status": "error", "error": "That service name is reserved for platform-owned secrets."},
+                status=403,
+            )
+            return
         try:
             deleted = object_service_keys.remove_service_key(
                 user_id, service, base_dir=_data_dir()

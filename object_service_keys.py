@@ -38,6 +38,14 @@ SERVICE_KEY_FIELDS = (
 MAX_KEY_LENGTH = 4096
 _SERVICE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
+# Reserved service-name prefixes mark PLATFORM-OWNED secrets -- a credential the
+# platform provisions on a user's behalf (e.g. a generated mailbox password),
+# as opposed to a user's own BYO key (openai, anthropic, ...). Reserved names
+# are valid to store, but only in-process server code may write them: the
+# self-service HTTP endpoint refuses them, so a user can never overwrite a
+# secret the platform owns. See docs/secrets-and-credentials.md.
+RESERVED_SERVICE_PREFIXES = ("sys-",)
+
 _FILE_LOCKS: dict[Path, threading.Lock] = {}
 _FILE_LOCKS_LOCK = threading.Lock()
 
@@ -74,6 +82,17 @@ def service_keys_path(base_dir: Path | str = DEFAULT_DATA_DIR) -> Path:
 def validate_service_name(service: str) -> bool:
     """Return True when a service name is safe for storage and routes."""
     return isinstance(service, str) and bool(_SERVICE_RE.fullmatch(service))
+
+
+def is_reserved_service(service: str) -> bool:
+    """Return True when a service name is platform-owned (a reserved prefix).
+
+    Reserved names are writable only by in-process server code; the
+    self-service HTTP endpoint rejects them so a user cannot overwrite a
+    secret the platform provisions on their behalf. This is the single source
+    of truth for the rule -- callers gate on it, they never re-derive it.
+    """
+    return isinstance(service, str) and service.startswith(RESERVED_SERVICE_PREFIXES)
 
 
 def set_service_key(
