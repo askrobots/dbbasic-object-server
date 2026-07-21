@@ -35,6 +35,7 @@ import http_api_contract
 import object_activity
 import object_backup
 import object_analytics
+import object_api_keys
 import object_collections
 import object_correlation
 import object_credentials
@@ -1393,6 +1394,96 @@ def _service_keys_route_parts(user_id: str) -> tuple[str | None, str | None]:
     return None, None
 
 
+def _api_keys_route_parts(user_id: str) -> tuple[str | None, str | None]:
+    """Split '{user}/api-keys[/{key_id}]' route tails; (None, None) otherwise."""
+    if "/api-keys" not in user_id:
+        return None, None
+    target, _, tail = user_id.partition("/api-keys")
+    if "/" in target or not target:
+        return None, None
+    if tail == "":
+        return target, None
+    if tail.startswith("/") and tail.count("/") == 1 and len(tail) > 1:
+        return target, tail[1:]
+    return None, None
+
+
+async def _handle_identity_user_api_keys(
+    send,
+    method: str,
+    user_id: str,
+    key_id: str | None,
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    """Self-service per-user API keys: create (raw token returned ONCE), list
+    status, revoke. The token never appears again -- only its hash is stored.
+    A signed-in user manages their own; the admin gate covers operator use."""
+    session = _current_identity_session(headers)
+    self_service = session is not None and session.user_id == user_id
+    if not self_service:
+        gate_error = _admin_token_gate_error(
+            headers, "API keys require the account owner's session or the admin gate."
+        )
+        if gate_error is not None:
+            status, message = gate_error
+            await _send_json(send, {"status": "error", "error": message}, status=status)
+            return
+
+    if (
+        method in {"PUT", "POST", "DELETE"}
+        and _session_cookie_token(headers)
+        and not _authorization_token(headers)
+        and not _cookie_request_origin_allowed(headers)
+    ):
+        await _send_json(
+            send, {"status": "error", "error": "Cross-origin cookie writes are not allowed."}, status=403,
+        )
+        return
+
+    if method == "GET" and key_id is None:
+        try:
+            keys = object_api_keys.list_api_keys(user_id, base_dir=_data_dir())
+        except object_api_keys.InvalidApiKeyError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        await _send_json(send, {"status": "ok", "user_id": user_id, "keys": keys})
+        return
+
+    if method in {"POST", "PUT"} and key_id is None:
+        try:
+            payload = _parse_json_body(body)
+        except ValueError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        try:
+            meta, raw_token = object_api_keys.create_api_key(
+                user_id, payload.get("name"), base_dir=_data_dir()
+            )
+        except object_api_keys.InvalidApiKeyError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        _append_ops_auth_event(event="api_key_created", identifier=user_id, label=meta["key_id"])
+        # The ONLY time the raw token is ever returned.
+        await _send_json(send, {"status": "ok", "token": raw_token, **meta})
+        return
+
+    if method == "DELETE" and key_id is not None:
+        try:
+            deleted = object_api_keys.revoke_api_key(user_id, key_id, base_dir=_data_dir())
+        except object_api_keys.InvalidApiKeyError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+            return
+        if not deleted:
+            await _send_json(send, {"status": "error", "error": "No such API key"}, status=404)
+            return
+        _append_ops_auth_event(event="api_key_revoked", identifier=user_id, label=key_id)
+        await _send_json(send, {"status": "ok", "deleted": True, "key_id": key_id})
+        return
+
+    await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+
+
 async def _handle_identity_user_service_keys(
     send,
     method: str,
@@ -1514,6 +1605,13 @@ async def _handle_identity_user(
     if service_keys_target is not None:
         await _handle_identity_user_service_keys(
             send, method, service_keys_target, service_name, body, headers
+        )
+        return
+
+    api_keys_target, api_key_id = _api_keys_route_parts(user_id)
+    if api_keys_target is not None:
+        await _handle_identity_user_api_keys(
+            send, method, api_keys_target, api_key_id, body, headers
         )
         return
 
@@ -10578,6 +10676,27 @@ def _permission_subject(headers: dict[str, str]) -> object_permissions.Permissio
     return _permission_identity(headers)[0]
 
 
+def _subject_for_user(user_id: str) -> object_permissions.PermissionSubject:
+    """Build a permission subject for a user id (used by the API-key auth path,
+    which resolves only a user id and must reconstruct the same authority a
+    session would). Reads the user's roles/account, then resolves project grants
+    exactly like the session path."""
+    try:
+        user = object_identity.get_user(user_id, base_dir=_data_dir())
+    except (object_identity.UserNotFoundError, OSError, ValueError):
+        user = None
+    if user is None:
+        subject = object_permissions.PermissionSubject(user_id=user_id)
+    else:
+        subject = object_permissions.PermissionSubject(
+            user_id=user_id,
+            account_id=user.get("account_id"),
+            roles=tuple(user.get("roles") or ()),
+            subscriptions=tuple(user.get("subscriptions") or ()),
+        )
+    return _with_accessible_projects(subject)
+
+
 def _permission_identity(
     headers: dict[str, str],
 ) -> tuple[object_permissions.PermissionSubject, str]:
@@ -10585,6 +10704,14 @@ def _permission_identity(
     admin_token = os.environ.get(ADMIN_TOKEN_ENV, "")
     if token and admin_token and hmac.compare_digest(token, admin_token):
         return object_permissions.PermissionSubject(user_id="admin", roles=("admin",)), "admin_token"
+
+    # A durable per-user API key (Authorization: Bearer dbk_...). Prefix-routed
+    # so a session token never reaches this path and vice versa. Resolves to the
+    # owning user's full authority (roles/account/project grants).
+    if token and token.startswith(object_api_keys.TOKEN_PREFIX):
+        api_user_id = object_api_keys.resolve_api_key(token, base_dir=_data_dir())
+        if api_user_id:
+            return _subject_for_user(api_user_id), "api_key"
 
     cookie_token = None if token else _session_cookie_token(headers)
     session_token = token or cookie_token
