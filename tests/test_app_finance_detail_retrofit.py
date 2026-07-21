@@ -54,9 +54,11 @@ def test_journal_view_composes_detail_related_and_fk_locked_form():
     assert view["route"] == "/journals/{journal_id:uuid}"
     blocks = json.loads(view["blocks"])
     kinds = [b["kind"] for b in blocks]
-    assert kinds == ["detail", "related", "form"]
+    # An `aggregate` balance block restores the bespoke page's debit/credit
+    # totals + Balanced badge, which no other block could express.
+    assert kinds == ["detail", "aggregate", "related", "form"]
 
-    detail, related, form = blocks
+    detail, aggregate, related, form = blocks
 
     # 1. editable+deletable journal detail (status edit replaces the
     # bespoke one-click draft->posted Post button)
@@ -65,13 +67,22 @@ def test_journal_view_composes_detail_related_and_fk_locked_form():
     assert detail["editable"] is True and detail["deletable"] is True
     assert detail["delete_redirect"] == "/journals"
 
-    # 2. postings, relational (fin_journal_lines by journal_id -- not embedded)
+    # 2. balance summary: sums of the postings' debit/credit cents + a
+    # Balanced/Not badge (debit_cents total must equal credit_cents total).
+    assert aggregate["kind"] == "aggregate"
+    assert aggregate["collection"] == "fin_journal_lines"
+    assert aggregate["fk_field"] == "journal_id"
+    assert aggregate["match"] == "$record_id"
+    assert aggregate["sums"] == ["debit_cents", "credit_cents"]
+    assert aggregate["balance"] == ["debit_cents", "credit_cents"]
+
+    # 3. postings, relational (fin_journal_lines by journal_id -- not embedded)
     assert related["collection"] == "fin_journal_lines"
     assert related["fk_field"] == "journal_id"
     assert related["match"] == "$record_id"
     assert related["title"] == "Postings"
 
-    # 3. add-posting form, journal_id locked to the page's journal
+    # 4. add-posting form, journal_id locked to the page's journal
     assert form["collection"] == "fin_journal_lines"
     assert form["fixed"] == {"journal_id": "$record_id"}
     assert form["title"] == "Add Posting"

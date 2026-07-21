@@ -248,7 +248,7 @@ def test_resolve_record_id_helper_handles_literal_and_token():
 
 def test_known_kinds_include_related_and_thread():
     source = _view_render_source()
-    assert 'KNOWN_KINDS = ["list", "form", "detail", "related", "thread", "count", "markdown", "reader"]' in source
+    assert 'KNOWN_KINDS = ["list", "form", "detail", "related", "thread", "count", "aggregate", "markdown", "reader"]' in source
     assert "related: renderRelated" in source
     assert "thread: renderThread" in source
 

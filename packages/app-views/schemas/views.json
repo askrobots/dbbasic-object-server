@@ -12,7 +12,10 @@
       "type": "text",
       "required": true,
       "label": "Title",
-      "validation": {"min_length": 1, "max_length": 200}
+      "validation": {
+        "min_length": 1,
+        "max_length": 200
+      }
     },
     {
       "name": "route",
@@ -25,14 +28,20 @@
       "type": "enum",
       "label": "Layout",
       "default": "single",
-      "enum": ["single", "two_column", "grid"]
+      "enum": [
+        "single",
+        "two_column",
+        "grid"
+      ]
     },
     {
       "name": "blocks",
       "type": "textarea",
       "label": "Blocks",
-      "help": "JSON list of block descriptors, validated server-side. Each block has a \"kind\" of list, form, detail, related, thread, count, markdown, or reader -- unknown kinds render as a placeholder, never as raw markup.",
-      "validation": {"max_length": 32768}
+      "help": "JSON list of block descriptors, validated server-side. Each block has a \"kind\" of list, form, detail, related, thread, count, aggregate, markdown, or reader -- unknown kinds render as a placeholder, never as raw markup.",
+      "validation": {
+        "max_length": 32768
+      }
     },
     {
       "name": "owner_id",
@@ -60,13 +69,30 @@
     }
   ],
   "forms": {
-    "default": {"fields": ["title", "route", "layout", "blocks", "is_public", "pinned"]}
+    "default": {
+      "fields": [
+        "title",
+        "route",
+        "layout",
+        "blocks",
+        "is_public",
+        "pinned"
+      ]
+    }
   },
   "views": {
     "list_mode": "table",
-    "list_fields": ["title", "route", "layout", "pinned"]
+    "list_fields": [
+      "title",
+      "route",
+      "layout",
+      "pinned"
+    ]
   },
   "search": {
-    "fields": ["title", "route"]
+    "fields": [
+      "title",
+      "route"
+    ]
   }
 }

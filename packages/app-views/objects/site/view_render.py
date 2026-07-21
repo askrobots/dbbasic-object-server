@@ -84,8 +84,11 @@ _STYLE = """
 .countcard { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md);
              padding: 1rem; text-align: center; }
 .countcard.danger { border-color: var(--danger); color: var(--danger); }
-.countnum { font-size: 2.25rem; font-weight: 700; line-height: 1; }
+.countnum { font-size: 2.25rem; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
 .countlabel { color: var(--muted); font-size: 0.85rem; margin-top: 0.25rem; }
+/* aggregate block: a row of stat cards (sums) + an optional balance badge */
+.aggregaterow { display: flex; gap: var(--gap, 0.75rem); flex-wrap: wrap; }
+.aggregaterow .countcard { flex: 1 1 8rem; }
 /* .detailcard/.detailrow/.detaillabel/.detailvalue: global now, in /style
    (app-theme/objects/site/style.py) -- window.dbbasicForm.readOnly (via
    window.dbbasicDetail) can be mounted outside this page too, so those
@@ -104,7 +107,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
 const human = (n) => String(n || "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 const el = (id) => document.getElementById(id);
 
-const KNOWN_KINDS = ["list", "form", "detail", "related", "thread", "count", "markdown", "reader"];
+const KNOWN_KINDS = ["list", "form", "detail", "related", "thread", "count", "aggregate", "markdown", "reader"];
 
 function unsupportedCard(msg) {
   return '<div class="viewblock-error">' + esc(msg || "unsupported block") + "</div>";
@@ -305,6 +308,51 @@ function renderCount(block, mount) {
   load();
 }
 
+// `aggregate` block: sum numeric fields across a set of records -- the
+// document-totals shape (a journal's debit/credit balance, an invoice's line
+// subtotal) that `related` (which only LISTS rows) and `count` (which only
+// COUNTS them) cannot express. Fetches the same 58-shaped record window a
+// `related`/`list` block does, filters to the parent by fk_field/match (like
+// `related`) or by `filters`, sums each field in `sums`, and renders a stat
+// per sum (a `_cents` field is shown in whole units, the same convention
+// /form's read-only renderer uses). `balance: [a, b]` adds a Balanced/Not
+// badge when two sums must be equal (debits == credits). Read-only + live,
+// subscribing to the source like every other block.
+function aggLabel(f) { return human(String(f).replace(/_cents$/, "")); }
+function aggValue(f, n) { return /_cents$/.test(String(f)) ? (Number(n) / 100).toFixed(2) : String(n); }
+function renderAggregate(block, mount) {
+  if (!block.collection) { mount.innerHTML = unsupportedCard("aggregate block needs a collection"); return; }
+  const sums = Array.isArray(block.sums) ? block.sums.filter((s) => typeof s === "string") : [];
+  const fk = block.fk_field;
+  const match = resolveRecordId(block.match);
+  async function load() {
+    const res = await fetch("/collections/" + encodeURIComponent(block.collection) + "/records?limit=500",
+      {credentials: "same-origin", headers: {accept: "application/json"}});
+    if (!res.ok) { mount.innerHTML = unsupportedCard("could not load " + block.collection); return; }
+    let rows = ((await res.json()).records) || [];
+    if (fk && match) rows = rows.filter((r) => r[fk] === match);
+    else if (block.filters) rows = rows.filter((r) => matchesFilters(r, block.filters));
+    const total = {};
+    for (const f of sums) total[f] = rows.reduce((a, r) => a + (Number(r[f]) || 0), 0);
+    const stats = sums.map((f) =>
+      '<div class="countcard"><div class="countnum">' + esc(aggValue(f, total[f]))
+      + '</div><div class="countlabel">' + esc(aggLabel(f)) + "</div></div>").join("");
+    let badge = "";
+    if (Array.isArray(block.balance) && block.balance.length === 2) {
+      const ok = (total[block.balance[0]] || 0) === (total[block.balance[1]] || 0);
+      badge = '<div class="countcard' + (ok ? "" : " danger") + '"><div class="countnum">' + (ok ? "✓" : "✗")
+        + '</div><div class="countlabel">' + (ok ? "Balanced" : "Not balanced") + "</div></div>";
+    }
+    const title = block.title ? '<h3 class="blocktitle">' + esc(block.title) + "</h3>" : "";
+    mount.innerHTML = title + '<div class="aggregaterow">' + (stats + badge || '<div class="state">Nothing to total.</div>') + "</div>";
+  }
+  (function sub() {
+    if (window.dbbasicSubscribe) window.dbbasicSubscribe(block.collection, load);
+    else setTimeout(sub, 400);
+  })();
+  load();
+}
+
 // Safe subset: escape ALL html first, then apply bold/italic/links/line
 // breaks on the escaped text. Never innerHTML the raw block text.
 function renderMarkdown(block, mount) {
@@ -352,7 +400,7 @@ function renderReader(block, mount) {
 }
 
 const RENDERERS = {list: renderList, form: renderForm, detail: renderDetail, related: renderRelated,
-  thread: renderThread, count: renderCount, markdown: renderMarkdown, reader: renderReader};
+  thread: renderThread, count: renderCount, aggregate: renderAggregate, markdown: renderMarkdown, reader: renderReader};
 
 function renderBlocks(view) {
   const container = el("blocks");

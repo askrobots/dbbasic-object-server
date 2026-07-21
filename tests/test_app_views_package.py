@@ -17,7 +17,7 @@ import python_object_runtime
 PACKAGES_ROOT = Path(__file__).resolve().parents[1] / "packages"
 APP_VIEWS_DIR = PACKAGES_ROOT / "app-views"
 
-CLOSED_VOCABULARY = {"list", "form", "detail", "related", "thread", "count", "markdown", "reader"}
+CLOSED_VOCABULARY = {"list", "form", "detail", "related", "thread", "count", "aggregate", "markdown", "reader"}
 
 
 def test_get_package_normalizes_app_views_manifest():
@@ -238,7 +238,7 @@ def test_renderer_returns_404_shape_for_a_missing_view_id(tmp_path):
 def test_renderer_source_covers_the_closed_block_vocabulary():
     source = (APP_VIEWS_DIR / "objects" / "site" / "view_render.py").read_text()
 
-    assert 'KNOWN_KINDS = ["list", "form", "detail", "related", "thread", "count", "markdown", "reader"]' in source
+    assert 'KNOWN_KINDS = ["list", "form", "detail", "related", "thread", "count", "aggregate", "markdown", "reader"]' in source
     for kind in CLOSED_VOCABULARY:
         assert f'"{kind}": render' in source or f"render{kind.capitalize()}" in source
     assert "unsupported" in source.lower()
@@ -343,3 +343,22 @@ def test_view_render_resolves_capture_less_list_view_by_path(tmp_path):
     assert mod._resolve_view_and_record({"_path": "/nope"}, data_dir) == ("", "")
     # _path is reserved -- never mistaken for a route capture value
     assert "_path" in mod._RESERVED_REQUEST_KEYS
+
+
+def test_view_render_has_an_aggregate_block_for_document_totals():
+    """The `aggregate` block sums numeric fields across a related/filtered set
+    (a journal's debit/credit balance, an invoice's line subtotal) -- the
+    document-totals shape `related` (lists) and `count` (counts) can't express.
+    Money `_cents` sums render in whole units; `balance: [a,b]` adds a
+    Balanced/Not badge. The one new block the Stage-6 retrofit surfaced a real
+    need for (the journal's client-computed balance summary)."""
+    source = (APP_VIEWS_DIR / "objects" / "site" / "view_render.py").read_text()
+    assert '"aggregate"' in source  # registered in KNOWN_KINDS
+    assert "aggregate: renderAggregate" in source  # wired into RENDERERS
+    assert "function renderAggregate(block, mount)" in source
+    # sums numeric fields, filtered to the parent like `related`
+    assert "block.sums" in source and "block.fk_field" in source or "const fk = block.fk_field" in source
+    assert "reduce((a, r) => a + (Number(r[f]) || 0), 0)" in source
+    # money-aware (cents -> whole units) and the balance badge
+    assert '/_cents$/.test(String(f)) ? (Number(n) / 100).toFixed(2)' in source
+    assert "block.balance" in source and "Balanced" in source and "Not balanced" in source
