@@ -34,6 +34,7 @@ from typing import Any, Callable, Mapping
 import http_api_contract
 import object_activity
 import object_backup
+import object_analytics
 import object_collections
 import object_correlation
 import object_credentials
@@ -392,6 +393,40 @@ async def app(scope: dict[str, Any], receive, send) -> None:
         object_correlation.reset_current_correlation_id(correlation_token)
         duration_ms = (time.perf_counter() - started_at) * 1000
         _metrics.record_request(method, path, status_code, duration_ms)
+        await _capture_page_view(scope, method, path, status_code, request_headers)
+
+
+async def _capture_page_view(
+    scope: dict[str, Any], method: str, path: str, status_code: int,
+    headers: dict[str, str],
+) -> None:
+    """Append one page_views row for this request (analytics). Off unless
+    DBBASIC_ANALYTICS is set; skips asset/infra paths; the file write is
+    offloaded to a thread so it never blocks the event loop under load; and the
+    whole thing is best-effort -- analytics must NEVER break a response (a
+    missing page_views collection, a full disk, anything, is swallowed)."""
+    try:
+        if not object_analytics.analytics_enabled() or not object_analytics.should_capture(path):
+            return
+        record = object_analytics.build_page_view(
+            path=path, method=method, status=status_code,
+            ip=_client_ip(scope, headers), headers=headers,
+            owners=object_analytics.owner_ips(),
+        )
+        base_dir = _data_dir()
+
+        def _write() -> None:
+            try:
+                object_records.create_collection_record(
+                    object_analytics.PAGE_VIEWS_COLLECTION, record,
+                    base_dir=base_dir, actor="server:analytics",
+                )
+            except Exception:  # noqa: BLE001 -- never surface an analytics write error
+                pass
+
+        await asyncio.to_thread(_write)
+    except Exception:  # noqa: BLE001 -- belt and suspenders on the hot path
+        pass
 
 
 def _realtime_enabled() -> bool:

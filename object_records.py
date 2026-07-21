@@ -997,6 +997,71 @@ def compact_collection(
         }
 
 
+def prune_collection_records(
+    collection: str,
+    *,
+    keep_newer_than: str,
+    timestamp_field: str = "created_at",
+    base_dir: Path | str = DEFAULT_DATA_DIR,
+    roots: Iterable[Path] | None = None,
+) -> dict[str, Any]:
+    """Retention / rotation: drop rows whose ``timestamp_field`` is strictly
+    older than ``keep_newer_than`` (an ISO-8601 string), rewriting the file to
+    only the kept rows in ONE atomic pass (temp + replace, under the file lock)
+    -- the same rewrite path compaction uses.
+
+    This is the tool for high-volume append-mode event logs (page_views) where
+    id-fold compaction cannot help: every row is a distinct event, nothing is
+    superseded, so the only way to bound the file is to age rows out. A row with
+    a missing or unparseable timestamp is KEPT (never delete data we can't
+    date). Only meaningful for append-format collections; a classic-mode or
+    never-written collection is a correctly-reported no-op.
+
+    Returns ``{"rows_before", "rows_after", "removed", "pruned"}``.
+    """
+    _ensure_collection_known(collection, base_dir=base_dir, roots=roots)
+    path = collection_records_file(collection, base_dir=base_dir)
+
+    with _records_file_lock(path):
+        physical_header = _physical_header(path)
+        if not physical_header or physical_header[0] != OP_FIELD:
+            live = len(_read_collection_records(collection, base_dir=base_dir))
+            return {"rows_before": live, "rows_after": live, "removed": 0, "pruned": False}
+
+        with path.open(newline="") as handle:
+            text = handle.read()
+        folded_records, _physical_row_count = _parse_append_body(collection, text, physical_header)
+        logical_fields = physical_header[1:]
+
+        cutoff = str(keep_newer_than)
+
+        def _keep(record: dict[str, str]) -> bool:
+            stamp = str(record.get(timestamp_field) or "")
+            return True if not stamp else stamp >= cutoff
+
+        kept = [record for record in folded_records if _keep(record)]
+        removed = len(folded_records) - len(kept)
+        if removed == 0:
+            return {
+                "rows_before": len(folded_records),
+                "rows_after": len(folded_records),
+                "removed": 0,
+                "pruned": False,
+            }
+
+        _write_collection_records(
+            collection, path, physical_header, kept, cache_fields=logical_fields
+        )
+        _PENDING_COMPACTION.discard(str(path.resolve(strict=False)))
+        _discard_oidx(path)
+        return {
+            "rows_before": len(folded_records),
+            "rows_after": len(kept),
+            "removed": removed,
+            "pruned": True,
+        }
+
+
 def append_collection_stats(
     collection: str,
     *,

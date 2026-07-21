@@ -1,0 +1,25 @@
+{
+  "name": "page_views",
+  "title": "Page Views",
+  "version": 1,
+  "description": "First-party traffic log (object_analytics). One row per non-asset HTTP request: path/method/status/ip/user_agent/referrer/session/is_owner. append storage -- write-hot and log-shaped; the platform's heaviest write path, and the source for analytics rollups. Bounded by the daemon's retention pass (process_analytics_retention), NOT id-fold compaction (a pure event log has nothing to fold). Admin-read only. See plan/2026-07-21-... parity assessment.",
+  "storage": "append",
+  "fields": [
+    { "name": "id" },
+    { "name": "path", "type": "text", "label": "Path" },
+    { "name": "method", "type": "text", "label": "Method" },
+    { "name": "status", "type": "number", "label": "Status" },
+    { "name": "ip", "type": "text", "label": "IP" },
+    { "name": "user_agent", "type": "text", "label": "User Agent" },
+    { "name": "referrer", "type": "text", "label": "Referrer" },
+    { "name": "session_id", "type": "text", "label": "Session" },
+    { "name": "user_id", "type": "text", "label": "User" },
+    { "name": "is_owner", "type": "boolean", "label": "Owner Traffic", "default": "false" },
+    { "name": "created_at", "type": "datetime", "read_only": true, "label": "Time" }
+  ],
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["created_at", "method", "path", "status", "ip"]
+  },
+  "search": { "fields": ["path", "ip", "user_agent"] }
+}

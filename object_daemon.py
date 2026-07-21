@@ -19,7 +19,7 @@ import signal
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -31,6 +31,7 @@ try:
 except ImportError:
     croniter = None
 
+import object_analytics
 import object_collections
 import object_connectors
 import object_email
@@ -1368,6 +1369,52 @@ def process_email_outbox(*, base_dir: Path | str = "data") -> dict | None:
     return {"attempted": attempted, "sent": sent, "dead": dead, "rate_limited": rate_limited}
 
 
+ANALYTICS_RETENTION_MARKER_NAME = ".analytics_retention_last_run"
+ANALYTICS_RETENTION_INTERVAL_ENV = "DBBASIC_ANALYTICS_RETENTION_INTERVAL_SECONDS"
+_DEFAULT_ANALYTICS_RETENTION_INTERVAL = 21600  # 6h -- a rewrite of a big file isn't cheap
+
+
+def process_analytics_retention(*, base_dir: Path | str = "data") -> dict | None:
+    """Age page_views rows out past the retention window, bounding the file.
+
+    page_views is the platform's heaviest write path and a pure event log --
+    id-fold compaction can't shrink it (nothing is superseded), so retention is
+    a time-windowed rewrite (object_records.prune_collection_records). Gated by
+    a marker file + interval (default 6h), the same shape process_compactions
+    uses -- a rewrite of a massive file is not something to do every tick.
+
+    Returns None when disabled/not-due/not-installed; else the prune summary.
+    """
+    if not object_analytics.analytics_enabled():
+        return None
+
+    marker_path = Path(base_dir) / ANALYTICS_RETENTION_MARKER_NAME
+    interval = _env_int(ANALYTICS_RETENTION_INTERVAL_ENV, _DEFAULT_ANALYTICS_RETENTION_INTERVAL)
+    now = time.time()
+    try:
+        if now - marker_path.stat().st_mtime < interval:
+            return None
+    except OSError:
+        pass  # no marker yet -> run now
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    marker_path.write_text(str(now))
+
+    days = object_analytics.retention_days()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat().replace("+00:00", "Z")
+    try:
+        result = object_records.prune_collection_records(
+            object_analytics.PAGE_VIEWS_COLLECTION,
+            keep_newer_than=cutoff, timestamp_field="created_at", base_dir=base_dir,
+        )
+    except (object_collections.CollectionNotFoundError,
+            object_collections.InvalidCollectionNameError, OSError, ValueError):
+        return None
+    if result.get("pruned"):
+        log(f"Analytics: pruned {result['removed']} page_view(s) older than {days}d "
+            f"({result['rows_before']} -> {result['rows_after']})")
+    return result
+
+
 def _connector_package_roots() -> list[str]:
     """Package source roots the reconcile pass loads connectors from, private
     overlay first -- mirrors object_server's resolution so a private connector
@@ -1550,6 +1597,10 @@ def main():
         _connectors_state = f"{len(_connector_decls)} connector(s): " + ", ".join(
             f"{d['package_id']}/{d['collection']}" for d in _connector_decls)
     print(f"Connectors: {_connectors_state}")
+    if object_analytics.analytics_enabled():
+        print(f"Analytics: capture ON (retention {object_analytics.retention_days()}d)")
+    else:
+        print("Analytics: capture off (DBBASIC_ANALYTICS unset)")
     print()
     print("Press Ctrl+C to stop")
     print("=" * 60)
@@ -1614,6 +1665,11 @@ def main():
             process_connectors(base_dir=base_dir)
         except Exception as e:
             log(f"Connectors error: {e}", 'ERROR')
+
+        try:
+            process_analytics_retention(base_dir=base_dir)
+        except Exception as e:
+            log(f"Analytics retention error: {e}", 'ERROR')
 
         now = time.time()
         if now - last_event_cleanup >= EVENT_CLEANUP_INTERVAL_SECONDS:

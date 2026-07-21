@@ -1,0 +1,11 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "role:admin",
+      "actions": ["read"],
+      "collection": "page_views",
+      "reason": "traffic analytics is an admin inspection surface; capture is server-side, never a public write"
+    }
+  ]
+}
