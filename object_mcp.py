@@ -364,6 +364,26 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "get_stock_levels",
+        "description": (
+            "The caller's on-hand stock, folded from stock_moves: per-(product, "
+            "location) net quantity and per-product on-hand totals. A derived "
+            "read (not a plain collection scan) -- thin wrapper over GET /api/"
+            "stock, owner-scoped. Empty when there are no stock moves."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_finance_summary",
+        "description": (
+            "The caller's trial balance: per-account debit/credit totals over "
+            "POSTED journals only (draft journals never contribute). A derived "
+            "read (a fold over journal postings, not a plain collection scan) -- "
+            "thin wrapper over GET /api/finance/summary, owner-scoped."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "read_page",
         "description": (
             "Fetch a URL server-side and return it stripped to readable text: "
@@ -543,6 +563,10 @@ def tool_route(name: str, arguments: Mapping[str, Any]) -> tuple[str, str, str, 
             ("offset", str(_bounded_int(args.get("offset"), default=0, minimum=0, maximum=1_000_000, name="offset"))),
         ]
         return ("GET", "/api/feed", urllib.parse.urlencode(pairs), b"")
+    if name == "get_stock_levels":
+        return ("GET", "/api/stock", "", b"")
+    if name == "get_finance_summary":
+        return ("GET", "/api/finance/summary", "", b"")
     if name == "read_page":
         body = {"url": _required_str(args, "url")}
         return ("POST", "/api/read", "", _json_bytes(body))

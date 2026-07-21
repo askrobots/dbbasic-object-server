@@ -63,8 +63,10 @@ import object_rate_limit
 import object_reader
 import object_reconciles
 import object_record_changes
+import object_finance
 import object_records
 import object_schema_versions
+import object_stock
 import object_ai
 import object_backup_index
 import object_realtime
@@ -652,6 +654,18 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
         # surfaces never collide on one path.
         if path == "/api/feed":
             await _handle_feed(send, method, query, headers)
+            return
+
+        # Stage 7 derived-read verbs: folded/computed data an agent can't get
+        # as a plain collection read. Owner-scoped (the caller's own books/
+        # stock), thin wrappers over object_stock/object_finance's own pure
+        # fold functions -- the MCP get_stock_levels/get_finance_summary verbs
+        # route here.
+        if path == "/api/stock":
+            await _handle_stock_levels(send, method, headers)
+            return
+        if path == "/api/finance/summary":
+            await _handle_finance_summary(send, method, headers)
             return
 
         if path == http_api_contract.PREFS_PATH:
@@ -8263,6 +8277,54 @@ async def _handle_activity(
         base_dir=_data_dir(), actor=session.user_id, limit=limit
     )
     await _send_json(send, {"status": "ok", "activity": entries})
+
+
+async def _handle_stock_levels(send, method: str, headers: dict[str, str]) -> None:
+    """GET /api/stock -> Stage-7 get_stock_levels: the caller's on-hand stock,
+    folded from stock_moves (object_stock.stock_levels). Owner-scoped -- the
+    same fold the site_stock page uses, exposed as JSON for the MCP verb. A
+    missing stock_moves collection or an anonymous caller returns an empty,
+    non-error summary (nothing to fold), never a 500.
+    """
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+    subject = _permission_subject(headers)
+    if not subject.user_id:
+        await _send_json(send, {"status": "ok", "levels": [], "totals": [], "authenticated": False})
+        return
+    try:
+        levels = object_stock.stock_levels(base_dir=_data_dir(), owner=subject.user_id)
+    except (object_collections.CollectionNotFoundError, object_collections.InvalidCollectionNameError):
+        levels = {"levels": [], "totals": []}
+    except (OSError, ValueError) as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=500)
+        return
+    await _send_json(send, {"status": "ok", **levels})
+
+
+async def _handle_finance_summary(send, method: str, headers: dict[str, str]) -> None:
+    """GET /api/finance/summary -> Stage-7 get_finance_summary: the caller's
+    trial balance (per-account debit/credit totals over POSTED journals),
+    folded by object_finance.trial_balance. Owner-scoped, same report the
+    site_trial_balance page renders, as JSON for the MCP verb. No journals /
+    anonymous -> empty rows, never a 500.
+    """
+    if method != "GET":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+    subject = _permission_subject(headers)
+    if not subject.user_id:
+        await _send_json(send, {"status": "ok", "rows": [], "authenticated": False})
+        return
+    try:
+        rows = object_finance.trial_balance(base_dir=_data_dir(), owner=subject.user_id)
+    except (object_collections.CollectionNotFoundError, object_collections.InvalidCollectionNameError):
+        rows = []
+    except (OSError, ValueError) as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=500)
+        return
+    await _send_json(send, {"status": "ok", "rows": rows})
 
 
 async def _handle_feed(
