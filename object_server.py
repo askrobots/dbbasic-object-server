@@ -1103,6 +1103,12 @@ async def _handle_site_route(
         return True
 
     payload.update(params)
+    # The raw matched path, so a routed object can resolve a capture-LESS
+    # route (an index/list view like /entities, whose views.route has no
+    # {param}) -- route captures alone can only identify detail views. A
+    # reserved, underscore-prefixed key (like _identity); objects that don't
+    # need it ignore it. See view_render._resolve_view_and_record.
+    payload["_path"] = path
 
     permission_action = object_permissions.EXECUTE
     if method == "PUT":

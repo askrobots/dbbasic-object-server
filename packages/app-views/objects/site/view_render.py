@@ -425,7 +425,7 @@ _DATA_DIR_ENV = "DBBASIC_DATA_DIR"
 
 # Request keys that are never a route capture, whatever a package's route
 # pattern happens to name its one param -- see _resolve_view_and_record.
-_RESERVED_REQUEST_KEYS = {"_identity", "embed", "view_id"}
+_RESERVED_REQUEST_KEYS = {"_identity", "embed", "view_id", "_path"}
 
 
 def _data_dir():
@@ -508,6 +508,18 @@ def _resolve_view_and_record(request, base_dir):
         capture = _route_capture_name(record.get("route"))
         if capture and capture in candidates:
             return str(record.get("id") or ""), candidates[capture]
+
+    # Capture-LESS route (an index/list view like /entities, whose views.route
+    # is a plain literal path with no {param}): the request carries no capture
+    # to match on, so resolve by the raw matched path against the view's own
+    # `route` field. The path (request["_path"], set by object_server for every
+    # routed object) stays the single source of truth -- no second route table.
+    path = str(request.get("_path") or "").strip()
+    if path:
+        for record in records:
+            route = record.get("route")
+            if route and _route_capture_name(route) is None and route == path:
+                return str(record.get("id") or ""), ""
     return "", ""
 
 

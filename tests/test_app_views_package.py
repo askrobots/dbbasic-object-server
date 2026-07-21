@@ -307,3 +307,39 @@ def test_app_theme_manifest_still_normalizes_after_nav_change():
     package = object_packages.get_package("app-theme", root=PACKAGES_ROOT)
     assert package["id"] == "app-theme"
     assert {obj["id"] for obj in package["objects"]} >= {"site_nav"}
+
+
+def test_view_render_resolves_capture_less_list_view_by_path(tmp_path):
+    """view_render can route a capture-LESS index/list view (e.g. /entities,
+    whose views.route is a plain literal with no {param}) by matching the raw
+    request path (request["_path"], set by object_server for every routed
+    object) against the view's `route` -- not just detail views with a route
+    capture. The views record stays the single source of truth; no second
+    route table."""
+    import types
+
+    src = (APP_VIEWS_DIR / "objects" / "site" / "view_render.py").read_text()
+    mod = types.ModuleType("view_render_under_test")
+    exec(compile(src, "view_render.py", "exec"), mod.__dict__)
+
+    data_dir = tmp_path / "data"
+    (data_dir / "collections" / "views").mkdir(parents=True)
+    (data_dir / "collections" / "views" / "records.tsv").write_text(
+        "id\troute\n"
+        "view_entities_list\t/entities\n"
+        "view_entities_detail\t/entities/{entity_id:uuid}\n"
+    )
+
+    uuid = "00000000-0000-4000-8000-000000000000"
+    # capture-less list route resolves by _path, with no record id
+    assert mod._resolve_view_and_record({"_path": "/entities"}, data_dir) == (
+        "view_entities_list", "",
+    )
+    # detail route still resolves by its single capture (record id present)
+    assert mod._resolve_view_and_record(
+        {"entity_id": uuid, "_path": f"/entities/{uuid}"}, data_dir
+    ) == ("view_entities_detail", uuid)
+    # an unknown path resolves to nothing (404 upstream), never a wrong view
+    assert mod._resolve_view_and_record({"_path": "/nope"}, data_dir) == ("", "")
+    # _path is reserved -- never mistaken for a route capture value
+    assert "_path" in mod._RESERVED_REQUEST_KEYS
