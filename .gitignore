@@ -15,3 +15,11 @@ venv/
 # (identity, credentials, sessions, records, logs, versions, backups)
 /data/
 /objects/
+
+# Closed-source / private packages — the open-core overlay. Proprietary
+# packages (e.g. Mailcow email hosting) live here and are never committed;
+# only the directory's README is tracked, to document the convention.
+# The server discovers this root alongside packages/ (private wins on id
+# collision). See packages-private/README.md.
+/packages-private/*
+!/packages-private/README.md

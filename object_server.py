@@ -153,6 +153,8 @@ FILTER_RESERVED_PARAMS = frozenset({"limit", "offset", "sort", "q"})
 # can't become an unbounded OR by the back door).
 FILTER_IN_MAX_VALUES = 50
 PACKAGES_DIR_ENV = "DBBASIC_PACKAGES_DIR"
+PRIVATE_PACKAGES_DIR_ENV = "DBBASIC_PRIVATE_PACKAGES_DIR"
+DEFAULT_PRIVATE_PACKAGES_DIR = "packages-private"
 PACKAGE_INSTALLS_ENABLED_ENV = "DBBASIC_ENABLE_PACKAGE_INSTALLS"
 PACKAGE_RESTORE_ENABLED_ENV = "DBBASIC_ENABLE_PACKAGE_RESTORE"
 DEFAULT_MAX_REQUEST_BYTES = 1_048_576
@@ -3887,7 +3889,7 @@ def _admin_capabilities_payload() -> dict[str, Any]:
 
 
 def _admin_package_summaries() -> list[dict[str, Any]]:
-    packages = object_packages.list_packages(root=_packages_dir())
+    packages = _list_all_packages()
     return [_admin_package_summary(package) for package in packages]
 
 
@@ -3895,7 +3897,7 @@ def _admin_package_summary(package: Mapping[str, Any]) -> dict[str, Any]:
     package_id = str(package["id"])
     plan = object_packages.dry_run_package(
         package_id,
-        root=_packages_dir(),
+        root=_root_for_package(package_id),
         base_dir=_data_dir(),
     )
     changes = object_package_changes.list_package_changes(
@@ -4415,7 +4417,7 @@ async def _handle_packages(
         return
 
     try:
-        packages = object_packages.list_packages(root=_packages_dir())
+        packages = _list_all_packages()
     except object_packages.InvalidPackageManifestError as exc:
         await _send_json(send, {"status": "error", "error": str(exc)}, status=500)
         return
@@ -4455,7 +4457,7 @@ async def _handle_package(
         if dry_run:
             plan = object_packages.dry_run_package(
                 package_id,
-                root=_packages_dir(),
+                root=_root_for_package(package_id),
                 base_dir=_data_dir(),
             )
             change = object_package_changes.append_package_change(
@@ -4476,11 +4478,11 @@ async def _handle_package(
                 "status": "ok",
                 "package": object_packages.get_package(
                     package_id,
-                    root=_packages_dir(),
+                    root=_root_for_package(package_id),
                 ),
                 "provenance": object_packages.package_status(
                     package_id,
-                    root=_packages_dir(),
+                    root=_root_for_package(package_id),
                     base_dir=_data_dir(),
                     object_roots=get_base_object_roots(),
                 ),
@@ -4546,7 +4548,7 @@ async def _handle_package_install(
         allow_replace = _optional_payload_bool(payload, "allow_replace") is True
         plan = object_packages.dry_run_package(
             package_id,
-            root=_packages_dir(),
+            root=_root_for_package(package_id),
             base_dir=_data_dir(),
         )
         requested_change = object_package_changes.append_package_change(
@@ -4571,7 +4573,7 @@ async def _handle_package_install(
 
         install_result = object_packages.install_package(
             package_id,
-            root=_packages_dir(),
+            root=_root_for_package(package_id),
             base_dir=_data_dir(),
             object_roots=get_base_object_roots(),
             allow_replace=allow_replace,
@@ -11050,6 +11052,45 @@ def _data_dir() -> str:
 
 def _packages_dir() -> str:
     return os.environ.get(PACKAGES_DIR_ENV, object_packages.PACKAGES_DIR)
+
+
+def _private_packages_dir() -> str:
+    return os.environ.get(PRIVATE_PACKAGES_DIR_ENV, DEFAULT_PRIVATE_PACKAGES_DIR)
+
+
+def _package_roots() -> list[str]:
+    """Package source roots, highest precedence first. The private overlay
+    (closed-source packages, gitignored -- see packages-private/README.md)
+    is searched ahead of the open-core `packages/` dir, so a private package
+    shadows an open one that shares its id. The private root is included only
+    when it actually exists, so an open-only checkout behaves exactly as
+    before."""
+    roots: list[str] = []
+    private = _private_packages_dir()
+    if private and Path(private).is_dir():
+        roots.append(private)
+    roots.append(_packages_dir())
+    return roots
+
+
+def _root_for_package(package_id: str) -> str:
+    """The root a specific package id resolves from (private overlay wins).
+    Falls back to the open packages dir when neither root has it, so the
+    caller still gets the normal PackageNotFoundError from downstream."""
+    for root in _package_roots():
+        if (Path(root) / package_id / object_packages.MANIFEST_FILE).is_file():
+            return root
+    return _packages_dir()
+
+
+def _list_all_packages() -> list[dict[str, Any]]:
+    """Package summaries merged across every root, private overlay first so a
+    private package shadows an open one with the same id."""
+    seen: dict[str, dict[str, Any]] = {}
+    for root in _package_roots():
+        for package in object_packages.list_packages(root=root):
+            seen.setdefault(str(package["id"]), package)
+    return list(seen.values())
 
 
 def _primary_objects_dir() -> str:
