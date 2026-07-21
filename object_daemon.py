@@ -1341,10 +1341,14 @@ def _connector_package_roots() -> list[str]:
     (e.g. Mailcow, in packages-private/) is found on the deployment where it is
     installed, and a private declaration shadows an open one for a collection."""
     roots: list[str] = []
-    private = os.environ.get("DBBASIC_PRIVATE_PACKAGES_DIR", "packages-private")
+    packages = os.environ.get("DBBASIC_PACKAGES_DIR", object_packages.PACKAGES_DIR)
+    # Private overlay defaults to a sibling of the active packages dir (same
+    # rule as object_server._private_packages_dir), so overriding the packages
+    # dir isolates the overlay too.
+    private = os.environ.get("DBBASIC_PRIVATE_PACKAGES_DIR") or str(Path(packages).parent / "packages-private")
     if private and Path(private).is_dir():
         roots.append(private)
-    roots.append(os.environ.get("DBBASIC_PACKAGES_DIR", object_packages.PACKAGES_DIR))
+    roots.append(packages)
     return roots
 
 

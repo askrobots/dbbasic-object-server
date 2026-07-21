@@ -63,6 +63,18 @@ def test_private_shadows_open_on_id_collision(tmp_path, monkeypatch):
     assert object_server._root_for_package("app-email") == str(private)
 
 
+def test_private_root_defaults_to_sibling_of_packages_dir(tmp_path, monkeypatch):
+    # With only the packages dir overridden, the private overlay must derive as
+    # a SIBLING of it -- never a fixed cwd-relative path -- so a hermetic test
+    # can't accidentally pick up a developer's real packages-private/ contents.
+    pkgs = tmp_path / "pkgs"; pkgs.mkdir()
+    monkeypatch.setenv(object_server.PACKAGES_DIR_ENV, str(pkgs))
+    monkeypatch.delenv(object_server.PRIVATE_PACKAGES_DIR_ENV, raising=False)
+    assert object_server._private_packages_dir() == str(tmp_path / "packages-private")
+    # the sibling doesn't exist -> overlay empty -> only the open root is searched
+    assert object_server._package_roots() == [str(pkgs)]
+
+
 def test_resolve_falls_back_to_open_root_for_unknown_id(tmp_path, monkeypatch):
     public = tmp_path / "packages"; public.mkdir()
     private = tmp_path / "packages-private"; private.mkdir()

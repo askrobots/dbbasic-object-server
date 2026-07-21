@@ -11069,7 +11069,14 @@ def _packages_dir() -> str:
 
 
 def _private_packages_dir() -> str:
-    return os.environ.get(PRIVATE_PACKAGES_DIR_ENV, DEFAULT_PRIVATE_PACKAGES_DIR)
+    # Default to a SIBLING of the active packages dir, not a fixed cwd-relative
+    # path: this way overriding DBBASIC_PACKAGES_DIR (e.g. a hermetic test)
+    # isolates the private overlay too, while a normal deploy (packages/ +
+    # packages-private/ side by side) still finds it.
+    explicit = os.environ.get(PRIVATE_PACKAGES_DIR_ENV)
+    if explicit:
+        return explicit
+    return str(Path(_packages_dir()).parent / DEFAULT_PRIVATE_PACKAGES_DIR)
 
 
 def _package_roots() -> list[str]:
