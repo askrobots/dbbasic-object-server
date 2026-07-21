@@ -1,0 +1,29 @@
+{
+  "name": "entities",
+  "title": "Entities",
+  "version": 1,
+  "description": "A distinct set of books -- a business or household under one login. Owner-scoped (owner_id = the login that owns this set of books), a faithful port of the predecessor's Entity model (its `user` FK), adapted to this system's owner_id convention. `entity_id` on the finance/commerce collections points INTO this collection -- a scoping FK, not composition (plan/vocabulary/65-multi-entity-spec.md). Multi-currency FX, inter-entity transactions, and cross-entity consolidation are out of scope; base_currency is stored (home currency for reports) but not converted. mode drives the chart-of-accounts auto-seed (simple = income+expense; standard/double_entry = the full standard chart).",
+  "fields": [
+    { "name": "id" },
+    { "name": "name", "type": "text", "required": true, "label": "Name" },
+    { "name": "owner_id", "type": "text", "required": true, "label": "Owner", "help": "The login that owns this set of books." },
+    { "name": "mode", "type": "enum", "enum": ["simple", "standard", "double_entry"], "default": "simple", "label": "Mode", "help": "Simple = income/expense only; standard/double_entry = full chart of accounts." },
+    { "name": "business_type", "type": "enum", "enum": ["freelancer", "small_business", "nonprofit", "other"], "default": "freelancer", "label": "Business Type" },
+    { "name": "status", "type": "enum", "enum": ["active", "closed", "archived"], "default": "active", "label": "Status" },
+    { "name": "base_currency", "type": "text", "default": "USD", "label": "Base Currency", "help": "Home currency for this entity's reports and totals. Stored, not FX-converted (multi-currency is out of scope for v1)." },
+    { "name": "description", "type": "textarea", "label": "Description" },
+    { "name": "project_id", "type": "text", "label": "Project", "relation": { "collection": "projects", "display_field": "name" }, "help": "Optional: link this set of books to a project." },
+    { "name": "created_at", "type": "datetime", "read_only": true, "label": "Created" },
+    { "name": "updated_at", "type": "datetime", "read_only": true, "label": "Updated" },
+    { "name": "extra", "type": "text", "label": "Extra", "store": "extra" }
+  ],
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["name", "business_type", "base_currency", "status"]
+  },
+  "forms": {
+    "default": {
+      "fields": ["name", "mode", "business_type", "status", "base_currency", "description", "project_id"]
+    }
+  }
+}

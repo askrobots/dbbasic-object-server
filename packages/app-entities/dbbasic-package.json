@@ -1,0 +1,33 @@
+{
+  "id": "app-entities",
+  "name": "Entities",
+  "version": "0.1.0",
+  "description": "Multi-entity: a distinct set of books (a business or household) under one login, a faithful port of the predecessor's Entity model (plan/vocabulary/65-multi-entity-spec.md). Owner-scoped -- each entity belongs to one login (owner_id), and a login can run several. entity_id on the finance/commerce collections is a scoping FK pointing INTO this collection (added additively to those packages, backfilled to a per-owner default). Because entities are owner-scoped, the scoping needs NO permission-core change: access stays owner_id-based (you only see your own rows) and the current entity is a client-held 58 filter (entity_id=) that only narrows within your own data. /entities (list + create) and /entities/{entity_id:uuid} (owner-editable detail) are seeded 59 views via site_view_render -- URL-addressable, no bespoke page. mode drives chart-of-accounts auto-seed on creation (deferred to a later slice: a Setup Accounts action). Out of scope v1: multi-member entity sharing, multi-currency FX, inter-entity transactions, cross-entity consolidation.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": ["app-views"],
+  "objects": [],
+  "schemas": [
+    {
+      "collection": "entities",
+      "path": "schemas/entities.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "views",
+      "path": "seed/views.tsv"
+    },
+    {
+      "collection": "site_routes",
+      "path": "seed/site_routes.tsv"
+    }
+  ],
+  "migrations": []
+}
