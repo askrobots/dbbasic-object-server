@@ -1,20 +1,16 @@
 {
   "id": "app-orders",
   "name": "Orders",
-  "version": "0.1.0",
-  "description": "Sales and purchase orders (doc_type on one shared schema, the real SO/PO split): owner-scoped CRUD, guarded status lifecycle (draft/confirmed/processing/shipped/delivered/cancelled), and a HANDLES totals handler (system_order_totals) that stamps subtotal/tax/total from order_lines in integer cents on every line change. Order lines optionally relate to app-catalog's products collection but do not require it -- a line may be free-text. Reconciled against a private predecessor-system audit, not part of this repo. Deferred to a later slice: auto-numbered sequences per doc_type (an order_counters collection + a closed orders create route), the convert_to_invoice ACTION (invoice_id exists on orders so the provenance link has somewhere to land once that flow is built), stock decrement on ship, and purchase-order receiving. subtotal_cents/tax_cents/total_cents/line_total_cents/line_tax_cents are deliberately NOT schema read_only -- see objects/system/order_totals.py's module docstring for why (update_collection_record has no read_only write exception, so a truly read_only field could never be re-stamped). Order detail permalinks need a site_routes record mapping /orders/{order_id:uuid} to site_order_view -- not seeded by this package, same precedent as app-invoices' /invoices/{invoice_id:uuid} and app-catalog's /products/{product_id:uuid}.",
+  "version": "0.2.0",
+  "description": "Sales and purchase orders (doc_type on one shared schema, the real SO/PO split): owner-scoped CRUD, guarded status lifecycle (draft/confirmed/processing/shipped/delivered/cancelled), and a HANDLES totals handler (system_order_totals) that stamps subtotal/tax/total from order_lines in integer cents on every line change. Order lines optionally relate to app-catalog's products collection but do not require it -- a line may be free-text. Reconciled against a private predecessor-system audit, not part of this repo. Deferred to a later slice: auto-numbered sequences per doc_type (an order_counters collection + a closed orders create route), the convert_to_invoice ACTION (invoice_id exists on orders so the provenance link has somewhere to land once that flow is built), stock decrement on ship, and purchase-order receiving. subtotal_cents/tax_cents/total_cents/line_total_cents/line_tax_cents are deliberately NOT schema read_only -- see objects/system/order_totals.py's module docstring for why (update_collection_record has no read_only write exception, so a truly read_only field could never be re-stamped). The order permalink /orders/{order_id:uuid} is now a seeded 59 detail view (site_view_render): a composed page of three generic block renderers -- an editable+deletable `detail` block (the order; money renders via /form's cents formatting, no custom JS, and status transitions become status-field edits in the owner edit form, guarded by the 10-flow transitions above -- no one-click status buttons, the same make-it-basic trade app-forum's pin/lock takes), a `related` block (order_lines flat by order_id), and a `form` block with fixed:{order_id:$record_id} (Add Line, FK locked to the page's order). order_lines stays a RELATIONAL collection, not embedded on orders -- a line is addressable on its own (it can have things attached to it later), matching every other line-item package here (app-invoices' invoice_lines, app-forum's forum_replies). No bespoke per-order page.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
-  "dependencies": [],
+  "dependencies": ["app-views"],
   "objects": [
     {
       "id": "site_orders",
       "path": "objects/site/orders.py"
-    },
-    {
-      "id": "site_order_view",
-      "path": "objects/site/order_view.py"
     },
     {
       "id": "system_order_totals",
@@ -44,6 +40,14 @@
     {
       "collection": "order_lines",
       "path": "seed/order_lines.tsv"
+    },
+    {
+      "collection": "views",
+      "path": "seed/views.tsv"
+    },
+    {
+      "collection": "site_routes",
+      "path": "seed/site_routes.tsv"
     }
   ],
   "migrations": []

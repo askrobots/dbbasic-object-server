@@ -37,13 +37,16 @@ def test_get_package_normalizes_app_finance_manifest():
     assert package["name"] == "Finance"
     assert {schema["collection"] for schema in package["schemas"]} == set(_SCHEMA_NAMES)
     # site_setup_accounts (65 slice 4) added the Setup Accounts action object.
+    # site_journal_view was retrofitted away (stage-6): the journal detail
+    # page is now a seeded 59 view (site_view_render), not a bespoke object.
     assert {obj["id"] for obj in package["objects"]} == {
-        "site_accounts", "site_journals", "site_journal_view", "site_trial_balance",
+        "site_accounts", "site_journals", "site_trial_balance",
         "site_setup_accounts",
     }
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
-    # + a site_routes seed for the /finance/setup-accounts route (65 slice 4).
-    assert {entry["collection"] for entry in package["seed"]} == set(_SCHEMA_NAMES) | {"site_routes"}
+    # + a site_routes seed for /finance/setup-accounts and /journals/{id},
+    # + a views seed for the retrofitted journal detail view.
+    assert {entry["collection"] for entry in package["seed"]} == set(_SCHEMA_NAMES) | {"views", "site_routes"}
 
 
 def test_dry_run_app_finance_package_is_safe(tmp_path):
@@ -77,8 +80,10 @@ def test_install_app_finance_package_loads_schemas(tmp_path):
 
     assert (object_root / "site" / "accounts.py").is_file()
     assert (object_root / "site" / "journals.py").is_file()
-    assert (object_root / "site" / "journal_view.py").is_file()
     assert (object_root / "site" / "trial_balance.py").is_file()
+    # journal_view.py was deleted (stage-6 retrofit): the journal detail
+    # page is now a seeded 59 view, not an installed object file.
+    assert not (object_root / "site" / "journal_view.py").exists()
 
 
 def test_schema_json_files_are_valid_and_versioned():
@@ -287,8 +292,11 @@ def test_site_pages_are_publicly_executable():
     visitors), never public read on a collection -- same split app-invoices
     and app-catalog use.
     """
+    # site_journal_view is gone (stage-6 retrofit): the journal detail page
+    # is now site_view_render, granted public execute by app-views itself,
+    # not by a per-package rule here (see packages/app-views/permissions).
     policy = _app_finance_policy()
-    for object_id in ("site_accounts", "site_journals", "site_journal_view", "site_trial_balance"):
+    for object_id in ("site_accounts", "site_journals", "site_trial_balance"):
         decision = object_permissions.check_permission(
             None, object_permissions.EXECUTE, policy=policy, object_id=object_id,
         )

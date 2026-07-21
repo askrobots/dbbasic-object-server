@@ -45,14 +45,16 @@ def test_get_package_normalizes_app_orders_manifest():
     }
     assert {obj["id"] for obj in package["objects"]} == {
         "site_orders",
-        "site_order_view",
         "system_order_totals",
     }
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
     assert {entry["collection"] for entry in package["seed"]} == {
         "orders",
         "order_lines",
+        "views",
+        "site_routes",
     }
+    assert {dep["id"] for dep in package["dependencies"]} == {"app-views"}
 
 
 def test_dry_run_app_orders_package_is_safe(tmp_path):
@@ -89,7 +91,6 @@ def test_install_app_orders_package_loads_schemas(tmp_path):
     assert orders_schema["name"] == "orders"
     assert lines_schema["name"] == "order_lines"
     assert (object_root / "site" / "orders.py").is_file()
-    assert (object_root / "site" / "order_view.py").is_file()
     assert (object_root / "system" / "order_totals.py").is_file()
 
 
@@ -236,14 +237,17 @@ def test_order_lines_schema_matches_the_brief():
 def test_product_id_relation_present_and_optional():
     """Order lines relate to app-catalog's products collection, but the
     relation is optional -- a line may be free-text (task brief), and
-    this package declares no dependency on app-catalog.
+    this package declares no dependency on app-catalog. It does depend on
+    app-views now (the retrofit's seeded view_order_detail needs
+    site_view_render), same as every other Stage-6-retrofitted package.
     """
     by_name = {f["name"]: f for f in _order_lines_schema()["fields"]}
     assert by_name["product_id"]["relation"]["collection"] == "products"
     assert "required" not in by_name["product_id"] or not by_name["product_id"]["required"]
 
     manifest = json.loads((APP_ORDERS_DIR / "dbbasic-package.json").read_text())
-    assert manifest["dependencies"] == []
+    assert "app-catalog" not in manifest.get("dependencies", [])
+    assert manifest.get("dependencies", []) == ["app-views"]
 
 
 def test_customer_snapshot_fields_present_alongside_optional_relation():
@@ -339,18 +343,21 @@ def test_others_cannot_touch_someone_elses_order_lines():
         assert decision.allowed is False
 
 
-def test_orders_and_order_view_pages_are_publicly_executable():
-    """Public execute on the *page objects* (they show a sign-in prompt to
+def test_orders_page_is_publicly_executable():
+    """Public execute on the *page object* (it shows a sign-in prompt to
     visitors), never public read on the *collection* -- same split
-    app-invoices uses for site_invoices/site_invoice_view.
+    app-invoices uses for site_invoices. The order detail permalink is now
+    the seeded view_order_detail view rendered by the shared
+    site_view_render object (see test_app_orders_detail_retrofit.py), not
+    a bespoke page object of this package's own, so it carries no
+    per-package permission rule here.
     """
     policy = _app_orders_policy()
 
-    for object_id in ("site_orders", "site_order_view"):
-        decision = object_permissions.check_permission(
-            None, object_permissions.EXECUTE, policy=policy, object_id=object_id
-        )
-        assert decision.allowed is True
+    decision = object_permissions.check_permission(
+        None, object_permissions.EXECUTE, policy=policy, object_id="site_orders"
+    )
+    assert decision.allowed is True
 
 
 def test_seed_tsvs_have_no_data_rows_and_match_schema_field_order():

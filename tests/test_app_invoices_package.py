@@ -46,13 +46,14 @@ def test_get_package_normalizes_app_invoices_manifest():
     }
     assert {obj["id"] for obj in package["objects"]} == {
         "site_invoices",
-        "site_invoice_view",
         "system_invoice_totals",
     }
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
     assert {entry["collection"] for entry in package["seed"]} == {
         "invoices",
         "invoice_lines",
+        "views",
+        "site_routes",
     }
 
 
@@ -93,7 +94,6 @@ def test_install_app_invoices_package_loads_schemas(tmp_path):
     assert invoices_schema["name"] == "invoices"
     assert lines_schema["name"] == "invoice_lines"
     assert (object_root / "site" / "invoices.py").is_file()
-    assert (object_root / "site" / "invoice_view.py").is_file()
     assert (object_root / "system" / "invoice_totals.py").is_file()
 
 
@@ -335,18 +335,20 @@ def test_others_cannot_touch_someone_elses_invoice_lines():
         assert decision.allowed is False
 
 
-def test_invoices_and_invoice_view_pages_are_publicly_executable():
-    """Public execute on the *page objects* (they show a sign-in prompt to
+def test_invoices_page_is_publicly_executable():
+    """Public execute on the *page object* (it shows a sign-in prompt to
     visitors), never public read on the *collection* -- same split
-    app-notes uses for site_notes/site_note_view.
+    app-notes uses for site_notes. The invoice detail permalink is now a
+    seeded 59 view rendered by site_view_render (app-views' own package),
+    not a per-package object, so it has no rule here anymore -- see
+    tests/test_app_invoices_detail_retrofit.py.
     """
     policy = _app_invoices_policy()
 
-    for object_id in ("site_invoices", "site_invoice_view"):
-        decision = object_permissions.check_permission(
-            None, object_permissions.EXECUTE, policy=policy, object_id=object_id
-        )
-        assert decision.allowed is True
+    decision = object_permissions.check_permission(
+        None, object_permissions.EXECUTE, policy=policy, object_id="site_invoices"
+    )
+    assert decision.allowed is True
 
 
 def test_seed_tsvs_have_no_data_rows_and_match_schema_field_order():

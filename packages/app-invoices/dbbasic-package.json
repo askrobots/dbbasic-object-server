@@ -1,20 +1,16 @@
 {
   "id": "app-invoices",
   "name": "Invoices",
-  "version": "0.2.0",
-  "description": "Line-item invoices, quotes, and credit notes (doc_type on one shared schema): owner-scoped CRUD, guarded status lifecycle (draft/sent/paid/partial/overdue/void), and a HANDLES totals handler (system_invoice_totals) that stamps subtotal/tax/total/balance from invoice_lines in integer cents on every line change. Deferred to a later slice: auto-numbered sequences per doc_type (invoice_counters + a closed invoices create route), the tokenized public/printable /i/{token} view, order-to-invoice conversion, and partial-payment recording (amount_paid_cents exists but nothing writes it yet). See plan/vocabulary/20-invoice-spec.md. subtotal_cents/tax_cents/total_cents/balance_due_cents/line_total_cents/line_tax_cents are deliberately NOT schema read_only -- see objects/system/invoice_totals.py's module docstring for why (update_collection_record has no read_only write exception, so a truly read_only field could never be re-stamped). Invoice detail permalinks need a site_routes record mapping /invoices/{invoice_id:uuid} to site_invoice_view -- not seeded by this package, same precedent as app-notes' /notes/{note_id:uuid}.",
+  "version": "0.3.0",
+  "description": "Line-item invoices, quotes, and credit notes (doc_type on one shared schema): owner-scoped CRUD, guarded status lifecycle (draft/sent/paid/partial/overdue/void), and a HANDLES totals handler (system_invoice_totals) that stamps subtotal/tax/total/balance from invoice_lines in integer cents on every line change. Deferred to a later slice: auto-numbered sequences per doc_type (invoice_counters + a closed invoices create route), the tokenized public/printable /i/{token} view, order-to-invoice conversion, and partial-payment recording (amount_paid_cents exists but nothing writes it yet). See plan/vocabulary/20-invoice-spec.md. subtotal_cents/tax_cents/total_cents/balance_due_cents/line_total_cents/line_tax_cents are deliberately NOT schema read_only -- see objects/system/invoice_totals.py's module docstring for why (update_collection_record has no read_only write exception, so a truly read_only field could never be re-stamped). The invoice permalink /invoices/{invoice_id:uuid} is now a seeded 59 detail view (site_view_render): a composed page of three generic block renderers -- an editable+deletable `detail` block (the invoice; the status field's own 10-flow transition guards enforce legal moves through the owner edit form, so no one-click Send/Void buttons are built, the same make-it-basic trade app-forum's pin/lock retrofit made), a `related` block (invoice_lines by invoice_id -- lines stay their own relational collection, never embedded, because they are the thing receipts/notes attach to later), and a `form` block with fixed:{invoice_id:$record_id} (Add Line, FK locked to the page's invoice). No bespoke per-invoice page or hand-written money-totals table -- the detail block's own /form cents formatting renders subtotal/tax/total/paid/balance correctly with no custom JS. No public/anonymous path in this slice; plan/vocabulary/20-invoice-spec.md's tokenized /i/{public_token} view is still a later slice.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
-  "dependencies": [],
+  "dependencies": ["app-views"],
   "objects": [
     {
       "id": "site_invoices",
       "path": "objects/site/invoices.py"
-    },
-    {
-      "id": "site_invoice_view",
-      "path": "objects/site/invoice_view.py"
     },
     {
       "id": "system_invoice_totals",
@@ -44,6 +40,14 @@
     {
       "collection": "invoice_lines",
       "path": "seed/invoice_lines.tsv"
+    },
+    {
+      "collection": "views",
+      "path": "seed/views.tsv"
+    },
+    {
+      "collection": "site_routes",
+      "path": "seed/site_routes.tsv"
     }
   ],
   "migrations": []

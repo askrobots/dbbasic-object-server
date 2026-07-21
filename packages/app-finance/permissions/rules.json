@@ -84,15 +84,6 @@
       "actions": [
         "execute"
       ],
-      "object_id": "site_journal_view",
-      "reason": "the journal detail page is public; the row-filtered collection API still decides which journal is actually returned"
-    },
-    {
-      "effect": "allow",
-      "principal": "public",
-      "actions": [
-        "execute"
-      ],
       "object_id": "site_trial_balance",
       "reason": "the trial balance page is public; it shows a sign-in prompt to visitors and the page itself scopes the report to the signed-in owner (see objects/site/trial_balance.py)"
     },
