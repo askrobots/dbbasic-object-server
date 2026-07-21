@@ -32,10 +32,12 @@ except ImportError:
     croniter = None
 
 import object_collections
+import object_connectors
 import object_email
 import object_events
 import object_materialize
 import object_notify
+import object_packages
 import object_record_changes
 import object_records
 import object_rollups
@@ -1333,6 +1335,103 @@ def process_email_outbox(*, base_dir: Path | str = "data") -> dict | None:
     return {"attempted": attempted, "sent": sent, "dead": dead, "rate_limited": rate_limited}
 
 
+def _connector_package_roots() -> list[str]:
+    """Package source roots the reconcile pass loads connectors from, private
+    overlay first -- mirrors object_server's resolution so a private connector
+    (e.g. Mailcow, in packages-private/) is found on the deployment where it is
+    installed, and a private declaration shadows an open one for a collection."""
+    roots: list[str] = []
+    private = os.environ.get("DBBASIC_PRIVATE_PACKAGES_DIR", "packages-private")
+    if private and Path(private).is_dir():
+        roots.append(private)
+    roots.append(os.environ.get("DBBASIC_PACKAGES_DIR", object_packages.PACKAGES_DIR))
+    return roots
+
+
+def _connector_declarations() -> list[dict]:
+    """All connector declarations across roots, deduped by collection with the
+    private overlay winning (first root wins)."""
+    decls: list[dict] = []
+    seen: set[str] = set()
+    for root in _connector_package_roots():
+        for decl in object_packages.iter_connectors(root=root):
+            if decl["collection"] in seen:
+                continue
+            seen.add(decl["collection"])
+            decls.append(decl)
+    return decls
+
+
+def process_connectors(*, base_dir: Path | str = "data") -> dict | None:
+    """03 external connectors: reconcile each declared collection against its
+    outside system.
+
+    For every collection a package declares a connector for, selects the rows
+    whose desired state the external world doesn't match yet (pending /
+    pending_delete, backoff due), calls the connector's `reconcile(record)`, and
+    writes the outcome back via object_connectors.plan_sync -- synced/deleted on
+    success, retry-with-backoff on a transient error, dead on a permanent one or
+    exhausted attempts. The driver owns the lifecycle; the connector only
+    reports ok/error/permanent. Per-row try/except isolates one bad row, and
+    per-collection isolation keeps one bad connector from stopping the rest.
+
+    Returns None when disabled or nothing declares a connector; else a summary.
+    """
+    if not object_connectors.connectors_pass_enabled(base_dir=base_dir):
+        return None
+    decls = _connector_declarations()
+    if not decls:
+        return None
+
+    config = object_connectors.connector_config_from_env()
+    now = datetime.now(timezone.utc)
+    reconciled = synced = dead = 0
+
+    for decl in decls:
+        try:
+            records = object_records.read_collection_records(decl["collection"], base_dir=base_dir)
+        except (object_collections.CollectionNotFoundError,
+                object_collections.InvalidCollectionNameError, OSError, ValueError):
+            continue  # collection not installed here -> nothing to reconcile
+        due = [r for r in records if object_connectors.is_due(r, now)]
+        if not due:
+            continue
+        due.sort(key=lambda r: (str(r.get("sync_next_at") or ""), str(r.get("created_at") or "")))
+        try:
+            reconcile = object_connectors.load_connector(decl["module"], decl["entry"])
+        except object_connectors.ConnectorLoadError as exc:
+            log(f"Connector: {decl['package_id']}/{decl['collection']} not loaded: {exc}", "ERROR")
+            continue
+
+        for record in due[:config.batch_size]:
+            try:
+                outcome = reconcile(record, base_dir=base_dir)
+                if not isinstance(outcome, dict):
+                    outcome = {"ok": False, "error": f"connector returned {type(outcome).__name__}, expected dict"}
+            except Exception as exc:  # noqa: BLE001 -- transient by default; isolate one bad row
+                outcome = {"ok": False, "error": str(exc)}
+            update = object_connectors.plan_sync(record, outcome, config, now=now)
+            try:
+                object_records.update_collection_record(
+                    decl["collection"], record["id"], update,
+                    base_dir=base_dir, actor=object_connectors.DEFAULT_ACTOR,
+                    preserve_read_only=True,
+                )
+            except Exception as exc:  # noqa: BLE001
+                log(f"Connector: {decl['collection']} {record.get('id')} status write failed: {exc}", "ERROR")
+                continue
+            reconciled += 1
+            status = update.get(object_connectors.SYNC_STATUS_FIELD)
+            if status in (object_connectors.STATUS_SYNCED, object_connectors.STATUS_DELETED):
+                synced += 1
+            elif status == object_connectors.STATUS_DEAD:
+                dead += 1
+
+    if reconciled:
+        log(f"Connectors: reconciled {reconciled} ({synced} synced, {dead} dead)")
+    return {"reconciled": reconciled, "synced": synced, "dead": dead}
+
+
 # --- Main ---
 
 def shutdown(signum, frame):
@@ -1398,6 +1497,15 @@ def main():
     else:
         _email_state = f"enabled (mode={_smtp_config.mode})"
     print(f"Email: {_email_state}")
+    _connector_decls = _connector_declarations()
+    if not object_connectors.connectors_pass_enabled(base_dir=base_dir):
+        _connectors_state = "disabled (connectors_enabled flag off)"
+    elif not _connector_decls:
+        _connectors_state = "no connectors declared"
+    else:
+        _connectors_state = f"{len(_connector_decls)} connector(s): " + ", ".join(
+            f"{d['package_id']}/{d['collection']}" for d in _connector_decls)
+    print(f"Connectors: {_connectors_state}")
     print()
     print("Press Ctrl+C to stop")
     print("=" * 60)
@@ -1457,6 +1565,11 @@ def main():
             process_email_outbox(base_dir=base_dir)
         except Exception as e:
             log(f"Email error: {e}", 'ERROR')
+
+        try:
+            process_connectors(base_dir=base_dir)
+        except Exception as e:
+            log(f"Connectors error: {e}", 'ERROR')
 
         now = time.time()
         if now - last_event_cleanup >= EVENT_CLEANUP_INTERVAL_SECONDS:

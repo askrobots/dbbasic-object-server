@@ -587,6 +587,7 @@ def _normalize_manifest(package_id: str, payload: Any) -> dict[str, Any]:
             section="seed",
         ),
         "migrations": _normalize_migrations(payload.get("migrations", []), package_id=package_id),
+        "connectors": _normalize_connectors(payload.get("connectors", []), package_id=package_id),
     }
 
 
@@ -603,6 +604,7 @@ def _package_summary(package: Mapping[str, Any]) -> dict[str, Any]:
         "seed_count": len(package["seed"]),
         "migration_count": len(package["migrations"]),
         "dependency_count": len(package["dependencies"]),
+        "connector_count": len(package.get("connectors", [])),
     }
 
 
@@ -695,6 +697,63 @@ def _normalize_migrations(payload: Any, *, package_id: str) -> list[dict[str, st
             }
         )
     return normalized
+
+
+def _normalize_connectors(payload: Any, *, package_id: str) -> list[dict[str, str]]:
+    """A `connectors` entry declares that a collection is reconciled against an
+    external system by a connector module inside this package (see
+    object_connectors / plan/vocabulary/03-external-connectors-spec.md):
+    `{collection, module, entry?}`. `module` is validated as a package-relative
+    path (escape-checked again at load time); `entry` defaults to `reconcile`."""
+    entries = _list_field(payload, package_id=package_id, section="connectors")
+    normalized = []
+    for entry in entries:
+        mapping = _entry_mapping(entry, package_id=package_id, section="connectors")
+        collection = _required_text(mapping, "collection", package_id=package_id)
+        if not object_collections.validate_collection_name(collection):
+            raise InvalidPackageManifestError(f"Invalid package connector collection: {collection}")
+        module = _safe_relative_path(
+            _required_text(mapping, "module", package_id=package_id),
+            package_id=package_id,
+            section="connectors",
+        )
+        entry_name = _optional_text(mapping.get("entry")) or "reconcile"
+        if not entry_name.isidentifier():
+            raise InvalidPackageManifestError(f"Invalid connector entry: {entry_name}")
+        normalized.append({"collection": collection, "module": module, "entry": entry_name})
+    return normalized
+
+
+def iter_connectors(*, root: Path | str = PACKAGES_DIR) -> list[dict[str, str]]:
+    """Every connector declaration under a package root, each with its module
+    resolved to an absolute path proven to live INSIDE its package. Robust to a
+    single bad package: a manifest that won't parse, or a module that is missing
+    or escapes the package dir, is skipped (never raises) so one bad package
+    can't blind the whole reconcile pass."""
+    packages_root = Path(root)
+    if not packages_root.is_dir():
+        return []
+    out: list[dict[str, str]] = []
+    for path in sorted(packages_root.iterdir(), key=lambda item: item.name):
+        if not path.is_dir() or not validate_package_id(path.name):
+            continue
+        if not (path / MANIFEST_FILE).is_file():
+            continue
+        try:
+            package = _load_package(path.name, path)
+        except (InvalidPackageManifestError, InvalidPackageIdError, OSError, ValueError):
+            continue
+        for decl in package.get("connectors", []):
+            status = _package_file_status(path, decl["module"])
+            if not status["exists"]:  # missing module, or escapes the package
+                continue
+            out.append({
+                "package_id": package["id"],
+                "collection": decl["collection"],
+                "module": str((path / decl["module"]).resolve()),
+                "entry": decl["entry"],
+            })
+    return out
 
 
 def _normalize_dependencies(payload: Any, *, package_id: str) -> list[dict[str, str | None]]:
