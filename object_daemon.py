@@ -34,6 +34,7 @@ except ImportError:
 import object_collections
 import object_events
 import object_materialize
+import object_notify
 import object_record_changes
 import object_records
 import object_rollups
@@ -87,6 +88,13 @@ _WARNED_UNKNOWN_AUTO_TRANSITION_COLLECTIONS: set[str] = set()
 MATERIALIZE_INTERVAL_SECONDS_ENV = "DBBASIC_MATERIALIZE_INTERVAL_SECONDS"
 _DEFAULT_MATERIALIZE_INTERVAL_SECONDS = 3600
 MATERIALIZE_MARKER_NAME = ".materialize_last_run"
+# 12 notify: the cursor file holds the ISO timestamp of the last record-change
+# entry process_notifications has already turned into notifications. Unlike the
+# other passes' interval markers, this is a POSITION (content), not a clock
+# (mtime) -- the pass runs every poll for near-instant delivery and advances
+# the cursor past what it processed. First run stamps it at "now" so a fresh
+# install never backfills notifications for the entire change history.
+NOTIFY_CURSOR_NAME = ".notify_cursor"
 
 # Definitions referencing a source/output/child collection that doesn't
 # exist yet (the owning package isn't installed) are logged once per
@@ -1134,6 +1142,91 @@ def _find_object_file(object_id: str) -> Path | None:
     return resolve_object_id(object_id)
 
 
+def process_notifications(*, base_dir: Path | str = "data") -> dict | None:
+    """12 notify: turn new record-change events into notifications.
+
+    Polls the record-change log rather than riding synchronous HANDLES
+    dispatch -- HANDLES is gated behind DBBASIC_ENABLE_EVENT_HANDLERS (off in
+    prod) and we deliberately don't rewrite installed objects to track dynamic
+    event sets (see object_notify's docstring). Reads each watched collection's
+    change entries newer than the cursor, matches them against enabled
+    notify_rules (object_notify), and appends a notifications row per resolved
+    recipient. At-least-once: a crash between writing a notification and
+    advancing the cursor re-notifies, the delivery bar 12/01 accept.
+
+    Returns None when notify is disabled or there are no rules; otherwise
+    {"changes": <processed>, "notifications": <written>}.
+    """
+    if not object_notify.notify_pass_enabled(base_dir=base_dir):
+        return None
+    try:
+        rules = object_records.read_collection_records(
+            object_notify.NOTIFY_RULES_COLLECTION, base_dir=base_dir
+        )
+    except (object_collections.CollectionNotFoundError, object_collections.InvalidCollectionNameError):
+        return None
+    enabled = [r for r in rules if str(r.get("enabled", "true")).strip().lower() not in {"off", "false", "0", "no"}]
+    if not enabled:
+        return None
+
+    cursor_path = Path(base_dir) / NOTIFY_CURSOR_NAME
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        cursor = cursor_path.read_text().strip()
+    except OSError:
+        cursor = ""
+    if not cursor:
+        # First run: stamp at now, notify only on FUTURE changes (never
+        # backfill the entire history).
+        cursor_path.parent.mkdir(parents=True, exist_ok=True)
+        cursor_path.write_text(now_iso)
+        return None
+
+    try:
+        known = {c.get("name") for c in object_collections.list_collections(base_dir=base_dir) if c.get("name")}
+    except (OSError, ValueError):
+        known = set()
+    watched = object_notify.watched_collections(enabled, known)
+
+    # Gather every change newer than the cursor, across watched collections.
+    fresh: list[dict] = []
+    for collection in watched:
+        try:
+            payload = object_record_changes.list_record_changes(collection, base_dir=base_dir, limit=1000)
+        except (object_collections.CollectionNotFoundError, object_collections.InvalidCollectionNameError, OSError, ValueError):
+            continue
+        for change in payload.get("changes") or []:
+            ts = str(change.get("timestamp") or "")
+            if ts > cursor:
+                fresh.append(change)
+    fresh.sort(key=lambda c: str(c.get("timestamp") or ""))
+
+    written = 0
+    max_ts = cursor
+    for change in fresh:
+        # Per-change try/except: one malformed rule or change never stops the
+        # rest, and the cursor still advances past it (never re-storming).
+        try:
+            for rule in enabled:
+                for note in object_notify.notifications_for_change(rule, change, base_dir=base_dir):
+                    object_records.create_collection_record(
+                        object_notify.NOTIFICATIONS_COLLECTION, note,
+                        base_dir=base_dir, actor=object_notify.DEFAULT_ACTOR,
+                    )
+                    written += 1
+        except Exception as exc:  # noqa: BLE001 -- isolate one bad change
+            log(f"Notify: change {change.get('change_id')} failed: {exc}", "ERROR")
+        ts = str(change.get("timestamp") or "")
+        if ts > max_ts:
+            max_ts = ts
+
+    if max_ts != cursor:
+        cursor_path.write_text(max_ts)
+    if fresh or written:
+        log(f"Notify: processed {len(fresh)} change(s), wrote {written} notification(s)")
+    return {"changes": len(fresh), "notifications": written}
+
+
 # --- Main ---
 
 def shutdown(signum, frame):
@@ -1190,6 +1283,7 @@ def main():
         f"Materialize: {'enabled' if object_materialize.materialize_pass_enabled(base_dir=base_dir) else 'disabled (materialize_enabled flag off)'} "
         f"(interval {_env_int(MATERIALIZE_INTERVAL_SECONDS_ENV, _DEFAULT_MATERIALIZE_INTERVAL_SECONDS)}s)"
     )
+    print(f"Notify: {'enabled' if object_notify.notify_pass_enabled(base_dir=base_dir) else 'disabled (notify_enabled flag off)'} (every poll)")
     print()
     print("Press Ctrl+C to stop")
     print("=" * 60)
@@ -1239,6 +1333,11 @@ def main():
             process_materializations(base_dir=base_dir)
         except Exception as e:
             log(f"Materialize error: {e}", 'ERROR')
+
+        try:
+            process_notifications(base_dir=base_dir)
+        except Exception as e:
+            log(f"Notify error: {e}", 'ERROR')
 
         now = time.time()
         if now - last_event_cleanup >= EVENT_CLEANUP_INTERVAL_SECONDS:

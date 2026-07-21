@@ -1,0 +1,2 @@
+id	name	enabled	event_pattern	match	recipients	suppress_self	channels
+nr_task_assigned	Task assigned notifies assignee	true	tasks.record.updated	"{""status"": ""assigned""}"	"{""mode"": ""field"", ""field"": ""assigned_to""}"	true	"[{""channel"": ""in_app"", ""body_template"": ""You were assigned \""{title}\"" ({urgency}), due {due_date}.""}, {""channel"": ""email"", ""subject_template"": ""You've been assigned: {title}"", ""body_template"": ""Task \""{title}\"" ({urgency}) was assigned to you. Due {due_date}.""}]"

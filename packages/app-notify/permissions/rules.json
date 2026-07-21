@@ -1,0 +1,11 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "role:admin",
+      "actions": ["read", "create", "update", "delete"],
+      "collection": "notify_rules",
+      "reason": "a notify rule can notify anyone and read any collection's change log; only admins declare notification rules (same posture as rollup_definitions/materialize_definitions)"
+    }
+  ]
+}

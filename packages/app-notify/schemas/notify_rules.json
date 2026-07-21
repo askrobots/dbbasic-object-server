@@ -1,0 +1,23 @@
+{
+  "name": "notify_rules",
+  "title": "Notify Rules",
+  "version": 1,
+  "description": "Declared event-pattern -> notification rules (plan/vocabulary/12-notify-spec.md). One row per rule: an event_pattern (<collection>.record.<created|updated|deleted>, * allowed per segment), an optional flat match {field:value} (ANDed; on an update, restricted to CHANGED fields so it fires on the transition), a recipients rule (owner/field/users/role), and channels (v1 delivers in_app: one notifications row per recipient; email waits on 01-email-adapter). Driven by object_notify + the daemon's process_notifications pass polling the record-change log -- no event-handler dependency. admin-owned: a rule can notify anyone, so only admins author them.",
+  "fields": [
+    { "name": "id" },
+    { "name": "name", "type": "text", "required": true, "label": "Name" },
+    { "name": "enabled", "type": "boolean", "default": "true", "label": "Enabled" },
+    { "name": "event_pattern", "type": "text", "required": true, "label": "Event Pattern", "help": "<collection>.record.<created|updated|deleted>; * allowed in the collection or action segment." },
+    { "name": "match", "type": "textarea", "label": "Match Conditions (JSON)", "help": "Flat {field: value}, ANDed on equality. Omit for every record matching the pattern." },
+    { "name": "recipients", "type": "textarea", "required": true, "label": "Recipients (JSON)", "help": "{mode: owner|field|users|role, ...}" },
+    { "name": "suppress_self", "type": "boolean", "default": "true", "label": "Suppress Self", "help": "Skip the recipient who is the change's own actor." },
+    { "name": "channels", "type": "textarea", "required": true, "label": "Channels (JSON)", "help": "[{channel: in_app, body_template}, ...]. v1 delivers in_app only." },
+    { "name": "last_run_at", "type": "datetime", "label": "Last Run", "read_only": true },
+    { "name": "created_at", "type": "datetime", "read_only": true, "label": "Created" },
+    { "name": "updated_at", "type": "datetime", "read_only": true, "label": "Updated" }
+  ],
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["name", "event_pattern", "enabled"]
+  }
+}

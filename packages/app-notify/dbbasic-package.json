@@ -1,0 +1,13 @@
+{
+  "id": "app-notify",
+  "name": "Notify",
+  "version": "0.1.0",
+  "description": "Declarative notifications (plan/vocabulary/12-notify-spec.md): a notify_rules row turns a record-change event into notifications, replacing the bespoke 'email me when X happens' object every app grows. The daemon's process_notifications pass polls the record-change log (object_notify), matches enabled rules (event_pattern + flat match, restricted to CHANGED fields on updates), resolves recipients (owner/field/users/role, suppressing the actor by default), renders the body_template, and appends a notifications row per recipient -- surfaced by the nav bell + realtime, unmodified. Polling the change log (not synchronous HANDLES dispatch) means it works with no event-handler dependency, at-least-once. v1 delivers the in_app channel; email waits on 01-email-adapter (recognized + skipped), digest batching too. Ships one example rule (task assigned -> notify the assignee). admin-owned rules. notify_enabled kill switch.",
+  "compatibility": { "dbbasic_object_server": ">=0.1.0" },
+  "dependencies": ["app-tasks", "app-collab"],
+  "objects": [],
+  "schemas": [ { "collection": "notify_rules", "path": "schemas/notify_rules.json" } ],
+  "permissions": [ { "path": "permissions/rules.json" } ],
+  "seed": [ { "collection": "notify_rules", "path": "seed/notify_rules.tsv" } ],
+  "migrations": []
+}
