@@ -1,0 +1,5 @@
+id	name	source_collection	filter	group_by	time_bucket	metrics	target_collection	min_group_size	refresh_mode	refresh_interval_seconds	last_computed_at	enabled
+ana_top_paths	Top paths (visitors)	page_views	"{""is_owner"": ""false""}"	"[""path""]"		"[{""op"": ""count"", ""as"": ""hits""}]"	analytics_top_paths		scheduled	300		true
+ana_top_ips	Top IPs (visitors)	page_views	"{""is_owner"": ""false""}"	"[""ip""]"		"[{""op"": ""count"", ""as"": ""hits""}]"	analytics_top_ips		scheduled	300		true
+ana_status	Status codes	page_views	"{""is_owner"": ""false""}"	"[""status""]"		"[{""op"": ""count"", ""as"": ""hits""}]"	analytics_status		scheduled	300		true
+ana_daily	Daily hits (visitors)	page_views	"{""is_owner"": ""false""}"	[]	"{""field"": ""created_at"", ""granularity"": ""day""}"	"[{""op"": ""count"", ""as"": ""hits""}]"	analytics_daily		scheduled	300		true

@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "description": "First-party traffic analytics (port of q9's analytics app): an append-mode page_views collection fed by a server-side capture hook (object_analytics), one row per non-asset request -- path/method/status/ip/user_agent/referrer/session/is_owner. Live traffic + bot-attack visibility (4xx and /api hits ARE captured on purpose), and a rollup source for dashboards. Capture is off unless DBBASIC_ANALYTICS is set (per-request write is an operator choice); admin-read only, closed to the generic write surface. Bounded by the daemon's time-windowed retention pass (DBBASIC_ANALYTICS_RETENTION_DAYS, default 30) -- the platform's heaviest write path and the stress test for massive-file rotation. No pages: the shell/dashboard + rollups are the surface.",
   "compatibility": { "dbbasic_object_server": ">=0.1.0" },
-  "dependencies": [],
+  "dependencies": ["app-rollup"],
   "objects": [],
   "schemas": [ { "collection": "page_views", "path": "schemas/page_views.json" } ],
   "permissions": [ { "path": "permissions/rules.json" } ],
-  "seed": [],
+  "seed": [ { "collection": "rollup_definitions", "path": "seed/rollup_definitions.tsv" } ],
   "migrations": []
 }

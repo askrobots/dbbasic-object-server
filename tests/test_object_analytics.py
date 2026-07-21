@@ -134,6 +134,40 @@ def test_capture_hook_appends_a_row_when_enabled(tmp_path, monkeypatch):
     assert len(object_records.read_collection_records("page_views", base_dir=data_dir)) == 1
 
 
+def test_rollups_aggregate_traffic_and_exclude_owner(tmp_path):
+    data_dir = tmp_path / "data"
+    object_root = tmp_path / "objects"
+    object_root.mkdir()
+    for pkg in ("app-rollup", "app-analytics"):
+        object_packages.install_package(pkg, root=PACKAGES_ROOT, base_dir=data_dir,
+                                        object_roots=[object_root], allow_replace=True)
+    # the reporting rollups seeded cleanly into the shared rollup_definitions
+    defs = {d["id"] for d in object_records.read_collection_records("rollup_definitions", base_dir=data_dir)}
+    assert {"ana_top_paths", "ana_top_ips", "ana_status", "ana_daily"} <= defs
+
+    def hit(path, ip, status, owner=False):
+        object_records.create_collection_record(
+            "page_views",
+            {"path": path, "method": "GET", "status": str(status), "ip": ip,
+             "is_owner": "true" if owner else "false"},
+            base_dir=data_dir, actor="t")
+
+    for _ in range(3):
+        hit("/a", "6.6.6.6", 200)          # a "bot" hammering /a from one IP
+    hit("/b", "1.2.3.4", 404)              # a 404
+    hit("/admin", "9.9.9.9", 200, owner=True)  # owner traffic -> excluded
+
+    result = object_daemon.process_rollups(base_dir=data_dir)
+    assert result is not None
+
+    top_paths = {r["path"]: int(r["hits"]) for r in object_records.read_collection_records("analytics_top_paths", base_dir=data_dir)}
+    assert top_paths == {"/a": 3, "/b": 1}   # /admin excluded (is_owner)
+    top_ips = {r["ip"]: int(r["hits"]) for r in object_records.read_collection_records("analytics_top_ips", base_dir=data_dir)}
+    assert top_ips.get("6.6.6.6") == 3       # the bot is visible, ranked
+    status = {r["status"]: int(r["hits"]) for r in object_records.read_collection_records("analytics_status", base_dir=data_dir)}
+    assert status.get("404") == 1 and status.get("200") == 3
+
+
 def test_capture_hook_noop_when_disabled(tmp_path, monkeypatch):
     data_dir = _install(tmp_path)
     monkeypatch.setenv(object_server.DATA_DIR_ENV, str(data_dir))
