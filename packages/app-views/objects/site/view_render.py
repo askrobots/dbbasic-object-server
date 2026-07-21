@@ -184,6 +184,9 @@ function renderList(block, mount) {
     const lbl = block.subtitle_label ? String(block.subtitle_label) + ": " : "";
     cfg.subtitle = (r) => (r[sf] == null ? "" : lbl + String(r[sf]));
   }
+  // `row_actions: false` -> a read-only list (a log, a report, a rollup target):
+  // no per-row edit/delete buttons. Default keeps the owner-based behavior.
+  if (block.row_actions === false) cfg.rowActions = false;
   if (block.sort === "oldest" || block.sort === "asc") {
     // dbbasicList's real sort option is a bound <select> element, not a
     // value -- synthesize a hidden one already set to "oldest" so the

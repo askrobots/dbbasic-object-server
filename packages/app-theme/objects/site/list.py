@@ -598,8 +598,13 @@ _JS = r"""
         const sub = cfg.subtitle ? cfg.subtitle(r) : "";
         const tags = cfg.tags ? cfg.tags(r) : "";
         const created = cfg.created ? cfg.created(r) : r.created_at;
-        const mine = r.owner_id === cfg.owner;
-        const acts = mine
+        // Edit/delete only for a row the viewer actually owns. BOTH ids must be
+        // present and equal -- a log/report/rollup row has no owner_id, and a
+        // report view has no cfg.owner, so the old `undefined === undefined`
+        // wrongly offered edit/delete on generated data. `cfg.rowActions:false`
+        // is the explicit off switch (a list block over a log/report sets it).
+        const mine = !!(cfg.owner && r.owner_id && r.owner_id === cfg.owner);
+        const acts = (cfg.rowActions !== false && mine)
           ? '<button class="rowbtn" data-act="edit" data-id="' + esc(r.id) + '" title="Edit">✎</button>'
             + '<button class="rowbtn danger" data-act="delete" data-id="' + esc(r.id) + '" title="Delete">✕</button>'
           : "";
