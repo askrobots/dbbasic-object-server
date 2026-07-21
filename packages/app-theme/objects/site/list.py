@@ -569,7 +569,7 @@ _JS = r"""
   // ---- the plain row list (table/cards/feed -- unchanged behavior) -------
 
   window.dbbasicList = function (collection, cfg) {
-    cfg = cfg || {};
+    cfg = Object.assign({}, cfg || {});  // own a copy -- 65 may add cfg.where below
     const mount = qs(cfg.mount);
     const searchEl = cfg.search ? qs(cfg.search) : null;
     const sortEl = cfg.sort ? qs(cfg.sort) : null;
@@ -671,7 +671,31 @@ _JS = r"""
     // completely unchanged, when the mode is table/cards/feed/absent, the
     // flag is off, or the mode's field can't be derived (Degradation: falls
     // back to table with a visible notice, never a silent empty page).
+    // 65 multi-entity: auto-scope a TOP-LEVEL browse list to the nav
+    // switcher's current entity. Only when there is no existing cfg.where --
+    // a `related` child list (a journal's postings, matched by journal_id) or
+    // an explicitly filtered list already carries the scope it needs, and
+    // adding the current entity there would wrongly hide a parent's children
+    // when a different entity is selected. Gated on an entity actually being
+    // selected AND the collection having an entity_id field, so non-entity
+    // lists and the "All entities" state are untouched (the same never-hide-
+    // by-default posture 58 takes for its own filters).
+    async function scopeToCurrentEntity() {
+      const cur = (window.dbbasicEntity && window.dbbasicEntity()) || "";
+      if (!cur || cfg.where) return;
+      try {
+        const res = await fetch("/api/schema/" + encodeURIComponent(collection),
+          {credentials: "same-origin", headers: {accept: "application/json"}});
+        if (!res.ok) return;
+        const schema = (await res.json()).schema;
+        if (schema && (schema.fields || []).some((f) => f.name === "entity_id")) {
+          cfg.where = {entity_id: cur};
+        }
+      } catch (e) { /* schema fetch failed -- leave the list unscoped, never blank */ }
+    }
+
     (async function boot() {
+      await scopeToCurrentEntity();
       const resolved = await resolveListMode(collection);
       if (resolved.kind === "board" || resolved.kind === "tree" || resolved.kind === "calendar") {
         // The page's newest/oldest sort and its text-search box are wired only

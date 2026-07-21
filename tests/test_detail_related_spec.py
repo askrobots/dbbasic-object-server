@@ -760,3 +760,20 @@ def test_form_auto_scopes_new_records_to_the_current_entity():
     # opts.fixed is COPIED, never mutated, so auto-scoping never leaks back to
     # the caller's object.
     assert "Object.assign({}, opts.fixed)" in source
+
+
+def test_list_auto_scopes_top_level_browse_to_current_entity():
+    """65 multi-entity: a TOP-LEVEL browse list over an entity-scoped
+    collection (schema has entity_id) auto-filters to the nav switcher's
+    current entity -- but only when there is NO existing cfg.where, so a
+    `related` child list (scoped by its own FK) and explicitly-filtered lists
+    are never wrongly narrowed to a different entity."""
+    source = _list_source()
+    assert "async function scopeToCurrentEntity()" in source
+    assert "window.dbbasicEntity" in source
+    # the never-hide guards: an entity must be selected, and no existing where
+    assert "if (!cur || cfg.where) return;" in source
+    assert '(f) => f.name === "entity_id"' in source
+    assert "cfg.where = {entity_id: cur}" in source
+    # cfg is copied so the caller's config object is never mutated
+    assert "cfg = Object.assign({}, cfg || {})" in source
