@@ -36,11 +36,14 @@ def test_get_package_normalizes_app_finance_manifest():
     assert package["id"] == "app-finance"
     assert package["name"] == "Finance"
     assert {schema["collection"] for schema in package["schemas"]} == set(_SCHEMA_NAMES)
+    # site_setup_accounts (65 slice 4) added the Setup Accounts action object.
     assert {obj["id"] for obj in package["objects"]} == {
         "site_accounts", "site_journals", "site_journal_view", "site_trial_balance",
+        "site_setup_accounts",
     }
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
-    assert {entry["collection"] for entry in package["seed"]} == set(_SCHEMA_NAMES)
+    # + a site_routes seed for the /finance/setup-accounts route (65 slice 4).
+    assert {entry["collection"] for entry in package["seed"]} == set(_SCHEMA_NAMES) | {"site_routes"}
 
 
 def test_dry_run_app_finance_package_is_safe(tmp_path):

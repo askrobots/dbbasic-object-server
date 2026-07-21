@@ -1,0 +1,2 @@
+id	pattern	object_id	priority
+route_finance_setup_accounts	/finance/setup-accounts	site_setup_accounts	10

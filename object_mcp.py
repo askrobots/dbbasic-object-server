@@ -329,6 +329,23 @@ TOOLS: list[dict[str, Any]] = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
+        "name": "setup_finance_accounts",
+        "description": (
+            "Seed one of the caller's entities with a chart of accounts based "
+            "on its mode (65 multi-entity): simple = income + expenses, "
+            "standard = a 15-account chart, double_entry = a full 29-account "
+            "chart. Idempotent -- accounts already present (by name) are "
+            "skipped. The entity must belong to the caller."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "entity_id": {"type": "string", "description": "The entity (set of books) to set up accounts for"},
+            },
+            "required": ["entity_id"],
+        },
+    },
+    {
         "name": "get_feed",
         "description": (
             "64 - Feed: recent PUBLIC content from accounts the caller follows, "
@@ -543,6 +560,11 @@ def tool_route(name: str, arguments: Mapping[str, Any]) -> tuple[str, str, str, 
     if name == "get_running_timer":
         body = {"method": "GET", "payload": {"action": "running"}}
         return ("POST", _timer_actions_execute_path(), "", _json_bytes(body))
+    if name == "setup_finance_accounts":
+        # Thin verb over site_setup_accounts (65 slice 4), via the same
+        # execute bridge start_timer/get_feed use -- no separate logic.
+        body = {"method": "POST", "payload": {"entity_id": _required_str(args, "entity_id")}}
+        return ("POST", "/admin/objects/site_setup_accounts/execute", "", _json_bytes(body))
 
     raise ValueError(f"Unknown tool: {name}")
 
