@@ -1,0 +1,11 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "role:admin",
+      "actions": ["read"],
+      "collection": "email_outbox",
+      "reason": "the outbound mail queue is an admin inspection surface, never public"
+    }
+  ]
+}

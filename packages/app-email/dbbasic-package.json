@@ -1,0 +1,13 @@
+{
+  "id": "app-email",
+  "name": "Email Adapter",
+  "version": "0.1.0",
+  "description": "One outbound-mail queue every block enqueues into (plan/vocabulary/01-email-adapter-spec.md), instead of each app reinventing an inline smtplib call that blocks the response, loses the message on any exception, and leaves no record a send was even attempted. A block calls object_email.enqueue(to, subject, text_body, ...) -- a plain local write of one queued email_outbox row -- and returns; the daemon's process_email_outbox pass renders each due row and hands it to the configured transport (DBBASIC_SMTP_MODE = disabled | log | live), recording the outcome back onto the row (sent / retry-with-backoff / dead). No page, no signed-in surface: this is a platform enabler for submit confirmations, notify's email channel, invoice delivery, membership invites, and rollup digests. The queue is admin-readable and closed to the generic POST write surface, so it can never be misconfigured into a public relay. SMTP credentials live in the deploy env (DBBASIC_SMTP_*), never a record or backup. email_enabled feature flag is the brownout kill switch. This package ships the schema + admin-read permission; the daemon pass and smtplib call live in core (object_email + object_daemon), there being no manifest hook to register a daemon pass yet.",
+  "compatibility": { "dbbasic_object_server": ">=0.1.0" },
+  "dependencies": [],
+  "objects": [],
+  "schemas": [ { "collection": "email_outbox", "path": "schemas/email_outbox.json" } ],
+  "permissions": [ { "path": "permissions/rules.json" } ],
+  "seed": [],
+  "migrations": []
+}

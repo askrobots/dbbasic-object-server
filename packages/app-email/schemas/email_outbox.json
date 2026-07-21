@@ -1,0 +1,33 @@
+{
+  "name": "email_outbox",
+  "title": "Email Outbox",
+  "version": 1,
+  "description": "Outbound mail queue (plan/vocabulary/01-email-adapter-spec.md). Any block enqueues a send record here via object_email.enqueue(); the daemon's process_email_outbox pass delivers it. Closed to the generic POST /collections write surface (no create rule for any principal) so it can never be misconfigured into a public relay -- writes only ever originate from server-side enqueue() or the daemon updating status. append storage: every retry/transition is a row, so the collection IS its own audit trail until compaction folds it.",
+  "storage": "append",
+  "fields": [
+    { "name": "id" },
+    { "name": "to", "type": "text", "required": true, "label": "To" },
+    { "name": "from_addr", "type": "text", "label": "From" },
+    { "name": "reply_to", "type": "text", "label": "Reply-To" },
+    { "name": "subject", "type": "text", "required": true, "label": "Subject" },
+    { "name": "text_body", "type": "textarea", "required": true, "label": "Text Body" },
+    { "name": "html_body", "type": "textarea", "label": "HTML Body" },
+    { "name": "status", "type": "text", "default": "queued", "label": "Status" },
+    { "name": "attempts", "type": "number", "default": "0", "label": "Attempts" },
+    { "name": "max_attempts", "type": "number", "label": "Max Attempts" },
+    { "name": "last_error", "type": "text", "label": "Last Error" },
+    { "name": "next_attempt_at", "type": "datetime", "label": "Next Attempt" },
+    { "name": "created_at", "type": "datetime", "read_only": true, "label": "Created" },
+    { "name": "updated_at", "type": "datetime", "read_only": true, "label": "Updated" },
+    { "name": "sent_at", "type": "datetime", "label": "Sent" },
+    { "name": "source_object_id", "type": "text", "label": "Source Object" },
+    { "name": "extra", "type": "text", "label": "Extra" }
+  ],
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["to", "subject", "status", "attempts", "updated_at"]
+  },
+  "search": {
+    "fields": ["to", "subject"]
+  }
+}

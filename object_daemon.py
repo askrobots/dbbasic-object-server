@@ -32,6 +32,7 @@ except ImportError:
     croniter = None
 
 import object_collections
+import object_email
 import object_events
 import object_materialize
 import object_notify
@@ -1227,6 +1228,111 @@ def process_notifications(*, base_dir: Path | str = "data") -> dict | None:
     return {"changes": len(fresh), "notifications": written}
 
 
+# 01 email adapter: rolling per-minute send-rate window, persisted as JSON
+# ({window_start, sent_count}) so it survives a daemon restart -- the same
+# "cheap state outside the collection" shape process_compactions' marker uses.
+EMAIL_RATE_MARKER_NAME = ".email_rate_window"
+# Whether we've already logged "SMTP not configured" this process. The pass
+# runs every tick (it's one cheap collection read) but must not repeat the
+# line every poll -- matching process_scheduler/process_queue when their own
+# trigger object is absent.
+_EMAIL_UNCONFIGURED_WARNED = False
+
+
+def _read_email_rate_window(base_dir: Path | str) -> dict | None:
+    try:
+        return json.loads((Path(base_dir) / EMAIL_RATE_MARKER_NAME).read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def _write_email_rate_window(base_dir: Path | str, window: dict) -> None:
+    path = Path(base_dir) / EMAIL_RATE_MARKER_NAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(window))
+
+
+def process_email_outbox(*, base_dir: Path | str = "data") -> dict | None:
+    """01 email adapter: drain the email_outbox queue.
+
+    Every tick, delivers the `queued` rows that are due (`next_attempt_at`
+    arrived) up to DBBASIC_SMTP_BATCH_SIZE, bounded by a rolling per-minute
+    rate window. Each send's outcome is written back onto its row: `sent`, or
+    `queued` again with a backed-off `next_attempt_at` and `last_error` (a
+    transient failure), or `dead` (a permanent SMTP error, or retries
+    exhausted). Per-message try/except -- one bad send never blocks the batch,
+    matching process_compactions' per-item isolation.
+
+    Returns None when email is disabled (feature flag), unconfigured (no SMTP
+    mode / host -- everything just keeps queuing, fully inspectable), or the
+    email_outbox collection isn't installed. Otherwise a small summary dict.
+    """
+    global _EMAIL_UNCONFIGURED_WARNED
+    if not object_email.email_pass_enabled(base_dir=base_dir):
+        return None
+
+    config = object_email.smtp_config_from_env()
+    if not config.configured:
+        if not _EMAIL_UNCONFIGURED_WARNED:
+            log("Email: SMTP not configured (DBBASIC_SMTP_MODE) -- outbound mail is queuing only")
+            _EMAIL_UNCONFIGURED_WARNED = True
+        return None
+    _EMAIL_UNCONFIGURED_WARNED = False  # configured again -> re-warn if it flips back
+
+    try:
+        records = object_records.read_collection_records(
+            object_email.OUTBOX_COLLECTION, base_dir=base_dir
+        )
+    except (object_collections.CollectionNotFoundError,
+            object_collections.InvalidCollectionNameError, OSError, ValueError):
+        return None
+
+    now = datetime.now(timezone.utc)
+    due = [r for r in records if object_email.is_due(r, now)]
+    if not due:
+        return {"attempted": 0, "sent": 0, "dead": 0}
+    # Oldest-scheduled first, so a backlog drains fairly rather than starving
+    # the earliest-queued behind newer arrivals.
+    due.sort(key=lambda r: (str(r.get("next_attempt_at") or ""), str(r.get("created_at") or "")))
+
+    window = object_email.rate_window_reset(_read_email_rate_window(base_dir), time.time())
+    sender = object_email.sender_for(config)
+    attempted = sent = dead = rate_limited = 0
+
+    for record in due[:config.batch_size]:
+        if window["sent_count"] >= config.rate_limit:
+            rate_limited += 1
+            continue  # left `queued`; a scheduling skip is not a delivery attempt
+        try:
+            update = object_email.attempt_delivery(record, config, sender=sender, now=now)
+        except Exception as exc:  # noqa: BLE001 -- isolate one bad message
+            log(f"Email: message {record.get('id')} delivery raised: {exc}", "ERROR")
+            continue
+        window["sent_count"] += 1  # a network attempt was made (success or not)
+        attempted += 1
+        try:
+            object_records.update_collection_record(
+                object_email.OUTBOX_COLLECTION, record["id"], update,
+                base_dir=base_dir, actor=object_email.DEFAULT_ACTOR,
+                preserve_read_only=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            # The send already happened; failing to record the outcome only
+            # risks an at-least-once re-send next tick -- the delivery bar 01
+            # accepts, never lost data.
+            log(f"Email: message {record.get('id')} sent but status write failed: {exc}", "ERROR")
+        if update.get("status") == object_email.STATUS_SENT:
+            sent += 1
+        elif update.get("status") == object_email.STATUS_DEAD:
+            dead += 1
+
+    _write_email_rate_window(base_dir, window)
+    if attempted or rate_limited:
+        extra = f", {rate_limited} rate-limited" if rate_limited else ""
+        log(f"Email: attempted {attempted} ({sent} sent, {dead} dead){extra}")
+    return {"attempted": attempted, "sent": sent, "dead": dead, "rate_limited": rate_limited}
+
+
 # --- Main ---
 
 def shutdown(signum, frame):
@@ -1284,6 +1390,14 @@ def main():
         f"(interval {_env_int(MATERIALIZE_INTERVAL_SECONDS_ENV, _DEFAULT_MATERIALIZE_INTERVAL_SECONDS)}s)"
     )
     print(f"Notify: {'enabled' if object_notify.notify_pass_enabled(base_dir=base_dir) else 'disabled (notify_enabled flag off)'} (every poll)")
+    _smtp_config = object_email.smtp_config_from_env()
+    if not object_email.email_pass_enabled(base_dir=base_dir):
+        _email_state = "disabled (email_enabled flag off)"
+    elif not _smtp_config.configured:
+        _email_state = f"queuing only (DBBASIC_SMTP_MODE={_smtp_config.mode!r}, not configured)"
+    else:
+        _email_state = f"enabled (mode={_smtp_config.mode})"
+    print(f"Email: {_email_state}")
     print()
     print("Press Ctrl+C to stop")
     print("=" * 60)
@@ -1338,6 +1452,11 @@ def main():
             process_notifications(base_dir=base_dir)
         except Exception as e:
             log(f"Notify error: {e}", 'ERROR')
+
+        try:
+            process_email_outbox(base_dir=base_dir)
+        except Exception as e:
+            log(f"Email error: {e}", 'ERROR')
 
         now = time.time()
         if now - last_event_cleanup >= EVENT_CLEANUP_INTERVAL_SECONDS:
