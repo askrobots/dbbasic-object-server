@@ -26,6 +26,11 @@ feature flag. A connector itself is just a function:
         # {"ok": False, "error": "..."}         transient  -> retry w/ backoff
         # {"ok": False, "error": "...",
         #  "permanent": True}                    permanent  -> dead, no retry
+        # {"skip": True}                         declined this tick (e.g. the
+        #                                        connector is unconfigured) ->
+        #                                        row untouched, NOT an attempt,
+        #                                        so it waits inspectably instead
+        #                                        of backing off toward dead
 
 The connector never touches the record's sync_* fields or performs its own
 write -- the driver owns the lifecycle, so backoff/attempts/dead-lettering live

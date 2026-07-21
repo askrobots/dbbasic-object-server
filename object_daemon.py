@@ -1385,7 +1385,7 @@ def process_connectors(*, base_dir: Path | str = "data") -> dict | None:
 
     config = object_connectors.connector_config_from_env()
     now = datetime.now(timezone.utc)
-    reconciled = synced = dead = 0
+    reconciled = synced = dead = skipped = 0
 
     for decl in decls:
         try:
@@ -1410,6 +1410,13 @@ def process_connectors(*, base_dir: Path | str = "data") -> dict | None:
                     outcome = {"ok": False, "error": f"connector returned {type(outcome).__name__}, expected dict"}
             except Exception as exc:  # noqa: BLE001 -- transient by default; isolate one bad row
                 outcome = {"ok": False, "error": str(exc)}
+            if outcome.get("skip"):
+                # The connector declined this tick (e.g. unconfigured): leave the
+                # row exactly as-is -- not an attempt, not a failure, so it waits
+                # inspectably instead of backing off toward `dead`. Mirrors the
+                # outbox's "unconfigured = queue only" posture.
+                skipped += 1
+                continue
             update = object_connectors.plan_sync(record, outcome, config, now=now)
             try:
                 object_records.update_collection_record(
@@ -1429,7 +1436,7 @@ def process_connectors(*, base_dir: Path | str = "data") -> dict | None:
 
     if reconciled:
         log(f"Connectors: reconciled {reconciled} ({synced} synced, {dead} dead)")
-    return {"reconciled": reconciled, "synced": synced, "dead": dead}
+    return {"reconciled": reconciled, "synced": synced, "dead": dead, "skipped": skipped}
 
 
 # --- Main ---

@@ -167,7 +167,7 @@ def test_process_connectors_reconciles_each_outcome(tmp_path, monkeypatch):
     monkeypatch.setenv("DBBASIC_PRIVATE_PACKAGES_DIR", str(tmp_path / "no-private"))
 
     result = object_daemon.process_connectors(base_dir=data_dir)
-    assert result == {"reconciled": 4, "synced": 2, "dead": 1}
+    assert result == {"reconciled": 4, "synced": 2, "dead": 1, "skipped": 0}
 
     rows = {r["name"]: r for r in object_records.read_collection_records("widgets", base_dir=data_dir)}
     assert rows["ok-one"]["sync_status"] == "synced"
@@ -179,7 +179,31 @@ def test_process_connectors_reconciles_each_outcome(tmp_path, monkeypatch):
 
     # re-run: synced/deleted/dead are terminal; only boom is due (its backoff is
     # in the future now), so nothing reconciles this tick
-    assert object_daemon.process_connectors(base_dir=data_dir) == {"reconciled": 0, "synced": 0, "dead": 0}
+    assert object_daemon.process_connectors(base_dir=data_dir) == {"reconciled": 0, "synced": 0, "dead": 0, "skipped": 0}
+
+
+SKIP_SRC = """
+def reconcile(record, *, base_dir):
+    return {"skip": True}   # e.g. connector unconfigured
+"""
+
+
+def test_process_connectors_skip_leaves_rows_untouched(tmp_path, monkeypatch):
+    pkg_root = tmp_path / "packages"; pkg_root.mkdir()
+    _make_pkg(pkg_root, "app-skip", collection="things", reconcile_src=SKIP_SRC)
+    data_dir = tmp_path / "data"
+    obj = tmp_path / "objects"; obj.mkdir()
+    object_packages.install_package("app-skip", root=pkg_root, base_dir=data_dir,
+                                    object_roots=[obj], allow_replace=True)
+    object_records.create_collection_record(
+        "things", {"owner_id": "1", "name": "x", "sync_status": "pending"}, base_dir=data_dir, actor="t")
+    monkeypatch.setenv("DBBASIC_PACKAGES_DIR", str(pkg_root))
+    monkeypatch.setenv("DBBASIC_PRIVATE_PACKAGES_DIR", str(tmp_path / "no-private"))
+
+    result = object_daemon.process_connectors(base_dir=data_dir)
+    assert result == {"reconciled": 0, "synced": 0, "dead": 0, "skipped": 1}
+    row = object_records.read_collection_records("things", base_dir=data_dir)[0]
+    assert row["sync_status"] == "pending" and (row.get("sync_attempts") or "0") == "0"  # untouched
 
 
 def test_process_connectors_none_when_nothing_declared(tmp_path, monkeypatch):
