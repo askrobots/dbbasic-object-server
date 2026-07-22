@@ -190,8 +190,18 @@ ones as they're settled; move Open Questions up as they're decided.
   polymorphic `files.(parent_collection, parent_id)` pair — no per-collection
   FK; tasks adopts both, the old `related:files` block removed, a live
   widget upload verified. `renderDetail` mounts them via one
-  `maybeMountCapabilities` (attachments above comments). Next: `shareable`/
-  permissions (generalize `project_access`).
+  `maybeMountCapabilities`. `shareable` (2026-07-22): the foundational one --
+  it changes the permission check, not just a widget. `capabilities.shareable`
+  + a `{id: $shared_records}` read rule let a record's OWNER grant other users
+  access via the `record_shares` collection. `window.dbbasicShare` (owner-only,
+  renders nothing for non-owners) writes grants only through the owner-checked
+  `/api/share` endpoint (authorized against the TARGET record's ownership -- a
+  cross-collection fact a row_filter can't express, and the thing that stops
+  self-serve escalation). A new collection-aware `$shared_records` row-filter
+  variable (the collection is threaded into resolution) keeps a share on a task
+  from leaking a same-id row in another collection. Security boundary verified
+  live: grantee reads (200), non-grantee denied (403), non-owner can't grant
+  (403). All three capabilities now mount in one detail page from flags alone.
 - **Gotchas found building it:** a field that is `required` **and** `read_only`
   can never be created through the HTTP write path (only a server-side
   `preserve_read_only` bypass) — `thread_comments.parent_*` had to drop
