@@ -148,6 +148,24 @@ ones as they're settled; move Open Questions up as they're decided.
 - **Status:** doctrine. First applied migrating `site/projects.py` (~60 lines
   of hand-rolled table/form/fetch deleted) onto `dbbasicList` + `dbbasicForm`.
 
+### 11. A collection filters by declaring `filter_fields` (works on every mode).
+- **Decision:** A schema's `views.filter_fields` renders a **filter bar** above
+  the list — an enum field → a select of its options, a boolean → Yes/No. A
+  pick ANDs into the fetch `where` and reloads the active mode. Filters compose
+  with the caller's own `where` (entity scope, a parent FK) and with the
+  client-side search box; a **Clear** button appears once anything is set.
+- **Rationale:** The list renderer had sort + live but not filters — the third
+  leg of "a table, but generative and alive." Filtering is server-side (the
+  same `field=value` path the board already uses, applied after the permission
+  row filter), so a filtered list can only ever *narrow* what the viewer may
+  already see — never widen it. One schema key, filters on list, table, and
+  board at once.
+- **Applies to:** any collection that declares `filter_fields` (tasks:
+  status + urgency today). Text is left to the search box; a date-range control
+  is the next increment (needs the dotted-operator `gte/lte` query path).
+- **Status:** shipped. Verified server-side narrowing (6 tasks → 2 on
+  status=open) and that the bar renders in board and table.
+
 ---
 
 ## Open questions (decide, then move up)
