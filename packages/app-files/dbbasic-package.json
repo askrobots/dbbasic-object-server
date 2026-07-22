@@ -6,11 +6,17 @@
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
-  "dependencies": ["app-projects"],
+  "dependencies": [
+    "app-projects"
+  ],
   "objects": [
     {
       "id": "site_files",
       "path": "objects/site/files.py"
+    },
+    {
+      "id": "site_attachments",
+      "path": "objects/site/attachments.py"
     }
   ],
   "schemas": [

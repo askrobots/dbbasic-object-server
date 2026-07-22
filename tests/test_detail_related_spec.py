@@ -158,16 +158,19 @@ def test_view_render_detail_block_is_a_thin_mount_wrapper():
     detail_fn = re.search(r"function renderDetail\(block, mount\) \{(.*?)\n\}", source, re.S)
     assert detail_fn, "renderDetail not found"
     assert "/api/schema/" not in detail_fn.group(1)
-    assert "maybeMountComments" in detail_fn.group(1)
+    assert "maybeMountCapabilities" in detail_fn.group(1)
 
 
-def test_detail_auto_mounts_comment_thread_when_capability_declared():
-    """capabilities.comments wiring: the detail page mounts window.dbbasicThread
-    for a record only when its collection's schema declares the capability."""
+def test_detail_auto_mounts_capability_widgets_when_declared():
+    """capabilities wiring: the detail page mounts a widget for a record only
+    when its collection's schema declares the matching capability."""
     source = _view_render_source()
     assert '<script src="/thread">' in source
-    assert "schema.capabilities && schema.capabilities.comments" in source
+    assert '<script src="/attachments">' in source
+    assert "caps.comments && window.dbbasicThread" in source
+    assert "caps.attachments && window.dbbasicAttachments" in source
     assert "window.dbbasicThread.mount" in source
+    assert "window.dbbasicAttachments.mount" in source
 
 
 # ---------------------------------------------------------------------

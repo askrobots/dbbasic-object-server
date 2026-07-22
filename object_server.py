@@ -6519,6 +6519,13 @@ async def _handle_user_file_upload(
     }
     if payload.get("project_id"):
         record["project_id"] = str(payload["project_id"])
+    # Polymorphic attachment: a file uploaded from a record's detail carries
+    # the (parent_collection, parent_id) pair the attachments capability uses,
+    # so any collection can hold files without a dedicated FK column. Set from
+    # the upload form (the widget supplies them); owner_id stays session-set.
+    for _pk in ("parent_collection", "parent_id"):
+        if payload.get(_pk):
+            record[_pk] = str(payload[_pk])[:120]
 
     permission_check = await _authorize_collection_write(
         send,

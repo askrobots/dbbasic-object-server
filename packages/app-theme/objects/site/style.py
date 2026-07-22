@@ -296,6 +296,18 @@ footer.app { margin-top: 2.5rem; color: var(--muted); font-size: 0.78rem; }
 .commenttext { white-space: pre-wrap; word-break: break-word; font-size: 0.9rem; }
 .threadcompose { display: grid; gap: 0.5rem; }
 .threadcomposeactions { display: flex; gap: 0.6rem; align-items: center; }
+/* Attachments (window.dbbasicAttachments): the capabilities.attachments surface. */
+.attachments { margin-top: 1.25rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+.attachlist { display: grid; gap: 0.5rem; margin-bottom: 1rem; }
+.attachrow { display: flex; gap: 0.7rem; align-items: center; background: var(--panel);
+             border: 1px solid var(--line); border-radius: var(--radius-md); padding: 0.5rem 0.75rem; }
+.attachicon { flex: none; font-size: 1rem; opacity: 0.8; }
+.attachbody { flex: 1; min-width: 0; }
+.attachname { font-weight: 600; font-size: 0.9rem; word-break: break-word; }
+.attachmeta { color: var(--muted); font-size: 0.78rem; margin-top: 0.1rem; }
+.attachactions { flex: none; }
+.attachupload { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
+.attachupload input[type="file"] { width: auto; flex: 1; min-width: 12rem; }
 
 /* 60: board (kanban / lead-pipeline), tree (self-relation nesting), and
    calendar (month grid) -- the three schema-driven list_mode renderers in

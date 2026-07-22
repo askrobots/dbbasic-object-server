@@ -90,14 +90,16 @@ def test_tasks_schema_is_now_version_6_additive_only():
     """tasks.json went 5 -> 6 adding task_type/template_id/instructions/
     metadata, then 7 -> 8 adding views.filter_fields (status/urgency) for the
     generative filter bar, then 8 -> 9 adding capabilities.comments (the
-    generic comment thread on the task detail). Every field that existed at v5
-    is still present, unchanged in name/type -- these schema changes are
-    purely additive.
+    generic comment thread on the task detail), then 9 -> 10 adding
+    capabilities.attachments (the generic attachment widget). Every field that
+    existed at v5 is still present, unchanged in name/type -- these schema
+    changes are purely additive.
     """
     schema = _schema("tasks")
-    assert schema["version"] == 9
+    assert schema["version"] == 10
     assert schema["views"]["filter_fields"] == ["status", "urgency"]
     assert schema["capabilities"]["comments"] is True
+    assert schema["capabilities"]["attachments"] is True
     by_name = {f["name"]: f for f in schema["fields"]}
 
     for name in ("id", "title", "description", "project_id", "status",

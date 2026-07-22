@@ -1,7 +1,7 @@
 {
   "name": "files",
   "title": "Files",
-  "version": 2,
+  "version": 3,
   "description": "File metadata; bytes live outside collections and are served by /api/files/{id} under this record's visibility.",
   "fields": [
     {
@@ -34,6 +34,16 @@
       "validation": {
         "max_length": 300
       }
+    },
+    {
+      "name": "parent_collection",
+      "type": "text",
+      "label": "Attached to (collection)"
+    },
+    {
+      "name": "parent_id",
+      "type": "text",
+      "label": "Attached to (record)"
     },
     {
       "name": "project_id",

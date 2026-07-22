@@ -284,27 +284,35 @@ function renderDetail(block, mount) {
     else setTimeout(sub, 400);
   })();
   load();
-  maybeMountComments(block.collection, recordId, commentsMount, viewerId);
+  maybeMountCapabilities(block.collection, recordId, commentsMount, viewerId);
 }
 
-// Capability wiring: a collection whose schema declares `capabilities.comments`
-// gets a comment thread under its detail page automatically -- no per-view
-// `thread` block, no per-app comment table. This is the "declare a capability,
-// the platform wires it" layer sitting on top of the display generators. Fails
-// silent (no thread) when the flag is absent or the widget isn't loaded.
-async function maybeMountComments(collection, recordId, mount, viewerId) {
-  if (!mount || !window.dbbasicThread) return;
+// Capability wiring: a collection's schema declares generic behaviors under
+// `capabilities`, and the detail page mounts the matching widget automatically
+// -- no per-view block, no per-app table/FK. This is the "declare a capability,
+// the platform wires it" layer on top of the display generators. Each mounts
+// into its own sub-element under the detail; fails silent when a flag is absent
+// or a widget isn't loaded.
+async function maybeMountCapabilities(collection, recordId, mount, viewerId) {
+  if (!mount) return;
+  let schema = null;
   try {
     const res = await fetch("/api/schema/" + encodeURIComponent(collection),
       {credentials: "same-origin", headers: {accept: "application/json"}});
-    if (!res.ok) return;
-    const schema = (await res.json()).schema;
-    if (schema && schema.capabilities && schema.capabilities.comments) {
-      window.dbbasicThread.mount(mount, {
-        parent_collection: collection, parent_id: recordId, viewer_id: viewerId || "",
-      });
-    }
-  } catch (e) { /* no schema / no capability -> no thread, never a crash */ }
+    if (res.ok) schema = (await res.json()).schema;
+  } catch (e) { return; }
+  const caps = (schema && schema.capabilities) || {};
+  const opts = {parent_collection: collection, parent_id: recordId, viewer_id: viewerId || ""};
+  // Attachments above comments (files, then discussion) -- each in its own div
+  // so neither clobbers the other.
+  if (caps.attachments && window.dbbasicAttachments) {
+    const a = document.createElement("div"); mount.appendChild(a);
+    window.dbbasicAttachments.mount(a, opts);
+  }
+  if (caps.comments && window.dbbasicThread) {
+    const t = document.createElement("div"); mount.appendChild(t);
+    window.dbbasicThread.mount(t, opts);
+  }
 }
 
 // 59's related block: a CHILD collection filtered by a foreign key back
@@ -678,6 +686,7 @@ def GET(request):
 <script src="/form"></script>
 <script src="/detail"></script>
 <script src="/thread"></script>
+<script src="/attachments"></script>
 <script>const VIEW_ID = {view_id!r}; const VIEWER_ID = {(user_id or "")!r}; const RECORD_ID = {record_id!r};{_SCRIPT}</script>
 {nav_html}
 </body>
