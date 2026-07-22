@@ -418,6 +418,7 @@ def test_public_schema_meta_endpoint_returns_structure(tmp_path, monkeypatch):
         "forms": {"default": {"fields": ["title", "url"]}},
         "views": {"list_mode": "cards"},
         "search": {"fields": ["title"]},
+        "capabilities": {"comments": True},
     }))
     monkeypatch.setenv(object_server.DATA_DIR_ENV, str(data_dir))
     # public — no auth needed (structure, not data)
@@ -427,6 +428,9 @@ def test_public_schema_meta_endpoint_returns_structure(tmp_path, monkeypatch):
     assert [f["name"] for f in schema["fields"]] == ["id", "title", "url"]
     assert schema["forms"]["default"]["fields"] == ["title", "url"]
     assert schema["views"]["list_mode"] == "cards"
+    # capabilities surface in the public meta so a UI can wire generic
+    # behaviors (e.g. the comment thread) from the schema alone.
+    assert schema["capabilities"] == {"comments": True}
     # unknown collection -> 404-ish (derived empty schema still returns; bad name -> 400)
     status, _, _ = request("/api/schema/bad!name")
     assert status == 400
