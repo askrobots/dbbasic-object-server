@@ -194,6 +194,26 @@ ones as they're settled; move Open Questions up as they're decided.
   from other readers — so comments stamp a separate `author_name` for
   attribution.
 
+### 13. Every data collection carries created_at; detail always shows it.
+- **Decision:** `created_at` (datetime, read-only, server-owned) is a baseline
+  field on every user-facing data collection, and the detail generator always
+  surfaces `created_at`/`updated_at` as record metadata — even when
+  `detail_fields` curates the main fields — the way the list row already shows
+  a timestamp.
+- **Rationale:** "When was this created" is baseline info every record should
+  carry and every detail should show; `detail_fields` is for curating the
+  *content* fields, not for suppressing metadata. Found by spotting records
+  with no timestamp (a collection missing the field entirely — e.g. projects)
+  and detail pages hiding it (tasks/contacts/forum_topics curated it out).
+- **Applies to:** all user-facing collections (config/system ones —
+  feature_flags, user_prefs, shell_*, *_definitions, project_access,
+  ai_prices, dbbasic_probe — intentionally omit it). Detail metadata append is
+  automatic in the shared renderer.
+- **Status:** shipped. Added the field to projects + organizations/files/
+  events/interactions/time_logs/tags/templates; detail appends the timestamps.
+  (Old records predate the field and read it back empty — new ones get a
+  server-set value.)
+
 ---
 
 ## Open questions (decide, then move up)
