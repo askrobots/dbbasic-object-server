@@ -262,6 +262,16 @@ _JS = r"""
     // explicitly lists detail_fields is honored verbatim (id included if listed).
     const explicit = !!(schema.views && schema.views.detail_fields);
     const ordered = order.map((n) => byName[n]).filter((f) => f && (explicit || f.name !== "id"));
+    // Record metadata (when was this created/updated) is baseline info every
+    // record carries -- detail_fields curates the MAIN fields, it shouldn't
+    // suppress the timestamps. Append them if the schema has them and the
+    // curated list didn't already include them, so "Created" shows on every
+    // detail page the way it does in the list row meta (matching decision:
+    // detail is a superset of the list, not a subset). Skipped automatically
+    // for a record with no value (readOnly skips fields absent from record).
+    for (const meta of ["created_at", "updated_at"]) {
+      if (byName[meta] && !ordered.some((f) => f.name === meta)) ordered.push(byName[meta]);
+    }
 
     const rows = [];
     for (const f of ordered) {

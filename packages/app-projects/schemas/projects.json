@@ -1,7 +1,7 @@
 {
   "name": "projects",
   "title": "Projects",
-  "version": 2,
+  "version": 3,
   "description": "Projects group tasks, notes, and other app records.",
   "fields": [
     {
@@ -32,6 +32,12 @@
         "completed",
         "on_hold"
       ]
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "read_only": true,
+      "label": "Created"
     },
     {
       "name": "owner_id",
