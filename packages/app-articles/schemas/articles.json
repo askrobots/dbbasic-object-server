@@ -1,7 +1,7 @@
 {
   "name": "articles",
   "title": "Articles",
-  "version": 3,
+  "version": 4,
   "description": "Long-form writing. Schema versions and record changelogs provide edit history. v3 adds blocks.feed (64 - Feed), opting articles into the follow-graph feed as its worked-example feed source; purely additive metadata, no field/behavior change.",
   "fields": [
     {
@@ -12,14 +12,19 @@
       "type": "text",
       "required": true,
       "label": "Title",
-      "validation": {"min_length": 1, "max_length": 200}
+      "validation": {
+        "min_length": 1,
+        "max_length": 200
+      }
     },
     {
       "name": "content",
       "type": "textarea",
       "required": true,
       "label": "Content",
-      "validation": {"min_length": 1}
+      "validation": {
+        "min_length": 1
+      }
     },
     {
       "name": "is_public",
@@ -46,15 +51,34 @@
     }
   ],
   "forms": {
-    "default": {"fields": ["title", "content", "is_public", "published_on"]}
+    "default": {
+      "fields": [
+        "title",
+        "content",
+        "is_public",
+        "published_on"
+      ]
+    }
   },
   "views": {
-    "list_mode": "feed",
-    "list_fields": ["title", "published_on", "is_public"]
+    "list_mode": "table",
+    "list_fields": [
+      "title",
+      "published_on",
+      "is_public"
+    ]
   },
   "search": {
-    "fields": ["title", "content"],
-    "result_fields": ["id", "title", "published_on", "is_public"]
+    "fields": [
+      "title",
+      "content"
+    ],
+    "result_fields": [
+      "id",
+      "title",
+      "published_on",
+      "is_public"
+    ]
   },
   "blocks": {
     "feed": {
@@ -62,7 +86,9 @@
       "visibility_field": "is_public",
       "visibility_true_value": "true",
       "time_field": "published_on",
-      "summary_fields": ["title"],
+      "summary_fields": [
+        "title"
+      ],
       "link_field": "id"
     }
   }

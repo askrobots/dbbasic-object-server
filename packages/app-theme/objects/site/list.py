@@ -377,6 +377,13 @@ _JS = r"""
       const r = resolveCalendarConfig(schema);
       return r.config ? {kind: "calendar", config: r.config} : {kind: null, notice: r.error};
     }
+    if (wanted === "table") {
+      const byName = {}; (schema.fields || []).forEach((f) => byName[f.name] = f);
+      // Columns from list_fields (curated) else every field; never the raw id.
+      const fields = ((schema.views && schema.views.list_fields) || (schema.fields || []).map((f) => f.name))
+        .filter((n) => byName[n] && n !== "id");
+      return fields.length ? {kind: "table", config: {fields: fields, byName: byName}} : {kind: null, notice: null};
+    }
     return {kind: null, notice: null};
   }
 
@@ -604,7 +611,7 @@ _JS = r"""
       return out;
     }
 
-    function startRowList(notice) {
+    function startRowList(notice, table) {
       function row(r) {
         const title = cardTitle(cfg, r);
         const av = String(title).trim().charAt(0) || "?";
@@ -662,14 +669,47 @@ _JS = r"""
         const s = list.slice().sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
         return (sortEl && sortEl.value === "oldest") ? s : s.reverse();
       }
+      // ---- table list_mode: a real <table> over the SAME fetch/sort/cap/
+      // subscribe pipeline as the row list, so it inherits filtering, the
+      // render cap, detail links, and LIVE UPDATES for free. `table` is
+      // {fields, byName} from the schema (list_fields + field metadata); cells
+      // are formatted by field semantics; headers sort; rows link to detail.
+      function humanName(n) { return String(n || "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()); }
+      function fmtCell(fname, r) {
+        const f = (table && table.byName[fname]) || {};
+        const t = String(f.type || "").toLowerCase();
+        const v = r[fname];
+        if (v == null || v === "") return "—";
+        if (/_cents$/.test(fname) && (t === "integer" || t === "number")) {
+          const n = parseFloat(v); if (!isNaN(n)) return "$" + (n / 100).toFixed(2);
+        }
+        if (t === "boolean") return v === "true" ? "Yes" : "No";
+        if (t === "datetime" || t === "date") return esc(relDate(v));
+        return esc(String(v));
+      }
+      function tableBody(shown) {
+        const sf = cfg.sortBy && cfg.sortBy.field;
+        const th = table.fields.map((n) => {
+          const f = table.byName[n] || {};
+          const arrow = (sf === n) ? (cfg.sortBy.dir === "asc" ? " ▲" : " ▼") : "";
+          return '<th data-sort="' + esc(n) + '">' + esc(f.label || humanName(n)) + arrow + '</th>';
+        }).join("");
+        const trs = shown.map((r) => {
+          const tds = table.fields.map((n) => '<td>' + fmtCell(n, r) + '</td>').join("");
+          return '<tr data-id="' + esc(r.id) + '"' + (cfg.link !== false ? ' class="clickrow"' : "") + '>' + tds + '</tr>';
+        }).join("");
+        return '<div class="dtablewrap"><table class="dtable"><thead><tr>' + th
+          + '</tr></thead><tbody>' + trs + '</tbody></table></div>';
+      }
       function render(list) {
         lastList = list;
         const sorted = sortList(list);
         const cap = (cfg.limit != null) ? cfg.limit : DEFAULT_ROW_CAP;
         const shown = expanded ? sorted : sorted.slice(0, cap);
-        const rows = shown.map(row).join("");
         const ctx = {collection: collection, count: list.length};
-        const body = rows || slotHtml("empty", ctx) || '<div class="state">Nothing yet.</div>';
+        const body = shown.length
+          ? (table ? tableBody(shown) : shown.map(row).join(""))
+          : (slotHtml("empty", ctx) || '<div class="state">Nothing yet.</div>');
         const noticeHtml = notice ? '<div class="state notice">' + esc(notice) + '</div>' : "";
         let more = "";
         if (sorted.length > cap) {
@@ -707,6 +747,20 @@ _JS = r"""
       mount.addEventListener("click", async (e) => {
         const more = e.target.closest("button.listmore");
         if (more) { expanded = (more.dataset.act === "showall"); render(lastList); return; }
+        // table: click a header to sort by that column (toggle desc/asc); click
+        // a row to open its detail (same reachability as the row list / cards).
+        const thSort = e.target.closest("th[data-sort]");
+        if (thSort) {
+          const f = thSort.dataset.sort, cur = cfg.sortBy || {};
+          cfg.sortBy = {field: f, dir: (cur.field === f && cur.dir !== "asc") ? "asc" : "desc"};
+          render(lastList); return;
+        }
+        const clickrow = e.target.closest("tr.clickrow");
+        if (clickrow) {
+          const id = clickrow.dataset.id, rec = all.find((x) => x.id === id) || {id: id};
+          window.location.href = cfg.href ? cfg.href(rec) : "/" + collection + "/" + encodeURIComponent(id);
+          return;
+        }
         const btn = e.target.closest("button.rowbtn"); if (!btn) return;
         const id = btn.dataset.id;
         if (btn.dataset.act === "delete") {
@@ -768,6 +822,9 @@ _JS = r"""
         if (resolved.kind === "tree") { activeReload = renderTree(collection, cfg, mount, resolved.config); return; }
         activeReload = renderCalendar(collection, cfg, mount, resolved.config); return;
       }
+      // table keeps the search box + sort control (unlike the grouped modes) --
+      // it's the row list rendered as a <table>, so those controls still apply.
+      if (resolved.kind === "table") { activeReload = startRowList(resolved.notice, resolved.config); return; }
       activeReload = startRowList(resolved.notice);
     })();
 

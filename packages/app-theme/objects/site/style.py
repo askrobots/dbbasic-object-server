@@ -244,6 +244,18 @@ footer.app { margin-top: 2.5rem; color: var(--muted); font-size: 0.78rem; }
             color: var(--muted); border-radius: var(--radius-sm); padding: 0.4rem 0.8rem;
             font: inherit; cursor: pointer; width: 100%; }
 .listmore:hover { border-color: var(--accent); color: var(--text); }
+/* table list_mode: a dense, sortable, live table over list_fields. */
+.dtablewrap { overflow-x: auto; max-width: 100%; border: 1px solid var(--line);
+              border-radius: var(--radius-md); background: var(--panel); }
+.dtable { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+.dtable th { text-align: left; padding: 0.55rem 0.7rem; border-bottom: 2px solid var(--line);
+             color: var(--muted); font-weight: 600; white-space: nowrap; cursor: pointer;
+             user-select: none; position: sticky; top: 0; background: var(--panel); }
+.dtable th:hover { color: var(--text); }
+.dtable td { padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+.dtable tbody tr:last-child td { border-bottom: none; }
+.dtable tbody tr.clickrow { cursor: pointer; }
+.dtable tbody tr.clickrow:hover { background: var(--panel-2); }
 
 /* 60: board (kanban / lead-pipeline), tree (self-relation nesting), and
    calendar (month grid) -- the three schema-driven list_mode renderers in
