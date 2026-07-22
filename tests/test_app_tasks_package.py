@@ -91,15 +91,17 @@ def test_tasks_schema_is_now_version_6_additive_only():
     metadata, then 7 -> 8 adding views.filter_fields (status/urgency) for the
     generative filter bar, then 8 -> 9 adding capabilities.comments (the
     generic comment thread on the task detail), then 9 -> 10 adding
-    capabilities.attachments (the generic attachment widget). Every field that
-    existed at v5 is still present, unchanged in name/type -- these schema
-    changes are purely additive.
+    capabilities.attachments (the generic attachment widget), then 10 -> 11
+    adding capabilities.shareable (the generic record-sharing widget). Every
+    field that existed at v5 is still present, unchanged in name/type -- these
+    schema changes are purely additive.
     """
     schema = _schema("tasks")
-    assert schema["version"] == 10
+    assert schema["version"] == 11
     assert schema["views"]["filter_fields"] == ["status", "urgency"]
     assert schema["capabilities"]["comments"] is True
     assert schema["capabilities"]["attachments"] is True
+    assert schema["capabilities"]["shareable"] is True
     by_name = {f["name"]: f for f in schema["fields"]}
 
     for name in ("id", "title", "description", "project_id", "status",

@@ -303,8 +303,12 @@ async function maybeMountCapabilities(collection, recordId, mount, viewerId) {
   } catch (e) { return; }
   const caps = (schema && schema.capabilities) || {};
   const opts = {parent_collection: collection, parent_id: recordId, viewer_id: viewerId || ""};
-  // Attachments above comments (files, then discussion) -- each in its own div
-  // so neither clobbers the other.
+  // Sharing (owner-only, renders nothing for others), then attachments, then
+  // comments -- each in its own div so none clobbers another.
+  if (caps.shareable && window.dbbasicShare) {
+    const s = document.createElement("div"); mount.appendChild(s);
+    window.dbbasicShare.mount(s, opts);
+  }
   if (caps.attachments && window.dbbasicAttachments) {
     const a = document.createElement("div"); mount.appendChild(a);
     window.dbbasicAttachments.mount(a, opts);
@@ -687,6 +691,7 @@ def GET(request):
 <script src="/detail"></script>
 <script src="/thread"></script>
 <script src="/attachments"></script>
+<script src="/share"></script>
 <script>const VIEW_ID = {view_id!r}; const VIEWER_ID = {(user_id or "")!r}; const RECORD_ID = {record_id!r};{_SCRIPT}</script>
 {nav_html}
 </body>

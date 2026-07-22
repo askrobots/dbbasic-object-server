@@ -167,10 +167,13 @@ def test_detail_auto_mounts_capability_widgets_when_declared():
     source = _view_render_source()
     assert '<script src="/thread">' in source
     assert '<script src="/attachments">' in source
+    assert '<script src="/share">' in source
     assert "caps.comments && window.dbbasicThread" in source
     assert "caps.attachments && window.dbbasicAttachments" in source
+    assert "caps.shareable && window.dbbasicShare" in source
     assert "window.dbbasicThread.mount" in source
     assert "window.dbbasicAttachments.mount" in source
+    assert "window.dbbasicShare.mount" in source
 
 
 # ---------------------------------------------------------------------

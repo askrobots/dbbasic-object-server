@@ -55,6 +55,14 @@ class PermissionSubject:
     ``writable_project_ids`` narrows that to grants with ``permission ==
     "write"``; both are resolved by the server from grant records before
     checks run — the engine itself stays pure and does no IO.
+
+    ``shared_records`` / ``writable_shared_records`` are the generic
+    equivalent for the sharing capability: per-collection sets of record ids
+    granted to this subject via ``record_shares`` (any grant, and write
+    grants). Resolved collection-aware by ``$shared_records`` /
+    ``$writable_shared_records`` in a row filter (the collection being checked
+    is threaded in), so a shared task never leaks a same-id row in another
+    collection.
     """
 
     user_id: str | None = None
@@ -64,6 +72,8 @@ class PermissionSubject:
     project_ids: tuple[str, ...] = ()
     owned_project_ids: tuple[str, ...] = ()
     writable_project_ids: tuple[str, ...] = ()
+    shared_records: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    writable_shared_records: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
     @classmethod
     def anonymous(cls) -> "PermissionSubject":
@@ -84,6 +94,19 @@ class PermissionSubject:
             project_ids=tuple(project_ids),
             owned_project_ids=tuple(owned_project_ids),
             writable_project_ids=tuple(writable_project_ids),
+        )
+
+    def with_shares(
+        self,
+        shared_records: Mapping[str, Iterable[str]],
+        writable_shared_records: Mapping[str, Iterable[str]] | None = None,
+    ) -> "PermissionSubject":
+        return replace(
+            self,
+            shared_records={k: tuple(v) for k, v in dict(shared_records).items()},
+            writable_shared_records={
+                k: tuple(v) for k, v in dict(writable_shared_records or {}).items()
+            },
         )
 
 
@@ -607,7 +630,11 @@ def _matching_rule(
             continue
         if not _principal_matches(rule.principal, subject, roles, record=record):
             continue
-        if record is not None and rule.row_filter and not _record_matches_filter(record, rule.row_filter, subject):
+        if (
+            record is not None
+            and rule.row_filter
+            and not _record_matches_filter(record, rule.row_filter, subject, collection=collection)
+        ):
             continue
         return rule
     return None
@@ -710,12 +737,14 @@ def _record_matches_filter(
     record: Mapping[str, Any],
     row_filter: Mapping[str, Any],
     subject: PermissionSubject,
+    *,
+    collection: str | None = None,
 ) -> bool:
     for key, expected in row_filter.items():
         actual = _string_value(record.get(key))
         for condition in _iter_conditions(expected):
             op, raw_value = _condition_op_value(condition)
-            resolved = _resolve_filter_value(raw_value, subject)
+            resolved = _resolve_filter_value(raw_value, subject, collection=collection)
             if not _condition_matches(op, actual, resolved):
                 return False
     return True
@@ -817,7 +846,7 @@ def _filter_datetime(value: str) -> datetime | None:
         return None
 
 
-def _resolve_filter_value(value: Any, subject: PermissionSubject) -> Any:
+def _resolve_filter_value(value: Any, subject: PermissionSubject, *, collection: str | None = None) -> Any:
     if value == "$user_id":
         return subject.user_id
     if value == "$account_id":
@@ -828,6 +857,15 @@ def _resolve_filter_value(value: Any, subject: PermissionSubject) -> Any:
         return tuple(subject.owned_project_ids)
     if value == "$writable_projects":
         return tuple(subject.writable_project_ids)
+    # Collection-aware sharing: the ids of THIS collection's records shared
+    # with the subject (any grant, and write grants). Empty tuple when the
+    # collection is unknown or nothing is shared -- so `{id: $shared_records}`
+    # simply matches nothing rather than erroring or matching a same-id row in
+    # a different collection.
+    if value == "$shared_records":
+        return tuple(subject.shared_records.get(collection, ())) if collection else ()
+    if value == "$writable_shared_records":
+        return tuple(subject.writable_shared_records.get(collection, ())) if collection else ()
     return value
 
 

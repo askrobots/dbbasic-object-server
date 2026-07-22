@@ -1,0 +1,12 @@
+{
+  "rules": [
+    {"effect": "allow", "principal": "registered", "actions": ["read"], "collection": "record_shares",
+     "row_filter": {"granted_by": "$user_id"},
+     "reason": "a granter can list the grants they made (the Share widget's roster)"},
+    {"effect": "allow", "principal": "registered", "actions": ["read"], "collection": "record_shares",
+     "row_filter": {"user_id": "$user_id"},
+     "reason": "a grantee can see grants made to them"},
+    {"effect": "allow", "principal": "public", "actions": ["execute"], "object_id": "site_share",
+     "reason": "the share widget is a public static script (like site_list); grants are still written only by the owner-checked /api/share endpoint"}
+  ]
+}

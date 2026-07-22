@@ -308,6 +308,16 @@ footer.app { margin-top: 2.5rem; color: var(--muted); font-size: 0.78rem; }
 .attachactions { flex: none; }
 .attachupload { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
 .attachupload input[type="file"] { width: auto; flex: 1; min-width: 12rem; }
+/* Sharing (window.dbbasicShare): the owner-only capabilities.shareable surface. */
+.share { margin-top: 1.25rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+.sharelist { display: grid; gap: 0.4rem; margin-bottom: 1rem; }
+.sharerow { display: flex; gap: 0.6rem; align-items: center; background: var(--panel);
+            border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 0.4rem 0.7rem; }
+.sharewho { font-weight: 600; font-size: 0.88rem; flex: 1; min-width: 0; word-break: break-word; }
+.sharemeta { color: var(--muted); font-size: 0.78rem; }
+.shareadd { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+.shareadd input { width: auto; flex: 1; min-width: 12rem; }
+.shareadd select { width: auto; }
 
 /* 60: board (kanban / lead-pipeline), tree (self-relation nesting), and
    calendar (month grid) -- the three schema-driven list_mode renderers in

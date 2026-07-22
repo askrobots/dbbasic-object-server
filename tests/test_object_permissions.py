@@ -169,6 +169,58 @@ def test_accessible_projects_filter_matches_by_membership():
     ).allowed is False
 
 
+def test_shared_records_filter_is_collection_scoped():
+    """capabilities.shareable: `{id: $shared_records}` grants read to a record
+    explicitly shared with the subject -- and ONLY in the collection it was
+    shared in. The collection is threaded into filter resolution so a share on
+    a task never leaks a same-id row in another collection, and an unshared
+    user (or a share on a different record) never matches.
+    """
+    policy = permissions.PermissionPolicy(
+        access_mode="role_based",
+        rules=(
+            permissions.PermissionRule.allow(
+                "registered", [permissions.READ], collection="tasks",
+                row_filter={"id": "$shared_records"},
+            ),
+        ),
+    )
+    # user "8" was granted task "t1" (and only that). Same id "t1" also exists
+    # as a record in another collection they were NOT granted.
+    granted = permissions.PermissionSubject(user_id="8").with_shares({"tasks": ["t1"]})
+    ungranted = permissions.PermissionSubject(user_id="9")
+    shared_task = {"id": "t1", "owner_id": "7"}
+    other_task = {"id": "t2", "owner_id": "7"}
+
+    # grantee reads the shared task
+    assert permissions.check_permission(
+        granted, permissions.READ, policy=policy, collection="tasks", record=shared_task
+    ).allowed is True
+    # but not a different task
+    assert permissions.check_permission(
+        granted, permissions.READ, policy=policy, collection="tasks", record=other_task
+    ).allowed is False
+    # and the SAME rule/id in a DIFFERENT collection must not match (collection
+    # scoping): the grant was for tasks, so an id-t1 row in "invoices" is denied
+    invoice_policy = permissions.PermissionPolicy(
+        access_mode="role_based",
+        rules=(
+            permissions.PermissionRule.allow(
+                "registered", [permissions.READ], collection="invoices",
+                row_filter={"id": "$shared_records"},
+            ),
+        ),
+    )
+    assert permissions.check_permission(
+        granted, permissions.READ, policy=invoice_policy, collection="invoices",
+        record={"id": "t1", "owner_id": "7"},
+    ).allowed is False
+    # a user with no grant never matches
+    assert permissions.check_permission(
+        ungranted, permissions.READ, policy=policy, collection="tasks", record=shared_task
+    ).allowed is False
+
+
 def test_subject_from_dict_reads_project_ids():
     subject = permissions.subject_from_dict(
         {"user_id": "8", "project_ids": ["p1", "p2"], "owned_project_ids": ["p9"]}

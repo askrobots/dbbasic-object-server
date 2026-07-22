@@ -1,0 +1,13 @@
+{
+  "id": "app-share",
+  "name": "Share",
+  "version": "0.1.0",
+  "description": "Generic record sharing as a capability: the record_shares grant collection (attachable to a record in any collection), window.dbbasicShare, and owner-checked grant writes via /api/share. A collection opts in with capabilities.shareable + a read rule using $shared_records.",
+  "compatibility": {"dbbasic_object_server": ">=0.1.0"},
+  "dependencies": [],
+  "objects": [{"id": "site_share", "path": "objects/site/share.py"}],
+  "schemas": [{"collection": "record_shares", "path": "schemas/record_shares.json"}],
+  "permissions": [{"path": "permissions/rules.json"}],
+  "seed": [],
+  "migrations": []
+}

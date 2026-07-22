@@ -724,6 +724,13 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
             await _handle_user_file(send, method, path[len(user_file_prefix):], headers)
             return
 
+        if path == "/api/share":
+            await _handle_share(send, method, query, body, headers)
+            return
+        if path.startswith("/api/share/"):
+            await _handle_share_revoke(send, method, path[len("/api/share/"):], headers)
+            return
+
         if path == http_api_contract.LOGIN_PATH:
             await _handle_login(send, method, query, body, headers)
             return
@@ -6558,6 +6565,140 @@ async def _handle_user_file_upload(
     await _send_json(send, {"status": "ok", "file": stored, "url": f"/api/files/{file_id}"}, status=201)
 
 
+def _share_target_record(collection: str, record_id: str) -> dict[str, str] | None:
+    try:
+        return object_records.get_collection_record(collection, record_id, base_dir=_data_dir())
+    except (LookupError, ValueError, object_collections.CollectionNotFoundError,
+            object_collections.InvalidCollectionNameError):
+        return None
+
+
+async def _handle_share(send, method: str, query, body: bytes, headers: dict[str, str]) -> None:
+    """List or create record-access grants.
+
+    The authorization that a row_filter can't express: creating a grant is
+    checked against the TARGET record's ownership (a cross-collection fact), so
+    only the record's owner (or an admin) can share it. Grants are written here,
+    server-side -- there is no create rule on record_shares, so this is the ONLY
+    path that mints one. That's what keeps sharing from being self-serve
+    privilege escalation.
+    """
+    subject = _permission_subject(headers)
+    requester = subject.user_id
+    if requester is None:
+        await _send_json(send, {"status": "error", "error": "Sharing requires a signed-in session."}, status=401)
+        return
+    is_admin = "admin" in (subject.roles or ())
+
+    if method == "GET":
+        collection = str(query.get("collection") or "").strip()
+        record_id = str(query.get("record_id") or "").strip()
+        if not collection or not record_id:
+            await _send_json(send, {"status": "error", "error": "collection and record_id are required."}, status=400)
+            return
+        target = _share_target_record(collection, record_id)
+        if target is None:
+            await _send_json(send, {"status": "error", "error": "Record not found."}, status=404)
+            return
+        if not is_admin and target.get("owner_id") != requester:
+            await _send_json(send, {"status": "error", "error": "Only the record's owner can view its shares."}, status=403)
+            return
+        grants = [
+            r for r in _read_records_or_empty(RECORD_SHARES_COLLECTION)
+            if r.get("collection") == collection and r.get("record_id") == record_id
+        ]
+        await _send_json(send, {"status": "ok", "shares": grants})
+        return
+
+    if method != "POST":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    if (
+        _session_cookie_token(headers)
+        and not _authorization_token(headers)
+        and not _cookie_request_origin_allowed(headers)
+    ):
+        await _send_json(send, {"status": "error", "error": "Cross-origin cookie writes are not allowed."}, status=403)
+        return
+
+    payload = _parse_json_body(body) or {}
+    collection = str(payload.get("collection") or "").strip()
+    record_id = str(payload.get("record_id") or "").strip()
+    grantee = str(payload.get("user_id") or "").strip()
+    permission = "write" if str(payload.get("permission") or "read").strip() == "write" else "read"
+    if not collection or not record_id or not grantee:
+        await _send_json(send, {"status": "error", "error": "collection, record_id and user_id are required."}, status=400)
+        return
+    target = _share_target_record(collection, record_id)
+    if target is None:
+        await _send_json(send, {"status": "error", "error": "Record not found."}, status=404)
+        return
+    if not is_admin and target.get("owner_id") != requester:
+        await _send_json(send, {"status": "error", "error": "Only the record's owner can share it."}, status=403)
+        return
+    grant = {
+        "id": object_ids.new_uuid4(),
+        "collection": collection,
+        "record_id": record_id,
+        "user_id": grantee,
+        "permission": permission,
+        "granted_by": requester,
+    }
+    try:
+        stored = object_records.create_collection_record(
+            RECORD_SHARES_COLLECTION, grant, base_dir=_data_dir(),
+            actor=_record_change_actor(headers), preserve_read_only=True,
+        )
+    except object_collections.CollectionNotFoundError:
+        await _send_json(send, {"status": "error", "error": "The record_shares collection is not installed (app-share)."}, status=404)
+        return
+    except ValueError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
+        return
+    await _send_json(send, {"status": "ok", "share": stored}, status=201)
+
+
+async def _handle_share_revoke(send, method: str, grant_id: str, headers: dict[str, str]) -> None:
+    """Revoke one grant. Authorized for the record's owner, the original
+    granter, or an admin -- the same target-ownership check as creating one."""
+    if method != "DELETE":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+    subject = _permission_subject(headers)
+    requester = subject.user_id
+    if requester is None:
+        await _send_json(send, {"status": "error", "error": "Sharing requires a signed-in session."}, status=401)
+        return
+    if (
+        _session_cookie_token(headers)
+        and not _authorization_token(headers)
+        and not _cookie_request_origin_allowed(headers)
+    ):
+        await _send_json(send, {"status": "error", "error": "Cross-origin cookie writes are not allowed."}, status=403)
+        return
+    if not grant_id or "/" in grant_id:
+        await _send_json(send, {"status": "error", "error": "Invalid grant id"}, status=400)
+        return
+    try:
+        grant = object_records.get_collection_record(RECORD_SHARES_COLLECTION, grant_id, base_dir=_data_dir())
+    except (LookupError, ValueError):
+        grant = None
+    if grant is None:
+        await _send_json(send, {"status": "error", "error": "Grant not found."}, status=404)
+        return
+    is_admin = "admin" in (subject.roles or ())
+    target = _share_target_record(grant.get("collection", ""), grant.get("record_id", ""))
+    owns_target = target is not None and target.get("owner_id") == requester
+    if not (is_admin or owns_target or grant.get("granted_by") == requester):
+        await _send_json(send, {"status": "error", "error": "Not allowed to revoke this grant."}, status=403)
+        return
+    object_records.delete_collection_record(
+        RECORD_SHARES_COLLECTION, grant_id, base_dir=_data_dir(), actor=_record_change_actor(headers)
+    )
+    await _send_json(send, {"status": "ok"})
+
+
 async def _handle_user_file(
     send,
     method: str,
@@ -10702,7 +10843,7 @@ def _subject_for_user(user_id: str) -> object_permissions.PermissionSubject:
             roles=tuple(user.get("roles") or ()),
             subscriptions=tuple(user.get("subscriptions") or ()),
         )
-    return _with_accessible_projects(subject)
+    return _with_shared_records(_with_accessible_projects(subject))
 
 
 def _permission_identity(
@@ -10729,7 +10870,7 @@ def _permission_identity(
         except (OSError, ValueError):
             session = None
         if session is not None:
-            subject = _with_accessible_projects(session.subject())
+            subject = _with_shared_records(_with_accessible_projects(session.subject()))
             return subject, "session_cookie" if cookie_token else "session_token"
 
     if not _env_enabled(PERMISSION_TRUST_HEADERS_ENV):
@@ -10737,12 +10878,14 @@ def _permission_identity(
 
     user_id = _optional_header_text(headers, "x-dbbasic-user-id")
     account_id = _optional_header_text(headers, "x-dbbasic-account-id")
-    subject = _with_accessible_projects(
-        object_permissions.PermissionSubject(
-            user_id=user_id,
-            account_id=account_id,
-            roles=_csv_header(headers.get("x-dbbasic-roles", "")),
-            subscriptions=_csv_header(headers.get("x-dbbasic-subscriptions", "")),
+    subject = _with_shared_records(
+        _with_accessible_projects(
+            object_permissions.PermissionSubject(
+                user_id=user_id,
+                account_id=account_id,
+                roles=_csv_header(headers.get("x-dbbasic-roles", "")),
+                subscriptions=_csv_header(headers.get("x-dbbasic-subscriptions", "")),
+            )
         )
     )
     method = "trusted_headers" if _trusted_identity_headers_present(headers) else "anonymous"
@@ -10791,6 +10934,42 @@ def _with_accessible_projects(
         dict.fromkeys(project_ids),
         dict.fromkeys(owned_project_ids),
         dict.fromkeys(writable_project_ids),
+    )
+
+
+RECORD_SHARES_COLLECTION = "record_shares"
+
+
+def _with_shared_records(
+    subject: object_permissions.PermissionSubject,
+) -> object_permissions.PermissionSubject:
+    """Resolve the subject's per-collection record shares before checks run.
+
+    The generic sibling of ``_with_accessible_projects``: grants live in the
+    plain ``record_shares`` collection (collection, record_id, user_id,
+    permission), written only by the owner-checked /api/share endpoint. A rule
+    opts a collection into sharing with a ``{"id": "$shared_records"}`` row
+    filter (or ``$writable_shared_records`` for write). Keyed by collection so
+    the collection-aware resolver returns only this collection's shared ids.
+    """
+    if subject.user_id is None:
+        return subject
+    shared: dict[str, list[str]] = {}
+    writable: dict[str, list[str]] = {}
+    for row in _read_records_or_empty(RECORD_SHARES_COLLECTION):
+        if row.get("user_id") != subject.user_id:
+            continue
+        coll, rid = row.get("collection"), row.get("record_id")
+        if not coll or not rid:
+            continue
+        shared.setdefault(coll, []).append(rid)
+        if row.get("permission") == "write":
+            writable.setdefault(coll, []).append(rid)
+    if not shared:
+        return subject
+    return subject.with_shares(
+        {k: list(dict.fromkeys(v)) for k, v in shared.items()},
+        {k: list(dict.fromkeys(v)) for k, v in writable.items()},
     )
 
 

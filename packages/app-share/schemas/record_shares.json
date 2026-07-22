@@ -1,0 +1,17 @@
+{
+  "name": "record_shares",
+  "title": "Shares",
+  "version": 1,
+  "storage": "append",
+  "description": "Generic record sharing: a grant of access to one record in any collection, via collection/record_id, to a user. The capabilities.shareable surface. Grants are WRITTEN only by the owner-checked /api/share endpoint (never a raw collection write -- forging a grant would be privilege escalation), so this schema declares no create/update/delete permission rule.",
+  "fields": [
+    {"name": "id"},
+    {"name": "collection", "type": "text", "required": true, "label": "Collection"},
+    {"name": "record_id", "type": "text", "required": true, "label": "Record"},
+    {"name": "user_id", "type": "text", "required": true, "label": "Shared with"},
+    {"name": "permission", "type": "enum", "enum": ["read", "write"], "default": "read", "label": "Permission"},
+    {"name": "granted_by", "type": "text", "read_only": true, "label": "Granted by"},
+    {"name": "created_at", "type": "datetime", "read_only": true, "label": "Granted"}
+  ],
+  "views": {"list_mode": "table", "list_fields": ["user_id", "permission", "granted_by", "created_at"]}
+}

@@ -3,31 +3,61 @@
     {
       "effect": "allow",
       "principal": "registered",
-      "actions": ["create", "read", "update", "delete"],
+      "actions": [
+        "create",
+        "read",
+        "update",
+        "delete"
+      ],
       "collection": "tasks",
-      "row_filter": {"owner_id": "$user_id"},
+      "row_filter": {
+        "owner_id": "$user_id"
+      },
       "reason": "signed-in users manage tasks they created"
     },
     {
       "effect": "allow",
       "principal": "registered",
-      "actions": ["read", "update"],
+      "actions": [
+        "read",
+        "update"
+      ],
       "collection": "tasks",
-      "row_filter": {"assigned_to": "$user_id"},
+      "row_filter": {
+        "assigned_to": "$user_id"
+      },
       "reason": "assignees see and progress tasks assigned to them"
     },
     {
       "effect": "allow",
       "principal": "registered",
-      "actions": ["read"],
+      "actions": [
+        "read"
+      ],
       "collection": "tasks",
-      "row_filter": {"project_id": "$accessible_projects"},
+      "row_filter": {
+        "project_id": "$accessible_projects"
+      },
       "reason": "tasks in projects shared with a user are readable"
     },
     {
       "effect": "allow",
+      "principal": "registered",
+      "actions": [
+        "read"
+      ],
+      "collection": "tasks",
+      "row_filter": {
+        "id": "$shared_records"
+      },
+      "reason": "a task explicitly shared with this user (capabilities.shareable via record_shares) is readable"
+    },
+    {
+      "effect": "allow",
       "principal": "public",
-      "actions": ["execute"],
+      "actions": [
+        "execute"
+      ],
       "object_id": "site_tasks",
       "reason": "the tasks page is public; it shows a sign-in prompt to visitors"
     }
