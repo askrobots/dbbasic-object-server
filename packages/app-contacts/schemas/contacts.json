@@ -1,7 +1,7 @@
 {
   "name": "contacts",
   "title": "Contacts",
-  "version": 4,
+  "version": 5,
   "description": "People: the core CRM record.",
   "fields": [
     {
@@ -175,6 +175,9 @@
         "collection": "interactions",
         "fk_field": "contact_id"
       }
+    ],
+    "filter_fields": [
+      "lead_status"
     ]
   },
   "search": {

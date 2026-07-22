@@ -93,9 +93,13 @@ def test_contacts_schema_is_now_version_3_additive_only():
     this schema change is purely additive (live records with no value for
     the new fields just read those fields back as empty, same as any other
     optional field on a schemaless TSV collection).
+
+    v4 -> v5 added views.filter_fields (lead_status) for the generative
+    filter bar -- a views-only, additive change; no field was touched.
     """
     schema = _schema("contacts")
-    assert schema["version"] == 4
+    assert schema["version"] == 5
+    assert schema["views"]["filter_fields"] == ["lead_status"]
     by_name = {f["name"]: f for f in schema["fields"]}
 
     # Fields present since v2, untouched.

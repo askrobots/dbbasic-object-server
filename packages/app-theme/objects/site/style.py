@@ -276,6 +276,9 @@ footer.app { margin-top: 2.5rem; color: var(--muted); font-size: 0.78rem; }
 .dtable tbody tr:last-child td { border-bottom: none; }
 .dtable tbody tr.clickrow { cursor: pointer; }
 .dtable tbody tr.clickrow:hover { background: var(--panel-2); }
+.dtable td.dtactions, .dtable th.dtactions { text-align: right; white-space: nowrap; width: 1%; }
+.dtable td.dtactions { display: table-cell; }
+.dtable td.dtactions .rowbtn { position: static; }
 
 /* 60: board (kanban / lead-pipeline), tree (self-relation nesting), and
    calendar (month grid) -- the three schema-driven list_mode renderers in

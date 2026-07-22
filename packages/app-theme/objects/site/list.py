@@ -663,6 +663,20 @@ _JS = r"""
     }
 
     function startRowList(notice, table) {
+      // Edit/delete only for a row the viewer actually owns. BOTH ids must be
+      // present and equal -- a log/report/rollup row has no owner_id, and a
+      // report view has no cfg.owner, so `undefined === undefined` must not
+      // wrongly offer actions. `cfg.rowActions:false` is the explicit off
+      // switch. Shared by the row list and the table so both modes offer the
+      // SAME actions -- flipping between them never silently drops edit/delete.
+      function isMine(r) { return !!(cfg.owner && r.owner_id && r.owner_id === cfg.owner); }
+      function rowActionsHtml(r) {
+        const acts = (cfg.rowActions !== false && isMine(r))
+          ? '<button class="rowbtn" data-act="edit" data-id="' + esc(r.id) + '" title="Edit">✎</button>'
+            + '<button class="rowbtn danger" data-act="delete" data-id="' + esc(r.id) + '" title="Delete">✕</button>'
+          : "";
+        return acts + slotHtml("row_actions", r);
+      }
       function row(r) {
         const title = cardTitle(cfg, r);
         const av = String(title).trim().charAt(0) || "?";
@@ -683,17 +697,11 @@ _JS = r"""
         // report view has no cfg.owner, so the old `undefined === undefined`
         // wrongly offered edit/delete on generated data. `cfg.rowActions:false`
         // is the explicit off switch (a list block over a log/report sets it).
-        const mine = !!(cfg.owner && r.owner_id && r.owner_id === cfg.owner);
-        const acts = (cfg.rowActions !== false && mine)
-          ? '<button class="rowbtn" data-act="edit" data-id="' + esc(r.id) + '" title="Edit">✎</button>'
-            + '<button class="rowbtn danger" data-act="delete" data-id="' + esc(r.id) + '" title="Delete">✕</button>'
-          : "";
         return '<div class="listrow"><div class="av">' + esc(av) + '</div><div class="body">'
           + '<div class="rowtitle">' + titleHtml + '</div>'
           + (sub ? '<div class="rowsub">' + esc(sub) + '</div>' : "")
           + '<div class="rowmeta">' + (created ? '<span class="when">' + esc(relDate(created)) + '</span>' : "")
-          + pills(tags) + '</div></div><div class="rowactions">' + acts
-          + slotHtml("row_actions", r) + '</div></div>';
+          + pills(tags) + '</div></div><div class="rowactions">' + rowActionsHtml(r) + '</div></div>';
       }
       // A list over a collection with real volume (a rollup report, a busy log)
       // must never render every row -- that produces a 50,000px page. Cap the
@@ -742,13 +750,19 @@ _JS = r"""
       }
       function tableBody(shown) {
         const sf = cfg.sortBy && cfg.sortBy.field;
+        // Peer with the row list: an owned row gets the same edit/delete (+ any
+        // row_actions slot) in a trailing column. Only add the column when a
+        // shown row actually has actions, so a read-only/report table stays a
+        // clean grid with no empty trailing column.
+        const showActs = shown.some((r) => rowActionsHtml(r) !== "");
         const th = table.fields.map((n) => {
           const f = table.byName[n] || {};
           const arrow = (sf === n) ? (cfg.sortBy.dir === "asc" ? " ▲" : " ▼") : "";
           return '<th data-sort="' + esc(n) + '">' + esc(f.label || humanName(n)) + arrow + '</th>';
-        }).join("");
+        }).join("") + (showActs ? '<th class="dtactions" aria-label="Actions"></th>' : "");
         const trs = shown.map((r) => {
-          const tds = table.fields.map((n) => '<td>' + fmtCell(n, r) + '</td>').join("");
+          const tds = table.fields.map((n) => '<td>' + fmtCell(n, r) + '</td>').join("")
+            + (showActs ? '<td class="dtactions">' + rowActionsHtml(r) + '</td>' : "");
           return '<tr data-id="' + esc(r.id) + '"' + (cfg.link !== false ? ' class="clickrow"' : "") + '>' + tds + '</tr>';
         }).join("");
         return '<div class="dtablewrap"><table class="dtable"><thead><tr>' + th
@@ -808,8 +822,11 @@ _JS = r"""
           cfg.sortBy = {field: f, dir: (cur.field === f && cur.dir !== "asc") ? "asc" : "desc"};
           render(lastList); return;
         }
+        // A row click opens detail -- UNLESS the click landed on an action
+        // button or a link inside the row (the actions column, or a linked
+        // cell), which have their own behavior.
         const clickrow = e.target.closest("tr.clickrow");
-        if (clickrow) {
+        if (clickrow && !e.target.closest("button, a")) {
           const id = clickrow.dataset.id, rec = all.find((x) => x.id === id) || {id: id};
           window.location.href = cfg.href ? cfg.href(rec) : "/" + collection + "/" + encodeURIComponent(id);
           return;
