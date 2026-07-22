@@ -21,7 +21,9 @@ flowchart TD
 
     APPS --> Q["Package authoring"]
     APPS --> SF["Schema forms contract"]
+    SF --> CAPS["Capabilities<br/>(comments, attachments, sharing)"]
     APPS --> P["Permissions model"]
+    P --> CAPS
     APPS --> SR["Site routing"]
 
     C --> M["Object authoring"]
@@ -87,7 +89,13 @@ flowchart TD
   for generated packages.
 - `schema-forms.md` - the schema field contract that generates forms and
   views: types, enums, relations, validation bounds, form layout, and list
-  modes, all enforced on record writes.
+  modes (list/table/board/tree/calendar, filters, relation labels), all
+  enforced on record writes.
+- `capabilities.md` - the per-collection behavior layer on top of the display
+  layer: `capabilities.{comments,attachments,shareable}` flags that grow a
+  comment thread, attachment list, and owner-checked sharing on a detail page
+  from one schema key — the polymorphic-collection + widget + auto-mount
+  pattern, the sharing security model, and how to add a new capability.
 - `site-routing.md` - clean public URLs for websites: convention routing,
   the `site_routes` records table with `{param}`/`{param:uuid}` patterns,
   `site_404`, and why routing maps URLs while the permission policy decides

@@ -120,11 +120,29 @@ rollback like source code:
 
 - `forms.default.fields` — field order for the generated record form.
   Additional named forms can define alternate layouts.
-- `views.list_mode` — the collection's reading mode: `table` (rows compared
-  to each other: tasks, orders, files), `cards` (rows read individually:
-  notes, contacts, messages), or `feed` (sequential with social context).
-  Generated list views pick their shape from this.
-- `views.list_fields` — columns/summary fields for list rendering.
+- `views.list_mode` — how the generated list renders. The shared list
+  renderer (`window.dbbasicList`) resolves it from the schema:
+  - `table` — a dense, sortable HTML table over `list_fields`; cells format by
+    type (money `_cents`, boolean, relative dates, enum badges), and relation
+    columns show the target's label, not the raw id.
+  - `board` — a kanban grouped by an enum field, drag-to-transition (the drag
+    issues the ordinary status write, so `flow` transitions still gate it). A
+    board collection that also has `list_fields` gets a **Board ⇄ Table**
+    toggle (the choice persists per collection).
+  - `tree` — nests a self-relation (`parent_id`) into a hierarchy.
+  - `calendar` — buckets by a date field.
+  - absent / `cards` / `feed` — the plain rich-row list.
+
+  Every mode shares one fetch/sort/cap/search/realtime pipeline, so all of
+  them inherit filtering, the 50-row cap, and live updates. A mode whose
+  required field can't be derived falls back to the row list with a visible
+  notice — never a blank page.
+- `views.list_fields` — columns (table), card fields (board), or summary
+  fields (rows). Relation fields resolve to the referenced record's label.
+- `views.filter_fields` — fields to expose as a **filter bar** above the list
+  (enum → a select of its options, boolean → Yes/No). A pick narrows the fetch
+  server-side (`field=value`, after the permission row filter) and composes
+  with the search box; works in every mode.
 - `search` — opts the collection into global search (`GET /api/search`
   and the `global_search` MCP tool):
 
@@ -137,6 +155,10 @@ rollback like source code:
   `views.list_fields`. Collections without a `search` section never
   appear in search results. Search runs inside the permission engine, so
   row filters and field permissions bound what any caller can find.
+- `capabilities` — generic per-collection *behaviors* on top of this display
+  layer: `{"comments": true}`, `{"attachments": true}`, `{"shareable": true}`
+  grow a comment thread, attachment list, and owner-checked sharing on the
+  detail page from one flag each. See [`capabilities.md`](capabilities.md).
 
 ## Worked Example: tasks
 

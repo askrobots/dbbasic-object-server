@@ -664,8 +664,14 @@ data-preserving package upgrade system (provenance baselines, three-way
 reconcile, override objects, feature flags), event handler objects, backups
 with read-only restore preview, identity and permission
 policy/audit/enforcement, traffic limits, health metrics, and deployment
-checks. CI runs the full suite (1050 tests) on CPython 3.10 through 3.14
-including the free-threaded 3.14t build, plus an end-to-end Docker Compose
+checks. On top of the store sits a schema-driven UI layer: one generative
+renderer that turns a schema into a live list/table/board/tree/calendar (with
+filters, sort, relation labels, and a board⇄table toggle), form, and composed
+detail page — and a per-collection *capability* layer where a schema flag grows
+a comment thread, attachment list, or owner-checked record sharing with no
+per-app code (see [`docs/capabilities.md`](docs/capabilities.md)). CI runs the
+full suite (~1990 tests) on CPython 3.10 through 3.14 including the
+free-threaded 3.14t build, plus an end-to-end Docker Compose
 build-and-health-check, on every push.
 
 Performance is measured, not asserted (Apple M1 and a 1-vCPU $6 VM; details
