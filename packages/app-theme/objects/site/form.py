@@ -257,7 +257,11 @@ _JS = r"""
     const byName = {}; (schema.fields || []).forEach((f) => byName[f.name] = f);
     const order = (schema.views && schema.views.detail_fields)
       || (schema.fields || []).map((f) => f.name);
-    const ordered = order.map((n) => byName[n]).filter(Boolean);
+    // The raw `id` (a UUID) is noise on a detail page; drop it by default.
+    // Timestamps/owner stay -- they're informative here. A schema that
+    // explicitly lists detail_fields is honored verbatim (id included if listed).
+    const explicit = !!(schema.views && schema.views.detail_fields);
+    const ordered = order.map((n) => byName[n]).filter((f) => f && (explicit || f.name !== "id"));
 
     const rows = [];
     for (const f of ordered) {
