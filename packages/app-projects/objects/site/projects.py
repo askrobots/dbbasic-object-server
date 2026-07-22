@@ -1,65 +1,34 @@
-"""Projects page: a signed-in table of the visitor's own projects.
+"""Projects page — built from metadata, not markup.
 
-The browser talks to /collections/projects/records with the visitor's
-session cookie, so the permission policy decides what this page can see
-and write — the page itself holds no data access.
-"""
-
-# Page-specific: the create form's panel wrapper (shared form.stack has no panel chrome).
-_STYLE = """
-form.create { margin-top: var(--gap); background: var(--panel); border: 1px solid var(--line);
-              border-radius: var(--radius-md); padding: var(--pad); display: grid; gap: var(--gap); }
-form.create button { justify-self: start; }
+Previously this page hand-rolled its own table, create form, fetch, and
+realtime wiring (~60 lines). Everything it did now comes from the shared
+generators: the schema's `views.list_mode: "table"` renders the list via
+/list -> window.dbbasicList (sortable columns, status badge, the 50-row
+cap, row -> detail, realtime), and the create/edit form via /form ->
+window.dbbasicForm. This page is just the chrome — breadcrumb, an Add
+button, a search/sort toolbar, two mount points — identical in shape to
+every other list page. No hand-written rows or fields; the bespoke copy
+that had drifted (no breadcrumb, always-open form, no cap) is gone.
 """
 
 _SCRIPT = """
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
-  (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
-
-async function load() {
-  const res = await fetch("/collections/projects/records?limit=200",
-                          {credentials: "same-origin", headers: {accept: "application/json"}});
-  const body = await res.json();
-  const rows = (body.records || []).map((r) =>
-    `<tr><td>${esc(r.name)}</td><td><span class="badge positive">${esc(r.status)}</span></td>` +
-    `<td>${esc(r.description)}</td></tr>`);
-  document.getElementById("rows").innerHTML =
-    rows.join("") || '<tr><td colspan="3">No projects yet.</td></tr>';
-}
-
-async function create(event) {
-  event.preventDefault();
-  const form = event.target;
-  const fields = form.elements;
-  const record = {
-    id: crypto.randomUUID(),
-    name: fields["name"].value.trim(),
-    description: fields["description"].value.trim(),
-    status: fields["status"].value,
-    owner_id: OWNER_ID,
-  };
-  const res = await fetch("/collections/projects/records", {
-    method: "POST", credentials: "same-origin",
-    headers: {"content-type": "application/json", accept: "application/json"},
-    body: JSON.stringify(record),
+const panel = document.getElementById("formpanel");
+const list = window.dbbasicList("projects", {
+  mount: "#list", search: "#search", sort: "#sort", owner: OWNER_ID,
+  title: (r) => r.name || "(untitled project)", href: (r) => "/projects/" + r.id,
+  created: (r) => r.created_at, onEdit: (r) => openForm(r),
+});
+function openForm(record) {
+  document.getElementById("formtitle").textContent = record ? "Edit Project" : "New Project";
+  panel.style.display = "block";
+  window.dbbasicForm("projects", {
+    mount: "#formmount", record: record, owner: OWNER_ID,
+    submitLabel: "Add Project",
+    onSaved: () => { panel.style.display = "none"; list.reload(); },
+    onCancel: () => { panel.style.display = "none"; },
   });
-  const body = await res.json();
-  document.getElementById("form-error").textContent = res.ok ? "" : (body.error || "Create failed");
-  if (res.ok) { form.reset(); load(); }
 }
-
-document.getElementById("create-form").addEventListener("submit", create);
-load();
-
-// Realtime: auto-refresh when this collection changes (another tab, user, or agent).
-(function () {
-  let _lt = null;
-  const reload = () => { clearTimeout(_lt); _lt = setTimeout(load, 150); };
-  (function wait() {
-    if (window.dbbasicSubscribe) window.dbbasicSubscribe("projects", reload);
-    else setTimeout(wait, 300);
-  })();
-})();
+document.getElementById("add").addEventListener("click", () => openForm(null));
 """
 
 
@@ -73,23 +42,23 @@ def GET(request):
         script = ""
     else:
         body = """
-<table>
-<thead><tr><th>Name</th><th>Status</th><th>Description</th></tr></thead>
-<tbody id="rows"><tr><td colspan="3">loading&hellip;</td></tr></tbody>
-</table>
-<form class="create" id="create-form">
-<input name="name" placeholder="Project name" required maxlength="120">
-<textarea name="description" placeholder="Description" rows="2"></textarea>
-<select name="status">
-<option value="active">active</option>
-<option value="completed">completed</option>
-<option value="on_hold">on hold</option>
-</select>
-<button type="submit" class="btn primary">Add Project</button>
-<div class="error" id="form-error"></div>
-</form>
+<div class="breadcrumb"><a href="/">Home</a> / Projects</div>
+<div class="pagehead"><h1>Projects</h1><button class="btn primary" id="add">+ New Project</button></div>
+<div id="formpanel" style="display:none; margin-bottom:1rem">
+  <h2 id="formtitle" style="font-size:1rem; margin:0 0 0.5rem">New Project</h2>
+  <div id="formmount"></div>
+</div>
+<div class="toolbar">
+  <input class="search grow" id="search" placeholder="Search projects&hellip;" autocomplete="off">
+  <select id="sort"><option value="newest">Newest</option><option value="oldest">Oldest</option></select>
+</div>
+<div id="list"><div class="state">loading&hellip;</div></div>
 """
-        script = f"<script>const OWNER_ID = {user_id!r};{_SCRIPT}</script>"
+        script = (
+            f"<script>const OWNER_ID = {user_id!r};</script>"
+            '<script src="/list"></script><script src="/form"></script>'
+            f"<script>{_SCRIPT}</script>"
+        )
 
     who = (
         f"signed in as <strong>{user_id}</strong>"
@@ -103,11 +72,10 @@ def GET(request):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Projects</title>
 <link rel="stylesheet" href="/style">
-<style>{_STYLE}</style>
 </head>
 <body>
 <div class="wrap">
-<header class="app"><h1>Projects</h1><div class="who">{who}</div></header>
+<header class="app"><h1><a href="/">DBBASIC</a></h1><div class="who">{who}</div></header>
 {body}
 </div>
 {script}

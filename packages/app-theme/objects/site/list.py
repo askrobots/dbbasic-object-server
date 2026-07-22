@@ -369,8 +369,20 @@ _JS = r"""
     }
   }
 
+  // Table config from a schema: columns from list_fields (curated) else every
+  // field, never the raw id. Returns null when there's nothing to show as
+  // columns. Hoisted out of resolveListMode so the board<->table switcher can
+  // build a table for a board-declared collection too (it has list_fields).
+  function buildTableConfig(schema) {
+    if (!schema) return null;
+    const byName = {}; (schema.fields || []).forEach((f) => byName[f.name] = f);
+    const fields = ((schema.views && schema.views.list_fields) || (schema.fields || []).map((f) => f.name))
+      .filter((n) => byName[n] && n !== "id");
+    return fields.length ? {fields: fields, byName: byName} : null;
+  }
+
   async function resolveListMode(collection) {
-    if (!(await listModesEnabled())) return {kind: null, notice: null};
+    if (!(await listModesEnabled())) return {kind: null, notice: null, schema: null};
 
     let schema = null;
     try {
@@ -378,29 +390,26 @@ _JS = r"""
         {credentials: "same-origin", headers: {accept: "application/json"}});
       if (res.ok) { const body = await res.json(); schema = body.schema || null; }
     } catch (e) { schema = null; }
-    if (!schema) return {kind: null, notice: null};
+    if (!schema) return {kind: null, notice: null, schema: null};
 
     const wanted = schema.views && schema.views.list_mode;
     if (wanted === "board") {
       const r = resolveBoardConfig(schema);
-      return r.config ? {kind: "board", config: r.config} : {kind: null, notice: r.error};
+      return r.config ? {kind: "board", config: r.config, schema: schema} : {kind: null, notice: r.error, schema: schema};
     }
     if (wanted === "tree") {
       const r = resolveTreeConfig(schema);
-      return r.config ? {kind: "tree", config: r.config} : {kind: null, notice: r.error};
+      return r.config ? {kind: "tree", config: r.config, schema: schema} : {kind: null, notice: r.error, schema: schema};
     }
     if (wanted === "calendar") {
       const r = resolveCalendarConfig(schema);
-      return r.config ? {kind: "calendar", config: r.config} : {kind: null, notice: r.error};
+      return r.config ? {kind: "calendar", config: r.config, schema: schema} : {kind: null, notice: r.error, schema: schema};
     }
     if (wanted === "table") {
-      const byName = {}; (schema.fields || []).forEach((f) => byName[f.name] = f);
-      // Columns from list_fields (curated) else every field; never the raw id.
-      const fields = ((schema.views && schema.views.list_fields) || (schema.fields || []).map((f) => f.name))
-        .filter((n) => byName[n] && n !== "id");
-      return fields.length ? {kind: "table", config: {fields: fields, byName: byName}} : {kind: null, notice: null};
+      const cfg = buildTableConfig(schema);
+      return cfg ? {kind: "table", config: cfg, schema: schema} : {kind: null, notice: null, schema: schema};
     }
-    return {kind: null, notice: null};
+    return {kind: null, notice: null, schema: schema};
   }
 
   // ---- board/tree/calendar renderers (impure: fetch + DOM + realtime) ----
@@ -826,16 +835,68 @@ _JS = r"""
       } catch (e) { /* schema fetch failed -- leave the list unscoped, never blank */ }
     }
 
+    // A grouped mode (board/tree/calendar) hides the row list's search + sort
+    // box -- those controls only drive the row list. Table and plain-list keep
+    // them.
+    function setGroupedControls(hidden) {
+      if (sortEl) sortEl.style.display = hidden ? "none" : "";
+      if (searchEl) searchEl.style.display = hidden ? "none" : "";
+    }
+
+    // board <-> table switcher. Persist the choice and reload rather than
+    // swap in place: window.dbbasicSubscribe has no unsubscribe, so an
+    // in-place swap would leave the previous mode's change-log handler live
+    // and double-render. One page load = one subscription. The choice is
+    // per-collection and survives navigation.
+    const modeStoreKey = "dbb_listmode_" + collection;
+    function storedMode() {
+      try { return window.localStorage.getItem(modeStoreKey); } catch (e) { return null; }
+    }
+    function storeMode(m) {
+      try { window.localStorage.setItem(modeStoreKey, m); } catch (e) {}
+    }
+    function renderSwitcher(current, modes) {
+      if (!mount || !mount.parentNode) return;
+      const bar = document.createElement("div");
+      bar.className = "listmodes";
+      bar.setAttribute("role", "tablist");
+      bar.innerHTML = modes.map((m) =>
+        '<button type="button" class="modebtn' + (m.key === current ? " active" : "")
+        + '" data-mode="' + m.key + '" aria-selected="' + (m.key === current) + '">'
+        + esc(m.label) + "</button>").join("");
+      mount.parentNode.insertBefore(bar, mount);
+      bar.addEventListener("click", (e) => {
+        const btn = e.target.closest("[data-mode]");
+        if (!btn) return;
+        const mk = btn.getAttribute("data-mode");
+        if (mk === current) return;
+        storeMode(mk);
+        window.location.reload();
+      });
+    }
+
     (async function boot() {
       await scopeToCurrentEntity();
       const resolved = await resolveListMode(collection);
+      // A board-declared collection that also has list_fields can render as a
+      // table too, so offer a switcher (the classic kanban<->list toggle). The
+      // user's pick (localStorage) wins over the schema default.
+      const tableConfig = buildTableConfig(resolved.schema);
+      const canBoard = resolved.kind === "board";
+      if (canBoard && tableConfig) {
+        const pick = storedMode() === "table" ? "table" : "board";
+        renderSwitcher(pick, [{key: "board", label: "Board"}, {key: "table", label: "Table"}]);
+        if (pick === "table") {
+          setGroupedControls(false);
+          activeReload = startRowList(null, tableConfig);
+        } else {
+          setGroupedControls(true);
+          activeReload = renderBoard(collection, cfg, mount, resolved.config);
+        }
+        return;
+      }
       if (resolved.kind === "board" || resolved.kind === "tree" || resolved.kind === "calendar") {
-        // The page's newest/oldest sort and its text-search box are wired only
-        // to the row list; in these grouped/nested/date-bucketed modes they'd
-        // be dead controls, so hide them for a clean surface. (Per-board
-        // filtering is a follow-on -- it would re-wire the search box here.)
-        if (sortEl) sortEl.style.display = "none";
-        if (searchEl) searchEl.style.display = "none";
+        setGroupedControls(true);
         if (resolved.kind === "board") { activeReload = renderBoard(collection, cfg, mount, resolved.config); return; }
         if (resolved.kind === "tree") { activeReload = renderTree(collection, cfg, mount, resolved.config); return; }
         activeReload = renderCalendar(collection, cfg, mount, resolved.config); return;

@@ -157,6 +157,14 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
 input.search { background-image: none; }
 [aria-invalid="true"], .invalid { border-color: var(--danger); }
 textarea { min-height: 4rem; resize: vertical; }
+/* Theme every select the same in every browser: without appearance:none,
+   Safari draws its beveled native control (the gradient pill in the form
+   screenshots) while Chrome draws a flat one -- so the same page looked
+   different per browser. Draw our own chevron instead. */
+select { appearance: none; -webkit-appearance: none; -moz-appearance: none;
+  padding-right: 1.9rem;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8' fill='none' stroke='%23857a68' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'><path d='M1 1.5 6 6.5 11 1.5'/></svg>");
+  background-repeat: no-repeat; background-position: right 0.65rem center; }
 
 /* Forms */
 form.stack { display: grid; gap: var(--gap); }
@@ -165,6 +173,18 @@ form.stack { display: grid; gap: var(--gap); }
 .field .req { color: var(--danger); }
 .field .help { font-size: 0.78rem; color: var(--muted); }
 .field .err { font-size: 0.8rem; color: var(--danger); min-height: 1rem; }
+/* The generated form was looser than a hand-built one for two reasons:
+   (1) `form.genform.stack` picked up BOTH the grid `gap` and the global
+   `.stack > * + *` margin-top, doubling the space between fields; and
+   (2) every field reserved a blank 1rem error line even with no error.
+   Use grid gap alone, tighten the label->control gap, and collapse the
+   error slot until there's actually a message. Now migrating a bespoke
+   page onto this renderer keeps its form tight. */
+form.genform.stack { gap: 0.85rem; }
+form.genform.stack > * + * { margin-top: 0; }
+.genform .field { gap: 0.25rem; }
+.genform .err { min-height: 0; }
+.genform .err:empty { display: none; }
 
 /* Buttons — intents, not colors */
 .btn { display: inline-flex; align-items: center; gap: 0.4rem; border: 1px solid var(--line);
@@ -260,6 +280,15 @@ footer.app { margin-top: 2.5rem; color: var(--muted); font-size: 0.78rem; }
 /* 60: board (kanban / lead-pipeline), tree (self-relation nesting), and
    calendar (month grid) -- the three schema-driven list_mode renderers in
    window.dbbasicList (list.py). */
+/* board <-> table mode switcher: a small segmented control above the list. */
+.listmodes { display: inline-flex; gap: 0; border: 1px solid var(--line);
+             border-radius: var(--radius-sm); overflow: hidden; margin-bottom: var(--gap); }
+.listmodes .modebtn { border: none; border-radius: 0; background: var(--panel);
+                      color: var(--muted); font: inherit; font-size: 0.85rem;
+                      padding: 0.3rem 0.8rem; cursor: pointer; width: auto; }
+.listmodes .modebtn + .modebtn { border-left: 1px solid var(--line); }
+.listmodes .modebtn:hover { color: var(--text); }
+.listmodes .modebtn.active { background: var(--accent); color: var(--accent-ink); }
 .board { display: flex; gap: var(--gap); align-items: flex-start; overflow-x: auto; padding-bottom: 0.25rem; }
 .boardcol { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md);
             flex: 1 1 200px; min-width: 200px; max-width: 340px; padding: 0.6rem; }
