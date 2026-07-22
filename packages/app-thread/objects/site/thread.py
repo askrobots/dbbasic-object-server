@@ -109,7 +109,11 @@ _JS = r"""
             id: (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now()),
             parent_collection: pc, parent_id: pid, body: text,
           };
-          if (viewer) rec.owner_id = viewer;
+          // author_name is a non-redacted display field: owner_id carries a
+          // `public: hidden` policy, so a reader who isn't the author can't see
+          // it -- without author_name every other person's comment would read
+          // as "someone". Stamp it so attribution survives.
+          if (viewer) { rec.owner_id = viewer; rec.author_name = viewer; }
           const [ok, resp] = await api("POST", "/collections/thread_comments/records", rec);
           if (!ok) { if (errEl) errEl.textContent = (resp && resp.error) || "Could not post comment"; return; }
           ta.value = ""; load();
