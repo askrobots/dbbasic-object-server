@@ -240,6 +240,10 @@ footer.app { margin-top: 2.5rem; color: var(--muted); font-size: 0.78rem; }
           border-radius: var(--radius-sm); padding: 0.25rem 0.5rem; font: inherit; cursor: pointer; line-height: 1; }
 .rowbtn:hover { border-color: var(--accent); color: var(--text); }
 .rowbtn.danger:hover { border-color: var(--danger); color: var(--danger); }
+.listmore { margin-top: 0.5rem; border: 1px solid var(--line); background: var(--panel-2);
+            color: var(--muted); border-radius: var(--radius-sm); padding: 0.4rem 0.8rem;
+            font: inherit; cursor: pointer; width: 100%; }
+.listmore:hover { border-color: var(--accent); color: var(--text); }
 
 /* 60: board (kanban / lead-pipeline), tree (self-relation nesting), and
    calendar (month grid) -- the three schema-driven list_mode renderers in

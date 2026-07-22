@@ -615,16 +615,47 @@ _JS = r"""
           + pills(tags) + '</div></div><div class="rowactions">' + acts
           + slotHtml("row_actions", r) + '</div></div>';
       }
+      // A list over a collection with real volume (a rollup report, a busy log)
+      // must never render every row -- that produces a 50,000px page. Cap the
+      // rendered rows (cfg.limit, default 50) with a Show-all toggle; the data
+      // is already fetched, so expanding is free. Universal: every list surface
+      // in every app inherits the cap, no per-view opt-in.
+      const DEFAULT_ROW_CAP = 50;
+      let expanded = false;
+      let lastList = [];
       function sortList(list) {
+        // A report can sort by a real field+direction (cfg.sortBy) -- e.g. top
+        // IPs by hits, descending -- otherwise fall back to the created_at
+        // newest/oldest default the sort <select> drives.
+        if (cfg.sortBy && cfg.sortBy.field) {
+          const f = cfg.sortBy.field, dir = (cfg.sortBy.dir === "asc") ? 1 : -1;
+          return list.slice().sort((a, b) => {
+            const an = parseFloat(a[f]), bn = parseFloat(b[f]);
+            const cmp = (!isNaN(an) && !isNaN(bn))
+              ? (an - bn)
+              : String(a[f] == null ? "" : a[f]).localeCompare(String(b[f] == null ? "" : b[f]));
+            return cmp * dir;
+          });
+        }
         const s = list.slice().sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
         return (sortEl && sortEl.value === "oldest") ? s : s.reverse();
       }
       function render(list) {
-        const rows = sortList(list).map(row).join("");
+        lastList = list;
+        const sorted = sortList(list);
+        const cap = (cfg.limit != null) ? cfg.limit : DEFAULT_ROW_CAP;
+        const shown = expanded ? sorted : sorted.slice(0, cap);
+        const rows = shown.map(row).join("");
         const ctx = {collection: collection, count: list.length};
         const body = rows || slotHtml("empty", ctx) || '<div class="state">Nothing yet.</div>';
         const noticeHtml = notice ? '<div class="state notice">' + esc(notice) + '</div>' : "";
-        mount.innerHTML = noticeHtml + slotHtml("before_list", ctx) + body + slotHtml("after_list", ctx);
+        let more = "";
+        if (sorted.length > cap) {
+          more = expanded
+            ? '<button class="listmore" data-act="collapse">Show fewer</button>'
+            : '<button class="listmore" data-act="showall">Show all ' + sorted.length + '</button>';
+        }
+        mount.innerHTML = noticeHtml + slotHtml("before_list", ctx) + body + more + slotHtml("after_list", ctx);
       }
       async function load() {
         const res = await fetch("/collections/" + collection + "/records?limit=500" + whereQueryString(cfg.where),
@@ -652,6 +683,8 @@ _JS = r"""
       if (searchEl) searchEl.addEventListener("input", (e) => search(e.target.value.trim()));
       if (sortEl) sortEl.addEventListener("change", () => render(all));
       mount.addEventListener("click", async (e) => {
+        const more = e.target.closest("button.listmore");
+        if (more) { expanded = (more.dataset.act === "showall"); render(lastList); return; }
         const btn = e.target.closest("button.rowbtn"); if (!btn) return;
         const id = btn.dataset.id;
         if (btn.dataset.act === "delete") {

@@ -187,6 +187,11 @@ function renderList(block, mount) {
   // `row_actions: false` -> a read-only list (a log, a report, a rollup target):
   // no per-row edit/delete buttons. Default keeps the owner-based behavior.
   if (block.row_actions === false) cfg.rowActions = false;
+  // `row_limit` overrides the list's default display cap (50); `sort_by`
+  // (+ `sort_dir` asc|desc) sorts by a real field -- so a report renders as a
+  // bounded top-N (e.g. top IPs by hits, desc) instead of every row.
+  if (block.row_limit != null) cfg.limit = block.row_limit;
+  if (block.sort_by) cfg.sortBy = {field: block.sort_by, dir: (block.sort_dir === "asc" ? "asc" : "desc")};
   if (block.sort === "oldest" || block.sort === "asc") {
     // dbbasicList's real sort option is a bound <select> element, not a
     // value -- synthesize a hidden one already set to "oldest" so the
