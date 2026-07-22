@@ -1,0 +1,2 @@
+id	pattern	object_id	priority
+route_projects_detail	/projects/{project_id}	site_view_render	10

@@ -35,7 +35,18 @@
     {
       "collection": "project_access",
       "path": "seed/project_access.tsv"
+    },
+    {
+      "collection": "views",
+      "path": "seed/views.tsv"
+    },
+    {
+      "collection": "site_routes",
+      "path": "seed/site_routes.tsv"
     }
   ],
-  "migrations": []
+  "migrations": [],
+  "dependencies": [
+    "app-views"
+  ]
 }
