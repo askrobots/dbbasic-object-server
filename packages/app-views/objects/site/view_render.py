@@ -264,9 +264,14 @@ function renderDetail(block, mount) {
   const load = () => window.dbbasicDetail.mount(mount, {
     collection: block.collection,
     record_id: recordId,
-    editable: !!block.editable,
-    deletable: !!block.deletable,
-    delete_redirect: block.delete_redirect || null,
+    // Owner-editable by DEFAULT (opt out with editable/deletable:false). The
+    // detail generator only shows Edit/Delete to the record's owner, so this is
+    // safe -- and it fixes the inconsistency where some detail views were
+    // converted with editable:true and others weren't. delete_redirect defaults
+    // to the collection index.
+    editable: block.editable !== false,
+    deletable: block.deletable !== false,
+    delete_redirect: block.delete_redirect || ("/" + block.collection),
     owner_field: block.owner_field || null,
     viewer_id: viewerId,
   });
