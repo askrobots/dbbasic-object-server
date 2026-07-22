@@ -100,6 +100,54 @@ ones as they're settled; move Open Questions up as they're decided.
   sort field/dir; the whole row is the detail link.
 - **Status:** shipped. Live on `/articles` (Title · Published On · Published).
 
+### 8. The generated form matches a hand-built one (spacing + themed selects).
+- **Decision:** The generative form uses **one** spacing mechanism (grid
+  `gap`), collapses a field's error line until there's an actual message
+  (`.err:empty { display: none }`), and themes every `<select>` itself
+  (`appearance: none` + our own chevron).
+- **Rationale:** The generated form was looser than a bespoke one for two
+  invisible reasons — it inherited *both* the grid gap and the global
+  `.stack > * + *` margin (doubled space), and reserved a blank 1rem error
+  line under every field (~44px between fields vs ~14px). And an unstyled
+  `<select>` renders as Safari's beveled native control but Chrome's flat one,
+  so the same page looked different per browser. A generic renderer has to be
+  *at least as good* as the hand-built page it replaces, or migrating onto it
+  (decision below) is a regression. Found by comparing the bespoke Projects
+  form to the generated Notes form side by side.
+- **Applies to:** every generated form (`window.dbbasicForm`) and every
+  `<select>` in the product.
+- **Status:** shipped. Measured 14px inter-field gap, no reserved error space.
+
+### 9. A board collection can toggle to a table (persisted per-collection).
+- **Decision:** A collection declared `list_mode: "board"` that also has
+  `list_fields` shows a small **Board / Table** segmented control; the table is
+  the same generative table from decision #7. The choice is stored per
+  collection in `localStorage` and survives navigation.
+- **Rationale:** A kanban is the right default for a workflow surface, but the
+  same records are often better *scanned* as a dense sortable table — the
+  classic kanban⇄list toggle. Both renderers already exist behind one
+  `resolveListMode`, so it's a switch, not new rendering. Switching **reloads**
+  rather than swapping in place: `dbbasicSubscribe` has no unsubscribe, so an
+  in-place swap would leave the previous mode's change-log handler live and
+  double-render. One page load = one subscription.
+- **Applies to:** any board-declared collection with `list_fields` (tasks
+  today). Tree/calendar toggles are a possible follow-on, same mechanism.
+- **Status:** shipped (tasks Board/Table).
+
+### 10. Make the generic layer ≥ the bespoke page before deleting the bespoke.
+- **Decision:** When a hand-built page does something the generic renderer
+  doesn't (or does *better*), fix the generic renderer to that bar **first**,
+  then delete the bespoke page onto it — never the reverse order.
+- **Rationale:** A bespoke page that looks better than the generic one isn't
+  just debt to delete; it's a spec for a quality gap in the shared layer. The
+  Projects form (tight) was showing what the generated form (loose, #8) should
+  be. Delete-first would have made Projects *worse*; fix-first made every
+  form better and Projects free.
+- **Applies to:** every "migrate a bespoke page onto the generator" task
+  (Projects done; analytics/commerce pages next).
+- **Status:** doctrine. First applied migrating `site/projects.py` (~60 lines
+  of hand-rolled table/form/fetch deleted) onto `dbbasicList` + `dbbasicForm`.
+
 ---
 
 ## Open questions (decide, then move up)
