@@ -42,6 +42,7 @@ in a subprocess. A daemon runs scheduled passes, compaction, and
 trigger→target automation. A websocket change log lets any surface re-render
 live.
 → [`runtime-contract.md`](runtime-contract.md),
+[`realtime.md`](realtime.md),
 [`asgi-realtime-direction.md`](asgi-realtime-direction.md),
 [`object-authoring.md`](object-authoring.md),
 [`capability-objects.md`](capability-objects.md)

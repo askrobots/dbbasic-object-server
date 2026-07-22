@@ -34,6 +34,9 @@ flowchart TB
   shape, runtime helpers, state/log usage, and response forms.
 - [capability-objects.md](capability-objects.md) — objects that shell out to
   system tools (ffmpeg, OCR, PDF), the subprocess model, and the trust boundary.
+- [realtime.md](realtime.md) — the change-log contract: the `/ws` subscribe
+  protocol, the signal-only (never-the-body) event, and per-subscriber
+  permission filtering that makes every surface live.
 - [asgi-realtime-direction.md](asgi-realtime-direction.md) — why plain ASGI, and
   how WebSocket/SSE object events fit.
 - [rest-and-object-messages.md](rest-and-object-messages.md) — RESTful resources
