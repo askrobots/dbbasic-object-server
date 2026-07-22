@@ -152,9 +152,9 @@ inherit permissions, audit, and backups.
 
 ## Writing Site Pages
 
-Site pages are normal objects (see `object-authoring.md`): return a dict for
+Site pages are normal objects (see [`object-authoring.md`](object-authoring.md)): return a dict for
 JSON, a `content_type`/`body` dict for HTML, use `request["_identity"]` for
 per-user rendering, and handle `POST` for forms — browser form posts arrive
 as parsed fields with the session cookie applied. Ship a site as a package
-(`package-authoring.md`) so it installs with its schema, seed records, and
+([`package-authoring.md`](package-authoring.md)) so it installs with its schema, seed records, and
 route table rows in one reviewed unit.

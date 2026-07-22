@@ -339,7 +339,7 @@ valid admin token exceeds the configured window.
 `DBBASIC_RATE_LIMIT_TRUST_PROXY_HEADERS` is appropriate only because uvicorn is
 bound to `127.0.0.1` behind Caddy.
 
-See `traffic-limits.md` for the operating model.
+See [`traffic-limits.md`](traffic-limits.md) for the operating model.
 
 ## Log Maintenance
 
@@ -851,7 +851,7 @@ Keep those secret-aware backups separate from portable runtime archives. Before
 calling this a production deployment, restore runtime backups on a second clean
 VM and run the health/object checks again.
 
-See `backup-restore.md` for the runtime archive contract and restore rules.
+See [`backup-restore.md`](backup-restore.md) for the runtime archive contract and restore rules.
 
 ## Current Limits
 

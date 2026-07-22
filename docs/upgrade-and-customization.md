@@ -22,7 +22,7 @@ Every installed app is three independent layers:
    the users. Lives entirely outside the package (already true today).
 
 An upgrade replaces layer 1. It must never silently destroy layers 2 or 3.
-Layer 3 is solved: seed is install-once (see `package-authoring.md`). This
+Layer 3 is solved: seed is install-once (see [`package-authoring.md`](package-authoring.md)). This
 document is about layer 2.
 
 ## Rule 0: Provenance Baselines

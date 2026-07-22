@@ -80,12 +80,12 @@ untrusted public users.
   articles, links, events, files, templates, timers, the shell, and the
   collaboration layer of comments/feed/notifications) — every app is
   schema + permission rules + at most one page object, with no
-  app-specific server code (see `app-packages.md`)
+  app-specific server code (see [`app-packages.md`](app-packages.md))
 - Per-user AI: write-only provider key storage, model choice per request,
   and `POST /api/ai/chat` — an AI turn that can call a caller-chosen
   subset of the MCP tools with the caller's own credentials, so an AI
   acting for a user is never more powerful than the user
-  (see `shell-and-ai.md`)
+  (see [`shell-and-ai.md`](shell-and-ai.md))
 - User file storage with per-user disk quotas, where downloads are
   authorized against each file's metadata record — owner rows, public
   links, and project sharing govern files like any other record
@@ -129,10 +129,10 @@ untrusted public users.
 
 ## Next Work
 
-The application suite is ported (see `app-packages.md`), the single-VM
-installer and quickstart exist (`scripts/install.sh`, `quickstart.md`),
+The application suite is ported (see [`app-packages.md`](app-packages.md)), the single-VM
+installer and quickstart exist (`scripts/install.sh`, [`quickstart.md`](quickstart.md)),
 and realtime push over websockets is live (`/ws`, permission-filtered —
-see `http-api-contract.md` and `asgi-realtime-direction.md`; the nav's
+see [`http-api-contract.md`](http-api-contract.md) and [`asgi-realtime-direction.md`](asgi-realtime-direction.md); the nav's
 notification bell already updates on push). The remaining work is platform
 capability, in rough priority order:
 

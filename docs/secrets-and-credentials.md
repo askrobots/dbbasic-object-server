@@ -22,7 +22,7 @@ A credential the *whole deployment* shares — the SMTP relay password
 (`DBBASIC_SMTP_PASSWORD`), a connector's API key (`DBBASIC_MAILCOW_API_KEY`),
 the admin token (`DBBASIC_ADMIN_TOKEN`) — lives in
 `/etc/dbbasic-object-server.env`, `640 root:dbbasic` (see
-`single-vm-deployment.md`). It is set by the operator, read by the server
+[`single-vm-deployment.md`](single-vm-deployment.md)). It is set by the operator, read by the server
 process, and never appears in a schema field, a record, an API response, or a
 backup archive. A package that needs one **declares the env var name in its
 docs and reads it at runtime** — it never ships the value and never stores it.
@@ -49,7 +49,7 @@ server) lives in the **write-only identity vault**, `object_service_keys`
   file and the write-only contract, not a cipher.
 - **Excluded from portable backups and source control** — so a leaked backup
   archive, the most common accidental exposure, contains no secret material.
-  (See `backup-restore.md`; a package must never undo this by copying a secret
+  (See [`backup-restore.md`](backup-restore.md); a package must never undo this by copying a secret
   into a record it *does* back up.)
 
 ## How a secret gets written (it is not a record write)
@@ -150,7 +150,7 @@ Conclusions that follow:
 
 ## See also
 
-- `single-vm-deployment.md` — the env-file trust boundary and admin-route posture.
-- `permissions-model.md` — owner-scoping and the admin bypass.
-- `backup-restore.md` — what is and isn't in a portable backup.
-- `package-authoring.md` — how a package ships schemas, permissions, and (soon) connectors.
+- [`single-vm-deployment.md`](single-vm-deployment.md) — the env-file trust boundary and admin-route posture.
+- [`permissions-model.md`](permissions-model.md) — owner-scoping and the admin bypass.
+- [`backup-restore.md`](backup-restore.md) — what is and isn't in a portable backup.
+- [`package-authoring.md`](package-authoring.md) — how a package ships schemas, permissions, and (soon) connectors.

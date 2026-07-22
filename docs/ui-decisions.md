@@ -2,7 +2,7 @@
 
 A living log of the small, repeated interaction decisions the generative UI
 makes — detail vs edit, page vs in-place, when a list caps, when a row links.
-The companion to `design-system.md`: that doc is the *architecture* (semantics →
+The companion to [`design-system.md`](design-system.md): that doc is the *architecture* (semantics →
 tokens → renderers, "define once, project everywhere"); this doc is the
 *behavior* those renderers agree on.
 

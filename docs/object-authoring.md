@@ -224,7 +224,7 @@ Cookie-authenticated form posts are origin-checked by the server (same-site
 only), so objects do not need their own CSRF plumbing for basic forms. Records
 and schemas are the step up from object state when the data needs listing,
 validation, and change history — see the collections sections of
-`http-api-contract.md`.
+[`http-api-contract.md`](http-api-contract.md).
 
 ## Upload Forms
 

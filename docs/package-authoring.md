@@ -96,10 +96,10 @@ Installs are deliberately conservative:
 ## Authoring Workflow
 
 1. Create the package directory and manifest.
-2. Write the objects (see `object-authoring.md` for method shape, state, logs,
+2. Write the objects (see [`object-authoring.md`](object-authoring.md) for method shape, state, logs,
    `request["_identity"]`, and HTML form patterns).
 3. Write each schema JSON (`{"fields": [{"name": "id"}, ...]}` — see the
-   schemas section of `http-api-contract.md` for validation and field
+   schemas section of [`http-api-contract.md`](http-api-contract.md) for validation and field
    permission options).
 4. Seed TSV: first row is the header, tab-separated, and must include `id`.
 5. Dry-run before any install:
