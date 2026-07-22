@@ -88,11 +88,13 @@ def test_schema_json_file_is_valid():
 
 def test_tasks_schema_is_now_version_6_additive_only():
     """tasks.json went 5 -> 6 adding task_type/template_id/instructions/
-    metadata. Every field that existed at v5 is still present, unchanged
-    in name/type -- this schema change is purely additive.
+    metadata, then 7 -> 8 adding views.filter_fields (status/urgency) for the
+    generative filter bar. Every field that existed at v5 is still present,
+    unchanged in name/type -- these schema changes are purely additive.
     """
     schema = _schema("tasks")
-    assert schema["version"] == 7
+    assert schema["version"] == 8
+    assert schema["views"]["filter_fields"] == ["status", "urgency"]
     by_name = {f["name"]: f for f in schema["fields"]}
 
     for name in ("id", "title", "description", "project_id", "status",

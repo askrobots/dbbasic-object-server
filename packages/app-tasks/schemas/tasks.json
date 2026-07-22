@@ -1,7 +1,7 @@
 {
   "name": "tasks",
   "title": "Tasks",
-  "version": 7,
+  "version": 8,
   "description": "Work items with an enforced status lifecycle. Transition guards add who-per-verb on top of row-filtered update rights. v6 adds task_type/template_id/instructions/metadata (the 'Work / CreateWork' fields reconciled against a private predecessor-system audit, not part of this repo); status/urgency and every transition guard are unchanged.",
   "fields": [
     {
@@ -239,6 +239,10 @@
         "collection": "files",
         "fk_field": "task_id"
       }
+    ],
+    "filter_fields": [
+      "status",
+      "urgency"
     ]
   },
   "search": {

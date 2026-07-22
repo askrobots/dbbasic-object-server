@@ -289,6 +289,13 @@ footer.app { margin-top: 2.5rem; color: var(--muted); font-size: 0.78rem; }
 .listmodes .modebtn + .modebtn { border-left: 1px solid var(--line); }
 .listmodes .modebtn:hover { color: var(--text); }
 .listmodes .modebtn.active { background: var(--accent); color: var(--accent-ink); }
+/* filter bar: a row of narrowing selects above the list, one per filter_field. */
+.listfilters { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: var(--gap); }
+.listfilters .filterctl { width: auto; min-width: 9rem; font-size: 0.85rem; padding-top: 0.3rem; padding-bottom: 0.3rem; }
+.listfilters .filterclear { width: auto; border: 1px solid var(--line); background: var(--panel-2);
+                            color: var(--muted); border-radius: var(--radius-sm); font: inherit;
+                            font-size: 0.82rem; padding: 0.3rem 0.7rem; cursor: pointer; }
+.listfilters .filterclear:hover { border-color: var(--accent); color: var(--text); }
 .board { display: flex; gap: var(--gap); align-items: flex-start; overflow-x: auto; padding-bottom: 0.25rem; }
 .boardcol { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md);
             flex: 1 1 200px; min-width: 200px; max-width: 340px; padding: 0.6rem; }

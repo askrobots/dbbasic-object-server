@@ -124,6 +124,7 @@ _JS = r"""
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
     (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
   const qs = (m) => typeof m === "string" ? document.querySelector(m) : m;
+  const humanize = (n) => String(n || "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
   function relDate(iso) {
     if (!iso) return "";
@@ -379,6 +380,31 @@ _JS = r"""
     const fields = ((schema.views && schema.views.list_fields) || (schema.fields || []).map((f) => f.name))
       .filter((n) => byName[n] && n !== "id");
     return fields.length ? {fields: fields, byName: byName} : null;
+  }
+
+  // Filter controls from schema.views.filter_fields. Each named field becomes
+  // a control: an enum -> a select of its options, a boolean -> Yes/No. The
+  // chosen values are ANDed into the same server-side `where` fetch the board
+  // already uses (field=value, applied after the permission row filter), so a
+  // filtered list can only ever narrow what the viewer may already see. Types
+  // other than enum/boolean are skipped for now (text is covered by the search
+  // box; a date-range control is a follow-on that needs the dotted-operator
+  // `extra` query path). One declaration, filters on every mode.
+  function buildFilters(schema) {
+    const ff = schema && schema.views && schema.views.filter_fields;
+    if (!Array.isArray(ff) || !ff.length) return [];
+    const byName = {}; (schema.fields || []).forEach((f) => byName[f.name] = f);
+    const out = [];
+    for (const name of ff) {
+      const f = byName[name]; if (!f) continue;
+      const t = String(f.type || "").toLowerCase();
+      if (t === "enum" || Array.isArray(f.enum)) {
+        out.push({name: name, label: f.label || humanize(name), type: "enum", options: f.enum || []});
+      } else if (t === "boolean") {
+        out.push({name: name, label: f.label || humanize(name), type: "boolean"});
+      }
+    }
+    return out;
   }
 
   async function resolveListMode(collection) {
@@ -875,9 +901,65 @@ _JS = r"""
       });
     }
 
+    // Filter bar: a row of selects above the list, one per filter field. A
+    // change ANDs the picked value into cfg.where and reloads the active mode
+    // -- server-side narrowing that composes with the caller's own where
+    // (entity scope, a parent FK) and with the client-side search box. Shown
+    // in every mode. Insert before mount so a mode re-render (which replaces
+    // mount's contents) never disturbs it.
+    function renderFilters(filters, onChange) {
+      if (!filters.length || !mount || !mount.parentNode) return;
+      const bar = document.createElement("div");
+      bar.className = "listfilters";
+      bar.innerHTML = filters.map((f) => {
+        let opts = '<option value="">All ' + esc(f.label) + '</option>';
+        if (f.type === "enum") for (const o of f.options) opts += '<option value="' + esc(o) + '">' + esc(o) + '</option>';
+        else if (f.type === "boolean") opts += '<option value="true">Yes</option><option value="false">No</option>';
+        return '<select class="filterctl" data-filter="' + esc(f.name) + '" aria-label="Filter by ' + esc(f.label) + '">' + opts + '</select>';
+      }).join("") + '<button type="button" class="filterclear" data-filterclear hidden>Clear</button>';
+      mount.parentNode.insertBefore(bar, mount);
+      const clearBtn = bar.querySelector("[data-filterclear]");
+      function sync() {
+        const any = [].some.call(bar.querySelectorAll("select[data-filter]"), (s) => s.value);
+        if (clearBtn) clearBtn.hidden = !any;
+      }
+      bar.addEventListener("change", (e) => {
+        const sel = e.target.closest("select[data-filter]");
+        if (!sel) return;
+        onChange(sel.getAttribute("data-filter"), sel.value);
+        sync();
+      });
+      if (clearBtn) clearBtn.addEventListener("click", () => {
+        bar.querySelectorAll("select[data-filter]").forEach((s) => { s.value = ""; });
+        onChange(null, null);
+        sync();
+      });
+    }
+
     (async function boot() {
       await scopeToCurrentEntity();
+      // Capture the caller/entity scope AFTER scopeToCurrentEntity so user
+      // filters layer on top of it rather than replacing it.
+      const baseWhere = cfg.where ? Object.assign({}, cfg.where) : null;
       const resolved = await resolveListMode(collection);
+
+      // Wire filters (enum/boolean) once, before dispatching a mode -- they
+      // apply to whichever renderer becomes active.
+      const filterState = {};
+      function applyFilterWhere() {
+        const merged = Object.assign({}, baseWhere || {});
+        for (const k in filterState) if (filterState[k] != null && filterState[k] !== "") merged[k] = filterState[k];
+        cfg.where = Object.keys(merged).length ? merged : null;
+      }
+      function onFilterChange(field, value) {
+        if (field === null) { for (const k in filterState) delete filterState[k]; }
+        else if (value == null || value === "") delete filterState[field];
+        else filterState[field] = value;
+        applyFilterWhere();
+        if (activeReload) activeReload();
+      }
+      renderFilters(buildFilters(resolved.schema), onFilterChange);
+
       // A board-declared collection that also has list_fields can render as a
       // table too, so offer a switcher (the classic kanban<->list toggle). The
       // user's pick (localStorage) wins over the schema default.
