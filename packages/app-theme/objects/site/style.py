@@ -279,6 +279,23 @@ footer.app { margin-top: 2.5rem; color: var(--muted); font-size: 0.78rem; }
 .dtable td.dtactions, .dtable th.dtactions { text-align: right; white-space: nowrap; width: 1%; }
 .dtable td.dtactions { display: table-cell; }
 .dtable td.dtactions .rowbtn { position: static; }
+/* Comment thread (window.dbbasicThread): the capabilities.comments surface. */
+.thread { margin-top: 1.25rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+.threadhead { font-size: 0.95rem; margin: 0 0 0.75rem; color: var(--muted); }
+.threadlist { display: grid; gap: 0.75rem; margin-bottom: 1rem; }
+.comment { display: flex; gap: 0.7rem; align-items: flex-start; }
+.comment .av { flex: none; width: 1.9rem; height: 1.9rem; border-radius: 999px;
+               background: var(--panel-2); color: var(--muted); display: flex;
+               align-items: center; justify-content: center; font-size: 0.8rem; font-weight: 600; }
+.comment .commentbody { flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--line);
+                        border-radius: var(--radius-md); padding: 0.55rem 0.75rem; }
+.commentmeta { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.25rem; }
+.commentwho { font-weight: 600; font-size: 0.85rem; }
+.commentmeta .when { color: var(--muted); font-size: 0.78rem; }
+.commentmeta .rowbtn { margin-left: auto; }
+.commenttext { white-space: pre-wrap; word-break: break-word; font-size: 0.9rem; }
+.threadcompose { display: grid; gap: 0.5rem; }
+.threadcomposeactions { display: flex; gap: 0.6rem; align-items: center; }
 
 /* 60: board (kanban / lead-pipeline), tree (self-relation nesting), and
    calendar (month grid) -- the three schema-driven list_mode renderers in

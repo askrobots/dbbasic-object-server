@@ -400,6 +400,14 @@ def _normalize_schema(
         # would strip it from the stored schema and the feed would find zero
         # sources. Whitelisted, not interpreted -- same posture as `flow`.
         "blocks",
+        # Root-level `capabilities` key: generic per-collection behaviors a
+        # collection opts into, wired by the platform rather than hand-built
+        # per app (e.g. `capabilities.comments: true` -> the detail page mounts
+        # window.dbbasicThread for that record; see app-thread + view_render).
+        # Must survive normalization or the flag is stripped on install and the
+        # capability never turns on. Whitelisted, not interpreted -- same
+        # posture as `flow`/`blocks`.
+        "capabilities",
     )
     for key in metadata_keys:
         if key in payload:

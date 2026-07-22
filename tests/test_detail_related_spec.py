@@ -150,11 +150,24 @@ def test_form_read_only_skips_fields_absent_from_the_record():
 def test_view_render_detail_block_is_a_thin_mount_wrapper():
     source = _view_render_source()
     assert '<script src="/detail">' in source
-    assert "window.dbbasicDetail.mount(mount" in source
-    # The old inline schema+record fetch/format is gone from renderDetail.
+    # Detail mounts into a sub-element so a capabilities.comments thread can
+    # sit below it (see maybeMountComments); still a thin mount wrapper.
+    assert "window.dbbasicDetail.mount(detailMount" in source
+    # The old inline schema+record fetch/format is gone from renderDetail's own
+    # body (the schema fetch that gates comments lives in maybeMountComments).
     detail_fn = re.search(r"function renderDetail\(block, mount\) \{(.*?)\n\}", source, re.S)
     assert detail_fn, "renderDetail not found"
     assert "/api/schema/" not in detail_fn.group(1)
+    assert "maybeMountComments" in detail_fn.group(1)
+
+
+def test_detail_auto_mounts_comment_thread_when_capability_declared():
+    """capabilities.comments wiring: the detail page mounts window.dbbasicThread
+    for a record only when its collection's schema declares the capability."""
+    source = _view_render_source()
+    assert '<script src="/thread">' in source
+    assert "schema.capabilities && schema.capabilities.comments" in source
+    assert "window.dbbasicThread.mount" in source
 
 
 # ---------------------------------------------------------------------

@@ -261,7 +261,11 @@ function renderDetail(block, mount) {
   if (!recordId) { mount.innerHTML = unsupportedCard("detail block needs a record_id"); return; }
   if (!window.dbbasicDetail) { mount.innerHTML = unsupportedCard("detail generator unavailable"); return; }
   const viewerId = (typeof VIEWER_ID !== "undefined" ? VIEWER_ID : "") || null;
-  const load = () => window.dbbasicDetail.mount(mount, {
+  // Detail on top, an auto-comments thread below it (see maybeMountComments).
+  mount.innerHTML = '<div class="detailmount"></div><div class="detailcomments"></div>';
+  const detailMount = mount.querySelector(".detailmount");
+  const commentsMount = mount.querySelector(".detailcomments");
+  const load = () => window.dbbasicDetail.mount(detailMount, {
     collection: block.collection,
     record_id: recordId,
     // Owner-editable by DEFAULT (opt out with editable/deletable:false). The
@@ -280,6 +284,27 @@ function renderDetail(block, mount) {
     else setTimeout(sub, 400);
   })();
   load();
+  maybeMountComments(block.collection, recordId, commentsMount, viewerId);
+}
+
+// Capability wiring: a collection whose schema declares `capabilities.comments`
+// gets a comment thread under its detail page automatically -- no per-view
+// `thread` block, no per-app comment table. This is the "declare a capability,
+// the platform wires it" layer sitting on top of the display generators. Fails
+// silent (no thread) when the flag is absent or the widget isn't loaded.
+async function maybeMountComments(collection, recordId, mount, viewerId) {
+  if (!mount || !window.dbbasicThread) return;
+  try {
+    const res = await fetch("/api/schema/" + encodeURIComponent(collection),
+      {credentials: "same-origin", headers: {accept: "application/json"}});
+    if (!res.ok) return;
+    const schema = (await res.json()).schema;
+    if (schema && schema.capabilities && schema.capabilities.comments) {
+      window.dbbasicThread.mount(mount, {
+        parent_collection: collection, parent_id: recordId, viewer_id: viewerId || "",
+      });
+    }
+  } catch (e) { /* no schema / no capability -> no thread, never a crash */ }
 }
 
 // 59's related block: a CHILD collection filtered by a foreign key back
@@ -652,6 +677,7 @@ def GET(request):
 <script src="/list"></script>
 <script src="/form"></script>
 <script src="/detail"></script>
+<script src="/thread"></script>
 <script>const VIEW_ID = {view_id!r}; const VIEWER_ID = {(user_id or "")!r}; const RECORD_ID = {record_id!r};{_SCRIPT}</script>
 {nav_html}
 </body>

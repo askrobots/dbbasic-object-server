@@ -3,10 +3,25 @@
     {
       "effect": "allow",
       "principal": "registered",
-      "actions": ["create", "read", "update", "delete"],
+      "actions": [
+        "create",
+        "update",
+        "delete"
+      ],
       "collection": "thread_comments",
-      "row_filter": {"owner_id": "$user_id"},
-      "reason": "signed-in users manage comments they authored; wider visibility and the public/anonymous path arrive with the full thread block (see 22-thread-spec)"
+      "row_filter": {
+        "owner_id": "$user_id"
+      },
+      "reason": "a signed-in user writes (and edits/removes) only comments they authored"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": [
+        "read"
+      ],
+      "collection": "thread_comments",
+      "reason": "signed-in users read comments on records they can reach -- the widget's fetch narrows to one (parent_collection,parent_id) thread; per-parent visibility inheritance is a follow-on (22-thread-spec)"
     }
   ]
 }
