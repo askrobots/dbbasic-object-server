@@ -230,6 +230,20 @@ ones as they're settled; move Open Questions up as they're decided.
   (Old records predate the field and read it back empty — new ones get a
   server-set value.)
 
+### 14. A relation field shows its target's name, not the raw FK id.
+- **Decision:** A field with `relation:{collection, display_field}` renders the
+  referenced record's display value ("Acme Corp") in the table cell and board
+  card — never the raw id ("o-acme"). Each referenced collection is fetched once
+  per render surface to build an id→label map; fails soft to the id when
+  unmapped. Board cards additionally drop any card field whose value is already
+  part of the title (so a full-name title doesn't repeat first/last below).
+- **Rationale:** The detail page already resolves relations (form.py's
+  `control`); the list surfaces showed raw ids, which read as broken data.
+  "Same field, same display, everywhere" — a relation is a name to a human,
+  not a UUID. Found by screenshotting the contacts board.
+- **Applies to:** every table and board over a collection with a relation field.
+- **Status:** shipped. Verified contacts board + table show "Acme Corp".
+
 ---
 
 ## Open questions (decide, then move up)
