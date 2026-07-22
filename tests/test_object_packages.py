@@ -706,11 +706,12 @@ def test_install_package_rejects_invalid_permission_fragment(tmp_path):
     assert "permission rule is invalid" in str(exc.value)
 
 
-def test_install_package_preserves_existing_seed_on_upgrade(tmp_path):
-    # Seed is install-once. Upgrading a package whose collection already holds
-    # records must neither block the install nor clobber the data: the records
-    # survive and seeding is skipped. This is the "upgrade the app, keep the
-    # data" contract — data lives outside the package, in the server data dir.
+def test_install_package_merges_seed_by_id_preserving_existing(tmp_path):
+    # Seeding a collection that already holds records MERGES by id: existing
+    # rows survive untouched, and seed rows whose id isn't present are added.
+    # This is what lets several packages each seed a shared collection
+    # (views/site_routes) and lets a new package version ship new default rows,
+    # while never clobbering live data ("upgrade the app, keep the data").
     packages_root = tmp_path / "packages"
     data_dir = tmp_path / "data"
     (data_dir / "collections" / "contacts").mkdir(parents=True)
@@ -732,12 +733,17 @@ def test_install_package_preserves_existing_seed_on_upgrade(tmp_path):
     )
 
     seed_entry = result["seed"][0]
-    assert seed_entry["status"] == "skipped"
+    assert seed_entry["status"] == "merged"
     assert seed_entry["installed"] is True
-    # Live records are untouched; the package's seed row (Bob) was not written.
-    assert (
-        data_dir / "collections" / "contacts" / "records.tsv"
-    ).read_text() == "id\tname\nc1\tAlice\n"
+    assert seed_entry["added"] == 1
+    # Existing row (Alice) preserved AND the new seed row (Bob) merged in by id.
+    records = object_records.read_collection_records("contacts", base_dir=data_dir)
+    assert {r["name"] for r in records} == {"Alice", "Bob"}
+    # Re-installing adds nothing (ids already present).
+    again = object_packages.install_package(
+        "seeded", root=packages_root, base_dir=data_dir, allow_replace=True
+    )
+    assert again["seed"][0]["status"] == "skipped" and again["seed"][0]["added"] == 0
 
 
 def test_install_package_validates_schema_before_writing_objects(tmp_path):

@@ -8,6 +8,8 @@ wait for explicit merge/run semantics.
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import os
 import re
@@ -396,15 +398,26 @@ def install_package(
 
     installed_seed = []
     for entry, planned, destination, content in seed_writes:
-        # Seed is install-once. If the collection already holds records, an
-        # upgrade must preserve them, so skip the seed write rather than
-        # clobber live data. Fresh installs (no records.tsv yet) still seed.
+        # Seed into a collection that already holds records: MERGE by id rather
+        # than skip. Add only the seed rows whose id isn't already present;
+        # existing rows (live data, possibly customized) are never touched. This
+        # is what lets several packages each seed a SHARED collection
+        # (views/site_routes) -- previously only the first-installed package's
+        # seed landed and every later one was skipped (needing manual inserts).
+        # A fresh collection (no records yet) still takes the whole seed file.
         if planned.get("installed"):
+            added = _merge_seed_rows(
+                entry["collection"], content, base_dir=base, package_id=package_id
+            )
             installed_seed.append(
                 {
                     **planned,
-                    "status": "skipped",
-                    "reason": "collection already has data; seed preserved",
+                    "status": "merged" if added else "skipped",
+                    "reason": (
+                        f"merged {added} new row(s); existing preserved"
+                        if added else "collection already has these rows; preserved"
+                    ),
+                    "added": added,
                     "destination": f"collections/{entry['collection']}/records.tsv",
                 }
             )
@@ -1064,6 +1077,46 @@ def _root_for_path(path: Path | None, roots: Iterable[Path]) -> Path | None:
             continue
         return root
     return None
+
+
+def _merge_seed_rows(
+    collection: str, content: bytes, *, base_dir: Path, package_id: str
+) -> int:
+    """Add the seed rows whose id isn't already in ``collection``; leave every
+    existing row untouched. Returns how many were added. Seed rows carry
+    explicit ids and created_at, which ``create_collection_record`` honors
+    (require_id + preserve_read_only), so a re-run adds nothing. One bad row is
+    skipped, never fails the install."""
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        return 0
+    rows = list(csv.DictReader(io.StringIO(text), delimiter="\t"))
+    if not rows:
+        return 0
+    try:
+        existing = {
+            r.get("id")
+            for r in object_records.read_collection_records(collection, base_dir=base_dir)
+        }
+    except (object_collections.CollectionNotFoundError,
+            object_collections.InvalidCollectionNameError, OSError, ValueError):
+        existing = set()
+    added = 0
+    for row in rows:
+        record_id = (row.get("id") or "").strip()
+        if not record_id or record_id in existing:
+            continue
+        try:
+            object_records.create_collection_record(
+                collection, {k: v for k, v in row.items() if v is not None},
+                base_dir=base_dir, actor=f"package:{package_id}", preserve_read_only=True,
+            )
+            existing.add(record_id)
+            added += 1
+        except Exception:  # noqa: BLE001 -- one malformed seed row never fails the install
+            continue
+    return added
 
 
 def _write_file_atomic_bytes(path: Path, content: bytes) -> None:
