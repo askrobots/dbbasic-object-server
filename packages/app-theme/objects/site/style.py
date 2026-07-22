@@ -250,7 +250,7 @@ footer.app { margin-top: 2.5rem; color: var(--muted); font-size: 0.78rem; }
    window.dbbasicList (list.py). */
 .board { display: flex; gap: var(--gap); align-items: flex-start; overflow-x: auto; padding-bottom: 0.25rem; }
 .boardcol { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md);
-            flex: none; width: 260px; padding: 0.6rem; }
+            flex: 1 1 200px; min-width: 200px; max-width: 340px; padding: 0.6rem; }
 .boardcolhead { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
                 font-weight: 600; font-size: 0.85rem; margin-bottom: 0.5rem; color: var(--muted); }
 .boardcolcount { background: var(--panel-2); border-radius: 999px; padding: 0.05rem 0.5rem; font-size: 0.72rem; }

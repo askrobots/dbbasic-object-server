@@ -1,3 +1,3 @@
 id	pattern	object_id	priority
 route_finance_setup_accounts	/finance/setup-accounts	site_setup_accounts	10
-route_journal_detail	/journals/{journal_id:uuid}	site_view_render	10
+route_journal_detail	/journals/{journal_id}	site_view_render	10

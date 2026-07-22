@@ -41,7 +41,7 @@ def test_topic_view_composes_detail_flat_related_and_fk_locked_form():
     assert len(rows) == 1
     view = rows[0]
     assert view["id"] == "view_forum_topic"
-    assert view["route"] == "/forum/topics/{topic_id:uuid}"
+    assert view["route"] == "/forum/topics/{topic_id}"
     blocks = json.loads(view["blocks"])
     kinds = [b["kind"] for b in blocks]
     assert kinds == ["detail", "related", "form"]
@@ -65,7 +65,7 @@ def test_topic_view_composes_detail_flat_related_and_fk_locked_form():
 def test_permalink_route_points_to_view_render():
     rows = _seed_rows("site_routes")
     assert len(rows) == 1
-    assert rows[0]["pattern"] == "/forum/topics/{topic_id:uuid}"
+    assert rows[0]["pattern"] == "/forum/topics/{topic_id}"
     assert rows[0]["object_id"] == "site_view_render"
 
 

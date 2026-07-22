@@ -413,15 +413,13 @@ _JS = r"""
         card.addEventListener("dragstart", (e) => {
           e.dataTransfer.setData("text/plain", card.dataset.id);
           e.dataTransfer.effectAllowed = "move";
-          card._dragged = true;
         });
-        // A board card opens its detail on click (same reachability as a list
-        // row). A real drag sets _dragged so the drop doesn't also navigate;
-        // a plain click (no drag) navigates. cfg.link === false opts out.
+        // A board card opens its detail on click. HTML5 drag-and-drop does not
+        // emit a click, so a plain click is unambiguous -- no drag-guard flag
+        // (an earlier guard could get stuck and swallow a card's click).
         if (cfg.link !== false) {
           card.style.cursor = "pointer";
           card.addEventListener("click", () => {
-            if (card._dragged) { card._dragged = false; return; }
             const id = card.dataset.id;
             const record = all.find((x) => x.id === id) || {id: id};
             window.location.href = cfg.href ? cfg.href(record) : "/" + collection + "/" + encodeURIComponent(id);

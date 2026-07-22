@@ -3,7 +3,7 @@ bespoke 152-line site_note_view.py permalink page was replaced by a seeded
 59 detail view (site_view_render) whose `detail` block is owner-aware
 (editable/deletable), so there is no per-note page object anymore. This also
 fixes a latent gap -- the package previously shipped no site_routes record
-for /notes/{note_id:uuid}, so permalinks depended on a route nothing seeded.
+for /notes/{note_id}, so permalinks depended on a route nothing seeded.
 """
 
 import json
@@ -43,7 +43,7 @@ def test_seeded_detail_view_uses_an_owner_aware_editable_detail_block():
     assert len(rows) == 1
     view = rows[0]
     assert view["id"] == "view_notes_detail"
-    assert view["route"] == "/notes/{note_id:uuid}"
+    assert view["route"] == "/notes/{note_id}"
     blocks = json.loads(view["blocks"])
     assert len(blocks) == 1
     block = blocks[0]
@@ -61,7 +61,7 @@ def test_permalink_route_is_seeded_to_the_view_render_generator():
     rows = _seed_rows("site_routes")
     assert len(rows) == 1
     route = rows[0]
-    assert route["pattern"] == "/notes/{note_id:uuid}"
+    assert route["pattern"] == "/notes/{note_id}"
     assert route["object_id"] == "site_view_render"
 
 

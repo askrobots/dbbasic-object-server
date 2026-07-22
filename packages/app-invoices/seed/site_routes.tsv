@@ -1,2 +1,2 @@
 id	pattern	object_id	priority
-route_invoice_detail	/invoices/{invoice_id:uuid}	site_view_render	10
+route_invoice_detail	/invoices/{invoice_id}	site_view_render	10

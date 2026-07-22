@@ -292,7 +292,7 @@ def test_record_id_resolves_from_a_routed_detail_capture(tmp_path, monkeypatch):
         data_dir,
         "views",
         "id\ttitle\troute\tlayout\tblocks\towner_id\tis_public\tpinned\tcreated_at\n"
-        "view_contacts_detail\tContact\t/contacts/{contact_id:uuid}\tsingle\t[]\t\ttrue\tfalse\t\n",
+        "view_contacts_detail\tContact\t/contacts/{contact_id}\tsingle\t[]\t\ttrue\tfalse\t\n",
     )
 
     runtime = python_object_runtime.PythonObjectRuntime(base_dir=data_dir)
@@ -359,7 +359,7 @@ def test_record_id_stays_empty_for_a_two_capture_route(tmp_path, monkeypatch):
         data_dir,
         "views",
         "id\ttitle\troute\tlayout\tblocks\towner_id\tis_public\tpinned\tcreated_at\n"
-        "view_two\tTwo\t/entities/{entity_id:uuid}/accounts/{account_id:uuid}\tsingle\t[]\t\ttrue\tfalse\t\n",
+        "view_two\tTwo\t/entities/{entity_id}/accounts/{account_id}\tsingle\t[]\t\ttrue\tfalse\t\n",
     )
 
     runtime = python_object_runtime.PythonObjectRuntime(base_dir=data_dir)
@@ -424,10 +424,15 @@ def test_route_resolution_for_a_seeded_detail_path(tmp_path, monkeypatch):
     assert f"const RECORD_ID = {contact_id!r};" in text
     assert '<script src="/detail">' in text
 
-    # A bad (non-uuid) id doesn't match the {contact_id:uuid} pattern at
-    # all -- ordinary site-routing 404, not a view_render concern.
-    miss_status, _, _ = raw_request("/contacts/not-a-uuid")
-    assert miss_status == 404
+    # The detail route is `{contact_id}` (no :uuid constraint) so ANY id segment
+    # routes to the view -- this is deliberate: records with non-uuid ids (seed
+    # data, friendly ids) must be reachable too, per "everything has a url"
+    # (docs/ui-decisions.md). A record that then doesn't exist is the view's own
+    # not-found state, not a routing 404. (The :uuid constraint still exists for
+    # a route that wants to enforce uuid shape; the app seeds just don't use it.)
+    any_status, _, any_body = raw_request("/contacts/friendly-id-123")
+    assert any_status == 200
+    assert "const VIEW_ID = 'view_contacts_detail';" in any_body.decode("utf-8")
 
 
 def test_route_resolution_for_a_seeded_task_detail_path_with_related_children(tmp_path, monkeypatch):

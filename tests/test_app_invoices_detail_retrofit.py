@@ -49,7 +49,7 @@ def test_invoice_view_composes_detail_flat_related_and_fk_locked_form():
     assert len(rows) == 1
     view = rows[0]
     assert view["id"] == "view_invoice_detail"
-    assert view["route"] == "/invoices/{invoice_id:uuid}"
+    assert view["route"] == "/invoices/{invoice_id}"
     assert view["layout"] == "single"
     blocks = json.loads(view["blocks"])
     kinds = [b["kind"] for b in blocks]
@@ -79,7 +79,7 @@ def test_permalink_route_points_to_view_render():
     rows = _seed_rows("site_routes")
     assert len(rows) == 1
     assert rows[0]["id"] == "route_invoice_detail"
-    assert rows[0]["pattern"] == "/invoices/{invoice_id:uuid}"
+    assert rows[0]["pattern"] == "/invoices/{invoice_id}"
     assert rows[0]["object_id"] == "site_view_render"
     assert rows[0]["priority"] == "10"
 

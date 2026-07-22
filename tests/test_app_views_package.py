@@ -327,7 +327,7 @@ def test_view_render_resolves_capture_less_list_view_by_path(tmp_path):
     (data_dir / "collections" / "views" / "records.tsv").write_text(
         "id\troute\n"
         "view_entities_list\t/entities\n"
-        "view_entities_detail\t/entities/{entity_id:uuid}\n"
+        "view_entities_detail\t/entities/{entity_id}\n"
     )
 
     uuid = "00000000-0000-4000-8000-000000000000"

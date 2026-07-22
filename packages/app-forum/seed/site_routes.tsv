@@ -1,2 +1,2 @@
 id	pattern	object_id	priority
-route_forum_topic	/forum/topics/{topic_id:uuid}	site_view_render	10
+route_forum_topic	/forum/topics/{topic_id}	site_view_render	10

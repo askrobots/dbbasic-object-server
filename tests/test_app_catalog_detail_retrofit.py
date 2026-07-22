@@ -48,7 +48,7 @@ def test_seeded_detail_view_uses_an_owner_aware_editable_detail_block():
     assert len(rows) == 1
     view = rows[0]
     assert view["id"] == "view_products_detail"
-    assert view["route"] == "/products/{product_id:uuid}"
+    assert view["route"] == "/products/{product_id}"
     blocks = json.loads(view["blocks"])
     assert len(blocks) == 1
     block = blocks[0]
@@ -70,7 +70,7 @@ def test_permalink_route_is_seeded_to_the_view_render_generator():
     assert len(rows) == 1
     route = rows[0]
     assert route["id"] == "route_products_detail"
-    assert route["pattern"] == "/products/{product_id:uuid}"
+    assert route["pattern"] == "/products/{product_id}"
     assert route["object_id"] == "site_view_render"
     assert route["priority"] == "10"
 

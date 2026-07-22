@@ -46,7 +46,7 @@ def test_thread_view_composes_detail_flat_related_markdown_and_fk_locked_form():
     assert len(rows) == 1
     view = rows[0]
     assert view["id"] == "view_inbox_thread"
-    assert view["route"] == "/inbox/{thread_id:uuid}"
+    assert view["route"] == "/inbox/{thread_id}"
     blocks = json.loads(view["blocks"])
     kinds = [b["kind"] for b in blocks]
     assert kinds == ["detail", "related", "markdown", "form"]
@@ -77,7 +77,7 @@ def test_thread_view_composes_detail_flat_related_markdown_and_fk_locked_form():
 def test_permalink_route_points_to_view_render():
     rows = _seed_rows("site_routes")
     assert len(rows) == 1
-    assert rows[0]["pattern"] == "/inbox/{thread_id:uuid}"
+    assert rows[0]["pattern"] == "/inbox/{thread_id}"
     assert rows[0]["object_id"] == "site_view_render"
 
 

@@ -51,7 +51,7 @@ def test_journal_view_composes_detail_related_and_fk_locked_form():
     assert len(rows) == 1
     view = rows[0]
     assert view["id"] == "view_journal_detail"
-    assert view["route"] == "/journals/{journal_id:uuid}"
+    assert view["route"] == "/journals/{journal_id}"
     blocks = json.loads(view["blocks"])
     kinds = [b["kind"] for b in blocks]
     # An `aggregate` balance block restores the bespoke page's debit/credit
@@ -96,7 +96,7 @@ def test_journal_route_points_to_view_render_and_setup_accounts_route_survives()
     assert rows[0]["object_id"] == "site_setup_accounts"
     assert len(rows) == 2
     assert rows[1]["id"] == "route_journal_detail"
-    assert rows[1]["pattern"] == "/journals/{journal_id:uuid}"
+    assert rows[1]["pattern"] == "/journals/{journal_id}"
     assert rows[1]["object_id"] == "site_view_render"
     assert rows[1]["priority"] == "10"
 

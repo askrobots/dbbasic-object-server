@@ -62,11 +62,11 @@ def test_pages_are_seeded_views_url_addressable_no_bespoke_object():
     detail_blocks = json.loads(views["view_entities_detail"]["blocks"])
     assert len(detail_blocks) == 1 and detail_blocks[0]["kind"] == "detail"
     assert detail_blocks[0]["editable"] is True and detail_blocks[0]["deletable"] is True
-    assert views["view_entities_detail"]["route"] == "/entities/{entity_id:uuid}"
+    assert views["view_entities_detail"]["route"] == "/entities/{entity_id}"
 
     routes = {r["pattern"]: r for r in _seed_rows("site_routes")}
     assert routes["/entities"]["object_id"] == "site_view_render"
-    assert routes["/entities/{entity_id:uuid}"]["object_id"] == "site_view_render"
+    assert routes["/entities/{entity_id}"]["object_id"] == "site_view_render"
 
 
 def _policy():

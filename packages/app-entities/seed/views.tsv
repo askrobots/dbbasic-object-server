@@ -1,3 +1,3 @@
 id	title	route	layout	blocks	owner_id	is_public	pinned	created_at
 view_entities_list	Entities	/entities	single	"[{""kind"": ""form"", ""collection"": ""entities"", ""title"": ""New set of books""}, {""kind"": ""list"", ""collection"": ""entities"", ""title"": ""Your entities""}]"		true	false	2026-01-01T00:00:00
-view_entities_detail	Entity	/entities/{entity_id:uuid}	single	"[{""kind"": ""detail"", ""collection"": ""entities"", ""record_id"": ""$record_id"", ""editable"": true, ""deletable"": true, ""delete_redirect"": ""/entities""}]"		true	false	2026-01-01T00:00:00
+view_entities_detail	Entity	/entities/{entity_id}	single	"[{""kind"": ""detail"", ""collection"": ""entities"", ""record_id"": ""$record_id"", ""editable"": true, ""deletable"": true, ""delete_redirect"": ""/entities""}]"		true	false	2026-01-01T00:00:00

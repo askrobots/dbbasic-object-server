@@ -1,2 +1,2 @@
 id	pattern	object_id	priority
-route_products_detail	/products/{product_id:uuid}	site_view_render	10
+route_products_detail	/products/{product_id}	site_view_render	10
