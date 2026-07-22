@@ -26,6 +26,28 @@ This public codebase was assembled from a working prototype in small,
 reviewed, tested slices — each checked for private deployment details before
 release. That discipline continues as new capability lands.
 
+## Documentation
+
+Start with **[`docs/architecture.md`](docs/architecture.md)** — it maps the
+whole system (storage → runtime → data → permissions → generative UI →
+capabilities → surfaces) and links the doc for each layer. The full,
+grouped index is **[`docs/README.md`](docs/README.md)**.
+
+Common entry points:
+
+- **Understand it** — [why it is different](docs/why-dbbasic.md) ·
+  [comparisons](docs/comparisons.md) · [the app suite](docs/app-packages.md)
+- **The generative layer** — [generative UI](docs/generative-ui.md) (one
+  renderer: list/table/board, forms, detail) ·
+  [schema → forms & views](docs/schema-forms.md) ·
+  [capabilities](docs/capabilities.md) (comments, attachments, sharing from a
+  flag) · [validation & business logic](docs/validation-and-logic.md)
+- **Build & operate** — [quickstart](docs/quickstart.md) ·
+  [package authoring](docs/package-authoring.md) ·
+  [permissions model](docs/permissions-model.md) ·
+  [single-VM deployment](docs/single-vm-deployment.md) ·
+  [HTTP API contract](docs/http-api-contract.md)
+
 ## The Core Idea
 
 A DBBASIC object is one small Python file that can do useful application work.

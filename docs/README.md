@@ -1,125 +1,112 @@
 # Documentation
 
-DBBASIC docs should be easy to enter from the root README and then branch into
-focused pages.
-
-The root README should explain the project in minutes. The docs directory should
-hold the deeper contracts, design rules, and implementation notes.
+Start with **[architecture.md](architecture.md)** — it maps the whole system
+and links every doc in place. The rest of this page is the same index, grouped
+by theme, with every doc one click away.
 
 ```mermaid
-flowchart TD
-    A["README"] --> QS["Quickstart<br/>(VM to first app)"]
-    A --> W["Why DBBASIC"]
-    A --> R["Status"]
-    A --> B["Runtime contract"]
-    A --> C["HTTP API contract"]
-
-    QS --> L["Single VM deployment<br/>(full reference)"]
-
-    W --> APPS["App packages<br/>(the suite)"]
-    W --> SH["Shell and AI"]
-
-    APPS --> Q["Package authoring"]
-    APPS --> SF["Schema forms contract"]
-    SF --> CAPS["Capabilities<br/>(comments, attachments, sharing)"]
-    APPS --> P["Permissions model"]
-    P --> CAPS
-    APPS --> SR["Site routing"]
-
-    C --> M["Object authoring"]
-    M --> CAP["Capability objects<br/>(ffmpeg, OCR, media)"]
-    C --> E["REST and object messages"]
-    C --> D["ASGI and realtime direction"]
-
-    R --> L["Single VM deployment"]
-    L --> N["Backup and restore"]
-    L --> O["Traffic limits"]
+flowchart TB
+    A["architecture.md<br/>(the map)"]
+    A --> START["Get started"]
+    A --> CONCEPTS["Concepts"]
+    A --> BUILD["Building apps"]
+    A --> OPERATE["Operating"]
+    A --> REF["Reference"]
 ```
 
-## Current Docs
+## Start here
 
-- `quickstart.md` - the linear path from a fresh VM to a running
-  server, a login, a domain with HTTPS, and a first app installed —
-  about thirty minutes, using `scripts/install.sh`.
-- `why-dbbasic.md` - the advantages, honestly stated with their
-  boundaries: live change, apps-as-data, one permission engine,
-  speed-through-less, AI-native without lock-in.
-- `comparisons.md` - what DBBASIC deletes relative to Django/Rails,
-  enterprise stacks, JS meta-frameworks, SaaS suites, and no-code
-  platforms — with the cost of each deletion stated, and receipts.
-- `app-packages.md` - the installed application suite (projects, notes,
-  tasks, contacts, articles, links, events, files, shell,
-  collaboration) and the schema+rules+page pattern every app repeats.
-- `shell-and-ai.md` - the talk-to-everything terminal: per-user AI
-  provider keys, model choice, MCP tool subsets, conversation resume,
-  and building live objects by asking ("coding without coding").
-- `design-system.md` - the semantic-contract design system: token roles,
-  themes as data and as packages (base/paper/terminal), the stylesheet
-  served as the `site_style` object at `/style`, and why semantics beat a
-  widget-prescriptive ui_schema.
-- `capability-objects.md` - objects that shell out to system tools
-  (ffmpeg, tesseract/OCR, ImageMagick, PDF text): the subprocess
-  execution model, worked examples, the trust boundary, and how they
-  compose with files, records, and AI.
-- `runtime-contract.md` - runtime, daemon, namespace, version, queue, scheduler,
-  and event contracts.
-- `http-api-contract.md` - existing `/objects` HTTP API shape used by current
+- [architecture.md](architecture.md) — the layer map: storage → runtime → data
+  → permissions → generative UI → capabilities → surfaces, with a link to the
+  doc for each.
+- [why-dbbasic.md](why-dbbasic.md) — the advantages, honestly stated with their
+  boundaries.
+- [quickstart.md](quickstart.md) — a fresh VM to a running server, login, HTTPS
+  domain, and a first app in ~30 minutes with `scripts/install.sh`.
+- [comparisons.md](comparisons.md) — what DBBASIC deletes vs Django/Rails,
+  enterprise stacks, JS meta-frameworks, and no-code — and the cost of each.
+
+## Concepts
+
+- [runtime-contract.md](runtime-contract.md) — runtime, daemon, namespace,
+  version, queue, scheduler, and event contracts.
+- [object-authoring.md](object-authoring.md) — object source layout, method
+  shape, runtime helpers, state/log usage, and response forms.
+- [capability-objects.md](capability-objects.md) — objects that shell out to
+  system tools (ffmpeg, OCR, PDF), the subprocess model, and the trust boundary.
+- [asgi-realtime-direction.md](asgi-realtime-direction.md) — why plain ASGI, and
+  how WebSocket/SSE object events fit.
+- [rest-and-object-messages.md](rest-and-object-messages.md) — RESTful resources
+  vs object behavior messages vs realtime streams.
+
+## Data, UI, and behavior
+
+- [schema-forms.md](schema-forms.md) — the schema field contract that generates
+  forms and views: types, enums, relations, validation bounds, list modes — all
+  enforced on write.
+- [generative-ui.md](generative-ui.md) — the one renderer: list/table/board/
+  tree/calendar, filters, search, relation labels, forms, and composed detail —
+  no per-app UI code.
+- [capabilities.md](capabilities.md) — per-collection behaviors from a schema
+  flag: comments, attachments, owner-checked sharing, and how to add one.
+- [validation-and-logic.md](validation-and-logic.md) — what's validated on every
+  write, and the business-logic/automation substrate (transitions, notify,
+  triggers, computed, connectors).
+- [design-system.md](design-system.md) — semantic tokens, themes as data and as
+  packages, and the stylesheet served as the `site_style` object at `/style`.
+- [ui-decisions.md](ui-decisions.md) — the living log of interaction decisions
+  (detail-vs-edit, the row cap, filters, relation labels, capabilities).
+
+## Building & shipping apps
+
+- [app-packages.md](app-packages.md) — the installed app suite and the
+  schema+rules+page pattern every app repeats.
+- [package-authoring.md](package-authoring.md) — manifest, layout, install
+  semantics, dry-run workflow, and rules for generated packages.
+- [upgrade-and-customization.md](upgrade-and-customization.md) — the
+  data-preserving upgrade system: baselines, three-way reconcile, overrides,
+  feature flags.
+- [permissions-model.md](permissions-model.md) — access modes, role/object/
+  action rules, ownership, row/field filters, sharing, temporary paid access,
+  and audit.
+- [site-routing.md](site-routing.md) — clean public URLs, the `site_routes`
+  table, `{param}` patterns, `site_404`.
+- [secrets-and-credentials.md](secrets-and-credentials.md) — the write-only
+  vault, hash-only tokens, and the trust boundary.
+- [shell-and-ai.md](shell-and-ai.md) — the talk-to-everything terminal: per-user
+  AI keys, model choice, MCP tool subsets, and building objects by asking.
+
+## Storage & durability
+
+- [storage-modes.md](storage-modes.md) — classic vs append-only collections.
+- [append-only-storage-design.md](append-only-storage-design.md) — tombstones,
+  compaction, and the disposable id→offset sidecar.
+- [durability-and-recovery.md](durability-and-recovery.md) — write durability
+  and recovery-by-replay.
+- [backup-restore.md](backup-restore.md) — archive format, verification, and
+  safe read-only restore preview.
+
+## Operating
+
+- [single-vm-deployment.md](single-vm-deployment.md) — conservative one-VM
+  staging with systemd, localhost uvicorn, separate object/data paths.
+- [docker-deployment.md](docker-deployment.md) — the Docker/Coolify path.
+- [traffic-limits.md](traffic-limits.md) — request-size limits and the
+  rate/concurrency/execution boundaries.
+- [status.md](status.md) — readiness checklist, useful deployment shape, and
+  next production-hardening work.
+
+## Reference
+
+- [http-api-contract.md](http-api-contract.md) — the full HTTP API shape used by
   clients and tools.
-- `status.md` - current readiness checklist, useful deployment shape, known
-  non-goals, and next production-hardening work.
-- `object-authoring.md` - current object source layout, method shape, runtime
-  helpers, state/log usage, response return forms, and the object-first
-  storage/schema loop.
-- `asgi-realtime-direction.md` - why the server uses plain ASGI, and how
-  WebSocket/SSE object events fit the direction.
-- `rest-and-object-messages.md` - how DBBASIC separates RESTful resources from
-  object behavior messages and realtime streams.
-- `single-vm-deployment.md` - conservative staging deployment on one VM with
-  systemd, localhost uvicorn, separate object/data paths, filesystem checks,
-  provider monitoring, and backup notes.
-- `backup-restore.md` - runtime archive format, verification, safe restore, and
-  what stays out of portable backups.
-- `traffic-limits.md` - request-size limits, high-traffic safety layers, and
-  the next rate/concurrency/execution boundaries.
-- `permissions-model.md` - server-side access modes, role/object/action rules,
-  ownership, sharing, row/field filters, subscriptions, temporary paid access,
-  route enforcement, and audit readback.
-- `package-authoring.md` - the practical guide for building an installable
-  package: manifest, layout, install semantics, dry-run workflow, and rules
-  for generated packages.
-- `schema-forms.md` - the schema field contract that generates forms and
-  views: types, enums, relations, validation bounds, form layout, and list
-  modes (list/table/board/tree/calendar, filters, relation labels), all
-  enforced on record writes.
-- `capabilities.md` - the per-collection behavior layer on top of the display
-  layer: `capabilities.{comments,attachments,shareable}` flags that grow a
-  comment thread, attachment list, and owner-checked sharing on a detail page
-  from one schema key — the polymorphic-collection + widget + auto-mount
-  pattern, the sharing security model, and how to add a new capability.
-- `site-routing.md` - clean public URLs for websites: convention routing,
-  the `site_routes` records table with `{param}`/`{param:uuid}` patterns,
-  `site_404`, and why routing maps URLs while the permission policy decides
-  access.
-- `runtime-contract.md#packages` and `http-api-contract.md#packages` - package
-  manifest layout, package discovery, dry-runs, and package change history.
 
 ## Documentation Rules
 
-- Keep the README short enough to explain the project quickly.
-- Move detailed design contracts into focused docs.
-- Link related docs instead of duplicating long explanations.
+- Keep the root README short enough to explain the project quickly; link into
+  focused docs from there and from [architecture.md](architecture.md).
+- **Link docs as a real markdown link, not a `` `code span` ``** — a code span
+  renders as monospace text and is not clickable on GitHub.
 - Use Mermaid diagrams when they make the system easier to understand.
 - Keep examples safe: no real IPs, private paths, tokens, or deployment names.
 - Prefer runnable examples when the public code supports them.
-
-## Future Docs
-
-Useful next docs:
-
-- object method reference
-- realtime event contract (with the websocket slice)
-
-PHP-style community notes were useful because examples and corrections lived
-near the function being used. GitHub does not provide inline manual comments in
-the same way, but DBBASIC can get close by linking docs, examples, tests, issues,
-and discussions around each public object/runtime surface.
