@@ -185,8 +185,11 @@ function renderList(block, mount) {
     cfg.subtitle = (r) => (r[sf] == null ? "" : lbl + String(r[sf]));
   }
   // `row_actions: false` -> a read-only list (a log, a report, a rollup target):
-  // no per-row edit/delete buttons. Default keeps the owner-based behavior.
-  if (block.row_actions === false) cfg.rowActions = false;
+  // no per-row edit/delete buttons, and no detail link either (a rollup target
+  // has no detail page). Normal data lists keep the owner-based actions and get
+  // the default /{collection}/{id} detail link.
+  if (block.row_actions === false) { cfg.rowActions = false; cfg.link = false; }
+  if (block.link === false) cfg.link = false;
   // `row_limit` overrides the list's default display cap (50); `sort_by`
   // (+ `sort_dir` asc|desc) sorts by a real field -- so a report renders as a
   // bounded top-N (e.g. top IPs by hits, desc) instead of every row.

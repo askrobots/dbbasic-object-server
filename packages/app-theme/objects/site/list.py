@@ -413,7 +413,20 @@ _JS = r"""
         card.addEventListener("dragstart", (e) => {
           e.dataTransfer.setData("text/plain", card.dataset.id);
           e.dataTransfer.effectAllowed = "move";
+          card._dragged = true;
         });
+        // A board card opens its detail on click (same reachability as a list
+        // row). A real drag sets _dragged so the drop doesn't also navigate;
+        // a plain click (no drag) navigates. cfg.link === false opts out.
+        if (cfg.link !== false) {
+          card.style.cursor = "pointer";
+          card.addEventListener("click", () => {
+            if (card._dragged) { card._dragged = false; return; }
+            const id = card.dataset.id;
+            const record = all.find((x) => x.id === id) || {id: id};
+            window.location.href = cfg.href ? cfg.href(record) : "/" + collection + "/" + encodeURIComponent(id);
+          });
+        }
       });
       mount.querySelectorAll(".boardcolbody").forEach((body) => {
         body.addEventListener("dragover", (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; });
@@ -591,9 +604,14 @@ _JS = r"""
       function row(r) {
         const title = cardTitle(cfg, r);
         const av = String(title).trim().charAt(0) || "?";
-        const href = cfg.href && cfg.href(r);
+        // Every row links to its detail view -- reachability, "everything has a
+        // url". The detail route is `/{collection}/{id}` by convention; cfg.href
+        // overrides it (and is treated as an external/new-tab link), and
+        // cfg.link === false opts a report/log (no detail page) out entirely.
+        const href = (cfg.link === false) ? "" : (cfg.href ? cfg.href(r) : "/" + collection + "/" + encodeURIComponent(r.id));
+        const linkAttrs = cfg.href ? ' target="_blank" rel="noopener"' : "";
         const titleHtml = href
-          ? '<a href="' + esc(href) + '" target="_blank" rel="noopener">' + esc(title) + '</a>'
+          ? '<a href="' + esc(href) + '"' + linkAttrs + '>' + esc(title) + '</a>'
           : esc(title);
         const sub = cfg.subtitle ? cfg.subtitle(r) : "";
         const tags = cfg.tags ? cfg.tags(r) : "";
