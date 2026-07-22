@@ -232,7 +232,8 @@ _JS = r"""
       return {error: "board mode needs an enum field -- none found; showing table"};
     }
     const cardFields = block.card_fields || (schema.views && schema.views.list_fields) || [];
-    return {config: {groupField: groupField, columns: boardColumns(field), cardFields: cardFields}};
+    return {config: {groupField: groupField, columns: boardColumns(field),
+                     cardFields: cardFields, byName: fieldsByName(schema)}};
   }
 
   // ---- tree: nest by a self-relation, cycle-guarded + depth-capped -------
@@ -407,6 +408,38 @@ _JS = r"""
     return out;
   }
 
+  // Resolve relation fields to a human label instead of a raw FK id. A field
+  // with `relation: {collection, display_field}` stores an id (o-acme); the
+  // table/board should show the target's name ("Acme"), the way the detail
+  // page already does. Fetch each referenced collection once, build an
+  // id->display map. Done once per render surface (not per realtime reload) --
+  // relation targets are comparatively stable, and a stale label just corrects
+  // on the next full load. Fails soft: a field with no map falls back to the id.
+  async function loadRelationMaps(byName, fields) {
+    const maps = {};
+    await Promise.all((fields || []).map(async (n) => {
+      const f = byName && byName[n];
+      if (!f || !f.relation) return;
+      const col = typeof f.relation === "string" ? f.relation : f.relation.collection;
+      const disp = (typeof f.relation === "object" && f.relation.display_field) || "name";
+      try {
+        const res = await fetch("/collections/" + encodeURIComponent(col) + "/records?limit=500",
+          {credentials: "same-origin", headers: {accept: "application/json"}});
+        if (!res.ok) return;
+        const body = await res.json();
+        const m = {};
+        for (const r of (body.records || [])) m[r.id] = r[disp] || r.id;
+        maps[n] = m;
+      } catch (e) { /* leave unmapped -> falls back to the id */ }
+    }));
+    return maps;
+  }
+  function relLabel(fname, value, byName, relMaps) {
+    const f = byName && byName[fname];
+    if (f && f.relation && relMaps && relMaps[fname] && (value in relMaps[fname])) return relMaps[fname][value];
+    return value;
+  }
+
   async function resolveListMode(collection) {
     if (!(await listModesEnabled())) return {kind: null, notice: null, schema: null};
 
@@ -452,12 +485,20 @@ _JS = r"""
 
   function renderBoard(collection, cfg, mount, boardCfg) {
     let all = [];
+    let relMaps = {};
 
     function cardHtml(r) {
+      const title = cardTitle(cfg, r);
+      // Skip the group field, empties, and any field whose value is already
+      // part of the title (first_name/last_name when the title is the full
+      // name) -- otherwise the card repeats "Grace" / "Hopper" under "Grace
+      // Hopper". Relation fields show the resolved label, not the raw FK id.
       const extra = boardCfg.cardFields.filter((f) => f !== boardCfg.groupField && r[f])
-        .map((f) => '<div class="boardcardfield">' + esc(r[f]) + '</div>').join("");
+        .map((f) => relLabel(f, String(r[f]), boardCfg.byName, relMaps))
+        .filter((label) => label && String(title).indexOf(label) === -1)
+        .map((label) => '<div class="boardcardfield">' + esc(label) + '</div>').join("");
       return '<div class="boardcard" draggable="true" data-id="' + esc(r.id) + '">'
-        + '<div class="boardcardtitle">' + esc(cardTitle(cfg, r)) + '</div>' + extra + '</div>';
+        + '<div class="boardcardtitle">' + esc(title) + '</div>' + extra + '</div>';
     }
 
     function draw() {
@@ -537,7 +578,8 @@ _JS = r"""
       if (window.dbbasicSubscribe) window.dbbasicSubscribe(collection, load);
       else setTimeout(sub, 400);
     })();
-    load();
+    // Resolve card relation labels once (org id -> name) before first draw.
+    loadRelationMaps(boardCfg.byName, boardCfg.cardFields).then((m) => { relMaps = m; load(); });
     return load;
   }
 
@@ -663,6 +705,8 @@ _JS = r"""
     }
 
     function startRowList(notice, table) {
+      // Relation columns (organization_id -> "Acme") resolved once for the table.
+      let relMaps = {};
       // Edit/delete only for a row the viewer actually owns. BOTH ids must be
       // present and equal -- a log/report/rollup row has no owner_id, and a
       // report view has no cfg.owner, so `undefined === undefined` must not
@@ -744,6 +788,7 @@ _JS = r"""
         }
         if (t === "boolean") return v === "true" ? "Yes" : "No";
         if (t === "datetime" || t === "date") return esc(relDate(v));
+        if (f.relation) return esc(relLabel(fname, String(v), table.byName, relMaps));
         if (isEnumField(f)) return enumBadge(v);
         if (/(^|_)tags?$/.test(fname) || t === "array" || t === "list") return pills(v) || "—";
         return esc(String(v));
@@ -846,7 +891,13 @@ _JS = r"""
         if (window.dbbasicSubscribe) window.dbbasicSubscribe(collection, load);
         else setTimeout(sub, 400);
       })();
-      load();
+      // In table mode, resolve relation labels once before the first render so
+      // columns show names not FK ids; the plain row list has no such columns.
+      if (table) {
+        loadRelationMaps(table.byName, table.fields).then((m) => { relMaps = m; load(); });
+      } else {
+        load();
+      }
       return load;
     }
 
