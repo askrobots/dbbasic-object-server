@@ -166,6 +166,34 @@ ones as they're settled; move Open Questions up as they're decided.
 - **Status:** shipped. Verified server-side narrowing (6 tasks → 2 on
   status=open) and that the bar renders in board and table.
 
+### 12. A collection opts into behaviors via `capabilities` (not just display).
+- **Decision:** Beyond the display keys (`list_mode`/`filter_fields`/…), a
+  schema declares generic *behaviors* under a root-level `capabilities` key,
+  wired by the platform rather than hand-built per app. First one:
+  `capabilities.comments: true` → the detail page grows a comment thread
+  (`window.dbbasicThread`, backed by the polymorphic `thread_comments`
+  collection), no per-view block, no per-app comment table.
+- **Rationale:** Comments existed **four times** (task_comments, thread_comments,
+  profile_comments, interactions) — the same "a record has a thread hung off
+  it" copied per app. That's a workaround for a layer that should be uniform.
+  One capability flag collapses them: the widget is polymorphic
+  (parent_collection + parent_id), so any collection gets comments by declaring
+  one key. This is the *behavior/connection* layer sitting on top of the
+  display layer — the same "define once, project everywhere," for what a
+  collection *does* and *connects to*, not just how it looks.
+- **Applies to:** any collection (tasks today). `capabilities` is whitelisted in
+  schema normalization and surfaced in `/api/schema` so the client can wire it.
+- **Status:** shipped. task_comments migrated onto thread_comments; the old
+  related block removed; verified a live widget-posted comment attributes
+  correctly. Next capabilities: `attachments`, `shareable`/permissions.
+- **Gotchas found building it:** a field that is `required` **and** `read_only`
+  can never be created through the HTTP write path (only a server-side
+  `preserve_read_only` bypass) — `thread_comments.parent_*` had to drop
+  `read_only` to be settable on create. And `owner_id` (a `public:hidden` field)
+  is server-set from the session; a client value is rejected, and it's redacted
+  from other readers — so comments stamp a separate `author_name` for
+  attribution.
+
 ---
 
 ## Open questions (decide, then move up)
