@@ -1,7 +1,7 @@
 {
   "name": "tags",
   "title": "Tags",
-  "version": 1,
+  "version": 2,
   "description": "Reusable tag names for contact categorization.",
   "fields": [
     {
@@ -12,7 +12,16 @@
       "type": "text",
       "required": true,
       "label": "Name",
-      "validation": {"min_length": 1, "max_length": 60}
+      "validation": {
+        "min_length": 1,
+        "max_length": 60
+      }
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "read_only": true,
+      "label": "Created"
     },
     {
       "name": "owner_id",
@@ -21,11 +30,19 @@
     }
   ],
   "forms": {
-    "default": {"fields": ["name"]}
+    "default": {
+      "fields": [
+        "name"
+      ]
+    }
   },
   "views": {
     "list_mode": "table",
-    "list_fields": ["name"],
-    "detail_fields": ["name"]
+    "list_fields": [
+      "name"
+    ],
+    "detail_fields": [
+      "name"
+    ]
   }
 }

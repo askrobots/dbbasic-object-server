@@ -85,15 +85,16 @@ def test_templates_schema_is_now_version_2_additive_only():
     existed at v1 is still present, unchanged in name/type -- this schema
     change is purely additive (live records with no value for the new
     fields just read those fields back as empty, same as any other
-    optional field on a schemaless TSV collection).
+    optional field on a schemaless TSV collection). v2 -> v3 adds created_at
+    (baseline record metadata), also additive.
     """
     schema = _schema("templates")
-    assert schema["version"] == 2
+    assert schema["version"] == 3
     by_name = {f["name"]: f for f in schema["fields"]}
 
     # Fields present since v1, untouched.
     for name in ("id", "name", "description", "category", "body", "tags",
-                 "is_public", "owner_id"):
+                 "is_public", "created_at", "owner_id"):
         assert name in by_name, f"v1 field {name!r} must not be removed"
     assert by_name["name"]["required"] is True
     assert by_name["body"]["required"] is True

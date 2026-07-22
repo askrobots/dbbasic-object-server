@@ -1,7 +1,7 @@
 {
   "name": "organizations",
   "title": "Organizations",
-  "version": 1,
+  "version": 2,
   "description": "Companies and groups contacts belong to.",
   "fields": [
     {
@@ -12,18 +12,29 @@
       "type": "text",
       "required": true,
       "label": "Name",
-      "validation": {"min_length": 1, "max_length": 120}
+      "validation": {
+        "min_length": 1,
+        "max_length": 120
+      }
     },
     {
       "name": "website",
       "type": "text",
       "label": "Website",
-      "validation": {"max_length": 254}
+      "validation": {
+        "max_length": 254
+      }
     },
     {
       "name": "notes",
       "type": "textarea",
       "label": "Notes"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "read_only": true,
+      "label": "Created"
     },
     {
       "name": "owner_id",
@@ -32,17 +43,37 @@
     }
   ],
   "forms": {
-    "default": {"fields": ["name", "website", "notes"]}
+    "default": {
+      "fields": [
+        "name",
+        "website",
+        "notes"
+      ]
+    }
   },
   "views": {
     "list_mode": "table",
-    "list_fields": ["name", "website"],
-    "detail_fields": ["name", "website", "notes"],
+    "list_fields": [
+      "name",
+      "website"
+    ],
+    "detail_fields": [
+      "name",
+      "website",
+      "notes"
+    ],
     "related": [
-      {"collection": "contacts", "fk_field": "organization_id"}
+      {
+        "collection": "contacts",
+        "fk_field": "organization_id"
+      }
     ]
   },
   "search": {
-    "fields": ["name", "website", "notes"]
+    "fields": [
+      "name",
+      "website",
+      "notes"
+    ]
   }
 }

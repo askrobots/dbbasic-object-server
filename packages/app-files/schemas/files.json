@@ -1,7 +1,7 @@
 {
   "name": "files",
   "title": "Files",
-  "version": 1,
+  "version": 2,
   "description": "File metadata; bytes live outside collections and are served by /api/files/{id} under this record's visibility.",
   "fields": [
     {
@@ -12,7 +12,10 @@
       "type": "text",
       "required": true,
       "label": "Filename",
-      "validation": {"min_length": 1, "max_length": 255}
+      "validation": {
+        "min_length": 1,
+        "max_length": 255
+      }
     },
     {
       "name": "content_type",
@@ -28,17 +31,25 @@
       "name": "description",
       "type": "text",
       "label": "Description",
-      "validation": {"max_length": 300}
+      "validation": {
+        "max_length": 300
+      }
     },
     {
       "name": "project_id",
       "label": "Project",
-      "relation": {"collection": "projects", "display_field": "name"}
+      "relation": {
+        "collection": "projects",
+        "display_field": "name"
+      }
     },
     {
       "name": "task_id",
       "label": "Task",
-      "relation": {"collection": "tasks", "display_field": "title"},
+      "relation": {
+        "collection": "tasks",
+        "display_field": "title"
+      },
       "help": "Optional attachment link into app-tasks' tasks collection -- a soft reference only, like tasks.json's own template_id -> templates (no install-order dependency declared). Lets a task detail page compose its attached files via a plain 59 `related` block ({\"collection\": \"files\", \"fk_field\": \"task_id\"}) -- files have independent identity/lifecycle (uploaded, downloaded, shared on their own), so this is a true related child, not document-composition."
     },
     {
@@ -49,19 +60,40 @@
       "help": "Public files are downloadable by anyone with the link"
     },
     {
+      "name": "created_at",
+      "type": "datetime",
+      "read_only": true,
+      "label": "Created"
+    },
+    {
       "name": "owner_id",
       "type": "text",
       "label": "Owner"
     }
   ],
   "forms": {
-    "default": {"fields": ["filename", "description", "project_id", "is_public"]}
+    "default": {
+      "fields": [
+        "filename",
+        "description",
+        "project_id",
+        "is_public"
+      ]
+    }
   },
   "views": {
     "list_mode": "table",
-    "list_fields": ["filename", "size", "content_type", "is_public"]
+    "list_fields": [
+      "filename",
+      "size",
+      "content_type",
+      "is_public"
+    ]
   },
   "search": {
-    "fields": ["filename", "description"]
+    "fields": [
+      "filename",
+      "description"
+    ]
   }
 }

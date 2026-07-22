@@ -1,7 +1,7 @@
 {
   "name": "time_logs",
   "title": "Time Logs",
-  "version": 2,
+  "version": 3,
   "description": "Work time against tasks. A running timer is a row with is_running true and no ended_at. Server-enforced by /timers/start, /timers/stop, /timers/running (62 - Timer, plan/vocabulary/62-timer-spec.md) -- see packages/app-timers/objects/site/timer_actions.py.",
   "fields": [
     {
@@ -10,7 +10,10 @@
     {
       "name": "task_id",
       "label": "Task",
-      "relation": {"collection": "tasks", "display_field": "title"}
+      "relation": {
+        "collection": "tasks",
+        "display_field": "title"
+      }
     },
     {
       "name": "started_at",
@@ -35,6 +38,12 @@
       "label": "Notes"
     },
     {
+      "name": "created_at",
+      "type": "datetime",
+      "read_only": true,
+      "label": "Created"
+    },
+    {
       "name": "owner_id",
       "type": "text",
       "label": "Owner"
@@ -47,10 +56,24 @@
     }
   ],
   "forms": {
-    "default": {"fields": ["task_id", "started_at", "ended_at", "is_running", "notes"]}
+    "default": {
+      "fields": [
+        "task_id",
+        "started_at",
+        "ended_at",
+        "is_running",
+        "notes"
+      ]
+    }
   },
   "views": {
     "list_mode": "table",
-    "list_fields": ["task_id", "started_at", "ended_at", "is_running", "duration_seconds"]
+    "list_fields": [
+      "task_id",
+      "started_at",
+      "ended_at",
+      "is_running",
+      "duration_seconds"
+    ]
   }
 }

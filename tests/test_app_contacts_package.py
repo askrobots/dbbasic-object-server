@@ -146,13 +146,14 @@ def test_contacts_form_and_list_wire_the_new_fields():
 
 def test_interactions_schema_is_now_version_2_additive_only():
     """interactions.json went 1 -> 2 adding "task" to kind's enum plus
-    subject/duration_minutes/outcome. occurred_on and summary are untouched.
+    subject/duration_minutes/outcome, then 2 -> 3 adding created_at (baseline
+    record metadata). occurred_on and summary are untouched.
     """
     schema = _schema("interactions")
-    assert schema["version"] == 2
+    assert schema["version"] == 3
     by_name = {f["name"]: f for f in schema["fields"]}
 
-    for name in ("id", "contact_id", "kind", "occurred_on", "summary", "owner_id"):
+    for name in ("id", "contact_id", "kind", "occurred_on", "summary", "created_at", "owner_id"):
         assert name in by_name, f"v1 field {name!r} must not be removed"
     assert by_name["contact_id"]["required"] is True
     assert by_name["summary"]["required"] is True
@@ -182,19 +183,19 @@ def test_interactions_form_and_list_wire_the_new_fields():
     assert "subject" in schema["views"]["list_fields"]
 
 
-def test_organizations_and_tags_schemas_are_untouched():
-    """The parity doc does not call for changes to these two -- confirm
-    they're still at their original version with no new fields.
+def test_organizations_and_tags_schemas_gain_only_created_at():
+    """Both got the baseline created_at metadata field (additive, v1 -> v2)
+    and nothing else -- every original field is still present, unchanged.
     """
     orgs = _schema("organizations")
-    assert orgs["version"] == 1
+    assert orgs["version"] == 2
     assert {f["name"] for f in orgs["fields"]} == {
-        "id", "name", "website", "notes", "owner_id",
+        "id", "name", "website", "notes", "created_at", "owner_id",
     }
 
     tags = _schema("tags")
-    assert tags["version"] == 1
-    assert {f["name"] for f in tags["fields"]} == {"id", "name", "owner_id"}
+    assert tags["version"] == 2
+    assert {f["name"] for f in tags["fields"]} == {"id", "name", "created_at", "owner_id"}
 
 
 def test_additive_field_adds_need_no_migration_entry():

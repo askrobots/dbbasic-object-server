@@ -1,7 +1,7 @@
 {
   "name": "templates",
   "title": "Templates",
-  "version": 2,
+  "version": 3,
   "description": "Reusable, structured-data templates. `body` remains a free-text fallback from v1; a private predecessor-system audit (not part of this repo) showed templates there are chiefly a JSON Schema (`schema`) plus optional AI-assist config, so v2 adds those fields alongside it. Edit history comes from the record changelog.",
   "fields": [
     {
@@ -12,13 +12,18 @@
       "type": "text",
       "required": true,
       "label": "Name",
-      "validation": {"min_length": 1, "max_length": 120}
+      "validation": {
+        "min_length": 1,
+        "max_length": 120
+      }
     },
     {
       "name": "description",
       "type": "text",
       "label": "Description",
-      "validation": {"max_length": 300}
+      "validation": {
+        "max_length": 300
+      }
     },
     {
       "name": "category",
@@ -30,7 +35,9 @@
       "type": "textarea",
       "required": true,
       "label": "Body",
-      "validation": {"min_length": 1}
+      "validation": {
+        "min_length": 1
+      }
     },
     {
       "name": "schema",
@@ -61,7 +68,12 @@
       "type": "enum",
       "label": "AI Assistance",
       "default": "suggestions",
-      "enum": ["none", "suggestions", "auto_fill", "full"],
+      "enum": [
+        "none",
+        "suggestions",
+        "auto_fill",
+        "full"
+      ],
       "help": "How much AI help this template calls for, mirroring the audited predecessor's levels. Stored preference only -- deferred infra, same posture as ai_prompt."
     },
     {
@@ -89,21 +101,50 @@
       "default": "false"
     },
     {
+      "name": "created_at",
+      "type": "datetime",
+      "read_only": true,
+      "label": "Created"
+    },
+    {
       "name": "owner_id",
       "type": "text",
       "label": "Owner"
     }
   ],
   "forms": {
-    "default": {"fields": ["name", "description", "category", "body", "schema",
-                           "instructions", "ai_prompt", "ai_assistance",
-                           "default_values", "tags", "is_public"]}
+    "default": {
+      "fields": [
+        "name",
+        "description",
+        "category",
+        "body",
+        "schema",
+        "instructions",
+        "ai_prompt",
+        "ai_assistance",
+        "default_values",
+        "tags",
+        "is_public"
+      ]
+    }
   },
   "views": {
     "list_mode": "table",
-    "list_fields": ["name", "category", "ai_assistance", "is_public"]
+    "list_fields": [
+      "name",
+      "category",
+      "ai_assistance",
+      "is_public"
+    ]
   },
   "search": {
-    "fields": ["name", "description", "body", "instructions", "tags"]
+    "fields": [
+      "name",
+      "description",
+      "body",
+      "instructions",
+      "tags"
+    ]
   }
 }

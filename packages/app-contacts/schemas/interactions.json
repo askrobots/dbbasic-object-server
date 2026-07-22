@@ -1,7 +1,7 @@
 {
   "name": "interactions",
   "title": "Interactions",
-  "version": 2,
+  "version": 3,
   "description": "Calls, emails, meetings, notes, and tasks logged against a contact.",
   "fields": [
     {
@@ -11,20 +11,31 @@
       "name": "contact_id",
       "required": true,
       "label": "Contact",
-      "relation": {"collection": "contacts", "display_field": "first_name"}
+      "relation": {
+        "collection": "contacts",
+        "display_field": "first_name"
+      }
     },
     {
       "name": "kind",
       "type": "enum",
       "label": "Kind",
       "default": "note",
-      "enum": ["call", "email", "meeting", "note", "task"]
+      "enum": [
+        "call",
+        "email",
+        "meeting",
+        "note",
+        "task"
+      ]
     },
     {
       "name": "subject",
       "type": "text",
       "label": "Subject",
-      "validation": {"max_length": 200}
+      "validation": {
+        "max_length": 200
+      }
     },
     {
       "name": "occurred_on",
@@ -40,7 +51,12 @@
       "name": "outcome",
       "type": "enum",
       "label": "Outcome",
-      "enum": ["positive", "neutral", "negative", "no_answer"],
+      "enum": [
+        "positive",
+        "neutral",
+        "negative",
+        "no_answer"
+      ],
       "help": "Optional; blank until set, no default is forced"
     },
     {
@@ -48,7 +64,15 @@
       "type": "textarea",
       "required": true,
       "label": "Summary",
-      "validation": {"min_length": 1}
+      "validation": {
+        "min_length": 1
+      }
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "read_only": true,
+      "label": "Created"
     },
     {
       "name": "owner_id",
@@ -57,16 +81,40 @@
     }
   ],
   "forms": {
-    "default": {"fields": ["contact_id", "kind", "subject", "occurred_on",
-                           "duration_minutes", "outcome", "summary"]}
+    "default": {
+      "fields": [
+        "contact_id",
+        "kind",
+        "subject",
+        "occurred_on",
+        "duration_minutes",
+        "outcome",
+        "summary"
+      ]
+    }
   },
   "views": {
     "list_mode": "feed",
-    "list_fields": ["contact_id", "kind", "subject", "occurred_on", "summary"],
-    "detail_fields": ["contact_id", "kind", "subject", "occurred_on",
-                      "duration_minutes", "outcome", "summary"]
+    "list_fields": [
+      "contact_id",
+      "kind",
+      "subject",
+      "occurred_on",
+      "summary"
+    ],
+    "detail_fields": [
+      "contact_id",
+      "kind",
+      "subject",
+      "occurred_on",
+      "duration_minutes",
+      "outcome",
+      "summary"
+    ]
   },
   "search": {
-    "fields": ["summary"]
+    "fields": [
+      "summary"
+    ]
   }
 }
