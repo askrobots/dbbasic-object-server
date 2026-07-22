@@ -81,6 +81,25 @@ ones as they're settled; move Open Questions up as they're decided.
 - **Applies to:** analytics and any report-shaped list.
 - **Status:** shipped.
 
+### 7. A data-dense collection renders as a live table (`list_mode: "table"`).
+- **Decision:** A schema (or a view's list block) can declare `list_mode:
+  "table"` to render its `list_fields` as a dense HTML table — sortable column
+  headers, one row per record, cells formatted by field type (money `_cents` →
+  `$`, boolean → Yes/No, datetime → relative). It reuses the same
+  `startRowList` engine as the rich-row list, so it **inherits for free**: the
+  search box, the 50-row cap + Show-all (#3), client-side sort (#6),
+  row→detail navigation (#1), and — the differentiator — **realtime
+  re-render** on the change log. A table here is not a static snapshot the way
+  django-tables2 is; it updates live as records change.
+- **Rationale:** Rich rows (title + snippet) suit content/feeds; they waste
+  space and hide structure for inherently tabular data (invoices, contacts,
+  links, a rollup). One renderer, chosen per collection by a single schema key,
+  keeps every table consistent instead of each app hand-rolling one.
+- **Applies to:** any collection whose index goes through `dbbasicList`; opt in
+  with `views.list_mode: "table"` + `list_fields`. Header click toggles
+  sort field/dir; the whole row is the detail link.
+- **Status:** shipped. Live on `/articles` (Title · Published On · Published).
+
 ---
 
 ## Open questions (decide, then move up)

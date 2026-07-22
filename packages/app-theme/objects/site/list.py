@@ -138,6 +138,22 @@ _JS = r"""
     return String(v || "").split(",").map((t) => t.trim()).filter(Boolean)
       .map((t) => '<span class="pill">' + esc(t) + '</span>').join("");
   }
+  // A single enum/status value renders as a colored badge -- the same
+  // treatment the bespoke Projects table gives "active". Tone is inferred
+  // from the value's meaning so the whole product agrees (a "done"/"paid"
+  // is green everywhere, a "blocked"/"overdue" red) without each schema
+  // having to declare colors. Unknown values get a neutral badge.
+  function badgeTone(val) {
+    const s = String(val || "").toLowerCase().replace(/[\s-]+/g, "_");
+    if (/^(active|done|complete|completed|paid|approved|published|resolved|won|live|success|ready|enabled|open)$/.test(s)) return "positive";
+    if (/^(blocked|overdue|failed|cancelled|canceled|rejected|lost|error|archived|expired|disabled|closed)$/.test(s)) return "danger";
+    if (/^(pending|in_progress|review|in_review|on_hold|draft|todo|new|waiting|queued|processing|backlog)$/.test(s)) return "warning";
+    return "";
+  }
+  function enumBadge(val) {
+    const tone = badgeTone(val);
+    return '<span class="badge' + (tone ? " " + tone : "") + '">' + esc(String(val)) + '</span>';
+  }
 
   // 58's field=value encoding (implicit eq) -- one query param per `where`
   // entry, ANDed by the server after its own permission row filter. `extra`
@@ -685,6 +701,8 @@ _JS = r"""
         }
         if (t === "boolean") return v === "true" ? "Yes" : "No";
         if (t === "datetime" || t === "date") return esc(relDate(v));
+        if (isEnumField(f)) return enumBadge(v);
+        if (/(^|_)tags?$/.test(fname) || t === "array" || t === "list") return pills(v) || "—";
         return esc(String(v));
       }
       function tableBody(shown) {
