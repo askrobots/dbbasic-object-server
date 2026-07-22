@@ -383,7 +383,13 @@ _JS = r"""
   // ---- board/tree/calendar renderers (impure: fetch + DOM + realtime) ----
 
   function cardTitle(cfg, r) {
-    return (cfg.title ? cfg.title(r) : (r.title || r.name || r.id)) || "(untitled)";
+    // Label a record by a human field, trying common text fields before the raw
+    // id -- so a comment / note / message / interaction (no title/name field)
+    // shows its actual text instead of a UUID (and the avatar gets a real
+    // letter). cfg.title overrides everything.
+    const auto = r.title || r.name || r.label || r.subject || r.body || r.text
+      || r.content || r.message || r.description || r.email || r.id;
+    return (cfg.title ? cfg.title(r) : auto) || "(untitled)";
   }
 
   function renderBoard(collection, cfg, mount, boardCfg) {
