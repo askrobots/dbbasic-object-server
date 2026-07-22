@@ -183,9 +183,15 @@ ones as they're settled; move Open Questions up as they're decided.
   collection *does* and *connects to*, not just how it looks.
 - **Applies to:** any collection (tasks today). `capabilities` is whitelisted in
   schema normalization and surfaced in `/api/schema` so the client can wire it.
-- **Status:** shipped. task_comments migrated onto thread_comments; the old
-  related block removed; verified a live widget-posted comment attributes
-  correctly. Next capabilities: `attachments`, `shareable`/permissions.
+- **Status:** shipped (two capabilities now). `comments`: task_comments
+  migrated onto thread_comments, related block removed, live widget post
+  verified. `attachments` (2026-07-22): `window.dbbasicAttachments` (served at
+  `/attachments`) uploads/lists/downloads/deletes files for a record via the
+  polymorphic `files.(parent_collection, parent_id)` pair — no per-collection
+  FK; tasks adopts both, the old `related:files` block removed, a live
+  widget upload verified. `renderDetail` mounts them via one
+  `maybeMountCapabilities` (attachments above comments). Next: `shareable`/
+  permissions (generalize `project_access`).
 - **Gotchas found building it:** a field that is `required` **and** `read_only`
   can never be created through the HTTP write path (only a server-side
   `preserve_read_only` bypass) — `thread_comments.parent_*` had to drop
