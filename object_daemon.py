@@ -37,6 +37,7 @@ import object_connectors
 import object_email
 import object_events
 import object_identity
+import object_ids
 import object_materialize
 import object_notify
 import object_packages
@@ -170,11 +171,22 @@ def process_scheduler(runtime: ObjectRuntime):
 
         log(f"Scheduler: executing {target_id}.{method} (task {task['id']})")
 
+        run_started = time.time()
+        run_result = None
+        run_error: Exception | None = None
         try:
-            _execute_target(runtime, target_id, method, payload)
+            run_result = _execute_target(runtime, target_id, method, payload)
             log(f"Scheduler: {target_id}.{method} completed")
         except Exception as e:
+            run_error = e
             log(f"Scheduler: {target_id}.{method} failed: {e}", 'ERROR')
+        _record_scheduler_run(
+            task, target_id, method,
+            started=run_started,
+            duration_ms=int((time.time() - run_started) * 1000),
+            result=run_result,
+            error=run_error,
+        )
 
         # Update task
         task['last_run'] = now
@@ -187,6 +199,37 @@ def process_scheduler(runtime: ObjectRuntime):
             task['next_run'] = _calculate_next_run(task, after=now)
 
         obj.state_manager.set(key, json.dumps(task))
+
+
+def _record_scheduler_run(task, target_id, method, *, started, duration_ms,
+                          result, error):
+    """Append one scheduler_runs row -- run history an operator can query.
+
+    A run's outcome must be a RECORD, not a stdout line only ssh can reach
+    (the observability hole that let q9's auto-approve and this server's own
+    scheduler passes sit dead unnoticed). Best-effort: skips silently when
+    the scheduler_runs collection is not installed (system-dashboard ships
+    it) and never breaks the pass.
+    """
+    try:
+        base_dir = os.environ.get("DBBASIC_DATA_DIR", "data")
+        row = {
+            "id": object_ids.new_uuid4(),
+            "task_id": str(task.get("id") or ""),
+            "object_id": str(target_id),
+            "method": str(method),
+            "ok": "false" if error is not None else "true",
+            "started_at": datetime.fromtimestamp(started, tz=timezone.utc).isoformat(),
+            "duration_ms": str(int(duration_ms)),
+            "result": "" if error is not None or result is None else json.dumps(result)[:2000],
+            "error": str(error)[:2000] if error is not None else "",
+            "error_type": type(error).__name__ if error is not None else "",
+        }
+        object_records.create_collection_record(
+            "scheduler_runs", row, base_dir=base_dir, actor="daemon:scheduler"
+        )
+    except Exception:
+        pass  # observability must never break the scheduling pass
 
 
 def _calculate_next_run(task, after=None):

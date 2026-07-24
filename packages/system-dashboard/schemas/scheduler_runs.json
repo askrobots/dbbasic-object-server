@@ -1,0 +1,83 @@
+{
+  "name": "scheduler_runs",
+  "title": "Scheduler Runs",
+  "version": 1,
+  "storage": "append",
+  "description": "Run history for daemon-scheduled tasks -- one append-only row per execution, written best-effort by object_daemon.process_scheduler. The Flower lesson: a run's outcome must be a RECORD an operator can query, not a stdout line only ssh can reach (q9's auto-approve sat dead for years and this server's own scheduler pass sat disabled because run outcomes were invisible). result carries the target's return value (JSON, truncated); error/error_type carry the failure. Admin-read only (permissions/rules.json); the /scheduler page renders this plus the live task board from the scheduler trigger's state.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "task_id",
+      "type": "text",
+      "label": "Task"
+    },
+    {
+      "name": "object_id",
+      "type": "text",
+      "label": "Target Object"
+    },
+    {
+      "name": "method",
+      "type": "text",
+      "label": "Method"
+    },
+    {
+      "name": "ok",
+      "type": "boolean",
+      "label": "OK"
+    },
+    {
+      "name": "started_at",
+      "type": "datetime",
+      "label": "Started"
+    },
+    {
+      "name": "duration_ms",
+      "type": "integer",
+      "label": "Duration (ms)"
+    },
+    {
+      "name": "result",
+      "type": "text",
+      "label": "Result",
+      "help": "The target object's return value as JSON, truncated to 2000 chars."
+    },
+    {
+      "name": "error",
+      "type": "text",
+      "label": "Error"
+    },
+    {
+      "name": "error_type",
+      "type": "text",
+      "label": "Error Type"
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    }
+  ],
+  "views": {
+    "list_mode": "table",
+    "list_fields": [
+      "task_id",
+      "object_id",
+      "ok",
+      "started_at",
+      "duration_ms"
+    ],
+    "filter_fields": [
+      "task_id",
+      "ok"
+    ]
+  }
+}
