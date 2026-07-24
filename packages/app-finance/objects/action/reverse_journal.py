@@ -15,7 +15,7 @@ balanced by construction; re-verified anyway).
 
 import os
 
-import object_ids
+import object_finance
 import object_records
 
 ACTOR = "action_reverse_journal"
@@ -46,9 +46,9 @@ def POST(request):
         return {"status": 409, "error": "Only a posted journal can be reversed; edit the draft instead."}
 
     marker = f"reversal:{journal_id}"
-    for row in object_records.read_collection_records("fin_journals", base_dir=base):
-        if row.get("generated_from") == marker:
-            return {"status": 409, "error": f"Already reversed by journal {row.get('id')}."}
+    existing = object_finance.find_journal_by_provenance(base, marker)
+    if existing is not None:
+        return {"status": 409, "error": f"Already reversed by journal {existing.get('id')}."}
 
     lines = [
         l for l in object_records.read_collection_records("fin_journal_lines", base_dir=base)
@@ -57,45 +57,31 @@ def POST(request):
     if not lines:
         return {"status": 409, "error": "Journal has no lines to reverse."}
 
-    mirror_id = object_ids.new_uuid4()
-    mirror = {
-        "id": mirror_id,
-        "date": journal.get("date", ""),
-        "description": f"Reversal of {journal.get('reference') or journal.get('description') or journal_id}",
-        "status": "draft",
-        "generated_from": marker,
-        "kind": "reversing",
-        "owner_id": journal.get("owner_id", ""),
-    }
-    if journal.get("entity_id"):
-        mirror["entity_id"] = journal["entity_id"]
-    object_records.create_collection_record("fin_journals", mirror, base_dir=base, actor=ACTOR)
-    for line in lines:
-        object_records.create_collection_record(
-            "fin_journal_lines",
+    composed = object_finance.compose_posted_journal(
+        base,
+        generated_from=marker,
+        date=journal.get("date", ""),
+        description=f"Reversal of {journal.get('reference') or journal.get('description') or journal_id}",
+        lines=[
             {
-                "id": object_ids.new_uuid4(),
-                "journal_id": mirror_id,
                 "account_id": line.get("account_id", ""),
                 "debit_cents": line.get("credit_cents", "0"),   # swapped
                 "credit_cents": line.get("debit_cents", "0"),   # swapped
                 "memo": line.get("memo", ""),
-                "owner_id": journal.get("owner_id", ""),
-                **({"entity_id": line["entity_id"]} if line.get("entity_id") else {}),
-            },
-            base_dir=base,
-            actor=ACTOR,
-        )
-    mirror_lines = [
-        l for l in object_records.read_collection_records("fin_journal_lines", base_dir=base)
-        if l.get("journal_id") == mirror_id
-    ]
-    debits = sum(int(l.get("debit_cents") or 0) for l in mirror_lines)
-    credits = sum(int(l.get("credit_cents") or 0) for l in mirror_lines)
-    if debits == credits and debits > 0:
-        object_records.update_collection_record(
-            "fin_journals", mirror_id, {"status": "posted"}, base_dir=base, actor=ACTOR
-        )
-        return {"status": 200, "reversal_id": mirror_id, "posted": True}
-    return {"status": 200, "reversal_id": mirror_id, "posted": False,
+                "entity_id": line.get("entity_id", ""),
+            }
+            for line in lines
+        ],
+        owner_id=journal.get("owner_id", ""),
+        entity_id=journal.get("entity_id", ""),
+        kind="reversing",
+        actor=ACTOR,
+    )
+    if not composed.get("ok"):
+        return {"status": 409, "error": composed.get("error", "could not compose the mirror")}
+    if composed.get("skipped"):
+        return {"status": 409, "error": f"Already reversed ({composed.get('journal_id', 'unknown')})."}
+    if composed.get("posted"):
+        return {"status": 200, "reversal_id": composed["journal_id"], "posted": True}
+    return {"status": 200, "reversal_id": composed["journal_id"], "posted": False,
             "note": "left draft: mirror did not balance"}

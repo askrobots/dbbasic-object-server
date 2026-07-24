@@ -24,10 +24,9 @@ writes bypass the HTTP-only balance hook, so the composer carries its own
 check; the hook remains the gate for human entries.
 """
 
-import json
 import os
 
-import object_ids
+import object_finance
 import object_records
 
 HANDLES = [
@@ -55,16 +54,6 @@ def _setting(base, key, default=""):
     return default
 
 
-def _journal_exists(base, generated_from):
-    try:
-        for row in object_records.read_collection_records("fin_journals", base_dir=base):
-            if row.get("generated_from") == generated_from:
-                return True
-    except Exception:
-        return True  # cannot tell -> do not risk a duplicate
-    return False
-
-
 def _books_ready(base):
     try:
         object_records.read_collection_records("fin_journals", base_dir=base)
@@ -76,57 +65,29 @@ def _books_ready(base):
 
 def _compose(base, *, generated_from, date, description, debit_account,
              credit_account, amount_cents, owner_id, entity_id="", kind="standard"):
-    """One balanced entry: DR debit_account / CR credit_account, posted."""
+    """One balanced entry: DR debit_account / CR credit_account, posted.
+
+    Mechanics live in object_finance.compose_posted_journal (the shared
+    composer this module's hand-rolled version was extracted into); this
+    wrapper keeps the two-line one-amount policy shape the payment/refund/
+    bounce/issue entries all share.
+    """
     if amount_cents <= 0:
         return {"ok": True, "skipped": "zero amount"}
-    if _journal_exists(base, generated_from):
-        return {"ok": True, "skipped": f"already composed: {generated_from}"}
-    journal_id = object_ids.new_uuid4()
-    journal = {
-        "id": journal_id,
-        "date": date or "",
-        "description": description,
-        "status": "draft",
-        "generated_from": generated_from,
-        "kind": kind,
-        "owner_id": owner_id or "",
-    }
-    if entity_id:
-        journal["entity_id"] = entity_id
-    object_records.create_collection_record(
-        "fin_journals", journal, base_dir=base, actor=ACTOR,
-        allow_computed_submission=False,
+    return object_finance.compose_posted_journal(
+        base,
+        generated_from=generated_from,
+        date=date,
+        description=description,
+        lines=[
+            {"account_id": debit_account, "debit_cents": amount_cents, "credit_cents": 0},
+            {"account_id": credit_account, "debit_cents": 0, "credit_cents": amount_cents},
+        ],
+        owner_id=owner_id,
+        entity_id=entity_id,
+        kind=kind,
+        actor=ACTOR,
     )
-    for account_id, debit, credit in (
-        (debit_account, str(amount_cents), "0"),
-        (credit_account, "0", str(amount_cents)),
-    ):
-        line = {
-            "id": object_ids.new_uuid4(),
-            "journal_id": journal_id,
-            "account_id": account_id,
-            "debit_cents": debit,
-            "credit_cents": credit,
-            "owner_id": owner_id or "",
-        }
-        if entity_id:
-            line["entity_id"] = entity_id
-        object_records.create_collection_record(
-            "fin_journal_lines", line, base_dir=base, actor=ACTOR
-        )
-    # Balanced by construction; verify anyway before posting (this path
-    # bypasses the HTTP balance hook, so the composer carries its own check).
-    lines = [l for l in object_records.read_collection_records("fin_journal_lines", base_dir=base)
-             if l.get("journal_id") == journal_id]
-    debits = sum(int(l.get("debit_cents") or 0) for l in lines)
-    credits = sum(int(l.get("credit_cents") or 0) for l in lines)
-    if debits == credits and debits > 0:
-        object_records.update_collection_record(
-            "fin_journals", journal_id, {"status": "posted"}, base_dir=base, actor=ACTOR
-        )
-        return {"ok": True, "journal_id": journal_id, "posted": True}
-    return {"ok": True, "journal_id": journal_id, "posted": False,
-            "note": "left draft: did not balance"}
 
 
 def _get(base, collection, record_id):
@@ -180,7 +141,7 @@ def EVENT(request):
                     entity_id=entity,
                 )
             if action == "updated" and payment.get("status") == "bounced":
-                if not _journal_exists(base, f"payments/{record_id}"):
+                if object_finance.find_journal_by_provenance(base, f"payments/{record_id}") is None:
                     return {"ok": True, "skipped": "no original entry to reverse"}
                 return _compose(
                     base, generated_from=f"payments/{record_id}:bounced",

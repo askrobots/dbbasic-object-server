@@ -27,9 +27,11 @@ def _seed_rows(name):
 
 def test_manifest_drops_the_bespoke_view_object_and_seeds_the_detail_view():
     package = object_packages.get_package("app-catalog", root=PACKAGES_ROOT)
-    # The permalink page object is gone; the other three pages remain.
+    # The permalink page object is gone; the three pages remain, joined in
+    # 0.4.0 by the inventory-adjustments trio (hook/composer/count action).
     assert {obj["id"] for obj in package["objects"]} == {
         "site_products", "site_locations", "site_stock",
+        "hook_stock_moves", "system_stock_books", "action_apply_count",
     }
     # The detail view + its route are seeded (into app-views'/site-routing's
     # own shared collections), alongside the existing products/locations/

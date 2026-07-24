@@ -44,6 +44,13 @@
       "actions": ["execute"],
       "object_id": "site_stock",
       "reason": "the stock levels page is public; it shows a sign-in prompt to visitors, and computes the owner-scoped summary itself once signed in (see objects/site/stock.py)"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "action_apply_count",
+      "reason": "applying a physical count is an ordinary operator verb; the object requires a signed-in identity, stamps the caller as the move's owner, and writes only compensating adjustment moves (never edits)"
     }
   ]
 }

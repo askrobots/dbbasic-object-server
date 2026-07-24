@@ -1,9 +1,12 @@
 {
   "name": "stock_moves",
   "title": "Stock Moves",
-  "version": 2,
+  "version": 3,
   "storage": "append",
-  "description": "Immutable ledger of inventory movement: product_id moves quantity from from_location_id to to_location_id. Never updated once written -- stock LEVELS are derived by folding this log (see object_stock.py), never stored on this collection or anywhere else. Reconciled against a private predecessor-system catalog audit, not part of this repo (its StockMove model: 'immutable, levels DERIVED not stored'). This is the textbook append-mode collection per docs/append-only-storage-design.md: write-heavy, never updated, an inspectable audit trail by design -- see docs/storage-modes.md's 'Append (opt-in per collection)' section for what that changes about how this collection is physically written and read.",
+  "hooks": {
+    "before_write": "hook_stock_moves"
+  },
+  "description": "Immutable ledger of inventory movement: product_id moves quantity from from_location_id to to_location_id. Never updated once written -- stock LEVELS are derived by folding this log (see object_stock.py), never stored on this collection or anywhere else. Reconciled against a private predecessor-system catalog audit, not part of this repo (its StockMove model: 'immutable, levels DERIVED not stored'). This is the textbook append-mode collection per docs/append-only-storage-design.md: write-heavy, never updated, an inspectable audit trail by design -- see docs/storage-modes.md's 'Append (opt-in per collection)' section for what that changes about how this collection is physically written and read. TAX POSTURE: some jurisdictions assess business personal property tax on inventory VALUE as of a specific date, per location -- this log supports that by construction (fold moves up to any date, per location, at stamped unit_cost_cents); nothing may ever collapse the location dimension or overwrite stamped costs.",
   "fields": [
     {
       "name": "id"
@@ -60,9 +63,15 @@
         "transfer",
         "adjustment",
         "return",
-        "count"
+        "count",
+        "waste",
+        "breakage",
+        "theft",
+        "expiry",
+        "damage",
+        "disaster"
       ],
-      "help": "Matches the predecessor system's stock move reasons (reconciled against a private source audit, not part of this repo)."
+      "help": "The first six match the predecessor system's stock move reasons (reconciled against a private source audit, not part of this repo). v3 adds the LOSS taxonomy (plan/inventory-adjustments-spec.md): waste/breakage/theft/expiry/damage/disaster name what actually happened instead of hiding it under 'adjustment' -- a loss move leaves from_location_id with NO to_location_id (goods left the system; hook-enforced) and composes a shrinkage journal (system_stock_books). 'adjustment' remains for count variances only (action_apply_count writes them)."
     },
     {
       "name": "reference",
@@ -118,6 +127,9 @@
       "reason",
       "quantity",
       "occurred_at"
+    ],
+    "filter_fields": [
+      "reason"
     ]
   }
 }

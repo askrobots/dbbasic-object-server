@@ -36,6 +36,19 @@ Integer-cents arithmetic only, per 00-doctrine-and-contract.md: money is
 always a whole number of cents, parsed defensively (blank/None -> 0)
 since a hand-edited TSV row or a partially-filled form draft can leave a
 *_cents field blank.
+
+compose_posted_journal() joined this module later, at the doctrine-#4
+extraction threshold (docs/logic-decisions.md): once system_books
+(payments/refunds/bounces/issues), fin_recurring_runner (adjusting
+entries), and action_reverse_journal (mirrors) had each hand-rolled the
+same create-journal -> create-lines -> verify -> post sequence, the third
+composer (system_stock_books, inventory losses) triggered the extraction.
+Callers own POLICY (which accounts, what amount, when to compose); this
+function owns MECHANICS (idempotency by provenance, draft -> lines ->
+re-read -> verify balance -> post). Composed entries are storage-level
+writes that bypass the HTTP-only balance hook, so the re-verify here is
+the gate for every generated journal; the hook remains the gate for
+human entries.
 """
 from __future__ import annotations
 
@@ -43,6 +56,7 @@ from decimal import ROUND_FLOOR, Decimal
 from pathlib import Path
 from typing import Any, Iterable
 
+import object_ids
 import object_records
 from object_versions import DEFAULT_DATA_DIR
 
@@ -193,3 +207,122 @@ def trial_balance(
         row["account_name"],
     ))
     return rows
+
+
+_UNREADABLE = object()  # sentinel: could not scan fin_journals for a marker
+
+
+def _scan_provenance(base_dir, generated_from):
+    try:
+        for row in object_records.read_collection_records("fin_journals", base_dir=base_dir):
+            if row.get("generated_from") == generated_from:
+                return row
+    except Exception:
+        return _UNREADABLE
+    return None
+
+
+def find_journal_by_provenance(base_dir, generated_from):
+    """The fin_journals row stamped with this generated_from, else None.
+
+    Unreadable books also return None -- callers that need the
+    do-not-risk-a-duplicate posture get it inside compose_posted_journal,
+    which distinguishes 'absent' from 'could not tell'.
+    """
+    row = _scan_provenance(base_dir, generated_from)
+    return None if row is _UNREADABLE else row
+
+
+def compose_posted_journal(base_dir, *, generated_from, date, description,
+                           lines, owner_id, entity_id="", kind="standard",
+                           actor="object_finance", post=True):
+    """Compose one journal from line specs and post it when balanced.
+
+    lines: iterable of {"account_id", "debit_cents", "credit_cents",
+    optional "memo", optional "entity_id" (defaults to the journal's)}.
+    Returns {"ok": True, ...} shapes:
+      already composed -> {"ok", "skipped", "journal_id", "posted"}
+      nothing to book  -> {"ok", "skipped"}
+      composed         -> {"ok", "journal_id", "posted", maybe "note"}
+    and {"ok": False, "error"} only for unusable line amounts. post=False
+    composes but always leaves the draft (recurring templates without
+    auto_post).
+    """
+    normalized, debits, credits = [], 0, 0
+    for spec in lines or []:
+        if not isinstance(spec, dict):
+            continue
+        try:
+            dr = int(spec.get("debit_cents") or 0)
+            cr = int(spec.get("credit_cents") or 0)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "line amounts must be integer cents"}
+        if dr < 0 or cr < 0:
+            return {"ok": False, "error": "line amounts must not be negative"}
+        debits += dr
+        credits += cr
+        normalized.append({
+            "account_id": str(spec.get("account_id") or ""),
+            "debit_cents": str(dr),
+            "credit_cents": str(cr),
+            "memo": str(spec.get("memo") or ""),
+            "entity_id": str(spec.get("entity_id") or entity_id or ""),
+        })
+
+    if generated_from:
+        existing = _scan_provenance(base_dir, generated_from)
+        if existing is _UNREADABLE:
+            return {"ok": True, "skipped": "books unreadable; not risking a duplicate"}
+        if existing is not None:
+            return {"ok": True, "skipped": f"already composed: {generated_from}",
+                    "journal_id": existing.get("id"),
+                    "posted": existing.get("status") == "posted"}
+
+    if not normalized or (debits == 0 and credits == 0):
+        return {"ok": True, "skipped": "zero amount"}
+
+    journal_id = object_ids.new_uuid4()
+    journal = {
+        "id": journal_id,
+        "date": date or "",
+        "description": description or "",
+        "status": "draft",
+        "generated_from": generated_from or "",
+        "kind": kind,
+        "owner_id": owner_id or "",
+    }
+    if entity_id:
+        journal["entity_id"] = entity_id
+    object_records.create_collection_record(
+        "fin_journals", journal, base_dir=base_dir, actor=actor,
+        allow_computed_submission=False,
+    )
+    for spec in normalized:
+        line = {
+            "id": object_ids.new_uuid4(),
+            "journal_id": journal_id,
+            "account_id": spec["account_id"],
+            "debit_cents": spec["debit_cents"],
+            "credit_cents": spec["credit_cents"],
+            "owner_id": owner_id or "",
+        }
+        if spec["memo"]:
+            line["memo"] = spec["memo"]
+        if spec["entity_id"]:
+            line["entity_id"] = spec["entity_id"]
+        object_records.create_collection_record(
+            "fin_journal_lines", line, base_dir=base_dir, actor=actor
+        )
+
+    # Balanced by construction; verify by RE-READING what actually landed
+    # before posting (a failed line write must never post a lopsided entry).
+    landed = journal_totals(journal_id, base_dir=base_dir)
+    if (post and landed["is_balanced"] and landed["total_debits_cents"] > 0):
+        object_records.update_collection_record(
+            "fin_journals", journal_id, {"status": "posted"},
+            base_dir=base_dir, actor=actor,
+        )
+        return {"ok": True, "journal_id": journal_id, "posted": True}
+    note = ("left draft: did not balance" if not landed["is_balanced"]
+            else "left draft: post not requested")
+    return {"ok": True, "journal_id": journal_id, "posted": False, "note": note}

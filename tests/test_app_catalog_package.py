@@ -50,10 +50,15 @@ def test_get_package_normalizes_app_catalog_manifest():
     # site_product_view was removed in the Stage-6 retrofit: the product
     # permalink is now a seeded 59 detail view (site_view_render), not a
     # bespoke page object -- see tests/test_app_catalog_detail_retrofit.py.
+    # 0.4.0 added the inventory-adjustments trio (hook gate/stamp, shrinkage
+    # composer, count reconciliation -- plan/inventory-adjustments-spec.md).
     assert {obj["id"] for obj in package["objects"]} == {
         "site_products",
         "site_locations",
         "site_stock",
+        "hook_stock_moves",
+        "system_stock_books",
+        "action_apply_count",
     }
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
     assert {entry["collection"] for entry in package["seed"]} == {
@@ -319,12 +324,15 @@ def test_stock_moves_schema_field_order_and_relations():
 
 
 def test_stock_moves_reason_enum_matches_the_source_model():
-    """Matches the predecessor system's stock move reasons (private source
-    audit, not part of this repo), default transfer.
+    """The first six match the predecessor system's stock move reasons
+    (private source audit, not part of this repo), default transfer. v3
+    extends the enum ADDITIVELY with the loss taxonomy
+    (plan/inventory-adjustments-spec.md) -- old rows stay valid.
     """
     by_name = {f["name"]: f for f in _stock_moves_schema()["fields"]}
     assert by_name["reason"]["enum"] == [
         "purchase", "sale", "transfer", "adjustment", "return", "count",
+        "waste", "breakage", "theft", "expiry", "damage", "disaster",
     ]
     assert by_name["reason"]["default"] == "transfer"
 

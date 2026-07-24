@@ -19,7 +19,7 @@ import json
 import os
 from datetime import date, timedelta
 
-import object_ids
+import object_finance
 import object_records
 
 ACTOR = "fin_recurring_runner"
@@ -68,54 +68,35 @@ def POST(request):
         if not next_run or next_run > today:
             continue
         marker = f"fin_recurring/{tpl['id']}:{next_run}"
-        already = any(
-            j.get("generated_from") == marker
-            for j in object_records.read_collection_records("fin_journals", base_dir=base)
-        )
+        already = object_finance.find_journal_by_provenance(base, marker) is not None
         if not already:
             try:
                 lines_spec = json.loads(tpl.get("template_lines") or "[]")
             except (ValueError, TypeError):
                 results.append({"template": tpl["id"], "error": "bad template_lines JSON"})
                 continue
-            journal_id = object_ids.new_uuid4()
-            object_records.create_collection_record(
-                "fin_journals",
-                {"id": journal_id, "date": next_run,
-                 "description": f"{tpl.get('name') or 'Recurring entry'} ({next_run})",
-                 "status": "draft", "generated_from": marker, "kind": "adjusting",
-                 "owner_id": tpl.get("owner_id", ""),
-                 **({"entity_id": tpl["entity_id"]} if tpl.get("entity_id") else {})},
-                base_dir=base, actor=ACTOR,
-            )
-            debits = credits = 0
-            for spec in lines_spec:
-                if not isinstance(spec, dict):
-                    continue
-                dr = int(spec.get("debit_cents") or 0)
-                cr = int(spec.get("credit_cents") or 0)
-                debits += dr
-                credits += cr
-                object_records.create_collection_record(
-                    "fin_journal_lines",
-                    {"id": object_ids.new_uuid4(), "journal_id": journal_id,
-                     "account_id": str(spec.get("account_id") or ""),
-                     "debit_cents": str(dr), "credit_cents": str(cr),
-                     "memo": str(spec.get("memo") or ""),
-                     "owner_id": tpl.get("owner_id", "")},
-                    base_dir=base, actor=ACTOR,
-                )
             auto_post = (tpl.get("auto_post") or "").lower() in ("true", "1", "yes")
-            posted = False
-            if auto_post and debits == credits and debits > 0:
-                object_records.update_collection_record(
-                    "fin_journals", journal_id, {"status": "posted"},
-                    base_dir=base, actor=ACTOR,
-                )
-                posted = True
-            results.append({"template": tpl["id"], "journal": journal_id,
-                            "posted": posted,
-                            **({} if debits == credits else {"note": "unbalanced: left draft"})})
+            composed = object_finance.compose_posted_journal(
+                base,
+                generated_from=marker,
+                date=next_run,
+                description=f"{tpl.get('name') or 'Recurring entry'} ({next_run})",
+                lines=lines_spec,
+                owner_id=tpl.get("owner_id", ""),
+                entity_id=tpl.get("entity_id", ""),
+                kind="adjusting",
+                actor=ACTOR,
+                post=auto_post,
+            )
+            if not composed.get("ok"):
+                results.append({"template": tpl["id"], "error": composed.get("error", "compose failed")})
+                continue
+            result = {"template": tpl["id"],
+                      "journal": composed.get("journal_id", ""),
+                      "posted": bool(composed.get("posted"))}
+            if "did not balance" in (composed.get("note") or ""):
+                result["note"] = "unbalanced: left draft"
+            results.append(result)
             ran += 1
         # Advance the schedule even if this period was already composed
         # (a crashed earlier pass may have composed but not advanced).

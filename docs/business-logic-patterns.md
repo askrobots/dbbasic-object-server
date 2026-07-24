@@ -120,6 +120,34 @@ a stock move or a journal reversal.
    enforced by the journal-balance hook that already ships. The chain closes:
    append-only record → hook invariant → rollup display → balanced books.
 
+## Worked example 5: inventory shrinkage (the events nobody codes for)
+
+Waste, breakage, theft, expiry, damage, disaster: systems are easy to build
+when quantities just flow buy → stock → sell; real usage is losses. Naming
+them is the point — "adjustment" is the euphemism that hides exactly what
+operators and auditors need to see.
+
+1. **Losses are movements** (logic-decisions #3): a loss is an append-only
+   stock move with a loss `reason`, out of a location, to nowhere — never an
+   edit to an on-hand number (levels stay derived).
+2. **The hook stamps and gates**: `unit_cost_cents` is stamped from the
+   product at the moment of movement (#1 — tomorrow's cost edit must not
+   reprice yesterday's loss); a loss must leave a real location and can have
+   no destination.
+3. **The composer books the shadow**: a loss move composes a posted journal —
+   DR shrinkage-expense / CR inventory-asset — with per-reason account
+   overrides as settings (theft to its own account for the insurance claim).
+4. **Count reconciliation is the same machinery**: a physical count writes
+   one compensating adjustment move for the variance (out for shortage, in
+   for overage) plus the mirror journal. The count is an *event*, not an
+   edit.
+
+This was also the composer pattern's third repeat, which triggered the
+doctrine-#4 extraction: every generated journal now goes through
+`object_finance.compose_posted_journal` (idempotent by `generated_from`,
+verify-then-post), and the payment/refund/recurring/reversal composers
+shrank onto it.
+
 ## State-dependent behavior generally
 
 `transitions` + `when` guards define the machine; the board's drag is its UI;
