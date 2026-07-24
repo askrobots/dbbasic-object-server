@@ -19,6 +19,10 @@
     {
       "collection": "ai_prices",
       "path": "schemas/ai_prices.json"
+    },
+    {
+      "collection": "app_settings",
+      "path": "schemas/app_settings.json"
     }
   ],
   "permissions": [

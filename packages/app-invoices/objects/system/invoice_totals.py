@@ -189,8 +189,11 @@ def _recompute_invoice(invoice_id: str, base_dir: str) -> bool:
         tax_cents += line_tax_cents
 
     total_cents = subtotal_cents + tax_cents
-    amount_paid_cents = _to_int(invoice.get("amount_paid_cents"))
-    balance_due_cents = total_cents - amount_paid_cents
+    # balance_due_cents / amount_paid_cents are formula fields now (invoices
+    # v2, app-payments): the storage layer derives them from total and the
+    # payments/refunds rollups on every write. Writing them here would be
+    # rejected as a computed-field submission -- this object owns only the
+    # line-derived totals until those, too, graduate to rollups.
 
     changes = {}
     if _to_int(invoice.get("subtotal_cents")) != subtotal_cents:
@@ -199,8 +202,6 @@ def _recompute_invoice(invoice_id: str, base_dir: str) -> bool:
         changes["tax_cents"] = str(tax_cents)
     if _to_int(invoice.get("total_cents")) != total_cents:
         changes["total_cents"] = str(total_cents)
-    if _to_int(invoice.get("balance_due_cents")) != balance_due_cents:
-        changes["balance_due_cents"] = str(balance_due_cents)
 
     if not changes:
         return False

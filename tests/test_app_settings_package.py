@@ -30,6 +30,7 @@ def test_get_package_normalizes_app_settings_manifest():
         "user_prefs",
         "feature_flags",
         "ai_prices",
+        "app_settings",  # server-wide per-app config (payments.* first)
     }
 
 
@@ -50,6 +51,7 @@ def test_dry_run_app_settings_package_is_safe(tmp_path):
         "user_prefs",
         "feature_flags",
         "ai_prices",
+        "app_settings",  # server-wide per-app config (payments.* first)
     }
 
 

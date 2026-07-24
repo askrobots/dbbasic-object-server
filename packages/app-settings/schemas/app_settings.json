@@ -1,0 +1,16 @@
+{
+  "name": "app_settings",
+  "title": "App Settings",
+  "version": 1,
+  "description": "Server-wide, admin-managed configuration for app packages: one key/value per row, keys namespaced by app (payments.overpayment_policy). The settings sibling of user_prefs (per-user) and feature_flags (on/off switches); operator/infra config stays in env. Hooks and the daemon read these with code-side defaults, so an absent row always means the documented default.",
+  "fields": [
+    {"name": "id"},
+    {"name": "key", "type": "text", "required": true, "label": "Key",
+     "validation": {"max_length": 120, "pattern": "^[a-z0-9_]+(\\.[a-z0-9_]+)+$"}},
+    {"name": "value", "type": "text", "required": true, "label": "Value",
+     "validation": {"max_length": 500}},
+    {"name": "description", "type": "text", "label": "Description",
+     "validation": {"max_length": 300}}
+  ],
+  "views": {"list_mode": "table", "list_fields": ["key", "value", "description"]}
+}

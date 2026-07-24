@@ -1,0 +1,2 @@
+id	pattern	object_id	priority
+route_payments_detail	/payments/{payment_id}	site_view_render	10

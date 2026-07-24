@@ -1,7 +1,7 @@
 {
   "name": "invoices",
   "title": "Invoices",
-  "version": 1,
+  "version": 2,
   "description": "Line-item invoices, quotes, and credit notes. Lines live in invoice_lines; subtotal/tax/total/balance are stamped by the invoice_totals handler, never typed by hand. See plan/vocabulary/20-invoice-spec.md.",
   "fields": [
     {
@@ -12,7 +12,11 @@
       "type": "enum",
       "label": "Document Type",
       "default": "invoice",
-      "enum": ["invoice", "credit_note", "quote"],
+      "enum": [
+        "invoice",
+        "credit_note",
+        "quote"
+      ],
       "help": "invoice/credit_note/quote share this schema. Real predecessor numbers each type separately (INV-####/CN-####/QT-####); auto-numbering is deferred here (see the number field) but the type is captured now so nothing is lost."
     },
     {
@@ -25,7 +29,10 @@
     {
       "name": "customer_id",
       "label": "Customer (contact)",
-      "relation": {"collection": "contacts", "display_field": "first_name"},
+      "relation": {
+        "collection": "contacts",
+        "display_field": "first_name"
+      },
       "help": "Optional cross-reference only. The snapshot fields below are what every surface renders -- editing the contact later never rewrites an already-issued document."
     },
     {
@@ -33,13 +40,18 @@
       "type": "text",
       "required": true,
       "label": "Bill To",
-      "validation": {"min_length": 1, "max_length": 200}
+      "validation": {
+        "min_length": 1,
+        "max_length": 200
+      }
     },
     {
       "name": "customer_email",
       "type": "text",
       "label": "Customer Email",
-      "validation": {"max_length": 254}
+      "validation": {
+        "max_length": 254
+      }
     },
     {
       "name": "customer_address",
@@ -51,28 +63,77 @@
       "type": "text",
       "default": "USD",
       "label": "Currency (ISO 4217)",
-      "validation": {"pattern": "^[A-Z]{3}$"}
+      "validation": {
+        "pattern": "^[A-Z]{3}$"
+      }
     },
     {
       "name": "status",
       "type": "enum",
       "label": "Status",
       "default": "draft",
-      "enum": ["draft", "sent", "paid", "partial", "overdue", "void"],
+      "enum": [
+        "draft",
+        "sent",
+        "paid",
+        "partial",
+        "overdue",
+        "void"
+      ],
       "transitions": {
         "draft": [
-          {"to": "sent", "when": {"owner_id": "$user_id"}},
-          {"to": "void", "when": {"owner_id": "$user_id"}}
+          {
+            "to": "sent",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          },
+          {
+            "to": "void",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          }
         ],
         "sent": [
-          {"to": "paid", "when": {"owner_id": "$user_id"}},
-          {"to": "partial", "when": {"owner_id": "$user_id"}},
-          {"to": "overdue", "when": {"owner_id": "$user_id"}},
-          {"to": "void", "when": {"owner_id": "$user_id"}}
+          {
+            "to": "paid",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          },
+          {
+            "to": "partial",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          },
+          {
+            "to": "overdue",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          },
+          {
+            "to": "void",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          }
         ],
         "partial": [
-          {"to": "paid", "when": {"owner_id": "$user_id"}},
-          {"to": "void", "when": {"owner_id": "$user_id"}}
+          {
+            "to": "paid",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          },
+          {
+            "to": "void",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          }
         ]
       },
       "help": "paid and void are terminal. Every other move requires the invoice owner. overdue is a manual move in v1 -- a daemon pass that flips sent->overdue once due_date has passed is a later slice, not built here."
@@ -109,18 +170,41 @@
       "help": "Stamped by invoice_totals: subtotal_cents + tax_cents."
     },
     {
+      "name": "payments_received_cents",
+      "type": "computed",
+      "label": "Payments (cents)",
+      "rollup": {
+        "collection": "payments",
+        "fk_field": "invoice_id",
+        "op": "sum",
+        "field": "amount_cents",
+        "where": {
+          "status": "received"
+        }
+      }
+    },
+    {
+      "name": "refunded_cents",
+      "type": "computed",
+      "label": "Refunded (cents)",
+      "rollup": {
+        "collection": "refunds",
+        "fk_field": "invoice_id",
+        "op": "sum",
+        "field": "amount_cents"
+      }
+    },
+    {
       "name": "amount_paid_cents",
-      "type": "integer",
-      "default": "0",
-      "label": "Amount Paid (cents)",
-      "help": "Manual partial-payment tracking is out of scope for v1 (plan/vocabulary/20-invoice-spec.md Out of Scope); the field exists so balance_due_cents and the partial status are meaningful once payment recording lands."
+      "type": "computed",
+      "label": "Paid (cents)",
+      "formula": "payments_received_cents - refunded_cents"
     },
     {
       "name": "balance_due_cents",
-      "type": "integer",
-      "default": "0",
-      "label": "Balance Due (cents)",
-      "help": "Stamped by invoice_totals: total_cents - amount_paid_cents."
+      "type": "computed",
+      "label": "Balance due (cents)",
+      "formula": "total_cents - amount_paid_cents"
     },
     {
       "name": "notes",
@@ -162,15 +246,37 @@
     }
   ],
   "forms": {
-    "default": {"fields": ["doc_type", "number", "customer_id", "customer_name",
-                           "customer_email", "customer_address", "currency",
-                           "issue_date", "due_date", "status", "notes", "payment_link"]}
+    "default": {
+      "fields": [
+        "doc_type",
+        "number",
+        "customer_id",
+        "customer_name",
+        "customer_email",
+        "customer_address",
+        "currency",
+        "issue_date",
+        "due_date",
+        "status",
+        "notes",
+        "payment_link"
+      ]
+    }
   },
   "views": {
     "list_mode": "table",
-    "list_fields": ["number", "customer_name", "status", "total_cents", "due_date"]
+    "list_fields": [
+      "number",
+      "customer_name",
+      "status",
+      "total_cents",
+      "due_date"
+    ]
   },
   "search": {
-    "fields": ["number", "customer_name"]
+    "fields": [
+      "number",
+      "customer_name"
+    ]
   }
 }

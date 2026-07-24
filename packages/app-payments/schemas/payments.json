@@ -1,0 +1,33 @@
+{
+  "name": "payments",
+  "title": "Payments",
+  "version": 1,
+  "storage": "append",
+  "description": "Money received against an invoice. Append-only (money moves, never mutates -- docs/logic-decisions.md #3): a bounced check is a status transition on the same movement, a correction is a refund record, never an edit to the amount. Rollups on invoices exclude bounced payments.",
+  "fields": [
+    {"name": "id"},
+    {"name": "invoice_id", "required": true, "label": "Invoice",
+     "relation": {"collection": "invoices", "display_field": "number"}},
+    {"name": "amount_cents", "type": "integer", "required": true, "label": "Amount (cents)"},
+    {"name": "method", "type": "enum", "label": "Method", "default": "transfer",
+     "enum": ["cash", "check", "card", "transfer", "other"]},
+    {"name": "received_on", "type": "date", "required": true, "label": "Received"},
+    {"name": "reference", "type": "text", "label": "Reference",
+     "validation": {"max_length": 120}},
+    {"name": "notes", "type": "textarea", "label": "Notes"},
+    {"name": "status", "type": "enum", "default": "received", "label": "Status",
+     "enum": ["received", "bounced"],
+     "transitions": {"received": [{"to": "bounced", "when": {"owner_id": "$user_id"}}], "bounced": []}},
+    {"name": "refunded_cents", "type": "computed", "label": "Refunded (cents)",
+     "rollup": {"collection": "refunds", "fk_field": "payment_id", "op": "sum", "field": "amount_cents"}},
+    {"name": "owner_id", "type": "text"},
+    {"name": "created_at", "type": "datetime", "read_only": true, "label": "Created"}
+  ],
+  "forms": {"default": {"fields": ["invoice_id", "amount_cents", "method", "received_on", "reference", "notes"]}},
+  "views": {"list_mode": "table",
+            "list_fields": ["invoice_id", "amount_cents", "method", "received_on", "status"],
+            "filter_fields": ["status", "method"],
+            "related": [{"collection": "refunds", "fk_field": "payment_id"}]},
+  "search": {"fields": ["reference", "notes"]},
+  "hooks": {"before_write": "hook_payments"}
+}

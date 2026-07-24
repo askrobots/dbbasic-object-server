@@ -58,6 +58,33 @@ def _fire(runtime, object_root, record_id, action):
     )
 
 
+def _add_payments_substrate(data_dir, paid_cents=None):
+    """invoices v2 derives amount_paid/balance_due from the payments/refunds
+    collections (app-payments). Give the env those schemas + collections, and
+    optionally one real received payment -- the thing the old test faked by
+    writing amount_paid_cents directly ("simulating a future partial-payment
+    write"; the future arrived)."""
+    import pathlib, shutil
+    packages = pathlib.Path(__file__).resolve().parents[1] / "packages"
+    schema_dir = data_dir / "schemas"
+    for name in ("payments", "refunds"):
+        shutil.copy(packages / "app-payments" / "schemas" / f"{name}.json",
+                    schema_dir / f"{name}.json")
+    for coll, hdr in (
+        ("payments", "id\tinvoice_id\tamount_cents\tmethod\treceived_on\treference\tnotes\tstatus\trefunded_cents\towner_id\tcreated_at\n"),
+        ("refunds", "id\tpayment_id\tinvoice_id\tamount_cents\treason\trefunded_on\towner_id\tcreated_at\n"),
+    ):
+        d = data_dir / "collections" / coll
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "records.tsv").write_text(hdr)
+    if paid_cents is not None:
+        object_records.create_collection_record(
+            "payments",
+            {"id": "pay_1", "invoice_id": "inv_1", "amount_cents": str(paid_cents),
+             "method": "transfer", "received_on": "2026-07-24", "owner_id": "u1"},
+            base_dir=data_dir)
+
+
 def _make_invoice(data_dir, **overrides):
     record = {
         "id": "inv_1",
@@ -121,12 +148,13 @@ def test_multi_line_invoice_totals_match_hand_computed_cents(tmp_path):
     subtotal_cents    = 5997 + 5000 = 10997
     tax_cents         = 494 + 0     = 494
     total_cents       = 10997 + 494 = 11491
-    amount_paid_cents = 2000 (set directly on the invoice, simulating a
-                              future partial-payment write)
+    amount_paid_cents = 2000 (a real received payment record now --
+                              rollup/formula territory, app-payments)
     balance_due_cents = 11491 - 2000 = 9491
     """
     data_dir, object_root, runtime = _install(tmp_path)
-    _make_invoice(data_dir, amount_paid_cents="2000")
+    _make_invoice(data_dir)
+    _add_payments_substrate(data_dir, paid_cents=2000)
     _make_line(data_dir, id="il_1", description="Consulting hours",
                quantity="3", unit_price_cents="1999", tax_rate_bps="825")
     _make_line(data_dir, id="il_2", description="Software license",
@@ -207,6 +235,7 @@ def test_deleting_a_line_recovers_invoice_id_from_record_changes_and_resums(tmp_
 
 def test_zero_lines_leaves_invoice_at_zero_totals(tmp_path):
     data_dir, object_root, runtime = _install(tmp_path)
+    _add_payments_substrate(data_dir)  # balance_due derives via payments now
     _make_invoice(data_dir)
 
     invoice = object_records.get_collection_record("invoices", "inv_1", base_dir=data_dir)

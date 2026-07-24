@@ -1,0 +1,22 @@
+{
+  "name": "refunds",
+  "title": "Refunds",
+  "version": 1,
+  "storage": "append",
+  "description": "A refund is a new compensating record pointing at its payment -- never an edit (docs/logic-decisions.md #3). invoice_id is STAMPED by the hook from the payment (stamp doctrine #1) so invoices can roll refunds up directly; the hook also enforces refund <= payment minus prior refunds.",
+  "fields": [
+    {"name": "id"},
+    {"name": "payment_id", "required": true, "label": "Payment",
+     "relation": {"collection": "payments", "display_field": "reference"}},
+    {"name": "invoice_id", "label": "Invoice",
+     "relation": {"collection": "invoices", "display_field": "number"}},
+    {"name": "amount_cents", "type": "integer", "required": true, "label": "Amount (cents)"},
+    {"name": "reason", "type": "textarea", "label": "Reason"},
+    {"name": "refunded_on", "type": "date", "required": true, "label": "Refunded"},
+    {"name": "owner_id", "type": "text"},
+    {"name": "created_at", "type": "datetime", "read_only": true, "label": "Created"}
+  ],
+  "forms": {"default": {"fields": ["payment_id", "amount_cents", "reason", "refunded_on"]}},
+  "views": {"list_mode": "table", "list_fields": ["payment_id", "invoice_id", "amount_cents", "refunded_on"]},
+  "hooks": {"before_write": "hook_refunds"}
+}

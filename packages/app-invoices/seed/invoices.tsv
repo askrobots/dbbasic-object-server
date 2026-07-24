@@ -1,1 +1,1 @@
-id	doc_type	number	customer_id	customer_name	customer_email	customer_address	currency	status	issue_date	due_date	subtotal_cents	tax_cents	total_cents	amount_paid_cents	balance_due_cents	notes	payment_link	paid_at	public_token	source_order_id	owner_id	created_at
+id	doc_type	number	customer_id	customer_name	customer_email	customer_address	currency	status	issue_date	due_date	subtotal_cents	tax_cents	total_cents	payments_received_cents	refunded_cents	amount_paid_cents	balance_due_cents	notes	payment_link	paid_at	public_token	source_order_id	owner_id	created_at

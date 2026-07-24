@@ -101,7 +101,8 @@ def test_schema_json_files_are_valid_and_versioned():
     for name in ("invoices", "invoice_lines"):
         payload = json.loads((APP_INVOICES_DIR / "schemas" / f"{name}.json").read_text())
         assert payload["name"] == name
-        assert payload["version"] == 1
+        # invoices v2: paid/balance became derived (app-payments rollups/formulas)
+        assert payload["version"] == (2 if name == "invoices" else 1)
         assert payload["views"]["list_mode"] == "table"
 
 
@@ -118,7 +119,7 @@ def test_no_money_field_uses_a_float_or_currency_type():
             if name in _ALLOWED_FLOAT_FIELDS:
                 continue
             if "_cents" in name or name in {"balance_due_cents"}:
-                assert field_type == "integer", f"{schema['name']}.{name} must be type integer, got {field_type!r}"
+                assert field_type in ("integer", "computed"), f"{schema['name']}.{name} must be integer or computed-over-cents, got {field_type!r}"
             assert field_type not in _FLOAT_MONEY_TYPES, (
                 f"{schema['name']}.{name} uses a float-shaped type {field_type!r}"
             )
@@ -130,8 +131,10 @@ def test_every_cents_field_is_present_and_integer():
         "subtotal_cents", "tax_cents", "total_cents",
         "amount_paid_cents", "balance_due_cents",
     ):
-        assert invoices_by_name[name]["type"] == "integer"
-        assert invoices_by_name[name]["default"] == "0"
+        expected = "computed" if name in ("amount_paid_cents", "balance_due_cents", "payments_received_cents", "refunded_cents") else "integer"
+        assert invoices_by_name[name]["type"] == expected
+        if expected == "integer":
+            assert invoices_by_name[name]["default"] == "0"
 
     lines_by_name = {f["name"]: f for f in _invoice_lines_schema()["fields"]}
     for name in ("unit_price_cents", "line_total_cents", "line_tax_cents"):
