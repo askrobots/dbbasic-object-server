@@ -77,6 +77,59 @@ def _esc(value):
     return html.escape(str(value or ""))
 
 
+_DAYS = {"0": "Sunday", "1": "Monday", "2": "Tuesday", "3": "Wednesday",
+         "4": "Thursday", "5": "Friday", "6": "Saturday", "7": "Sunday",
+         "sun": "Sunday", "mon": "Monday", "tue": "Tuesday", "wed": "Wednesday",
+         "thu": "Thursday", "fri": "Friday", "sat": "Saturday"}
+
+
+def describe_schedule(schedule, task_type=""):
+    """Render a schedule in plain English.
+
+    "10 6 * * *" is precise and completely opaque to anyone who does not
+    write cron daily -- and an operator who cannot read WHEN a task runs
+    cannot tell whether it ran when it should have. So the board leads
+    with the English and keeps the cron string as the small print.
+    """
+    text = str(schedule or "").strip()
+    if not text:
+        return ""
+    if str(task_type).strip() == "onetime":
+        return f"Once at {text[:16].replace('T', ' ')}"
+
+    parts = text.split()
+    if len(parts) != 5:
+        return ""
+    minute, hour, dom, month, dow = parts
+
+    def _every(field):
+        return field.startswith("*/") and field[2:].isdigit()
+
+    if _every(minute) and hour == dom == month == dow == "*":
+        return f"Every {minute[2:]} minutes"
+    if minute.isdigit() and hour == "*" and dom == month == dow == "*":
+        return f"Hourly at :{int(minute):02d}"
+    if _every(hour) and minute.isdigit() and dom == month == dow == "*":
+        return f"Every {hour[2:]} hours at :{int(minute):02d}"
+    if not (minute.isdigit() and hour.isdigit()):
+        return ""
+
+    at = f"{int(hour):02d}:{int(minute):02d} UTC"
+    if dom == month == dow == "*":
+        return f"Daily at {at}"
+    if dow != "*" and dom == "*":
+        # Only a single named day is describable: "1-5" is weekdays and
+        # "1,4" is twice a week -- calling either "Weekly" would be a
+        # confident wrong answer, so those fall back to the raw cron.
+        day = _DAYS.get(dow.lower())
+        return f"Weekly on {day} at {at}" if day else ""
+    if dom.isdigit() and month == "*" and dow == "*":
+        return f"Monthly on day {int(dom)} at {at}"
+    if dom.isdigit() and month.isdigit() and dow == "*":
+        return f"Yearly on {int(month)}/{int(dom)} at {at}"
+    return ""
+
+
 def _task_rows_html(tasks, latest_by_task):
     if not tasks:
         return '<tr><td colspan="8" class="muted">No task_* entries in the scheduler trigger state.</td></tr>'
@@ -93,11 +146,18 @@ def _task_rows_html(tasks, latest_by_task):
                          f" &middot; {_esc(last.get('duration_ms'))}ms</span>")
         status = str(task.get("status") or "")
         toggle = ("pause" if status == "active" else "resume")
+        english = describe_schedule(task.get("schedule"), task.get("type"))
+        schedule_cell = (
+            (f"<strong>{_esc(english)}</strong><br>" if english else "")
+            + f"<code class=\"muted\" title=\"minute hour day-of-month month day-of-week\">"
+              f"{_esc(task.get('schedule'))}</code>"
+            + (f" <span class=\"muted\">{_esc(task.get('type'))}</span>" if not english else "")
+        )
         out.append(
             "<tr>"
             f"<td><code>{_esc(tid)}</code></td>"
             f"<td><code>{_esc(task.get('object_id'))}</code>.{_esc(task.get('method', 'POST'))}</td>"
-            f"<td><code>{_esc(task.get('schedule'))}</code> <span class=\"muted\">{_esc(task.get('type'))}</span></td>"
+            f"<td>{schedule_cell}</td>"
             f"<td class=\"{'ok' if status == 'active' else 'warn'}\">{_esc(status)}</td>"
             f"<td>{_when(task.get('next_run'))}</td>"
             f"<td>{last_cell}</td>"
@@ -249,6 +309,10 @@ def GET(request):
 <thead><tr><th>Task</th><th>Target</th><th>Schedule</th><th>Status</th><th>Next Run</th><th>Last Run</th><th>Runs</th><th>Actions</th></tr></thead>
 <tbody>{_task_rows_html(tasks, latest_by_task)}</tbody>
 </table>
+<p class="muted" style="font-size:0.75rem;margin:0.5rem 0 0">
+Cron fields are <code>minute hour day-of-month month day-of-week</code>
+(all times UTC). <code>*</code> means every, <code>*/5</code> means every 5th.
+</p>
 <h2>Recent Runs</h2>
 <table>
 <thead><tr><th>Started</th><th>Task</th><th>Target</th><th>Outcome</th><th>Duration</th><th>Detail</th></tr></thead>

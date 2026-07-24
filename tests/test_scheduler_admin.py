@@ -164,6 +164,39 @@ def test_pause_and_resume(tmp_path, monkeypatch):
     assert len(runs(data_dir)) == 1  # onetime schedule in the past -> due again
 
 
+def test_schedules_render_in_plain_english(tmp_path, monkeypatch):
+    """A cron string is precise and opaque; an operator who cannot read WHEN
+    a task runs cannot tell whether it ran when it should have."""
+    setup_env(tmp_path, monkeypatch)
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_sched", DASH_OBJECTS / "system" / "scheduler.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    describe = module.describe_schedule
+
+    assert describe("10 6 * * *") == "Daily at 06:10 UTC"
+    assert describe("25 6 * * *") == "Daily at 06:25 UTC"
+    assert describe("*/5 * * * *") == "Every 5 minutes"
+    assert describe("0 * * * *") == "Hourly at :00"
+    assert describe("30 3 * * 1") == "Weekly on Monday at 03:30 UTC"
+    assert describe("0 4 1 * *") == "Monthly on day 1 at 04:00 UTC"
+    assert describe("2026-01-01T00:00:00+00:00", "onetime").startswith("Once at 2026-01-01")
+    assert describe("15 9 * * 1-5") == ""     # unsupported shape: fall back to the raw cron
+    assert describe("") == ""
+
+
+def test_admin_page_shows_english_schedule_and_a_cron_legend(tmp_path, monkeypatch):
+    _, data_dir = setup_env(tmp_path, monkeypatch)
+    task = due_task("action_probe")
+    task.update({"type": "cron", "schedule": "10 6 * * *"})
+    register(data_dir, "task_cron", task)
+    body = page("GET", {"_identity": ADMIN})["body"]
+    assert "Daily at 06:10 UTC" in body
+    assert "10 6 * * *" in body            # the cron itself stays as small print
+    assert "day-of-week" in body           # field legend for the unusual schedules
+
+
 def test_post_validates_action_and_key(tmp_path, monkeypatch):
     setup_env(tmp_path, monkeypatch)
     assert page("POST", {"_identity": ADMIN, "action": "explode", "key": "task_x"})["status"] == 400

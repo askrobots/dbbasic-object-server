@@ -27,7 +27,26 @@ jobs:
         # Matches docs/docker-deployment.md's quickstart
         # (`docker compose up --build`) plus `-d` so this step returns
         # immediately instead of tailing logs forever in CI.
-        run: docker compose up -d --build
+        #
+        # Retried because pulling the base image from Docker Hub times out
+        # on GitHub runners often enough to red-X main for reasons that
+        # have nothing to do with the commit (seen 2026-07-24 on a
+        # README-only change). A CI that cries wolf trains people to stop
+        # reading it. Three attempts with backoff; a real build failure
+        # still fails all three and reports normally.
+        run: |
+          for attempt in 1 2 3; do
+            echo "::group::docker compose up (attempt ${attempt})"
+            if docker compose up -d --build; then
+              echo "::endgroup::"
+              exit 0
+            fi
+            echo "::endgroup::"
+            echo "attempt ${attempt} failed"
+            [ "${attempt}" -lt 3 ] && sleep $((attempt * 15))
+          done
+          echo "docker compose up failed three times -- not a transient registry blip"
+          exit 1
 
       - name: Wait for the container to become healthy
         run: |

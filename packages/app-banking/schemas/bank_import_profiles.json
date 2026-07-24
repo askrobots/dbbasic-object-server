@@ -1,0 +1,31 @@
+{
+  "name": "bank_import_profiles",
+  "title": "Import Profiles",
+  "version": 1,
+  "description": "How to read one bank's export: column_map as DATA, not code. Every bank's CSV is different, so the FIRST import from a new bank is a configuration job -- paste a sample, let AI propose the mapping, confirm it, save it here. Every import after that runs the saved profile deterministically. The anti-pattern this exists to refuse: AI re-reading statements every month, which is nondeterministic and unauditable -- exactly what a fraud control must never be. AI configures; code executes.",
+  "fields": [
+    {"name": "id"},
+    {"name": "name", "type": "text", "required": true, "label": "Name"},
+    {"name": "bank_account_id", "required": true, "label": "Bank Account",
+     "relation": {"collection": "bank_accounts", "display_field": "name"}},
+    {"name": "source_format", "type": "enum", "default": "csv", "label": "Format",
+     "enum": ["csv", "ofx", "camt053", "mt940"],
+     "help": "v1 ships csv; ofx (FITID + balances) is the next importer. The canonical landing shape (bank_lines) is the same for all of them."},
+    {"name": "column_map", "type": "textarea", "label": "Column Map (JSON)",
+     "help": "{\"date\": \"Posted Date\", \"amount\": \"Amount\", \"description\": \"Description\", \"external_id\": \"Transaction ID\", \"date_format\": \"%m/%d/%Y\", \"decimal_sep\": \".\", \"sign\": \"normal\"}. Use debit/credit instead of amount for two-column exports; sign=flip for banks that export withdrawals as positive."},
+    {"name": "has_balances", "type": "boolean", "default": "false", "label": "Carries Balances",
+     "help": "Whether this export states opening/closing balances. Without them the tie-out check cannot run and imports are honestly marked lower-assurance."},
+    {"name": "has_external_ids", "type": "boolean", "default": "false", "label": "Carries Transaction IDs",
+     "help": "Whether the bank gives each line a stable id (OFX FITID). Without one, dedup falls back to a content hash."},
+    {"name": "sample", "type": "textarea", "label": "Sample Rows",
+     "help": "A few real lines from this bank, kept so the mapping can be re-derived or reviewed later."},
+    {"name": "notes", "type": "textarea", "label": "Notes"},
+    {"name": "owner_id", "type": "text", "label": "Owner"},
+    {"name": "created_at", "type": "datetime", "read_only": true, "label": "Created"}
+  ],
+  "search": {"fields": ["name"]},
+  "forms": {"default": {"fields": ["name", "bank_account_id", "source_format", "column_map",
+                                    "has_balances", "has_external_ids", "sample", "notes"]}},
+  "views": {"list_mode": "table",
+            "list_fields": ["name", "bank_account_id", "source_format", "has_balances"]}
+}

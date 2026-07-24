@@ -1,0 +1,43 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "bank_accounts",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "signed-in users manage their own bank accounts, same owner-scoped posture as the rest of finance"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "bank_import_profiles",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "an import profile is the user's own how-to-read-my-bank configuration"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read"],
+      "collection": "bank_statement_imports",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "import runs are historical events: readable and creatable by their owner, never updatable or deletable -- the provenance record for imported evidence must not be rewritable"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update"],
+      "collection": "bank_lines",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "owners read and import their own statement lines, and UPDATE only to record reconciliation work (match_status/matched_to/resolved_as) -- which is attributed in the change log, so who reconciled what is auditable. No delete: imported evidence is append-only, and the transitions on match_status constrain what an update may do to it"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "action_import_bank_csv",
+      "reason": "importing a statement is an ordinary operator verb; the object requires a signed-in identity and verifies the bank account belongs to the caller"
+    }
+  ]
+}
