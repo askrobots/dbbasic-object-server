@@ -1547,6 +1547,20 @@ def main():
         from dbbasic_object_core.runtime.object_runtime import ObjectRuntime
     except ImportError:
         ObjectRuntime = None
+    # Native fallback: the repo's own runtime serves the scheduler/queue/
+    # events passes (load_object + state_manager + execute_object are the
+    # whole surface they use). The legacy dbbasic_object_core runtime keeps
+    # precedence where it is installed; deployments without it -- the
+    # droplet -- get working scheduled tasks instead of a silent disable
+    # (found 2026-07-24: system_invoice_aging/fin_recurring had NO working
+    # schedule path in production because this import was missing).
+    if ObjectRuntime is None:
+        try:
+            from python_object_runtime import PythonObjectRuntime as _NativeRuntime
+        except ImportError:
+            _NativeRuntime = None
+    else:
+        _NativeRuntime = None
 
     # Same data-dir resolution as the server: env first, ./data fallback.
     base_dir = os.environ.get("DBBASIC_DATA_DIR", "data")
@@ -1560,9 +1574,11 @@ def main():
     print(f"Poll interval: {args.interval}s")
     print(f"Data dir: {base_dir}")
     print(f"Object roots: {', '.join(str(root) for root in _object_roots())}")
-    if ObjectRuntime is None:
+    if ObjectRuntime is None and _NativeRuntime is None:
         print("Object runtime: NOT installed (scheduler/queue/events passes disabled)")
     else:
+        _runtime_label = "dbbasic_object_core" if ObjectRuntime is not None else "native (python_object_runtime)"
+        print(f"Object runtime: {_runtime_label}")
         print(f"Scheduler: {'enabled' if _find_trigger_file('scheduler') else 'no scheduler object'}")
         print(f"Queue: {'enabled' if _find_trigger_file('queue') else 'no queue object'}")
         print(f"Events: {'enabled' if _find_trigger_file('events') else 'no events object'}")
@@ -1606,7 +1622,12 @@ def main():
     print("=" * 60)
     print()
 
-    runtime = ObjectRuntime(base_dir=str(base_dir)) if ObjectRuntime is not None else None
+    if ObjectRuntime is not None:
+        runtime = ObjectRuntime(base_dir=str(base_dir))
+    elif _NativeRuntime is not None:
+        runtime = _NativeRuntime()
+    else:
+        runtime = None
     last_event_cleanup = 0.0
 
     while _running:
