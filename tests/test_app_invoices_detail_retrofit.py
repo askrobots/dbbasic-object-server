@@ -33,9 +33,11 @@ def test_manifest_drops_bespoke_invoice_view_page_and_seeds_the_detail_view():
     package = object_packages.get_package("app-invoices", root=PACKAGES_ROOT)
     assert {obj["id"] for obj in package["objects"]} == {
         "site_invoices", "system_invoice_totals",
+        "system_invoice_aging",  # aging + dunning runner (payments slice 2)
     }
     assert {entry["collection"] for entry in package["seed"]} == {
         "invoices", "invoice_lines", "views", "site_routes",
+        "notify_rules",  # dunning: owner in_app ping on overdue (slice 2)
     }
     assert {dep["id"] for dep in package["dependencies"]} == {"app-views"}
 

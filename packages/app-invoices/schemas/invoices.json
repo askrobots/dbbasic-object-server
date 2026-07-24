@@ -1,7 +1,7 @@
 {
   "name": "invoices",
   "title": "Invoices",
-  "version": 2,
+  "version": 3,
   "description": "Line-item invoices, quotes, and credit notes. Lines live in invoice_lines; subtotal/tax/total/balance are stamped by the invoice_totals handler, never typed by hand. See plan/vocabulary/20-invoice-spec.md.",
   "fields": [
     {
@@ -133,6 +133,40 @@
             "when": {
               "owner_id": "$user_id"
             }
+          },
+          {
+            "to": "overdue",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          }
+        ],
+        "overdue": [
+          {
+            "to": "paid",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          },
+          {
+            "to": "partial",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          },
+          {
+            "to": "void",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          }
+        ],
+        "paid": [
+          {
+            "to": "partial",
+            "when": {
+              "owner_id": "$user_id"
+            }
           }
         ]
       },
@@ -205,6 +239,17 @@
       "type": "computed",
       "label": "Balance due (cents)",
       "formula": "total_cents - amount_paid_cents"
+    },
+    {
+      "name": "dunning_level",
+      "type": "integer",
+      "default": "0",
+      "label": "Dunning level"
+    },
+    {
+      "name": "last_dunned_on",
+      "type": "date",
+      "label": "Last dunned"
     },
     {
       "name": "notes",

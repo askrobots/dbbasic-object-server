@@ -1,0 +1,2 @@
+id	name	enabled	event_pattern	match	recipients	suppress_self	channels
+nr_invoice_overdue	Invoice overdue notifies owner	true	invoices.record.updated	"{""status"": ""overdue""}"	"{""mode"": ""owner""}"	false	"[{""channel"": ""in_app"", ""body_template"": ""Invoice {number} for {customer_name} is overdue (level {dunning_level}) — balance {balance_due_cents}c""}]"

@@ -203,6 +203,7 @@ def test_package_manifest_shape():
     assert {o["id"] for o in package["objects"]} == {
         "site_payments", "hook_payments", "hook_refunds",
         "system_books",  # journal composer (books spine)
+        "system_invoice_status",  # event-driven paid/partial flips (slice 2)
     }
     assert "app-invoices" in {d["id"] for d in package["dependencies"]}
     for schema_name in ("payments", "refunds"):

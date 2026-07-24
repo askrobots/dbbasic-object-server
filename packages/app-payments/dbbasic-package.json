@@ -25,6 +25,10 @@
     {
       "id": "system_books",
       "path": "objects/system/books.py"
+    },
+    {
+      "id": "system_invoice_status",
+      "path": "objects/system/invoice_status.py"
     }
   ],
   "schemas": [

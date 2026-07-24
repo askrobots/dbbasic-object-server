@@ -47,6 +47,7 @@ def test_get_package_normalizes_app_invoices_manifest():
     assert {obj["id"] for obj in package["objects"]} == {
         "site_invoices",
         "system_invoice_totals",
+        "system_invoice_aging",  # aging + dunning runner (payments slice 2)
     }
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
     assert {entry["collection"] for entry in package["seed"]} == {
@@ -54,6 +55,7 @@ def test_get_package_normalizes_app_invoices_manifest():
         "invoice_lines",
         "views",
         "site_routes",
+      "notify_rules",
     }
 
 
@@ -102,7 +104,7 @@ def test_schema_json_files_are_valid_and_versioned():
         payload = json.loads((APP_INVOICES_DIR / "schemas" / f"{name}.json").read_text())
         assert payload["name"] == name
         # invoices v2: paid/balance became derived (app-payments rollups/formulas)
-        assert payload["version"] == (2 if name == "invoices" else 1)
+        assert payload["version"] == (3 if name == "invoices" else 1)
         assert payload["views"]["list_mode"] == "table"
 
 
@@ -193,10 +195,20 @@ def test_invoices_guarded_status_transitions_match_the_brief():
     }
 
     partial_targets = {entry["to"]: entry["when"] for entry in transitions["partial"]}
-    assert partial_targets == {"paid": owner_guard, "void": owner_guard}
+    # + overdue (v3): a partially-paid invoice can age past due (slice 2)
+    assert partial_targets == {"paid": owner_guard, "void": owner_guard,
+                               "overdue": owner_guard}
+    # v3: overdue is no longer terminal (clears to paid/partial, voidable),
+    # and a refund can reopen a paid invoice -- the lifecycle arcs the
+    # aging/status machines revealed.
+    overdue_targets = {entry["to"]: entry["when"] for entry in transitions["overdue"]}
+    assert overdue_targets == {"paid": owner_guard, "partial": owner_guard,
+                               "void": owner_guard}
+    paid_targets = {entry["to"]: entry["when"] for entry in transitions["paid"]}
+    assert paid_targets == {"partial": owner_guard}
 
-    # paid and void are terminal: no entries in the transitions map at all.
-    assert "paid" not in transitions
+    # void is terminal; paid can reopen to partial when a refund lands
+    # (v3 -- the arc the refund machinery revealed).
     assert "void" not in transitions
 
 

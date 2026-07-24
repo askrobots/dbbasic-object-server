@@ -6,7 +6,9 @@
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
-  "dependencies": ["app-views"],
+  "dependencies": [
+    "app-views"
+  ],
   "objects": [
     {
       "id": "site_invoices",
@@ -15,6 +17,10 @@
     {
       "id": "system_invoice_totals",
       "path": "objects/system/invoice_totals.py"
+    },
+    {
+      "id": "system_invoice_aging",
+      "path": "objects/system/invoice_aging.py"
     }
   ],
   "schemas": [
@@ -48,6 +54,10 @@
     {
       "collection": "site_routes",
       "path": "seed/site_routes.tsv"
+    },
+    {
+      "collection": "notify_rules",
+      "path": "seed/notify_rules.tsv"
     }
   ],
   "migrations": []
