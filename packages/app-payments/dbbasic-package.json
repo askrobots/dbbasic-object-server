@@ -3,23 +3,62 @@
   "name": "Payments",
   "version": "0.1.0",
   "description": "Payments and refunds against invoices: append-only money movements, hook-enforced invariants (overpayment gate per app_settings policy; refund <= payment minus prior refunds; invoice_id stamped from the payment), and rollup/formula-derived paid and balance amounts on invoices. First module of the ERP tail; the stress test of the primitive stack (plan/payments-spec.md).",
-  "compatibility": {"dbbasic_object_server": ">=0.1.0"},
-  "dependencies": ["app-invoices"],
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": [
+    "app-invoices"
+  ],
   "objects": [
-    {"id": "site_payments", "path": "objects/site/payments.py"},
-    {"id": "hook_payments", "path": "objects/hook/payments.py"},
-    {"id": "hook_refunds", "path": "objects/hook/refunds.py"}
+    {
+      "id": "site_payments",
+      "path": "objects/site/payments.py"
+    },
+    {
+      "id": "hook_payments",
+      "path": "objects/hook/payments.py"
+    },
+    {
+      "id": "hook_refunds",
+      "path": "objects/hook/refunds.py"
+    },
+    {
+      "id": "system_books",
+      "path": "objects/system/books.py"
+    }
   ],
   "schemas": [
-    {"collection": "payments", "path": "schemas/payments.json"},
-    {"collection": "refunds", "path": "schemas/refunds.json"}
+    {
+      "collection": "payments",
+      "path": "schemas/payments.json"
+    },
+    {
+      "collection": "refunds",
+      "path": "schemas/refunds.json"
+    }
   ],
-  "permissions": [{"path": "permissions/rules.json"}],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
   "seed": [
-    {"collection": "payments", "path": "seed/payments.tsv"},
-    {"collection": "refunds", "path": "seed/refunds.tsv"},
-    {"collection": "views", "path": "seed/views.tsv"},
-    {"collection": "site_routes", "path": "seed/site_routes.tsv"}
+    {
+      "collection": "payments",
+      "path": "seed/payments.tsv"
+    },
+    {
+      "collection": "refunds",
+      "path": "seed/refunds.tsv"
+    },
+    {
+      "collection": "views",
+      "path": "seed/views.tsv"
+    },
+    {
+      "collection": "site_routes",
+      "path": "seed/site_routes.tsv"
+    }
   ],
   "migrations": []
 }

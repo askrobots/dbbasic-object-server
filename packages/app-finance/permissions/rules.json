@@ -95,6 +95,15 @@
       ],
       "object_id": "site_setup_accounts",
       "reason": "setup-accounts is public execute like every other finance page object; the object itself requires a signed-in identity and verifies the entity belongs to the caller before creating any account"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": [
+        "execute"
+      ],
+      "object_id": "action_reverse_journal",
+      "reason": "reversing a posted journal is the doctrine-correct correction; the object itself enforces owner-or-admin on the target journal"
     }
   ]
 }

@@ -44,6 +44,7 @@ def test_get_package_normalizes_app_finance_manifest():
     assert {obj["id"] for obj in package["objects"]} == {
         "site_accounts", "site_journals", "site_trial_balance",
         "site_setup_accounts", "hook_fin_journals",
+        "action_reverse_journal", "system_fin_recurring_runner",
     }
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
     # + a site_routes seed for /finance/setup-accounts and /journals/{id},
@@ -104,9 +105,11 @@ def test_schema_json_files_are_valid_and_versioned():
             assert payload["version"] == 3
             assert payload["views"]["list_mode"] == "tree"
         elif name == "fin_journals":
-            # generated_from (61) + entity_id (65) + hooks.before_write (v4:
-            # balance enforcement) + debit/credit_total_cents rollups (v5)
-            assert payload["version"] == 5
+            # generated_from (61) + entity_id (65) + hooks.before_write (v4)
+            # + totals rollups (v5) + kind standard|adjusting|reversing|closing
+            # (v6, the books spine)
+            assert payload["version"] == 6
+            assert payload["views"]["filter_fields"] == ["status", "kind"]
             assert payload["hooks"] == {"before_write": "hook_fin_journals"}
             assert payload["views"]["list_mode"] == "table"
         else:

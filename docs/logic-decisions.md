@@ -115,6 +115,22 @@ Format per decision: **Decision · Rationale · Applies to · Status.**
   [`event-hooks-decisions.md`](event-hooks-decisions.md); restated here as
   the load-bearing boundary of the whole map).
 
+### 7. Generated documents carry provenance and face the same gates.
+- **Decision:** Every machine-composed record (a journal from a payment, a
+  reversal, a recurring adjusting entry) stamps `generated_from` with its
+  source ("payments/{id}", "reversal:{id}", "fin_recurring/{id}:{period}"),
+  composers check that stamp before composing (replays are no-ops), and a
+  generated entry passes the same balance verification a human entry would —
+  composers re-verify because storage-layer writes bypass the HTTP-only hook.
+- **Rationale:** Idempotency by provenance makes event redelivery, daemon
+  restarts, and manual re-runs safe by construction — no dedup tables, no
+  distributed locks; the ledger itself remembers what was generated. And a
+  machine allowed to skip the gates would make generated books less
+  trustworthy than hand-kept ones — the opposite of the point.
+- **Applies to:** system_books composers, action_reverse_journal,
+  fin_recurring_runner; every future composer.
+- **Status:** doctrine, shipped with the books spine.
+
 ---
 
 ## How to use this

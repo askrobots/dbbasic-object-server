@@ -30,6 +30,14 @@
     {
       "id": "hook_fin_journals",
       "path": "objects/hook/fin_journals.py"
+    },
+    {
+      "id": "action_reverse_journal",
+      "path": "objects/action/reverse_journal.py"
+    },
+    {
+      "id": "system_fin_recurring_runner",
+      "path": "objects/system/fin_recurring_runner.py"
     }
   ],
   "schemas": [
