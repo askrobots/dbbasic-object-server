@@ -55,6 +55,12 @@ flowchart TB
 - [validation-and-logic.md](validation-and-logic.md) — what's validated on every
   write, and the business-logic/automation substrate (transitions, notify,
   triggers, computed, connectors).
+- [business-logic-patterns.md](business-logic-patterns.md) — where every rule
+  goes: the placement flowchart and map, with worked examples (sales tax,
+  payment aging, dunning, refunds) most systems get wrong.
+- [logic-decisions.md](logic-decisions.md) — the living log of logic-placement
+  doctrines (stamp vs derive, time belongs to the daemon, money moves,
+  extract-after-repeat, gates vs reactions).
 - [design-system.md](design-system.md) — semantic tokens, themes as data and as
   packages, and the stylesheet served as the `site_style` object at `/style`.
 - [ui-decisions.md](ui-decisions.md) — the living log of interaction decisions

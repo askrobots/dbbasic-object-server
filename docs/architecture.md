@@ -51,7 +51,9 @@ live.
 relations (validated pointers), bounds, defaults, and status transitions — and
 those are enforced on every write, not just in the form.
 → [`schema-forms.md`](schema-forms.md),
-[`validation-and-logic.md`](validation-and-logic.md)
+[`validation-and-logic.md`](validation-and-logic.md),
+[`business-logic-patterns.md`](business-logic-patterns.md),
+[`logic-decisions.md`](logic-decisions.md)
 
 **Permissions.** One engine decides access for every surface: access modes,
 role/object/action rules, ownership, row and field filters, temporary paid

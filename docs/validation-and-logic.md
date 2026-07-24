@@ -155,6 +155,9 @@ natural next sugar over the hook.
 
 ## Related
 
+- [`business-logic-patterns.md`](business-logic-patterns.md) — WHERE each kind
+  of rule goes (the placement flowchart) with worked examples; and
+  [`logic-decisions.md`](logic-decisions.md), the doctrines behind placements.
 - [`schema-forms.md`](schema-forms.md) — the field contract these checks read.
 - [`runtime-contract.md`](runtime-contract.md) — the daemon, triggers,
   schedules, and event contracts.
