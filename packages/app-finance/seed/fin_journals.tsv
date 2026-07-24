@@ -1,1 +1,1 @@
-id	date	description	status	contact_id	reference	currency	generated_from	owner_id	entity_id	created_at
+id	date	description	status	contact_id	reference	currency	generated_from	debit_total_cents	credit_total_cents	owner_id	entity_id	created_at

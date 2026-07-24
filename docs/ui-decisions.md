@@ -244,6 +244,20 @@ ones as they're settled; move Open Questions up as they're decided.
 - **Applies to:** every table and board over a collection with a relation field.
 - **Status:** shipped. Verified contacts board + table show "Acme Corp".
 
+### 15. Derived values are stored values (formulas & rollups materialize).
+- **Decision:** A computed field's `formula`/`rollup` value is **written into
+  the record** whenever its inputs change — never computed on read, never
+  client-side.
+- **Rationale:** Stored values mean the entire generative stack (lists,
+  tables, boards, detail, search, server-side filters, sort, CSV, backups,
+  grep) works with zero special cases, and realtime is free: a child-line
+  edit rewrites the parent's stored total → change log fires → every open
+  browser updates. Staleness is confined to definition changes, handled by an
+  explicit `recompute_computed_fields` backfill — never a runtime loop.
+- **Applies to:** every `type: computed` field with a `formula` or `rollup`
+  (fin_journals debit/credit totals; contacts full_name).
+- **Status:** shipped.
+
 ---
 
 ## Open questions (decide, then move up)

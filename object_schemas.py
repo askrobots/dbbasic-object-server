@@ -467,6 +467,13 @@ def _normalize_field(payload: Any, *, schema: str) -> dict[str, Any]:
         # every field would always show. Whitelisted, not interpreted here --
         # same posture as the root-level `blocks`/`flow`/`views` keys.
         "visible_when",
+        # Formula & rollup declarations on `type: computed` fields
+        # (plan/formula-rollup-spec.md): `formula` is a tiny expression over
+        # sibling fields, `rollup` aggregates a child collection. Interpreted
+        # by object_records/_apply_computed_fields at write time; must survive
+        # normalization or derived values silently never compute.
+        "formula",
+        "rollup",
     )
     for key in metadata_keys:
         if key in payload:

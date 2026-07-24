@@ -1,7 +1,7 @@
 {
   "name": "fin_journals",
   "title": "Journals",
-  "version": 4,
+  "version": 5,
   "description": "Double-entry transaction headers; the actual debit/credit rows live in fin_journal_lines. Reconciled against a private predecessor-system audit, not part of this repo (its Journal model: '+lines; draft/posted; contact/project/document links; period_locked'). Whether a journal balances (total_debits_cents == total_credits_cents) is a COMPUTED property (see object_finance.journal_totals), never enforced here -- see the status field's help below for why, matching the source's own weak spot exactly (reconciled against a private predecessor-system audit, not part of this repo: 'posting is a bare status flip -- balance NOT enforced at post'). v2 adds generated_from (plan/vocabulary/61-materialize-spec.md, additive): a small optional JSON provenance stamp on a journal materialize generated (definition id, source row id, period), left blank on a hand-created journal.",
   "fields": [
     {
@@ -71,6 +71,28 @@
       "type": "text",
       "label": "Generated From",
       "help": "Provenance stamp (JSON: definition_id/source_id/period_start) set when this journal was created by a materialize_definitions row (plan/vocabulary/61-materialize-spec.md) rather than hand-entered. Blank for a hand-created journal. An ordinary (not schema read_only) field, same reasoning as app-orders' order_totals-stamped fields: object_materialize's write is a plain field submission through create_collection_record, no special escape hatch -- keeping this field read_only would need one. Omitted from forms.default so the generated form never renders it as an editable input."
+    },
+    {
+      "name": "debit_total_cents",
+      "type": "computed",
+      "label": "Debits (cents)",
+      "rollup": {
+        "collection": "fin_journal_lines",
+        "fk_field": "journal_id",
+        "op": "sum",
+        "field": "debit_cents"
+      }
+    },
+    {
+      "name": "credit_total_cents",
+      "type": "computed",
+      "label": "Credits (cents)",
+      "rollup": {
+        "collection": "fin_journal_lines",
+        "fk_field": "journal_id",
+        "op": "sum",
+        "field": "credit_cents"
+      }
     },
     {
       "name": "owner_id",

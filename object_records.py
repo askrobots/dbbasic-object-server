@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 import object_collections
+import object_computed
 import object_correlation
 import object_ids
 import object_permissions
@@ -624,6 +625,7 @@ def create_collection_record(
     clean = _apply_schema_defaults(collection, clean, base_dir=base_dir, roots=roots)
     _check_field_storable(clean)
     clean = _apply_auto_created_at(collection, clean, submitted_fields, base_dir=base_dir, roots=roots)
+    clean = _apply_computed_fields(collection, clean, base_dir=base_dir, roots=roots)
     _validate_record_against_schema(
         collection,
         clean,
@@ -707,6 +709,7 @@ def create_collection_record(
             correlation_id=object_correlation.current_correlation_id(),
             base_dir=base_dir,
         )
+        _recompute_rollups_for_source(collection, [result], base_dir=base_dir, roots=roots)
         return result
 
 
@@ -800,6 +803,7 @@ def update_collection_record(
         updated = dict(existing)
         updated.update(clean)
         updated["id"] = record_id
+        updated = _apply_computed_fields(collection, updated, base_dir=base_dir, roots=roots)
         _validate_record_against_schema(
             collection,
             updated,
@@ -858,6 +862,9 @@ def update_collection_record(
             actor=actor or "unattributed",
             correlation_id=object_correlation.current_correlation_id(),
             base_dir=base_dir,
+        )
+        _recompute_rollups_for_source(
+            collection, [existing, result], base_dir=base_dir, roots=roots
         )
         return result
 
@@ -928,6 +935,7 @@ def delete_collection_record(
             correlation_id=object_correlation.current_correlation_id(),
             base_dir=base_dir,
         )
+        _recompute_rollups_for_source(collection, [result], base_dir=base_dir, roots=roots)
         return result
 
 
@@ -3148,6 +3156,189 @@ def _apply_schema_defaults(
             continue
         clean[name] = _schema_scalar_to_string(field["default"], field_name=name)
     return clean
+
+
+# ---------------------------------------------------------------------------
+# Formula & rollup fields (plan/formula-rollup-spec.md): derived values,
+# MATERIALIZED at this storage layer so every writer (HTTP, daemon, seeds,
+# imports) keeps them consistent and every surface reads plain stored values.
+# Formulas recompute on writes of the record itself; rollups recompute on
+# writes/deletes in the source collection (single-hop, thread-local guarded).
+# A broken formula stores "" and never fails the write -- derived values are
+# non-authoritative, the opposite posture of pre-write hooks.
+# ---------------------------------------------------------------------------
+
+_ROLLUP_LOCAL = threading.local()
+
+
+def _apply_computed_fields(
+    collection: str,
+    record: dict[str, str],
+    *,
+    base_dir: Path | str,
+    roots: Iterable[Path] | None,
+) -> dict[str, str]:
+    """Recompute this record's own derived values: rollups first (so a parent
+    created/edited after its children exist is immediately correct), then
+    formulas (which may reference the fresh rollup values)."""
+    fields = _schema_fields(collection, base_dir=base_dir, roots=roots)
+    if not fields:
+        return record
+    rollups = object_computed.rollup_fields(fields)
+    formulas = object_computed.formula_fields(fields)
+    if not rollups and not formulas:
+        return record
+    out = dict(record)
+    for field in rollups:
+        spec = field["rollup"]
+        try:
+            children = [
+                row
+                for row in read_collection_records(
+                    spec["collection"], base_dir=base_dir, roots=roots
+                )
+                if row.get(spec["fk_field"]) == out.get("id")
+            ]
+        except (object_collections.CollectionNotFoundError, OSError, ValueError):
+            continue
+        out[field["name"]] = object_computed.compute_rollup(spec, children)
+    return object_computed.apply_formulas(fields, out)
+
+
+def _rollup_parents_for_source(
+    source_collection: str,
+    *,
+    base_dir: Path | str,
+    roots: Iterable[Path] | None,
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    """(parent_collection, rollup_fields) pairs whose rollups aggregate the
+    given source collection. Declared schemas only (the schemas dir); a
+    collection cannot roll up itself (v1 loop guard)."""
+    parents: list[tuple[str, list[dict[str, Any]]]] = []
+    schema_dir = Path(base_dir) / "schemas"
+    try:
+        names = sorted(path.stem for path in schema_dir.glob("*.json"))
+    except OSError:
+        return parents
+    for name in names:
+        if name == source_collection:
+            continue
+        fields = _schema_fields(name, base_dir=base_dir, roots=roots)
+        specs = [
+            field
+            for field in object_computed.rollup_fields(fields)
+            if field["rollup"]["collection"] == source_collection
+        ]
+        if specs:
+            parents.append((name, specs))
+    return parents
+
+
+def _recompute_rollups_for_source(
+    source_collection: str,
+    affected_rows: list[dict[str, str] | None],
+    *,
+    base_dir: Path | str,
+    roots: Iterable[Path] | None,
+) -> None:
+    """After a write/delete in source_collection, bring affected parents'
+    rollup fields current. Single-hop: the parent update this performs never
+    triggers further rollup scans (thread-local guard). Best-effort by design:
+    a failed parent refresh must never fail the child's own write."""
+    if getattr(_ROLLUP_LOCAL, "active", False):
+        return
+    parents = _rollup_parents_for_source(source_collection, base_dir=base_dir, roots=roots)
+    if not parents:
+        return
+    _ROLLUP_LOCAL.active = True
+    try:
+        for parent_collection, specs in parents:
+            fk_values: set[str] = set()
+            for field in specs:
+                fk_field = field["rollup"]["fk_field"]
+                for row in affected_rows:
+                    if row and row.get(fk_field):
+                        fk_values.add(str(row[fk_field]))
+            if not fk_values:
+                continue
+            try:
+                source_rows = read_collection_records(
+                    source_collection, base_dir=base_dir, roots=roots
+                )
+            except (object_collections.CollectionNotFoundError, OSError, ValueError):
+                continue
+            for parent_id in sorted(fk_values):
+                try:
+                    parent = get_collection_record(
+                        parent_collection, parent_id, base_dir=base_dir, roots=roots
+                    )
+                except (RecordNotFoundError, object_collections.CollectionNotFoundError,
+                        InvalidRecordIdError, OSError, ValueError):
+                    continue
+                changes: dict[str, str] = {}
+                for field in specs:
+                    spec = field["rollup"]
+                    children = [
+                        row for row in source_rows if row.get(spec["fk_field"]) == parent_id
+                    ]
+                    changes[field["name"]] = object_computed.compute_rollup(spec, children)
+                if all(str(parent.get(k, "")) == v for k, v in changes.items()):
+                    continue
+                try:
+                    update_collection_record(
+                        parent_collection,
+                        parent_id,
+                        changes,
+                        base_dir=base_dir,
+                        roots=roots,
+                        actor="system:rollup",
+                        allow_computed_submission=True,
+                    )
+                except Exception:
+                    continue
+    finally:
+        _ROLLUP_LOCAL.active = False
+
+
+def recompute_computed_fields(
+    collection: str,
+    *,
+    base_dir: Path | str = DEFAULT_DATA_DIR,
+    roots: Iterable[Path] | None = None,
+) -> int:
+    """Backfill/refresh every derived value in a collection; returns how many
+    records changed. For definition changes and first adoption -- called
+    explicitly (install migration, admin action, cron), never automatically in
+    a runtime loop (docs: no runtime object rewriting; same spirit for data)."""
+    fields = _schema_fields(collection, base_dir=base_dir, roots=roots)
+    computed_names = {
+        field["name"]
+        for field in object_computed.rollup_fields(fields)
+        + object_computed.formula_fields(fields)
+    }
+    if not computed_names:
+        return 0
+    changed = 0
+    for row in read_collection_records(collection, base_dir=base_dir, roots=roots):
+        desired = _apply_computed_fields(collection, dict(row), base_dir=base_dir, roots=roots)
+        delta = {
+            name: desired.get(name, "")
+            for name in computed_names
+            if str(row.get(name, "")) != str(desired.get(name, ""))
+        }
+        if not delta:
+            continue
+        update_collection_record(
+            collection,
+            row["id"],
+            delta,
+            base_dir=base_dir,
+            roots=roots,
+            actor="system:recompute",
+            allow_computed_submission=True,
+        )
+        changed += 1
+    return changed
 
 
 def _validate_field_transitions(

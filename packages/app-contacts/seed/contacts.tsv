@@ -1,1 +1,1 @@
-id	first_name	last_name	email	phone	organization_id	project_id	tags	notes	owner_id
+id	first_name	last_name	full_name	email	phone	job_title	organization_id	project_id	lead_status	tags	notes	created_at	owner_id

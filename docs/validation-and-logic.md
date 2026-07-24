@@ -120,15 +120,38 @@ This is the same family as Salesforce flows/validation-rules, Hasura event
 triggers, and Directus Flows — declarative automation over a data store, here
 on plain-text records.
 
-### Where it's heading
+### Formula & rollup fields — shipped
 
-The single highest-leverage addition is **formula / rollup fields** — declare
-`total_cents = sum(order_lines.amount_cents)` or `full_name = first + " " +
-last` in the schema and have the platform derive it everywhere. It composes
-with display, validation, and business logic at once — the reason Airtable and
-Salesforce feel like magic. **Declarative validation rules** (cross-field
-formula + message) are the natural second, closing the cross-field gap and
-adding business logic in the same stroke.
+The spreadsheet feature, on collections. A `type: computed` field declares
+either a **formula** over sibling fields or a **rollup** over a child
+collection:
+
+```json
+{"name": "full_name", "type": "computed",
+ "formula": "first_name + \" \" + last_name"}
+
+{"name": "debit_total_cents", "type": "computed",
+ "rollup": {"collection": "fin_journal_lines", "fk_field": "journal_id",
+            "op": "sum", "field": "debit_cents"}}
+```
+
+Values are **materialized on write at the storage layer** — stored in the TSV,
+recomputed whenever inputs change (formulas on writes of the record itself;
+rollups when source-collection records are created, updated, or deleted —
+single-hop, loop-guarded). Because the value is stored, every surface works
+with zero changes: lists, tables, detail, search, `field=value` filters, sort,
+CSV, backups — and **realtime falls out free**: edit a journal line and the
+journal's totals update live in every open browser. `rollup.op` is
+`sum | count | min | max | avg`, with an optional equality `where`. The
+formula language is a tiny safe expression grammar (fields, strings, numbers,
+`+ - * /`, parens — never Python eval). A broken formula stores an empty value
+and never fails the write — derived values are non-authoritative, the opposite
+posture of hooks. Definition changes are backfilled explicitly with
+`object_records.recompute_computed_fields(collection)` (install step, admin
+action, or cron — never a runtime loop).
+
+**Declarative validation rules** (cross-field formula + message) remain the
+natural next sugar over the hook.
 
 ## Related
 

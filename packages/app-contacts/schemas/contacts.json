@@ -1,7 +1,7 @@
 {
   "name": "contacts",
   "title": "Contacts",
-  "version": 5,
+  "version": 6,
   "description": "People: the core CRM record.",
   "fields": [
     {
@@ -24,6 +24,12 @@
       "validation": {
         "max_length": 80
       }
+    },
+    {
+      "name": "full_name",
+      "type": "computed",
+      "label": "Name",
+      "formula": "first_name + \" \" + last_name"
     },
     {
       "name": "email",

@@ -105,8 +105,8 @@ def test_schema_json_files_are_valid_and_versioned():
             assert payload["views"]["list_mode"] == "tree"
         elif name == "fin_journals":
             # generated_from (61) + entity_id (65) + hooks.before_write (v4:
-            # balance enforcement at post -- see hook/fin_journals.py)
-            assert payload["version"] == 4
+            # balance enforcement) + debit/credit_total_cents rollups (v5)
+            assert payload["version"] == 5
             assert payload["hooks"] == {"before_write": "hook_fin_journals"}
             assert payload["views"]["list_mode"] == "table"
         else:
@@ -121,7 +121,19 @@ def test_no_money_field_uses_a_float_or_currency_type():
             field_name = field["name"]
             field_type = field.get("type")
             if "_cents" in field_name:
-                assert field_type == "integer", f"{name}.{field_name} must be type integer, got {field_type!r}"
+                # A derived money field (rollup sum of integer-cents inputs)
+                # is `computed`; every stored/writable money field stays
+                # integer. Both keep money out of float-shaped types.
+                assert field_type in ("integer", "computed"), (
+                    f"{name}.{field_name} must be integer (or computed over "
+                    f"integers), got {field_type!r}"
+                )
+                if field_type == "computed":
+                    rollup = field.get("rollup") or {}
+                    assert rollup.get("field", "").endswith("_cents"), (
+                        f"{name}.{field_name} computed money must derive from "
+                        f"a _cents field"
+                    )
             assert field_type not in _FLOAT_MONEY_TYPES, (
                 f"{name}.{field_name} uses a float-shaped type {field_type!r}"
             )

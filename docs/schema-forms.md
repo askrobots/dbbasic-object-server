@@ -155,6 +155,13 @@ rollback like source code:
   `views.list_fields`. Collections without a `search` section never
   appear in search results. Search runs inside the permission engine, so
   row filters and field permissions bound what any caller can find.
+- `formula` / `rollup` (on a `type: computed` field) — derived values,
+  materialized on write: a formula computes from sibling fields
+  (`"first_name + \" \" + last_name"`); a rollup aggregates a child
+  collection (`{"collection": "fin_journal_lines", "fk_field": "journal_id",
+  "op": "sum", "field": "debit_cents"}`). Stored like any field, so every
+  view/filter/sort sees them; kept current by the write path. See
+  [`validation-and-logic.md`](validation-and-logic.md).
 - `capabilities` — generic per-collection *behaviors* on top of this display
   layer: `{"comments": true}`, `{"attachments": true}`, `{"shareable": true}`
   grow a comment thread, attachment list, and owner-checked sharing on the
