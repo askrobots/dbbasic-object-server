@@ -38,6 +38,27 @@
       "actions": ["execute"],
       "object_id": "action_import_bank_csv",
       "reason": "importing a statement is an ordinary operator verb; the object requires a signed-in identity and verifies the bank account belongs to the caller"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "action_resolve_bank_line",
+      "reason": "resolving a line as a fee, interest, transfer or NSF is an ordinary operator verb; the object checks ownership of the line (and of any counterpart account) and composes through the shared journal composer, which is idempotent by provenance"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "system_bank_matcher",
+      "reason": "the matcher only ever writes SUGGESTIONS onto the caller's own unmatched lines (and auto-confirms solely at the configured tier), so running it is safe for any signed-in owner as well as the scheduler"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_reconcile",
+      "reason": "page objects are public execute like every other site_* page (see packages/app-finance's site_trial_balance rule); the object itself gates all data on a signed-in identity and scopes every read to the caller's own bank accounts and lines, so an anonymous or cross-owner request never sees another owner's reconciliation"
     }
   ]
 }

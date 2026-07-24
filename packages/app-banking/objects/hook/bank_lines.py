@@ -1,4 +1,15 @@
-"""Pre-write hook for bank_lines: the duplicate gate on imported evidence.
+"""Pre-write hook for bank_lines: evidence stays evidence.
+
+Two jobs. On CREATE, the duplicate gate. On UPDATE, the rule that makes
+this collection an anti-fraud control rather than just another table:
+**the bank's words are immutable.** posted_on, amount_cents, description,
+raw and the identity fields can never be edited -- a correction comes from
+re-importing a corrected statement, never from reshaping the evidence to
+agree with the books. What an operator MAY change is their own
+reconciliation work: match_status, matched_to, resolved_as, suggestions.
+
+Also gated: claiming a line is `matched` without saying what it matched is
+a status with no substance, so matched_to must be present and well-formed.
 
 A statement line must land exactly once per bank account. The bank's own
 transaction id (OFX FITID) is the strongest key; CSV exports rarely carry
@@ -23,8 +34,36 @@ def _base_dir():
     return os.environ.get("DBBASIC_DATA_DIR", "data")
 
 
+def _check_update(request):
+    existing = request.get("existing") or {}
+    changes = request.get("changes") or {}
+
+    touched = object_banking.evidence_changes(existing, changes)
+    if touched:
+        return {
+            "error": ("A bank line records what the bank said and cannot be edited "
+                      f"({', '.join(touched)}). Import a corrected statement instead -- "
+                      "reconciliation means explaining the difference between the bank "
+                      "and the books, never editing one to match the other."),
+            "status": 409,
+        }
+
+    if changes.get("match_status") == "matched":
+        target = str(changes.get("matched_to") or existing.get("matched_to") or "").strip()
+        if not target:
+            return {"error": "Set matched_to (e.g. payments/<id>) when marking a line matched.",
+                    "status": 400}
+        if target.count("/") != 1 or not all(part.strip() for part in target.split("/")):
+            return {"error": f"matched_to must look like collection/record_id, got {target!r}.",
+                    "status": 400}
+    return None
+
+
 def BEFORE_WRITE(request):
-    if request.get("action") != "create":
+    action = request.get("action")
+    if action == "update":
+        return _check_update(request)
+    if action != "create":
         return None
     record = request.get("record") or {}
 

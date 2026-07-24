@@ -131,6 +131,56 @@ Format per decision: **Decision · Rationale · Applies to · Status.**
   fin_recurring_runner; every future composer.
 - **Status:** doctrine, shipped with the books spine.
 
+### 8. Independent evidence is never edited to agree with our records
+
+- **Decision:** Records authored by an outside party — imported bank
+  statement lines today, provider payout feeds and scanned documents next —
+  are stored append-only with the original text preserved verbatim, and
+  their factual fields are immutable after the write. What an operator may
+  add is their *own* work about that evidence: what it matched, how it was
+  resolved, a correction recorded as a new record. Corrections to the
+  evidence itself come from re-importing a corrected file.
+- **Rationale:** The reason comparing our books to a bank statement is the
+  strongest practical control is that the bank's copy was written by someone
+  with no stake in our numbers. The moment a line can be edited, that
+  independence evaporates and the check becomes self-certification —
+  reconciliation degenerates into making the two sides match rather than
+  explaining why they differ. This is also why the *act* of reconciling is
+  an ordinary attributed update rather than a silent background match:
+  reconciliation performed invisibly by the same hands that move the money
+  is the classic embezzlement pattern, and an attributed change log makes
+  who-decided-what structural instead of procedural.
+- **Applies to:** `bank_lines` (hook-enforced immutability of
+  posted_on/amount/description/raw/identity fields), imported statement
+  provenance (`bank_statement_imports`); the same posture is required of
+  scanned-document intake and provider payout imports when they land.
+- **Corollary — a check that cannot run must say so:** an import records
+  which self-checks *ran*, not only which passed, so a statement that
+  carried no balances never reads as trustworthy as one whose arithmetic
+  was verified. Silent skipping is how controls rot.
+- **Status:** doctrine, shipped with bank import.
+
+### 9. Reactions belong to the write path; storage-level writers must say so
+
+- **Decision:** Event handlers dispatch on the HTTP write path only. An
+  object that writes through `object_records` directly (a runner, an action)
+  does **not** trigger `HANDLES` reactions, so if such a write needs its
+  reaction it must perform it explicitly — using the *shared* primitive with
+  the *same* provenance marker the handler would have used, never a private
+  copy of the logic.
+- **Rationale:** Sharing the marker makes the two paths idempotent against
+  each other: whichever runs first wins, the other is a no-op. Copying the
+  logic instead would fork the rule and guarantee eventual divergence.
+- **Instances so far (counting toward #4):** (1) `action_apply_count`
+  composes its own inventory-variance journal; (2) `action_resolve_bank_line`
+  composes the NSF bounce reversal under `payments/{id}:bounced`, the marker
+  `system_books` also uses.
+- **At the third instance, extract instead of working around:** the real fix
+  is a daemon pass that dispatches handlers from the record-change log — the
+  same shape `process_notifications` already uses to avoid depending on
+  synchronous dispatch. Do not write a third workaround.
+- **Status:** observed twice; extraction pending the third.
+
 ---
 
 ## How to use this

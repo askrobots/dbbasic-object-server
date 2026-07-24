@@ -148,6 +148,38 @@ doctrine-#4 extraction: every generated journal now goes through
 verify-then-post), and the payment/refund/recurring/reversal composers
 shrank onto it.
 
+## Worked example 6: bank reconciliation (evidence, not data entry)
+
+Comparing the books to a bank statement is the strongest practical control a
+small business has, and the reason is not arithmetic — it is that the bank's
+copy was written by someone with no stake in our numbers. Every design
+choice follows from protecting that independence (logic-decisions #8).
+
+1. **Imported lines are append-only and keep their original text** in `raw`;
+   parsed fields are a view of it. A pre-write hook makes the factual fields
+   immutable on update — corrections come from re-importing a corrected
+   statement, never from editing a line to agree with the books.
+2. **The statement checks itself.** Opening + lines = closing (tie-out), and
+   this opening = the last statement's closing (continuity). Both run at
+   import and *set* the import's status; a truncated or edited file fails
+   arithmetic. The flags record which checks **ran**, so a balance-less CSV
+   never reads as trustworthy as a verified one.
+3. **Reading a bank's format is data**, not code: a saved column map,
+   authored once with AI help and executed deterministically thereafter. AI
+   at configuration time, code at run time — a control cannot be
+   nondeterministic.
+4. **The matcher proposes; a person disposes.** Suggestions are derived and
+   non-authoritative; confirming is an ordinary attributed update, so the
+   change log names who reconciled what. Only a two-signal match
+   (reference *and* amount) is auto-confirmable, and even that is
+   configurable to off.
+5. **The unmatched tail is where the business logic lives**: fees, interest,
+   own-account transfers, NSF bounces — each a resolution verb composing a
+   posted journal through the shared composer, stamped with the line's id so
+   resolving twice books once. These are exactly the entries small books
+   never record, which is why their cash balance drifts until they stop
+   reconciling at all.
+
 ## State-dependent behavior generally
 
 `transitions` + `when` guards define the machine; the board's drag is its UI;

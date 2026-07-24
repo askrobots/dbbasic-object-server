@@ -333,3 +333,311 @@ def run_gates(lines: list[dict], *, bank_account_id: str,
 
 def flags_json(gates: dict) -> str:
     return json.dumps(gates.get("checks", {}), sort_keys=True)
+
+
+# --- matching ---------------------------------------------------------------
+#
+# Matching is DERIVED and non-authoritative: the matcher proposes, a human
+# (or an explicitly configured auto-match tier) disposes. That split is the
+# control -- reconciliation performed invisibly by whoever moves the money
+# is the classic fraud hole, so the act of confirming is an ordinary
+# attributed update and shows up in the change log with a name on it.
+
+# Fields of a bank line that are EVIDENCE: what the bank said, verbatim.
+# An update may never touch them -- corrections come from re-importing a
+# corrected statement, not from editing the record to agree with the books.
+EVIDENCE_FIELDS = ("import_id", "bank_account_id", "posted_on", "amount_cents",
+                   "description", "external_id", "line_hash", "raw")
+
+
+def _day_gap(left: str, right: str) -> int | None:
+    try:
+        a = datetime.strptime(str(left)[:10], "%Y-%m-%d").date()
+        b = datetime.strptime(str(right)[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+    return abs((a - b).days)
+
+
+def _reference_hit(description: str, reference: str) -> bool:
+    """Does the statement text carry this record's reference?
+
+    Banks mangle memos (case, padding, truncation), so compare
+    case-insensitively on collapsed alphanumerics. A reference shorter than
+    four characters is too weak to assert identity on -- "12" appears in
+    half of all descriptions.
+    """
+    ref = "".join(ch for ch in str(reference or "") if ch.isalnum()).upper()
+    if len(ref) < 4:
+        return False
+    haystack = "".join(ch for ch in str(description or "") if ch.isalnum()).upper()
+    return ref in haystack
+
+
+def candidate_matches(line: dict, candidates: Iterable[dict], *,
+                      window_days: int = 5, max_combination: int = 3) -> list[dict]:
+    """Propose book-side records for one bank line, best first.
+
+    `candidates` are dicts of {ref, amount_cents, date, reference} where
+    amount_cents is already expressed in the LINE's sign convention (money
+    into the account positive) and `ref` is "collection/id".
+
+    Tiers, strongest to weakest:
+      1. the record's reference appears in the statement text AND the
+         amount agrees -- two independent signals, safe to auto-confirm
+      2. exact amount within the date window -- one signal; plausible but a
+         same-priced invoice from another customer looks identical
+      3. a same-window combination of 2..max_combination records summing to
+         the line -- the batched deposit case; always suggestion-only
+    """
+    amount = int(line.get("amount_cents") or 0)
+    posted_on = str(line.get("posted_on") or "")
+    description = str(line.get("description") or "")
+
+    near = []
+    for cand in candidates:
+        gap = _day_gap(posted_on, cand.get("date"))
+        if gap is None or gap > window_days:
+            continue
+        near.append((gap, cand))
+
+    proposals = []
+    for gap, cand in near:
+        same_amount = int(cand.get("amount_cents") or 0) == amount
+        if same_amount and _reference_hit(description, cand.get("reference")):
+            proposals.append({
+                "tier": 1, "refs": [cand["ref"]], "day_gap": gap,
+                "why": f"reference {cand.get('reference')} appears in the statement text "
+                       f"and the amount matches exactly",
+            })
+        elif same_amount:
+            proposals.append({
+                "tier": 2, "refs": [cand["ref"]], "day_gap": gap,
+                "why": f"exact amount within {gap} day(s)",
+            })
+
+    if not any(p["tier"] == 1 for p in proposals) and max_combination >= 2:
+        proposals.extend(_combination_matches(amount, near, max_combination))
+
+    proposals.sort(key=lambda p: (p["tier"], p.get("day_gap", 99), len(p["refs"])))
+    return proposals
+
+
+def _combination_matches(amount: int, near: list, max_combination: int) -> list[dict]:
+    """Batched-deposit case: several book records banked as one line.
+
+    Bounded on purpose (few candidates, small k): an unbounded subset search
+    over a busy account would both hang and produce coincidences that are
+    worse than no suggestion at all.
+    """
+    from itertools import combinations
+
+    pool = [c for _, c in near][:12]
+    found = []
+    for size in range(2, min(max_combination, len(pool)) + 1):
+        for combo in combinations(pool, size):
+            if sum(int(c.get("amount_cents") or 0) for c in combo) != amount:
+                continue
+            found.append({
+                "tier": 3,
+                "refs": [c["ref"] for c in combo],
+                "day_gap": 0,
+                "why": f"{size} records sum to this line (batched deposit)",
+            })
+            if len(found) >= 3:      # a handful of options, not a catalogue
+                return found
+    return found
+
+
+def evidence_changes(existing: dict, changes: dict) -> list[str]:
+    """Which evidence fields an update is trying to alter (should be none)."""
+    touched = []
+    for field in EVIDENCE_FIELDS:
+        if field not in changes:
+            continue
+        if str(changes.get(field) or "") != str(existing.get(field) or ""):
+            touched.append(field)
+    return touched
+
+
+# --- the reconciliation statement --------------------------------------------
+#
+# plan/bank-import-reconciliation-spec.md section 6: "bank closing balance
+# (last accepted import) vs. book cash balance (fin account), reconciled by:
+# matched total, outstanding timing items, unresolved tail." Nothing here
+# writes anything -- it is a fold over already-stored state, the same
+# posture as object_finance.trial_balance().
+
+ACCOUNTS_COLLECTION = "bank_accounts"
+JOURNALS_COLLECTION = "fin_journals"
+JOURNAL_LINES_COLLECTION = "fin_journal_lines"
+
+_STATUS_POSTED = "posted"
+
+ASSURANCE_VERIFIED = "verified"
+ASSURANCE_UNVERIFIED = "unverified"
+ASSURANCE_FLAGGED = "flagged"
+
+
+def _safe_read(collection: str, base_dir: Path | str) -> list[dict]:
+    """read_collection_records, folding a missing/uninstalled collection to
+    an empty list instead of raising -- this report must degrade to "not
+    enough data" rather than a 500 when a dependent package (app-finance)
+    or a not-yet-imported account has nothing on file yet."""
+    try:
+        return object_records.read_collection_records(collection, base_dir=base_dir)
+    except Exception:
+        return []
+
+
+def _latest_by_period_end(rows: list[dict]) -> dict | None:
+    return max(rows, key=lambda r: (r.get("period_end") or "", r.get("created_at") or ""),
+               default=None)
+
+
+def _assurance_from_flags(flags_raw: Any) -> str:
+    """verified/unverified/flagged from one import's flags JSON (the
+    `checks` block run_gates() produces).
+
+    "flagged" is deliberately keyed on ANY failed check (tie_out or
+    continuity), not just tie_out, because a broken chain of statements is
+    exactly as much of an anti-fraud gap as a broken statement -- both mean
+    the evidence trail cannot be trusted yet. "unverified" is the honest
+    middle ground for a balance-less CSV: nothing failed because nothing
+    that could fail was even run.
+    """
+    try:
+        checks = json.loads(flags_raw or "{}")
+    except (ValueError, TypeError):
+        checks = {}
+    if not isinstance(checks, dict):
+        checks = {}
+    failed = any(isinstance(c, dict) and c.get("ran") and not c.get("passed")
+                 for c in checks.values())
+    if failed:
+        return ASSURANCE_FLAGGED
+    tie_out = checks.get("tie_out")
+    if isinstance(tie_out, dict) and tie_out.get("ran") and tie_out.get("passed"):
+        return ASSURANCE_VERIFIED
+    return ASSURANCE_UNVERIFIED
+
+
+def reconciliation(bank_account_id: str, *, base_dir: Path | str = DEFAULT_DATA_DIR,
+                   as_of: str = "") -> dict:
+    """The classic bank reconciliation statement for one account.
+
+    Two independent truths are folded and compared, never merged: the
+    bank's (bank_statement_imports/bank_lines, imported evidence) and the
+    books' (fin_journals/fin_journal_lines through the account's own
+    fin_account_id). bank_closing_cents deliberately comes from the latest
+    ACCEPTED import only -- an import whose own tie-out either passed or
+    was never claimed to run -- because a statement that failed its own
+    arithmetic check is not something to build a "you're reconciled" claim
+    on top of. `assurance`, by contrast, is read off the single most
+    recent import regardless of its status: a fresh statement that just
+    failed tie-out is exactly the thing this view exists to surface, even
+    while the number it displays quietly falls back to the last
+    trustworthy one.
+
+    The tie: once every bank line is either matched to a book record or
+    resolved (composing its own journal via action_resolve_bank_line),
+    bank_closing_cents - book_balance_cents should equal exactly the sum
+    of lines resolved as "timing" (on the statement, deliberately never
+    booked -- see object_banking module docstring / the resolution-verbs
+    tests). Any remaining unmatched or merely-suggested line is slack in
+    that equation, which is what `reconciled` actually tests: it is not
+    "do the two numbers match", it is "do they match FOR AN EXPLAINED
+    REASON".
+
+    as_of, when given (ISO date), scopes the statement to that date:
+    imports with a period_end after it and posted journals dated after it
+    are excluded, so a caller can ask "were we reconciled as of last
+    month-end" without waiting for a fresh import.
+
+    Never raises -- a bank account that does not exist, one with no
+    fin_account_id set, or collections that are not installed all fold to
+    a dict of mostly-None fields. This is a report a caller may render for
+    a not-yet-configured account, not a gate.
+    """
+    accounts = _safe_read(ACCOUNTS_COLLECTION, base_dir)
+    account = next((a for a in accounts if a.get("id") == bank_account_id), None)
+    fin_account_id = str((account or {}).get("fin_account_id") or "")
+
+    imports = [r for r in _safe_read(IMPORTS_COLLECTION, base_dir)
+               if r.get("bank_account_id") == bank_account_id
+               and (r.get("period_end") or "")
+               and (not as_of or (r.get("period_end") or "") <= as_of)]
+    latest_import = _latest_by_period_end(imports)
+    latest_accepted = _latest_by_period_end(
+        [r for r in imports if r.get("status") == STATUS_ACCEPTED])
+
+    bank_closing_cents = None
+    bank_statement_date = None
+    if latest_accepted is not None and is_present(latest_accepted.get("closing_balance_cents")):
+        bank_closing_cents = int(latest_accepted["closing_balance_cents"])
+        bank_statement_date = latest_accepted.get("period_end") or ""
+
+    assurance = _assurance_from_flags(latest_import.get("flags")) if latest_import else None
+
+    book_balance_cents = None
+    if fin_account_id:
+        posted_ids = {
+            j.get("id") for j in _safe_read(JOURNALS_COLLECTION, base_dir)
+            if j.get("status") == _STATUS_POSTED
+            and (not as_of or (j.get("date") or "") <= as_of)
+        }
+        debit_total = credit_total = 0
+        for line in _safe_read(JOURNAL_LINES_COLLECTION, base_dir):
+            if line.get("journal_id") not in posted_ids or line.get("account_id") != fin_account_id:
+                continue
+            debit_total += int(line.get("debit_cents") or 0)
+            credit_total += int(line.get("credit_cents") or 0)
+        # An asset account: debits increase the balance, credits decrease
+        # it -- the same convention object_finance.py uses throughout.
+        book_balance_cents = debit_total - credit_total
+
+    matched_cents = timing_cents = unmatched_cents = 0
+    unmatched_count = timing_count = suggested_count = 0
+    for row in _safe_read(LINES_COLLECTION, base_dir):
+        if row.get("bank_account_id") != bank_account_id:
+            continue
+        amount = int(row.get("amount_cents") or 0)
+        status = row.get("match_status") or "unmatched"
+        if status == "matched":
+            matched_cents += amount
+        elif status == "resolved":
+            if (row.get("resolved_as") or "") == "timing":
+                timing_cents += amount
+                timing_count += 1
+            else:
+                matched_cents += amount
+        else:
+            # unmatched and suggested are both still an open tail -- a
+            # suggestion is the matcher's opinion, not a human decision
+            # (object_banking module docstring), so it has not yet earned
+            # its way into matched_cents.
+            unmatched_cents += amount
+            if status == "suggested":
+                suggested_count += 1
+            else:
+                unmatched_count += 1
+
+    difference_cents = None
+    if bank_closing_cents is not None and book_balance_cents is not None:
+        difference_cents = bank_closing_cents - book_balance_cents
+    reconciled = difference_cents is not None and difference_cents == timing_cents
+
+    return {
+        "bank_closing_cents": bank_closing_cents,
+        "bank_statement_date": bank_statement_date,
+        "book_balance_cents": book_balance_cents,
+        "matched_cents": matched_cents,
+        "unmatched_cents": unmatched_cents,
+        "timing_cents": timing_cents,
+        "unmatched_count": unmatched_count,
+        "timing_count": timing_count,
+        "suggested_count": suggested_count,
+        "difference_cents": difference_cents,
+        "reconciled": reconciled,
+        "assurance": assurance,
+    }

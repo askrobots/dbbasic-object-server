@@ -1,12 +1,14 @@
 {
   "id": "app-banking",
   "name": "Banking",
-  "version": "0.1.0",
-  "description": "Bank statement import and reconciliation -- the #1 practical anti-fraud control, and the one place a third party's independent record enters the system (plan/bank-import-reconciliation-spec.md). The posture is evidence handling, not ETL: bank_lines are append-only, keep their original row verbatim in `raw`, and are never hand-edited, so nobody can quietly reshape the evidence to agree with the books. Imports check THEMSELVES -- a statement carries its own checksum, so tie-out (opening + lines == closing) and continuity (this opening == the last statement's closing) run at import time and set the import's status; flagged imports still store their lines because hiding a truncated statement is exactly the failure this control catches, and the flags record which checks RAN so a balance-less CSV never reads as trustworthy as a tied-out one. Dedup is by the bank's own transaction id when the format has one (OFX FITID), else an ordinal-disambiguated content hash so genuine same-day twins both land while a re-imported file adds nothing; file-level idempotency is by sha256 of the statement itself. Reading a bank's export is DATA (bank_import_profiles.column_map), authored once with AI help and executed deterministically thereafter -- an AI that re-reads statements every month is nondeterministic and unauditable, the opposite of a control. Pure parsing/hashing/gate logic lives in object_banking.py at the repository root, a plain importable library like object_stock.py and object_finance.py, not a registered object. This slice ships the evidence layer (collections, the CSV importer, the duplicate gate); the matcher, the resolution verbs that compose journals through object_finance.compose_posted_journal, and the reconciliation statement view are the next slices of the same spec.",
+  "version": "0.2.0",
+  "description": "Bank statement import and reconciliation -- the #1 practical anti-fraud control, and the one place a third party's independent record enters the system (plan/bank-import-reconciliation-spec.md). The posture is evidence handling, not ETL: bank_lines are append-only, keep their original row verbatim in `raw`, and are never hand-edited, so nobody can quietly reshape the evidence to agree with the books. Imports check THEMSELVES -- a statement carries its own checksum, so tie-out (opening + lines == closing) and continuity (this opening == the last statement's closing) run at import time and set the import's status; flagged imports still store their lines because hiding a truncated statement is exactly the failure this control catches, and the flags record which checks RAN so a balance-less CSV never reads as trustworthy as a tied-out one. Dedup is by the bank's own transaction id when the format has one (OFX FITID), else an ordinal-disambiguated content hash so genuine same-day twins both land while a re-imported file adds nothing; file-level idempotency is by sha256 of the statement itself. Reading a bank's export is DATA (bank_import_profiles.column_map), authored once with AI help and executed deterministically thereafter -- an AI that re-reads statements every month is nondeterministic and unauditable, the opposite of a control. Pure parsing/hashing/gate logic lives in object_banking.py at the repository root, a plain importable library like object_stock.py and object_finance.py, not a registered object. 0.1.0 shipped the evidence layer (collections, the CSV importer, the duplicate gate). 0.2.0 adds the reconciliation work itself: system_bank_matcher proposes book-side records for unmatched lines in tiers (reference+amount, exact amount in a date window, batched-deposit combinations) but only ever SUGGESTS above the configured auto-match tier, because confirming a match must be an ordinary attributed update -- reconciliation performed invisibly by whoever moves the money is the classic fraud hole. hook_bank_lines additionally makes the evidence immutable on update: what the bank said (posted_on, amount, description, raw, identity fields) can never be edited, only the operator's own reconciliation work can. action_resolve_bank_line books the unmatched tail -- bank fees and interest (entries small books routinely never record, which is why their cash drifts until they stop reconciling), own-account transfers, and NSF bounces -- each through object_finance.compose_posted_journal stamped generated_from bank_lines/{id} so resolving twice composes once. The reconciliation statement view is the remaining slice.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
-  "dependencies": ["app-finance"],
+  "dependencies": [
+    "app-finance"
+  ],
   "objects": [
     {
       "id": "hook_bank_lines",
@@ -15,17 +17,48 @@
     {
       "id": "action_import_bank_csv",
       "path": "objects/action/import_bank_csv.py"
+    },
+    {
+      "id": "system_bank_matcher",
+      "path": "objects/system/bank_matcher.py"
+    },
+    {
+      "id": "action_resolve_bank_line",
+      "path": "objects/action/resolve_bank_line.py"
+    },
+    {
+      "id": "site_reconcile",
+      "path": "objects/site/reconcile.py"
     }
   ],
   "schemas": [
-    {"collection": "bank_accounts", "path": "schemas/bank_accounts.json"},
-    {"collection": "bank_import_profiles", "path": "schemas/bank_import_profiles.json"},
-    {"collection": "bank_statement_imports", "path": "schemas/bank_statement_imports.json"},
-    {"collection": "bank_lines", "path": "schemas/bank_lines.json"}
+    {
+      "collection": "bank_accounts",
+      "path": "schemas/bank_accounts.json"
+    },
+    {
+      "collection": "bank_import_profiles",
+      "path": "schemas/bank_import_profiles.json"
+    },
+    {
+      "collection": "bank_statement_imports",
+      "path": "schemas/bank_statement_imports.json"
+    },
+    {
+      "collection": "bank_lines",
+      "path": "schemas/bank_lines.json"
+    }
   ],
   "permissions": [
-    {"path": "permissions/rules.json"}
+    {
+      "path": "permissions/rules.json"
+    }
   ],
-  "seed": [],
+  "seed": [
+    {
+      "collection": "site_routes",
+      "path": "seed/site_routes.tsv"
+    }
+  ],
   "migrations": []
 }
