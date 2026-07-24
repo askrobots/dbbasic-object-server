@@ -79,13 +79,17 @@ RUNTIME = python_object_runtime.PythonObjectRuntime()
 
 
 def fire(collection, record_id, action):
+    # Mirror the REAL dispatcher payload: event name uses the participle,
+    # the action field carries the RAW verb ("create") -- the mismatch that
+    # slipped past the first version of these tests and skipped in prod.
+    raw = {"created": "create", "updated": "update", "deleted": "delete"}[action]
     return object_execution.execute_object(
         RUNTIME,
         object_execution.ObjectExecutionRequest(
             "system_books", method="EVENT",
             payload={"event": f"{collection}.record.{action}",
                      "collection": collection, "record_id": record_id,
-                     "action": action},
+                     "action": raw},
         ),
         roots=[PACKAGES / "app-payments" / "objects"],
     )

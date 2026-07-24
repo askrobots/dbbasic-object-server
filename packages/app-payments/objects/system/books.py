@@ -142,7 +142,10 @@ def EVENT(request):
     raises into the dispatcher."""
     collection = str(request.get("collection") or "")
     record_id = str(request.get("record_id") or "")
+    # The dispatcher's payload carries the RAW action ("create"); the event
+    # NAME uses the participle ("...record.created"). Accept both.
     action = str(request.get("action") or "")
+    action = {"create": "created", "update": "updated", "delete": "deleted"}.get(action, action)
     if not record_id:
         return {"ok": True, "skipped": "no record id"}
 
