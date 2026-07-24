@@ -34,6 +34,7 @@ def test_manifest_drops_bespoke_journal_page_and_seeds_the_detail_view():
     package = object_packages.get_package("app-finance", root=PACKAGES_ROOT)
     assert {obj["id"] for obj in package["objects"]} == {
         "site_accounts", "site_journals", "site_trial_balance", "site_setup_accounts",
+        "hook_fin_journals",  # pre-write balance hook, added after the retrofit
     }
     assert {entry["collection"] for entry in package["seed"]} == {
         "fin_accounts", "fin_journals", "fin_journal_lines", "fin_recurring",

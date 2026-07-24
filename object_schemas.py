@@ -408,6 +408,13 @@ def _normalize_schema(
         # capability never turns on. Whitelisted, not interpreted -- same
         # posture as `flow`/`blocks`.
         "capabilities",
+        # Root-level `hooks` key: per-collection pre-write hook declaration
+        # (`hooks.before_write` names an object the generic HTTP write path
+        # executes synchronously -- reject/transform -- after permission
+        # checks, before persist; see object_server._apply_before_write_hook
+        # and plan/pre-write-hook-spec.md). Server-side only: deliberately NOT
+        # exposed by /api/schema. Whitelisted, not interpreted.
+        "hooks",
     )
     for key in metadata_keys:
         if key in payload:

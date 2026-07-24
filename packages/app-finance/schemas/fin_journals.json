@@ -1,7 +1,7 @@
 {
   "name": "fin_journals",
   "title": "Journals",
-  "version": 3,
+  "version": 4,
   "description": "Double-entry transaction headers; the actual debit/credit rows live in fin_journal_lines. Reconciled against a private predecessor-system audit, not part of this repo (its Journal model: '+lines; draft/posted; contact/project/document links; period_locked'). Whether a journal balances (total_debits_cents == total_credits_cents) is a COMPUTED property (see object_finance.journal_totals), never enforced here -- see the status field's help below for why, matching the source's own weak spot exactly (reconciled against a private predecessor-system audit, not part of this repo: 'posting is a bare status flip -- balance NOT enforced at post'). v2 adds generated_from (plan/vocabulary/61-materialize-spec.md, additive): a small optional JSON provenance stamp on a journal materialize generated (definition id, source row id, period), left blank on a hand-created journal.",
   "fields": [
     {
@@ -114,5 +114,8 @@
       "status",
       "currency"
     ]
+  },
+  "hooks": {
+    "before_write": "hook_fin_journals"
   }
 }

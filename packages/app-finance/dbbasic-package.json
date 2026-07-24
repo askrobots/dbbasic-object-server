@@ -26,6 +26,10 @@
     {
       "id": "site_setup_accounts",
       "path": "objects/site/setup_accounts.py"
+    },
+    {
+      "id": "hook_fin_journals",
+      "path": "objects/hook/fin_journals.py"
     }
   ],
   "schemas": [

@@ -68,3 +68,15 @@ helper (a `/flags` object; `window.dbbasicFlags`).
    UI-only, can ship alongside either.
 4. Later, only if pulled by real need: pre-write hooks; user-authored
    handlers running as their author.
+
+## Update (2026-07-23): pre-write hooks landed
+
+The "later, only if pulled by real need" condition was met — the need being
+custom cross-field/cross-collection validation on generatively-formed
+collections (the extensibility question every "schema-driven" system must
+answer). `hooks.before_write` now runs a declared object synchronously in the
+generic write path: after permission checks, before persist; reject or
+transform; **fail closed**; opt-in per collection so the latency concern above
+stays bounded (no-hook collections pay one cached dict lookup). After-write
+work remains the event system's job — nothing here changes that split. See
+[`validation-and-logic.md`](validation-and-logic.md) for the contract.

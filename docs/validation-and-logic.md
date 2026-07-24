@@ -37,15 +37,51 @@ if the schema says so.
 - **Numeric range** — we bound string length, not numeric value (a price can go
   negative). A `min`/`max` value rule is the fix.
 - **Uniqueness** — no unique constraint (e.g. unique email).
-- **Cross-field / formula validation** — no "end_date > start_date" or "if
-  type = asset then serial required." `visible_when` handles conditional
-  *visibility*, not conditional *validation*. This is the Salesforce
-  "validation rule" (a formula that blocks the save with a message) — the
-  highest-leverage next validation primitive.
+- **Declarative cross-field rules** — no formula language yet for
+  "end_date > start_date" (`visible_when` handles conditional *visibility*,
+  not validation). The general mechanism exists, though: a **pre-write hook**
+  (below) expresses any cross-field or cross-collection rule in real code. A
+  Salesforce-style declarative rule (formula + message) remains the ergonomic
+  follow-on for the common cases.
 - **Inline client feedback** — the form pre-checks `required`; length/pattern
   errors currently surface after a server round-trip, and messages are
   technical ("longer than max_length"). Friendlier, inline feedback is a
   UX polish item, not a safety gap.
+
+## Pre-write hooks — code inside the write path
+
+For rules the schema can't express, a collection declares a **hook object**:
+
+```json
+{ "name": "fin_journals", "hooks": { "before_write": "hook_fin_journals" } }
+```
+
+The object's `BEFORE_WRITE(request)` runs **synchronously inside the generic
+HTTP write path** — after permission checks, before persist — for every public
+create/update on that collection. `request` carries `{collection, action,
+record, existing, changes, subject}`. It returns `None` to allow,
+`{"error": "...", "status": 4xx}` to reject with its own message, or
+`{"record": {...}}` to transform (the transformed record still passes full
+schema validation, and can never touch `id`, `owner_id`, or read-only/computed
+fields).
+
+The contract is deliberately strict:
+
+- **Fail closed** — a declared hook that is missing, raises, or returns a
+  non-contract shape rejects the write. A gate that silently passes on error
+  is not a gate.
+- **After permissions** — a denied subject never reaches the hook.
+- **Opt-in per collection** — collections without `hooks` pay one cached dict
+  lookup; the original latency concern that deferred this feature
+  ([`event-hooks-decisions.md`](event-hooks-decisions.md)) stays bounded.
+- **Public surface only** — trusted server-side writers (the daemon,
+  migrations, seed-merge) call the storage layer directly and bypass hooks.
+
+This is what keeps the generative form working when custom logic arrives: the
+form still POSTs to `/collections/{c}/records`; the rule lives server-side.
+First adopter: `fin_journals` refuses to post a journal whose lines don't
+balance — a cross-collection rule (it sums `fin_journal_lines`) no schema key
+could express.
 
 ## Business logic — the automation substrate
 

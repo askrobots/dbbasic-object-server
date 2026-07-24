@@ -39,9 +39,11 @@ def test_get_package_normalizes_app_finance_manifest():
     # site_setup_accounts (65 slice 4) added the Setup Accounts action object.
     # site_journal_view was retrofitted away (stage-6): the journal detail
     # page is now a seeded 59 view (site_view_render), not a bespoke object.
+    # hook_fin_journals: the balance-enforcement pre-write hook (internal --
+    # no public execute rule; the write path runs it, never HTTP).
     assert {obj["id"] for obj in package["objects"]} == {
         "site_accounts", "site_journals", "site_trial_balance",
-        "site_setup_accounts",
+        "site_setup_accounts", "hook_fin_journals",
     }
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
     # + a site_routes seed for /finance/setup-accounts and /journals/{id},
@@ -102,8 +104,10 @@ def test_schema_json_files_are_valid_and_versioned():
             assert payload["version"] == 3
             assert payload["views"]["list_mode"] == "tree"
         elif name == "fin_journals":
-            # generated_from (61) + entity_id (65)
-            assert payload["version"] == 3
+            # generated_from (61) + entity_id (65) + hooks.before_write (v4:
+            # balance enforcement at post -- see hook/fin_journals.py)
+            assert payload["version"] == 4
+            assert payload["hooks"] == {"before_write": "hook_fin_journals"}
             assert payload["views"]["list_mode"] == "table"
         else:
             # fin_journal_lines / fin_recurring: 1 -> 2 (entity_id)

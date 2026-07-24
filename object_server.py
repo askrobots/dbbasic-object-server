@@ -6546,6 +6546,19 @@ async def _handle_user_file_upload(
     if permission_check is None:
         return
 
+    hooked = await _apply_before_write_hook(
+        send,
+        headers,
+        collection=USER_FILES_COLLECTION,
+        action="create",
+        record=record,
+        existing=None,
+        changes=record,
+    )
+    if hooked is None:
+        return
+    record = hooked
+
     try:
         stored = object_records.create_collection_record(
             USER_FILES_COLLECTION, record, base_dir=_data_dir(), actor=_record_change_actor(headers)
@@ -7682,6 +7695,163 @@ def _collection_has_owner_field(collection: str) -> bool:
     return any(f.get("name") == "owner_id" for f in (schema.get("fields") or []))
 
 
+_HOOK_METHOD = "BEFORE_WRITE"
+
+
+def _before_write_hook_id(collection: str) -> str | None:
+    """The collection's declared pre-write hook object id, if any.
+
+    Declared as `hooks: {"before_write": "<object_id>"}` at the schema root
+    (whitelisted in object_schemas normalization; deliberately NOT exposed via
+    /api/schema -- a server-side concern, never a client hint). Absent or
+    blank -> no hook, and the write path pays one cached-schema dict lookup.
+    """
+    try:
+        schema = object_schemas.get_schema(collection, base_dir=_data_dir())
+    except (LookupError, OSError, ValueError):
+        return None
+    hooks = schema.get("hooks")
+    if isinstance(hooks, dict):
+        hook_id = hooks.get("before_write")
+        if isinstance(hook_id, str) and hook_id.strip():
+            return hook_id.strip()
+    return None
+
+
+def _hook_protected_fields(collection: str) -> set[str]:
+    """Fields a hook transform may never change: identity/ownership plus every
+    read-only/computed field. The hook has rejection power and transform power
+    over ordinary fields only -- it cannot reassign a record or forge
+    server-owned values."""
+    protected = {"id", "owner_id"}
+    try:
+        schema = object_schemas.get_schema(collection, base_dir=_data_dir())
+    except (LookupError, OSError, ValueError):
+        return protected
+    for field in schema.get("fields", []):
+        if not isinstance(field, dict):
+            continue
+        field_type = str(field.get("type") or "").lower()
+        if (
+            field.get("read_only")
+            or field.get("readonly")
+            or field.get("computed")
+            or field_type == "computed"
+        ):
+            name = field.get("name")
+            if name:
+                protected.add(str(name))
+    return protected
+
+
+async def _apply_before_write_hook(
+    send,
+    headers: dict[str, str],
+    *,
+    collection: str,
+    action: str,
+    record: dict[str, Any],
+    existing: dict[str, Any] | None,
+    changes: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Run the collection's pre-write hook and return the record to persist.
+
+    Returns None when a response has already been sent (the hook rejected the
+    write, or the hook itself failed). The contract
+    (plan/pre-write-hook-spec.md): the hook object's BEFORE_WRITE(request)
+    receives {collection, action, record, existing, changes, subject} and
+    returns None/{} to allow, {"error", "status"?} to reject (4xx, its own
+    message), or {"record": {...}} to transform.
+
+    Ordering and safety:
+    - Runs AFTER permission/field checks -- a denied subject never reaches the
+      hook, so a hook side effect can't leak that a write was attempted.
+    - Fails CLOSED: declared-but-missing, raising, or non-contract hooks
+      reject the write with 500 -- a validation gate that silently passes on
+      error is not a gate.
+    - Transforms cannot touch id/owner_id/read-only/computed fields
+      (_hook_protected_fields), and the transformed record still goes through
+      full schema validation in the persist call.
+    - Executes in-process through the same path as any object
+      (object_execution.execute_object + the execution log), so hook runs are
+      observable like every other object run. Trusted server-side writers
+      (daemon, migrations, seed-merge) call object_records directly and bypass
+      hooks deliberately -- hooks gate the public write surface.
+    """
+    hook_id = _before_write_hook_id(collection)
+    if hook_id is None:
+        return record
+
+    subject = _permission_subject(headers)
+    payload = {
+        "collection": collection,
+        "action": action,
+        "record": dict(record),
+        "existing": dict(existing) if existing is not None else None,
+        "changes": dict(changes),
+        "subject": {"user_id": subject.user_id, "roles": list(subject.roles or ())},
+    }
+    execution_request = object_execution.ObjectExecutionRequest(
+        object_id=hook_id,
+        method=_HOOK_METHOD,
+        payload=payload,
+        correlation_id=object_correlation.current_correlation_id(),
+    )
+    try:
+        result = object_execution.execute_object(_runtime, execution_request)
+        _append_execution_log(result)
+    except Exception:
+        result = None
+
+    async def _fail() -> None:
+        await _send_json(
+            send,
+            {
+                "status": "error",
+                "error": f"Pre-write hook failed: {hook_id}",
+                "code": "hook_failed",
+            },
+            status=500,
+        )
+
+    if result is None or not result.ok:
+        await _fail()
+        return None
+    outcome = result.result
+    if outcome is None or outcome == {}:
+        return record
+    if not isinstance(outcome, dict):
+        await _fail()
+        return None
+    error_message = outcome.get("error")
+    if error_message:
+        try:
+            status = int(outcome.get("status") or 400)
+        except (TypeError, ValueError):
+            status = 400
+        if not 400 <= status <= 499:
+            status = 400
+        await _send_json(
+            send,
+            {"status": "error", "error": str(error_message), "code": "hook_rejected"},
+            status=status,
+        )
+        return None
+    transformed = outcome.get("record")
+    if transformed is None:
+        return record
+    if not isinstance(transformed, dict):
+        await _fail()
+        return None
+    final = dict(transformed)
+    for name in _hook_protected_fields(collection):
+        if name in record:
+            final[name] = record[name]
+        else:
+            final.pop(name, None)
+    return final
+
+
 async def _handle_collection_record_create(
     send,
     collection: str,
@@ -7740,6 +7910,19 @@ async def _handle_collection_record_create(
     session = _current_identity_session(headers)
     if session is not None and session.user_id and _collection_has_owner_field(collection):
         record_payload = {**record_payload, "owner_id": session.user_id}
+
+    hooked = await _apply_before_write_hook(
+        send,
+        headers,
+        collection=collection,
+        action="create",
+        record=record_payload,
+        existing=None,
+        changes=record_payload,
+    )
+    if hooked is None:
+        return
+    record_payload = hooked
 
     try:
         record = object_records.create_collection_record(
@@ -8000,6 +8183,31 @@ async def _handle_collection_record_update(
                 status=403,
             )
             return
+
+    hooked = await _apply_before_write_hook(
+        send,
+        headers,
+        collection=collection,
+        action="update",
+        record=candidate,
+        existing=existing,
+        changes=changes,
+    )
+    if hooked is None:
+        return
+    if hooked is not candidate:
+        # Persist only the delta the hook produced on top of the caller's own
+        # changes: update_collection_record treats every submitted key as a
+        # field write, so echoing untouched read-only fields (created_at) back
+        # through it would be rejected as read-only submissions. A change key
+        # the hook dropped from its record is a cancelled change.
+        final_changes = {k: v for k, v in changes.items() if k in hooked}
+        for key, value in hooked.items():
+            if key == "id":
+                continue
+            if key not in candidate or candidate.get(key) != value:
+                final_changes[key] = value
+        changes = final_changes
 
     try:
         record = object_records.update_collection_record(
