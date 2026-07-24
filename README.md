@@ -108,6 +108,36 @@ That makes the system useful for humans and AI tools:
 - patch the source
 - keep or roll back the version
 
+## The Clock Is Part of the Framework
+
+Rails and Django end at request/response. Everything time-driven gets exiled
+to infrastructure -- cron, celery, sidekiq -- separate processes whose state
+lives in a broker the application cannot query. Once jobs live outside the
+data model, their outcomes stop being data: monitoring becomes a bolt-on
+(Flower, Sidekiq Web) that can see queue mechanics but not what a run meant
+for the business. "Did dunning actually go out this month?" is not answerable
+from either, and most teams discover that with a production incident.
+
+Real systems mostly run on the clock -- billing cycles, invoice aging,
+dunning, reconciliation, recurring journals, retention. The request/response
+surface everyone optimizes is the thin edge. So here the clock is inside the
+system:
+
+- time-driven state changes are daemon passes through the same transition
+  machinery as any other write (an invoice goes overdue by the same declared
+  rules a person would be held to)
+- scheduled tasks are data: `task_*` entries in a trigger object's state,
+  cron or one-time, editable at runtime
+- every run's outcome is a record in the `scheduler_runs` collection -- the
+  target's actual result JSON, or the error and its type, with duration --
+  under the same permissions, audit, and realtime push as every other
+  collection
+- `/scheduler` is the operator board: tasks with next runs and last outcomes,
+  full run history with expandable detail, and run-now/pause/resume controls.
+  It is one page object, not a separate monitoring service
+- because outcomes are records, an AI operator can answer "did anything fail
+  overnight?" by reading a collection
+
 ## What Objects Can Do
 
 - handle HTTP requests
@@ -174,6 +204,20 @@ This repository currently contains:
 - `object_service_keys.py` - write-only per-user service API keys (AI providers and similar)
 - `object_ai.py` - provider-neutral AI chat with MCP tool calling behind the shell
 - `object_mcp.py` - MCP (Model Context Protocol) surface so agents operate the server as tools
+- `object_computed.py` - formula and rollup field evaluation, materialized on write
+- `object_rollups.py` - `rollup_definitions` engine materializing aggregates into collections
+- `object_materialize.py` - generate records from definitions on a daemon pass
+- `object_notify.py` - `notify_rules` engine turning record changes into in-app/email notifications
+- `object_email.py` - durable outbound email outbox with daemon drain, retry, and backoff
+- `object_analytics.py` - request analytics capture and page-view retention rules
+- `object_connectors.py` - reconcile driver converging external systems to package-declared desired state
+- `object_finance.py` - journal totals, trial balance, and the shared posted-journal composer
+- `object_stock.py` - derived stock levels folded from the append-only stock-moves ledger
+- `object_activity.py` - activity feed derivation from the record changelog
+- `object_api_keys.py` - durable per-user bearer API keys, hash-only storage
+- `object_import.py` - CSV/TSV record import slice of the import/export design
+- `object_reader.py` - text-first read surface for AI and voice consumers
+- `object_tts.py` - optional text-to-speech bridge to a host voice engine
 - `http_api_contract.py` - compatibility constants for paths and response shapes
 - `deployment_checks.py` - single-VM filesystem ownership and permission checks
 - `packages/hello-world/` - minimal example package with one object
@@ -691,9 +735,21 @@ renderer that turns a schema into a live list/table/board/tree/calendar (with
 filters, sort, relation labels, and a board⇄table toggle), form, and composed
 detail page — and a per-collection *capability* layer where a schema flag grows
 a comment thread, attachment list, or owner-checked record sharing with no
-per-app code (see [`docs/capabilities.md`](docs/capabilities.md)). CI runs the
-full suite (~1990 tests) on CPython 3.10 through 3.14 including the
-free-threaded 3.14t build, plus an end-to-end Docker Compose
+per-app code (see [`docs/capabilities.md`](docs/capabilities.md)).
+
+The business-logic layer is doctrine, not convention: every kind of rule has
+one declared home — validation and transitions in the schema, cross-record
+gates in pre-write hooks (fail closed), derived values as formula/rollup
+fields (fail soft), time-driven state in the daemon, reactions in event
+handlers and notify rules after the write, money and inventory as append-only
+records that move rather than mutate, and generated journals through one
+idempotent composer with provenance. The placement guide is
+[`docs/business-logic-patterns.md`](docs/business-logic-patterns.md); the
+decisions and their reasons accumulate in
+[`docs/logic-decisions.md`](docs/logic-decisions.md). Scheduled work is
+first-class and observable (see "The Clock Is Part of the Framework" above).
+CI runs the full suite (~2070 tests) on CPython 3.10 through 3.14 including
+the free-threaded 3.14t build, plus an end-to-end Docker Compose
 build-and-health-check, on every push.
 
 Performance is measured, not asserted (Apple M1 and a 1-vCPU $6 VM; details
