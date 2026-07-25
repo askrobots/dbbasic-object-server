@@ -142,6 +142,36 @@ system:
 - because outcomes are records, an AI operator can answer "did anything fail
   overnight?" by reading a collection
 
+## The App Suite, Measured in Code
+
+Everyone writes a notes app as the demo. Here is ours, measured the only
+way that matters -- registered objects (real Python files) per app:
+
+| app | objects | what the code is |
+|---|---|---|
+| notes, tasks, contacts, projects, articles, links, templates, entities | **0** | nothing -- a schema, permission rules, and seeded view records |
+| timers | 1 | start/stop verbs (an action) |
+| events | 1 | a bespoke calendar page |
+| orders | 1 | a totals-stamping reaction |
+| catalog | 4 | inventory gates, the shrinkage composer, a count verb, a stock report |
+| payments | 5 | the overpayment/refund gates, the books composer, status reactions |
+| invoices | 5 | aging + dunning runner, the pay-by-link portal, totals |
+| finance | 6 | the balance gate, journal reversal, recurring entries, statements |
+| banking | 8 | statement importers, the match engine, resolution verbs, reconciliation |
+
+The pattern is the argument. Apps whose rules are all *declarable* --
+shapes, ownership, state moves, derived values -- need **no code at all**,
+and every new collection of that kind is free. Code appears exactly where
+[`docs/zero-to-code.md`](docs/zero-to-code.md) says it enters: gates on the
+write path, composers reacting to money movement, verbs, scheduled
+runners, and a handful of genuinely bespoke report pages (a trial balance
+is a fold, not a form). Every app -- zero-code or not -- gets the same
+list/board/form/detail surfaces, the same JSON API, MCP tools, realtime
+push, and global search, because those read the schema, not the app. And
+[`/flow`](docs/write-pipeline.md) renders each collection's state machine,
+gates, and reactions live, compiled from the same declarations the server
+enforces.
+
 ## What Objects Can Do
 
 - handle HTTP requests
