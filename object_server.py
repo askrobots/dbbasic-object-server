@@ -12008,6 +12008,26 @@ def _normalize_object_response(payload: Any) -> tuple[int, list[tuple[str, str]]
     if isinstance(payload, bytes):
         return 200, [("content-type", "application/octet-stream")], payload
 
+    # A JSON-returning object may set the HTTP status too. Until now only
+    # the content_type branch honored it, so an action answering
+    # {"status": 409, "error": ...} was delivered as HTTP 200 with the
+    # refusal hidden in the body -- invisible to any client that checks
+    # the status line, and actively harmful for webhooks, where a
+    # provider's retry logic reads nothing else (a signature failure
+    # answered 200 is a forgery silently accepted forever).
+    #
+    # Only an INTEGER in HTTP range counts: collections legitimately carry
+    # a `status` field of their own ("active", "posted", "draft"), and a
+    # record echoed back must never be mistaken for a status line.
+    if isinstance(payload, dict):
+        for key in ("status_code", "http_status", "status"):
+            candidate = payload.get(key)
+            if isinstance(candidate, bool) or not isinstance(candidate, int):
+                continue
+            if 100 <= candidate <= 599:
+                body = json.dumps(payload).encode("utf-8")
+                return candidate, [("content-type", "application/json; charset=utf-8")], body
+
     body = json.dumps(payload).encode("utf-8")
     return 200, [("content-type", "application/json; charset=utf-8")], body
 

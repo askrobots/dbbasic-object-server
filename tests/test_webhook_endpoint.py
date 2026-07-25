@@ -137,3 +137,43 @@ def test_no_permission_rule_means_no_execution(env, tmp_path):
     # webhook endpoint must be an explicit opt-in per hook, never a blanket
     # exposure of every webhook_* object anyone installs.
     assert status in (401, 403)
+
+
+def test_object_status_reaches_the_status_line(env):
+    """An object answering {"status": 4xx} must produce that HTTP status.
+
+    This was broken: only content_type responses honored `status`, so a
+    webhook's signature failure -- and every action's refusal -- was
+    delivered as HTTP 200 with the rejection hidden in the body. Providers
+    retry on status alone, so a forgery answered 200 is a forgery
+    permanently accepted.
+    """
+    objects_dir, _ = env
+    (objects_dir / "webhook" / "refuser.py").write_text(
+        "def POST(request):\n"
+        "    return {'status': 400, 'error': 'Signature verification failed'}\n")
+    (objects_dir.parent / "data" / "permissions" / "policy.json").write_text(json.dumps({
+        "access_mode": "role_based",
+        "rules": [{"effect": "allow", "principal": "public", "actions": ["execute"],
+                   "object_id": "webhook_refuser", "reason": "test"}],
+    }))
+    status, payload = call("/webhooks/refuser", body=b"{}")
+    assert status == 400
+    assert payload["error"] == "Signature verification failed"
+
+
+def test_a_records_own_status_field_is_not_a_status_line(env):
+    """Collections carry a `status` of their own ("active", "posted"), and
+    an object echoing a record back must not have it read as HTTP."""
+    objects_dir, _ = env
+    (objects_dir / "webhook" / "record.py").write_text(
+        "def POST(request):\n"
+        "    return {'ok': True, 'record': {'id': 'x'}, 'status': 'active'}\n")
+    (objects_dir.parent / "data" / "permissions" / "policy.json").write_text(json.dumps({
+        "access_mode": "role_based",
+        "rules": [{"effect": "allow", "principal": "public", "actions": ["execute"],
+                   "object_id": "webhook_record", "reason": "test"}],
+    }))
+    status, payload = call("/webhooks/record", body=b"{}")
+    assert status == 200
+    assert payload["status"] == "active"
