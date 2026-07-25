@@ -40,6 +40,16 @@
       "principal": "registered",
       "actions": [
         "create",
+        "read"
+      ],
+      "collection": "rates",
+      "reason": "rates are shared observations: any signed-in user may read them (an amount cannot be valued without one) and may record one they fetched. No update or delete -- a restated rate is a new row with a later fetched_at, never an edit to what was recorded at the time"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": [
+        "create",
         "read",
         "update",
         "delete"

@@ -26,14 +26,17 @@ _FLOAT_MONEY_TYPES = {"float", "number", "currency"}
 # 0.4.0 added `denominations`: what a unit of value is and how finely it
 # divides (object_money.py). Amounts are integers of the smallest unit, so
 # this is the collection that says where the decimal point goes.
-_SCHEMA_NAMES = ("denominations", "fin_accounts", "fin_journals",
+_SCHEMA_NAMES = ("denominations", "rates", "fin_accounts", "fin_journals",
                  "fin_journal_lines", "fin_recurring")
 
 # Collections that are shared REFERENCE data rather than per-owner business
 # records: a denomination is the same fact in every set of books (gold is
 # gold), so unlike the rest of finance it carries no entity_id scoping FK
-# and it ships seeded rows instead of a bare header.
-_REFERENCE_COLLECTIONS = ("denominations",)
+# and it ships seeded rows instead of a bare header. `rates` is shared in the
+# same way (an observed price is not owned by one set of books) but ships
+# header-only, since rates are fetched rather than seeded.
+_REFERENCE_COLLECTIONS = ("denominations", "rates")
+_SEEDED_REFERENCE = ("denominations",)
 
 
 def _schema(name):
@@ -254,7 +257,7 @@ def test_seed_tsvs_have_no_data_rows_and_match_schema_field_order():
         schema = _schema(name)
         path = APP_FINANCE_DIR / "seed" / f"{name}.tsv"
         lines = path.read_text().splitlines()
-        if name in _REFERENCE_COLLECTIONS:
+        if name in _SEEDED_REFERENCE:
             # Reference data, not user data: an install that did not know
             # USD divides into two places and BTC into eight could not render
             # an amount at all, so these rows ship. Still schema-ordered, and

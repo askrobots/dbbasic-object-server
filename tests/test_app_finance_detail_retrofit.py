@@ -39,6 +39,7 @@ def test_manifest_drops_bespoke_journal_page_and_seeds_the_detail_view():
     }
     assert {entry["collection"] for entry in package["seed"]} == {
         "denominations",  # 0.4.0: seeded units of value (USD/JPY/BTC/ETH/XAU/...)
+        "rates",          # 0.5.0: observed conversion rates (header-only; fetched, not seeded)
         "fin_accounts", "fin_journals", "fin_journal_lines", "fin_recurring",
         "views", "site_routes",
     }

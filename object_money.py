@@ -177,6 +177,154 @@ def parse_amount(text: Any, code: str = DEFAULT_CODE, *,
     return to_minor(cleaned, scale_for(code, base_dir=base_dir))
 
 
+# --- conversion -------------------------------------------------------------
+#
+# Two rules govern everything below, and both are the kind that only look
+# pedantic until an auditor asks:
+#
+# 1. **Never look forward.** A rate dated after the moment being valued may
+#    never be used. Valuing yesterday's transaction with today's price is
+#    time travel; it silently restates history and is a classic audit
+#    finding. A lookup returns the newest rate at-or-before the moment, or
+#    nothing at all.
+# 2. **The rate is an input; the result is money.** Rates are measurements
+#    with significant figures, so they are stored as exact decimal strings.
+#    The converted amount is a count of minor units, so it is an integer,
+#    and the rounding that produces it is stated rather than inherited.
+
+RATES_COLLECTION = "rates"
+
+KIND_SPOT = "spot"
+KIND_CLOSE = "close"
+KIND_AVERAGE = "average"
+
+
+class RateNotFound(LookupError):
+    """No usable rate at or before the moment asked about."""
+
+
+def _norm(code: str) -> str:
+    return str(code or "").strip().upper()
+
+
+def rate_records(base_code: str, quote_code: str, *,
+                 base_dir: Path | str = DEFAULT_DATA_DIR) -> list[dict]:
+    """Every stored rate for a pair, newest `as_of` first."""
+    want_base, want_quote = _norm(base_code), _norm(quote_code)
+    try:
+        rows = object_records.read_collection_records(RATES_COLLECTION, base_dir=base_dir)
+    except Exception:
+        return []
+    matches = [r for r in rows
+               if _norm(r.get("base_code")) == want_base
+               and _norm(r.get("quote_code")) == want_quote]
+    matches.sort(key=lambda r: (str(r.get("as_of") or ""), str(r.get("fetched_at") or "")),
+                 reverse=True)
+    return matches
+
+
+def find_rate(base_code: str, quote_code: str, *,
+              base_dir: Path | str = DEFAULT_DATA_DIR,
+              as_of: str = "", kind: str = "", source: str = "",
+              allow_inverse: bool = True) -> dict | None:
+    """The rate to use for a pair at a moment, or None.
+
+    Returns the newest rate dated at or before `as_of` (all of them when
+    `as_of` is blank), optionally narrowed to a kind or a source. When the
+    pair is only stored the other way round, the inverse is derived and
+    marked `inverted` so a caller can see that the number was computed
+    rather than quoted -- inversion loses precision at the far end of a
+    ratio, and pretending otherwise would hide it.
+    """
+    if _norm(base_code) == _norm(quote_code):
+        return {"base_code": _norm(base_code), "quote_code": _norm(quote_code),
+                "rate": "1", "as_of": as_of, "kind": kind or KIND_SPOT,
+                "source": "identity", "inverted": False}
+
+    def _pick(rows):
+        for row in rows:
+            if kind and str(row.get("kind") or KIND_SPOT).strip().lower() != kind:
+                continue
+            if source and str(row.get("source") or "").strip().lower() != source.lower():
+                continue
+            if as_of and str(row.get("as_of") or "") > as_of:
+                continue          # never look forward
+            try:
+                if Decimal(str(row.get("rate") or "0")) <= 0:
+                    continue      # a non-positive rate is data corruption
+            except InvalidOperation:
+                continue
+            return row
+        return None
+
+    direct = _pick(rate_records(base_code, quote_code, base_dir=base_dir))
+    if direct is not None:
+        return {**direct, "inverted": False}
+    if not allow_inverse:
+        return None
+    reverse = _pick(rate_records(quote_code, base_code, base_dir=base_dir))
+    if reverse is None:
+        return None
+    inverse = Decimal(1) / Decimal(str(reverse["rate"]))
+    return {**reverse, "base_code": _norm(base_code), "quote_code": _norm(quote_code),
+            "rate": str(inverse), "inverted": True}
+
+
+def convert(amount_minor: Any, from_code: str, to_code: str, rate: Any, *,
+            base_dir: Path | str = DEFAULT_DATA_DIR,
+            rounding=ROUND_HALF_UP) -> int:
+    """Convert minor units of one denomination into minor units of another.
+
+    `rate` is how many `to_code` units one `from_code` unit is worth. The
+    caller passes the rate explicitly — usually the one it is about to STAMP
+    onto the record (docs/logic-decisions.md #1) — because a conversion that
+    silently looked up its own rate would be re-derivable later, and a
+    re-derivable conversion is one that can change after the fact.
+
+    Rounding happens once, at the end, at the target's scale: converting
+    then rounding per line is how a total stops matching the sum of its
+    parts.
+    """
+    from_scale = scale_for(from_code, base_dir=base_dir)
+    to_scale = scale_for(to_code, base_dir=base_dir)
+    try:
+        multiplier = Decimal(str(rate))
+    except InvalidOperation as exc:
+        raise MoneyError(f"Not a rate: {rate!r}") from exc
+    if multiplier <= 0:
+        raise MoneyError(f"A conversion rate must be positive, got {rate!r}")
+    whole = from_minor(amount_minor, from_scale)
+    return int((whole * multiplier).scaleb(to_scale).to_integral_value(rounding=rounding))
+
+
+def convert_at(amount_minor: Any, from_code: str, to_code: str, *,
+               base_dir: Path | str = DEFAULT_DATA_DIR, as_of: str = "",
+               kind: str = "", source: str = "") -> dict:
+    """Convert using the stored rate that applies at `as_of`.
+
+    Returns {"amount_minor", "rate", "rate_id", "as_of", "source",
+    "inverted"} — the rate comes back with the result precisely so the
+    caller can stamp it onto whatever it writes. Raises RateNotFound rather
+    than guessing: a conversion with no rate behind it is a number nobody
+    can defend later.
+    """
+    found = find_rate(from_code, to_code, base_dir=base_dir, as_of=as_of,
+                      kind=kind, source=source)
+    if found is None:
+        raise RateNotFound(
+            f"No {from_code}/{to_code} rate on or before {as_of or 'now'}"
+            + (f" from {source}" if source else ""))
+    return {
+        "amount_minor": convert(amount_minor, from_code, to_code, found["rate"],
+                                base_dir=base_dir),
+        "rate": str(found["rate"]),
+        "rate_id": found.get("id", ""),
+        "as_of": found.get("as_of", ""),
+        "source": found.get("source", ""),
+        "inverted": bool(found.get("inverted")),
+    }
+
+
 def same_denomination(*codes: str) -> bool:
     """True when every code given is the same denomination.
 
