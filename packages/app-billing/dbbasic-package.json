@@ -1,14 +1,15 @@
 {
   "id": "app-billing",
   "name": "Billing",
-  "version": "0.1.0",
-  "description": "Prepaid wallets and the ledger that IS their balance. The predecessor kept a mutable Wallet.balance column beside a Transaction table -- two truths that drift, and when they drift the customer is right and you cannot prove otherwise; here wallets.balance_minor is a ROLLUP over append-only wallet_entries, so the entries are the balance and nothing may write the number (docs/logic-decisions.md #3). Amounts are integer minor units (object_money.py), so a wallet holds dollars or satoshis or a gift-card unit without special cases. hook_wallet_entries gates debits by summing the ENTRIES rather than trusting the rollup -- a gate must be authoritative, and it documents the known check-then-append race honestly rather than pretending a reserve/capture system exists. system_wallet_replenish tops up from a saved card off-session, with the safeguard the predecessor also carried and most systems skip: a MONTHLY CAP, because autopay plus one runaway metering bug is a four-figure surprise, and a cap of zero (the default) means auto top-up is simply off. Declines -- especially the authentication-required kind an off-session charge cannot satisfy -- are reported for a human to act on, never retried in a loop that gets a processor account flagged. Plans, subscriptions and the period biller are the next slice; this one is the money container they will draw on.",
+  "version": "0.2.0",
+  "description": "Prepaid wallets and the ledger that IS their balance. The predecessor kept a mutable Wallet.balance column beside a Transaction table -- two truths that drift, and when they drift the customer is right and you cannot prove otherwise; here wallets.balance_minor is a ROLLUP over append-only wallet_entries, so the entries are the balance and nothing may write the number (docs/logic-decisions.md #3). Amounts are integer minor units (object_money.py), so a wallet holds dollars or satoshis or a gift-card unit without special cases. hook_wallet_entries gates debits by summing the ENTRIES rather than trusting the rollup -- a gate must be authoritative, and it documents the known check-then-append race honestly rather than pretending a reserve/capture system exists. system_wallet_replenish tops up from a saved card off-session, with the safeguard the predecessor also carried and most systems skip: a MONTHLY CAP, because autopay plus one runaway metering bug is a four-figure surprise, and a cap of zero (the default) means auto top-up is simply off. Declines -- especially the authentication-required kind an off-session charge cannot satisfy -- are reported for a human to act on, never retried in a loop that gets a processor account flagged. Plans, subscriptions and the period biller are the next slice; this one is the money container they will draw on. 0.2.0 adds the recurring half: billing_plans is a price book that VERSIONS FORWARD (an invoice must forever show the price it was billed under, so a change is a new row, never a rewrite of history customers already paid against), subscriptions carry billing_mode explicitly (wallet | subscription | hybrid -- guessing the mode from whether a plan has a base price breaks the moment someone sells a zero-base plan with a real contract), and system_billing_runner closes periods into invoices. Double-billing is the failure customers never forgive, so the runner is idempotent by provenance rather than by a dedup table: a marker on the invoice means a re-run after a crash raises nothing. The status ladder climbs BOTH ways -- paying restores service, because a ladder that only descends leaves a paying customer cut off -- and cancel-at-period-end runs service to the end of the paid period rather than billing someone for time they cannot use.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
   "dependencies": [
     "app-finance",
-    "app-payments"
+    "app-payments",
+    "app-invoices"
   ],
   "objects": [
     {
@@ -18,6 +19,10 @@
     {
       "id": "system_wallet_replenish",
       "path": "objects/system/wallet_replenish.py"
+    },
+    {
+      "id": "system_billing_runner",
+      "path": "objects/system/billing_runner.py"
     }
   ],
   "schemas": [
@@ -28,6 +33,14 @@
     {
       "collection": "wallet_entries",
       "path": "schemas/wallet_entries.json"
+    },
+    {
+      "collection": "billing_plans",
+      "path": "schemas/billing_plans.json"
+    },
+    {
+      "collection": "subscriptions",
+      "path": "schemas/subscriptions.json"
     }
   ],
   "permissions": [
@@ -43,6 +56,14 @@
     {
       "collection": "wallet_entries",
       "path": "seed/wallet_entries.tsv"
+    },
+    {
+      "collection": "billing_plans",
+      "path": "seed/billing_plans.tsv"
+    },
+    {
+      "collection": "subscriptions",
+      "path": "seed/subscriptions.tsv"
     }
   ],
   "migrations": []

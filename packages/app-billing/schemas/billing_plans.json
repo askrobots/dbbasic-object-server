@@ -1,0 +1,33 @@
+{
+  "name": "billing_plans",
+  "title": "Plans",
+  "version": 1,
+  "description": "The price book, and it is DATA that versions forward rather than a table anyone edits in place. An invoice must forever show the price it was billed under (docs/logic-decisions.md #1), so changing a price means adding a row with a later valid_from and deactivating the old one -- never rewriting history that customers already paid against. A plan spans all three billing modes without special cases: base_minor alone is a flat subscription, prices alone is pure pay-as-you-go metering, and both together is the hybrid (a base fee with usage overage) that most real SaaS actually sells. An internal or staff account is not special-case code either -- it is a plan whose numbers are zero.",
+  "fields": [
+    {"name": "id"},
+    {"name": "name", "type": "text", "required": true, "label": "Name"},
+    {"name": "code", "type": "text", "label": "Code",
+     "help": "Stable identifier across price versions (pro, team). Two rows may share a code; the active one with the latest valid_from wins."},
+    {"name": "period", "type": "enum", "default": "month", "label": "Billing Period",
+     "enum": ["month", "year"]},
+    {"name": "base_minor", "type": "integer", "default": "0", "label": "Base Price",
+     "help": "Charged every period regardless of usage. Integer minor units of the plan's denomination."},
+    {"name": "denomination_id", "label": "Denomination",
+     "relation": {"collection": "denominations", "display_field": "code"}},
+    {"name": "prices", "type": "textarea", "label": "Usage Prices (JSON)",
+     "help": "{\"ai.tokens\": {\"included\": 100000, \"unit_minor\": 2}} -- per metric, what the plan includes before overage and what each further unit costs. Empty means no metered component."},
+    {"name": "trial_days", "type": "integer", "default": "0", "label": "Trial Days"},
+    {"name": "is_active", "type": "boolean", "default": "true", "label": "Active",
+     "help": "Inactive plans keep billing their existing subscribers -- a retired price is not a cancelled contract -- but cannot be newly subscribed to."},
+    {"name": "valid_from", "type": "date", "label": "Valid From"},
+    {"name": "notes", "type": "textarea", "label": "Notes"},
+    {"name": "owner_id", "type": "text", "label": "Owner"},
+    {"name": "created_at", "type": "datetime", "read_only": true, "label": "Created"}
+  ],
+  "search": {"fields": ["name", "code"]},
+  "forms": {"default": {"fields": ["name", "code", "period", "base_minor",
+                                    "denomination_id", "prices", "trial_days",
+                                    "is_active", "valid_from", "notes"]}},
+  "views": {"list_mode": "table",
+            "list_fields": ["name", "code", "period", "base_minor", "is_active"]}
+}

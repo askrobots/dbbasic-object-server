@@ -35,6 +35,41 @@
         "owner_id": "$user_id"
       },
       "reason": "every customer can see exactly why their balance is what it is -- the statement is the ledger, not a summary of it. No create/update/delete: entries are written server-side by the metering, top-up and refund paths, and a client that could append its own credit could print money"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": [
+        "read"
+      ],
+      "collection": "billing_plans",
+      "reason": "prices are not a secret from the people paying them; a customer may read the plan they are on and the ones they could move to"
+    },
+    {
+      "effect": "allow",
+      "principal": "role:admin",
+      "actions": [
+        "create",
+        "update",
+        "delete"
+      ],
+      "collection": "billing_plans",
+      "reason": "the price book is an operator surface -- and edits are constrained by convention, not permission: changing a price means adding a row, because an old invoice must keep showing what it charged"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": [
+        "create",
+        "read",
+        "update",
+        "delete"
+      ],
+      "collection": "subscriptions",
+      "row_filter": {
+        "owner_id": "$user_id"
+      },
+      "reason": "a subscription is owned by the account that sells it; the status ladder is additionally constrained by declared transitions, so even its owner cannot skip from active straight to suspended without the daemon's reasons"
     }
   ]
 }
