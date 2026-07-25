@@ -87,6 +87,14 @@ DBBASIC_ENABLE_PACKAGE_RESTORE=false
 DBBASIC_ENABLE_PASSWORD_LOGIN=false
 DBBASIC_COOKIE_SECURE=true
 
+# Clean page URLs (/notes, /tasks) resolved to objects and seeded view
+# records. Without this every app page 404s before routes are even
+# consulted -- the flag exists for API-only deployments, but the app
+# suite is the product, so it ships ON (found via the e2e browser lane,
+# whose fixture was the only place all the required flags appeared
+# together).
+DBBASIC_ENABLE_SITE_ROUTES=true
+
 # Permissions start in the open; move to audit, then enforcement, once a
 # policy and login are in place (docs/permissions-model.md).
 DBBASIC_ENABLE_PERMISSION_AUDIT=false
