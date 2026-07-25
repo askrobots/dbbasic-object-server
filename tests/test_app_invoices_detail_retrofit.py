@@ -40,6 +40,9 @@ def test_manifest_drops_bespoke_invoice_view_page_and_seeds_the_detail_view():
         # that mints a token when an invoice leaves draft.
         "site_invoice_portal", "action_regenerate_portal_link",
         "system_invoice_portal_link",
+        # 0.8.0 time and materials: approved hours become one invoice, the
+        # last mile of the consulting billing mode.
+        "action_generate_tm_invoice",
     }
     assert {entry["collection"] for entry in package["seed"]} == {
         "invoices", "invoice_lines", "views", "site_routes",

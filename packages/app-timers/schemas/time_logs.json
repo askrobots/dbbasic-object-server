@@ -1,8 +1,8 @@
 {
   "name": "time_logs",
   "title": "Time Logs",
-  "version": 3,
-  "description": "Work time against tasks. A running timer is a row with is_running true and no ended_at. Server-enforced by /timers/start, /timers/stop, /timers/running (62 - Timer, plan/vocabulary/62-timer-spec.md) -- see packages/app-timers/objects/site/timer_actions.py.",
+  "version": 4,
+  "description": "Work time against tasks. A running timer is a row with is_running true and no ended_at. Server-enforced by /timers/start, /timers/stop, /timers/running (62 - Timer, plan/vocabulary/62-timer-spec.md) -- see packages/app-timers/objects/site/timer_actions.py. v4 makes an entry billable: consulting hours are a usage metric with an APPROVAL GATE, and that gate is the only structural difference between time-and-materials billing and metered cloud billing -- both then run the same meter -> rate -> line -> invoice spine. status walks draft -> submitted -> approved -> billed, and the rate is STAMPED at approval from rate_cards (docs/logic-decisions.md #1), so a rate change next quarter can never reprice work somebody already approved. An approved or billed entry is frozen: correcting it is a compensating entry or a credit on the invoice, never an edit to the evidence of what happened (#5, #8).",
   "fields": [
     {
       "name": "id"
@@ -14,6 +14,15 @@
         "collection": "tasks",
         "display_field": "title"
       }
+    },
+    {
+      "name": "project_id",
+      "label": "Project",
+      "relation": {
+        "collection": "projects",
+        "display_field": "name"
+      },
+      "help": "What the hours are billed against. Also half of the rate-card lookup: a rate scoped to this project beats the house default."
     },
     {
       "name": "started_at",
@@ -38,6 +47,64 @@
       "label": "Notes"
     },
     {
+      "name": "billable",
+      "type": "boolean",
+      "default": "true",
+      "label": "Billable",
+      "help": "Time worth recording is not always time worth charging for. Unbillable hours still count toward a project's cost -- they are simply never rated."
+    },
+    {
+      "name": "status",
+      "type": "enum",
+      "default": "draft",
+      "label": "Status",
+      "enum": ["draft", "submitted", "approved", "rejected", "billed"],
+      "transitions": {
+        "draft": [{"to": "submitted", "when": {"owner_id": "$user_id"}}],
+        "submitted": ["approved", "rejected"],
+        "rejected": [{"to": "draft", "when": {"owner_id": "$user_id"}}],
+        "approved": ["billed", "rejected"],
+        "billed": []
+      },
+      "help": "Only the person who logged the time may submit it, and only somebody else's hand moves it to approved -- an approval you can grant yourself is not an approval. rejected returns to draft so the hours can be corrected and resubmitted rather than lost. approved -> billed is machine-advanced by the invoice generator; billed is terminal, because a disputed hour is a credit on the invoice, not a rewind."
+    },
+    {
+      "name": "hourly_rate_cents",
+      "type": "integer",
+      "default": "0",
+      "label": "Rate",
+      "help": "Stamped at approval from the rate card in force on the day the work happened. Once stamped it belongs to this entry -- later rate changes never reprice approved work."
+    },
+    {
+      "name": "amount_cents",
+      "type": "integer",
+      "default": "0",
+      "label": "Amount",
+      "help": "Stamped alongside the rate: round(billable seconds / 3600 * rate), half-up, once. The entry is what a client disputes, so it is the thing whose arithmetic they can reproduce."
+    },
+    {
+      "name": "rate_card_id",
+      "label": "Rate Card",
+      "relation": {"collection": "rate_cards", "display_field": "label"},
+      "help": "Which card was chosen. Keeps 'why am I being charged this?' answerable years later."
+    },
+    {
+      "name": "invoice_id",
+      "label": "Invoice",
+      "relation": {"collection": "invoices", "display_field": "number"},
+      "help": "Stamped when the entry is billed. An entry already carrying one is never billed again -- that is what makes re-running the generator safe."
+    },
+    {
+      "name": "approved_by",
+      "type": "text",
+      "label": "Approved By"
+    },
+    {
+      "name": "approved_at",
+      "type": "datetime",
+      "label": "Approved"
+    },
+    {
       "name": "created_at",
       "type": "datetime",
       "read_only": true,
@@ -55,13 +122,16 @@
       "help": "Stamped by the stop verb: floor(ended_at - started_at). Never client-writable in practice -- omitted from forms.default, not schema read_only (update_collection_record has no preserve_read_only escape hatch; see packages/app-invoices/objects/system/invoice_totals.py for the same finding and the same workaround)."
     }
   ],
+  "hooks": {"before_write": "hook_time_logs"},
   "forms": {
     "default": {
       "fields": [
         "task_id",
+        "project_id",
         "started_at",
         "ended_at",
         "is_running",
+        "billable",
         "notes"
       ]
     }
@@ -70,10 +140,12 @@
     "list_mode": "table",
     "list_fields": [
       "task_id",
+      "project_id",
       "started_at",
-      "ended_at",
-      "is_running",
-      "duration_seconds"
-    ]
+      "duration_seconds",
+      "status",
+      "amount_cents"
+    ],
+    "filter_fields": ["status", "billable", "project_id"]
   }
 }

@@ -56,6 +56,9 @@ def test_get_package_normalizes_app_invoices_manifest():
         "site_invoice_portal",
         "action_regenerate_portal_link",
         "system_invoice_portal_link",
+        # 0.8.0 time and materials: approved hours become one invoice, the
+        # last mile of the consulting billing mode.
+        "action_generate_tm_invoice",
     }
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
     assert {entry["collection"] for entry in package["seed"]} == {

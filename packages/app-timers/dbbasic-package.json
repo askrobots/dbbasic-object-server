@@ -1,8 +1,8 @@
 {
   "id": "app-timers",
   "name": "Timers",
-  "version": "0.2.0",
-  "description": "Time logs against tasks: server-enforced start/stop (62 — Timer) over an is_running/duration_seconds pair, at most one running timer per owner. No page object — generated UIs (Scroll) manage time logs from the schema; start/stop/running are server routes (objects/site/timer_actions.py), not a generator page.",
+  "version": "0.3.0",
+  "description": "Time logs against tasks: server-enforced start/stop (62 \u2014 Timer) over an is_running/duration_seconds pair, at most one running timer per owner. No page object \u2014 generated UIs (Scroll) manage time logs from the schema; start/stop/running are server routes (objects/site/timer_actions.py), not a generator page.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
@@ -13,12 +13,20 @@
     {
       "id": "site_timer_actions",
       "path": "objects/site/timer_actions.py"
+    },
+    {
+      "id": "hook_time_logs",
+      "path": "objects/hook/time_logs.py"
     }
   ],
   "schemas": [
     {
       "collection": "time_logs",
       "path": "schemas/time_logs.json"
+    },
+    {
+      "collection": "rate_cards",
+      "path": "schemas/rate_cards.json"
     }
   ],
   "permissions": [
@@ -34,6 +42,10 @@
     {
       "collection": "site_routes",
       "path": "seed/site_routes.tsv"
+    },
+    {
+      "collection": "rate_cards",
+      "path": "seed/rate_cards.tsv"
     }
   ],
   "migrations": []

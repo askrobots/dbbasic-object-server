@@ -56,6 +56,15 @@
       ],
       "object_id": "action_regenerate_portal_link",
       "reason": "regenerating a portal link is the correct response to a leaked one; the object enforces owner-or-admin on the target invoice"
+    },
+    {
+      "effect": "allow",
+      "principal": "role:manager",
+      "actions": [
+        "execute"
+      ],
+      "object_id": "action_generate_tm_invoice",
+      "reason": "turning approved hours into an invoice is a billing decision; the approval that made those hours billable already happened, and this is the person who decides they go out now"
     }
   ]
 }

@@ -1,1 +1,1 @@
-id	task_id	started_at	ended_at	is_running	notes	owner_id
+id	task_id	project_id	started_at	ended_at	is_running	notes	billable	status	hourly_rate_cents	amount_cents	rate_card_id	invoice_id	approved_by	approved_at	created_at	owner_id	duration_seconds

@@ -3,17 +3,55 @@
     {
       "effect": "allow",
       "principal": "registered",
-      "actions": ["create", "read", "update", "delete"],
+      "actions": [
+        "create",
+        "read",
+        "update",
+        "delete"
+      ],
       "collection": "time_logs",
-      "row_filter": {"owner_id": "$user_id"},
+      "row_filter": {
+        "owner_id": "$user_id"
+      },
       "reason": "signed-in users manage their own time logs"
     },
     {
       "effect": "allow",
       "principal": "public",
-      "actions": ["execute"],
+      "actions": [
+        "execute"
+      ],
       "object_id": "site_timer_actions",
       "reason": "the timer start/stop/running routes are public execute, same convention as every other site object (app-theme's site_style, app-catalog's site_stock); the object itself requires a signed-in identity and scopes every read/write to $user_id before touching time_logs, same as the row-filtered collection API would"
+    },
+    {
+      "effect": "allow",
+      "principal": "role:manager",
+      "actions": [
+        "read",
+        "update"
+      ],
+      "collection": "time_logs",
+      "reason": "approving time means reading and moving somebody else's entry, which the owner-filtered rule above deliberately cannot do. The hook still refuses self-approval, so a manager approving their OWN hours is blocked by the gate rather than by this grant -- the rule says who may act on other people's time, not who may bless their own."
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": [
+        "read"
+      ],
+      "collection": "rate_cards",
+      "reason": "anyone logging time should be able to see the rate their hours will be billed at; a rate you cannot look up is one you cannot check an invoice against"
+    },
+    {
+      "effect": "allow",
+      "principal": "role:manager",
+      "actions": [
+        "create",
+        "update"
+      ],
+      "collection": "rate_cards",
+      "reason": "writing a rate card is setting a price, not recording work"
     }
   ]
 }
