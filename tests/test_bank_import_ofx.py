@@ -32,7 +32,7 @@ def setup_env(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     schema_dir = data_dir / "schemas"
     schema_dir.mkdir(parents=True)
-    for pkg, name in (("app-banking", "bank_accounts"),
+    for pkg, name in (("app-banking", "value_accounts"),
                       ("app-banking", "bank_import_profiles"),
                       ("app-banking", "bank_statement_imports"),
                       ("app-banking", "bank_lines"),
@@ -47,7 +47,7 @@ def setup_env(tmp_path, monkeypatch):
         "fin_accounts", {"id": "acct-cash", "name": "Cash", "account_type": "asset",
                          "owner_id": "dan"}, base_dir=data_dir)
     object_records.create_collection_record(
-        "bank_accounts", {"id": ACCOUNT, "name": "Checking",
+        "value_accounts", {"id": ACCOUNT, "name": "Checking",
                           "fin_account_id": "acct-cash", "owner_id": "dan"},
         base_dir=data_dir)
     return data_dir

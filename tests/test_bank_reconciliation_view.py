@@ -36,7 +36,7 @@ def setup_env(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     schema_dir = data_dir / "schemas"
     schema_dir.mkdir(parents=True)
-    wanted = [("app-banking", "bank_accounts"), ("app-banking", "bank_statement_imports"),
+    wanted = [("app-banking", "value_accounts"), ("app-banking", "bank_statement_imports"),
               ("app-banking", "bank_lines"),
               ("app-finance", "fin_accounts"), ("app-finance", "fin_journals"),
               ("app-finance", "fin_journal_lines")]
@@ -58,9 +58,9 @@ def make_fin_account(data_dir, aid, owner="dan"):
 
 def make_bank_account(data_dir, bid, *, fin_account_id, owner="dan", name=None, currency="USD"):
     return object_records.create_collection_record(
-        "bank_accounts",
+        "value_accounts",
         {"id": bid, "name": name or bid, "fin_account_id": fin_account_id,
-         "owner_id": owner, "currency": currency},
+         "owner_id": owner, "kind": "bank"},
         base_dir=data_dir)
 
 

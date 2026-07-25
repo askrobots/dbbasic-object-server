@@ -75,8 +75,27 @@ def _assurance_badge(assurance) -> str:
     return f'<span class="badge {tone}">{_esc(label)}</span>'
 
 
+def _currency_for(base, account):
+    """The denomination code an account is kept in.
+
+    value_accounts names a denomination record rather than carrying a
+    currency string, because the unit decides how an amount is even
+    rendered -- eight places for bitcoin, none for yen (object_money.py).
+    Falls back to USD so a half-configured account still displays.
+    """
+    denomination_id = str(account.get("denomination_id") or "").strip()
+    if not denomination_id:
+        return "USD"
+    try:
+        row = object_records.get_collection_record(
+            "denominations", denomination_id, base_dir=base)
+    except Exception:
+        return "USD"
+    return str(row.get("code") or "USD")
+
+
 def _my_accounts(base, user_id):
-    return [a for a in object_records.read_collection_records("bank_accounts", base_dir=base)
+    return [a for a in object_records.read_collection_records("value_accounts", base_dir=base)
             if a.get("owner_id") == user_id]
 
 
@@ -133,13 +152,12 @@ def _account_list_html(accounts, selected_id):
         items.append(
             f'<li{current}><a href="/reconcile?account={_esc(account["id"])}">'
             f'{_esc(account.get("name") or account["id"])}</a>'
-            f' <span class="hint">{_esc(account.get("institution"))}</span></li>'
+            f' <span class="hint">{_esc(account.get("custodian"))}</span></li>'
         )
     return "<ul class=\"accountlist\">" + "".join(items) + "</ul>"
 
 
-def _statement_html(account, result, open_lines, timing_lines):
-    currency = account.get("currency") or "USD"
+def _statement_html(account, result, open_lines, timing_lines, currency="USD"):
     tiles = f"""
 <div class="tiles">
 <div class="tile"><div class="n">{_money(result['bank_closing_cents'], currency)}</div><div class="l">Bank closing balance</div></div>
@@ -160,7 +178,7 @@ def _statement_html(account, result, open_lines, timing_lines):
 
     return f"""
 <div class="pagehead"><h1>{_esc(account.get('name') or account['id'])}</h1>
-<p class="hint">{_esc(account.get('institution'))} &middot; statement as of {_esc(statement_date)}
+<p class="hint">{_esc(account.get('custodian'))} &middot; statement as of {_esc(statement_date)}
 &middot; {_assurance_badge(result['assurance'])}</p></div>
 {tiles}
 <h2>The tie</h2>
@@ -295,7 +313,8 @@ def GET(request):
             (l for l in lines if l.get("match_status") == "resolved"
              and (l.get("resolved_as") or "") == "timing"),
             key=lambda l: l.get("posted_on") or "")
-        body += _statement_html(selected, result, open_lines, timing_lines)
+        body += _statement_html(selected, result, open_lines, timing_lines,
+                                _currency_for(base, selected))
     elif requested_id:
         body += '<p class="hint">That account was not found among yours.</p>'
 

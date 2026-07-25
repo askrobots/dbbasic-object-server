@@ -10,7 +10,7 @@
     {"name": "import_id", "label": "Import",
      "relation": {"collection": "bank_statement_imports", "display_field": "period_end"}},
     {"name": "bank_account_id", "required": true, "label": "Bank Account",
-     "relation": {"collection": "bank_accounts", "display_field": "name"}},
+     "relation": {"collection": "value_accounts", "display_field": "name"}},
     {"name": "posted_on", "type": "date", "required": true, "label": "Posted"},
     {"name": "amount_cents", "type": "integer", "required": true, "label": "Amount (cents)",
      "help": "Signed: positive is money into the account, negative is money out. Integer cents, never a float."},

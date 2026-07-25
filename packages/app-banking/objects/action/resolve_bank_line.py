@@ -107,7 +107,7 @@ def POST(request):
     journal = None
 
     if kind in JOURNAL_KINDS:
-        account = _get(base, "bank_accounts", line.get("bank_account_id", "")) or {}
+        account = _get(base, "value_accounts", line.get("bank_account_id", "")) or {}
         cash = account.get("fin_account_id") or ""
         entity_id = line.get("entity_id") or account.get("entity_id") or ""
         if not cash:
@@ -141,7 +141,7 @@ def POST(request):
 
         elif kind == "transfer":
             other_id = str(request.get("counterpart_bank_account_id") or "").strip()
-            counterpart = _get(base, "bank_accounts", other_id) if other_id else None
+            counterpart = _get(base, "value_accounts", other_id) if other_id else None
             if counterpart is None or not counterpart.get("fin_account_id"):
                 return {"status": 400,
                         "error": ("transfer needs counterpart_bank_account_id naming another "

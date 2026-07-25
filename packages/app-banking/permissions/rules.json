@@ -9,21 +9,6 @@
         "update",
         "delete"
       ],
-      "collection": "bank_accounts",
-      "row_filter": {
-        "owner_id": "$user_id"
-      },
-      "reason": "signed-in users manage their own bank accounts, same owner-scoped posture as the rest of finance"
-    },
-    {
-      "effect": "allow",
-      "principal": "registered",
-      "actions": [
-        "create",
-        "read",
-        "update",
-        "delete"
-      ],
       "collection": "bank_import_profiles",
       "row_filter": {
         "owner_id": "$user_id"
@@ -125,6 +110,28 @@
       ],
       "object_id": "action_import_ofx",
       "reason": "same posture as the CSV importer: a signed-in operator verb that verifies the bank account belongs to the caller before reading anything"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": [
+        "create",
+        "read"
+      ],
+      "collection": "value_account_counts",
+      "row_filter": {
+        "owner_id": "$user_id"
+      },
+      "reason": "a count is evidence: its owner may record and read one, and nobody may update or delete it -- an observation made by a named person at a moment is not a figure to revise later"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": [
+        "execute"
+      ],
+      "object_id": "action_record_count",
+      "reason": "recording a count is an ordinary operator verb; the object verifies the account belongs to the caller, refuses accounts that are not counted by hand, and enforces the witness requirement"
     }
   ]
 }

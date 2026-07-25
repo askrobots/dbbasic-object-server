@@ -7,7 +7,7 @@
   "fields": [
     {"name": "id"},
     {"name": "bank_account_id", "required": true, "label": "Bank Account",
-     "relation": {"collection": "bank_accounts", "display_field": "name"}},
+     "relation": {"collection": "value_accounts", "display_field": "name"}},
     {"name": "profile_id", "label": "Profile",
      "relation": {"collection": "bank_import_profiles", "display_field": "name"}},
     {"name": "source_format", "type": "text", "label": "Format"},

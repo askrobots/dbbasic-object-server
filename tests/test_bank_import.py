@@ -40,7 +40,7 @@ def setup_env(tmp_path, monkeypatch, *, column_map=None, has_balances=True):
     data_dir = tmp_path / "data"
     schema_dir = data_dir / "schemas"
     schema_dir.mkdir(parents=True)
-    for pkg, name in (("app-banking", "bank_accounts"),
+    for pkg, name in (("app-banking", "value_accounts"),
                       ("app-banking", "bank_import_profiles"),
                       ("app-banking", "bank_statement_imports"),
                       ("app-banking", "bank_lines"),
@@ -56,8 +56,8 @@ def setup_env(tmp_path, monkeypatch, *, column_map=None, has_balances=True):
         "fin_accounts", {"id": "acct-cash", "name": "Cash", "account_type": "asset",
                          "owner_id": "dan"}, base_dir=data_dir)
     object_records.create_collection_record(
-        "bank_accounts", {"id": ACCOUNT, "name": "Business Checking",
-                          "institution": "Test Bank", "last4": "1004",
+        "value_accounts", {"id": ACCOUNT, "name": "Business Checking",
+                          "custodian": "Test Bank", "reference": "1004", "kind": "bank",
                           "fin_account_id": "acct-cash", "owner_id": "dan"},
         base_dir=data_dir)
     object_records.create_collection_record(
@@ -296,7 +296,7 @@ def test_import_requires_identity_and_ownership(tmp_path, monkeypatch):
         roots=[BANKING_OBJECTS]).result
     assert anon["status"] == 403
     object_records.create_collection_record(
-        "bank_accounts", {"id": "bank-2", "name": "Someone Else",
+        "value_accounts", {"id": "bank-2", "name": "Someone Else",
                           "owner_id": "pat"}, base_dir=data_dir)
     other = run_import({"bank_account_id": "bank-2", "profile_id": PROFILE,
                         "content": STATEMENT})

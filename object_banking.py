@@ -468,7 +468,7 @@ def evidence_changes(existing: dict, changes: dict) -> list[str]:
 # writes anything -- it is a fold over already-stored state, the same
 # posture as object_finance.trial_balance().
 
-ACCOUNTS_COLLECTION = "bank_accounts"
+ACCOUNTS_COLLECTION = "value_accounts"
 JOURNALS_COLLECTION = "fin_journals"
 JOURNAL_LINES_COLLECTION = "fin_journal_lines"
 

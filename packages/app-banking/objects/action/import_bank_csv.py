@@ -55,7 +55,7 @@ def POST(request):
     base = _base_dir()
     try:
         account = object_records.get_collection_record(
-            "bank_accounts", bank_account_id, base_dir=base)
+            "value_accounts", bank_account_id, base_dir=base)
     except Exception:
         return {"status": 404, "error": f"Bank account not found: {bank_account_id}"}
     if account.get("owner_id") and account["owner_id"] != user_id and "admin" not in (identity.get("roles") or []):

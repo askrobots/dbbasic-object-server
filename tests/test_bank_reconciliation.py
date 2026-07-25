@@ -33,7 +33,7 @@ def setup_env(tmp_path, monkeypatch, *, settings=()):
     data_dir = tmp_path / "data"
     schema_dir = data_dir / "schemas"
     schema_dir.mkdir(parents=True)
-    wanted = [("app-banking", "bank_accounts"), ("app-banking", "bank_import_profiles"),
+    wanted = [("app-banking", "value_accounts"), ("app-banking", "bank_import_profiles"),
               ("app-banking", "bank_statement_imports"), ("app-banking", "bank_lines"),
               ("app-finance", "fin_accounts"), ("app-finance", "fin_journals"),
               ("app-finance", "fin_journal_lines"), ("app-settings", "app_settings"),
@@ -54,7 +54,7 @@ def setup_env(tmp_path, monkeypatch, *, settings=()):
                              "owner_id": "dan"}, base_dir=data_dir)
     for bank, cash, name in ((ACCOUNT, CASH, "Checking"), (ACCOUNT_2, CASH_2, "Savings")):
         object_records.create_collection_record(
-            "bank_accounts", {"id": bank, "name": name, "fin_account_id": cash,
+            "value_accounts", {"id": bank, "name": name, "fin_account_id": cash,
                               "owner_id": "dan"}, base_dir=data_dir)
     rows = _header("app-settings", "app_settings")
     for i, (k, v) in enumerate(settings):
@@ -351,7 +351,7 @@ def test_a_bank_account_without_a_book_account_cannot_post(tmp_path, monkeypatch
     data_dir = setup_env(tmp_path, monkeypatch,
                          settings=(("reconcile.journal.fees_account", FEES),))
     object_records.create_collection_record(
-        "bank_accounts", {"id": "bank-3", "name": "Unlinked", "owner_id": "dan"},
+        "value_accounts", {"id": "bank-3", "name": "Unlinked", "owner_id": "dan"},
         base_dir=data_dir)
     make_line(data_dir, "L9", amount=-2500, desc="FEE", account="bank-3")
     outcome = run_object("action_resolve_bank_line", {"line_id": "L9", "kind": "fee"})

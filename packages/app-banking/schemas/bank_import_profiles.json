@@ -7,7 +7,7 @@
     {"name": "id"},
     {"name": "name", "type": "text", "required": true, "label": "Name"},
     {"name": "bank_account_id", "required": true, "label": "Bank Account",
-     "relation": {"collection": "bank_accounts", "display_field": "name"}},
+     "relation": {"collection": "value_accounts", "display_field": "name"}},
     {"name": "source_format", "type": "enum", "default": "csv", "label": "Format",
      "enum": ["csv", "ofx", "camt053", "mt940"],
      "help": "v1 ships csv; ofx (FITID + balances) is the next importer. The canonical landing shape (bank_lines) is the same for all of them."},

@@ -33,7 +33,7 @@ def setup_env(tmp_path, monkeypatch, *, settings=(), with_tasks=True):
     data_dir = tmp_path / "data"
     schema_dir = data_dir / "schemas"
     schema_dir.mkdir(parents=True)
-    wanted = [("app-banking", "bank_accounts"), ("app-banking", "bank_import_profiles"),
+    wanted = [("app-banking", "value_accounts"), ("app-banking", "bank_import_profiles"),
               ("app-banking", "bank_statement_imports"), ("app-banking", "bank_lines"),
               ("app-finance", "fin_accounts"), ("app-settings", "app_settings"),
               ("app-payments", "payments"), ("app-invoices", "invoices")]
@@ -51,7 +51,7 @@ def setup_env(tmp_path, monkeypatch, *, settings=(), with_tasks=True):
         "fin_accounts", {"id": "acct-cash", "name": "Cash", "account_type": "asset",
                          "owner_id": "dan"}, base_dir=data_dir)
     object_records.create_collection_record(
-        "bank_accounts", {"id": ACCOUNT, "name": "Checking", "fin_account_id": "acct-cash",
+        "value_accounts", {"id": ACCOUNT, "name": "Checking", "fin_account_id": "acct-cash",
                           "owner_id": "dan"}, base_dir=data_dir)
 
     rows = _header("app-settings", "app_settings")
@@ -278,7 +278,7 @@ def test_escalate_to_setting_overrides_the_record_owner(tmp_path, monkeypatch):
 def test_bank_account_filter_scopes_the_scan(tmp_path, monkeypatch):
     data_dir = setup_env(tmp_path, monkeypatch)
     object_records.create_collection_record(
-        "bank_accounts", {"id": "bank-2", "name": "Savings", "fin_account_id": "acct-cash",
+        "value_accounts", {"id": "bank-2", "name": "Savings", "fin_account_id": "acct-cash",
                           "owner_id": "dan"}, base_dir=data_dir)
     make_line(data_dir, "L1", amount=150000, on="2026-07-01", desc="A", account=ACCOUNT)
     make_line(data_dir, "L2", amount=90000, on="2026-07-01", desc="B", account="bank-2")
