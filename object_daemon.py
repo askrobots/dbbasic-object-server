@@ -286,14 +286,23 @@ def process_queue(runtime: ObjectRuntime, max_messages=10):
         if msg.get('status') != 'pending':
             continue
 
-        # Check expiration
-        if msg.get('expires_at', float('inf')) < now:
+        # Check expiration. `or`-style defaulting rather than .get(key,
+        # default): object_daemon_control.enqueue_message always WRITES
+        # expires_at, using None to mean "never expires", so the key exists
+        # and .get's default never applied -- every message enqueued through
+        # the official API raised TypeError here and took the whole pass
+        # down with it. The queue was fully built and unusable for exactly
+        # that reason.
+        expires_at = msg.get('expires_at')
+        if expires_at is not None and expires_at < now:
             msg['status'] = 'expired'
             obj.state_manager.set(key, json.dumps(msg))
             continue
 
-        # Check visibility
-        if msg.get('visible_after', 0) > now:
+        # Check visibility (same defaulting hazard: visible_after is always
+        # written, and a null there means "runnable now").
+        visible_after = msg.get('visible_after')
+        if visible_after is not None and visible_after > now:
             continue
 
         messages.append((key, msg))

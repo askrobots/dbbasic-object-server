@@ -1,0 +1,18 @@
+{
+  "id": "system-triggers",
+  "name": "Daemon Triggers",
+  "version": "0.1.0",
+  "description": "The two trigger objects the background daemon reads its work from: `scheduler` (cron and one-time tasks) and `queue` (deferred work with delay, priority, expiry and retry-with-backoff). Both are deliberately inert -- the work is DATA in each object's state, and the contracts live in object_daemon.process_scheduler and process_queue. They ship as a package because a trigger object hand-placed on one server is a scheduler that dies silently the next time that server is rebuilt: without the file the daemon just reports 'no scheduler object' / 'no queue object' and every task and message waits forever, which is the same class of failure as code that is written but never scheduled. Installing this package is what turns those passes on. Note what the queue is not: messages execute inside the daemon's poll loop, so it suits follow-on writes, notifications, recomputes and short fetches -- long or heavy work (image processing, OCR, model calls) wants its own process instead of starving the other passes.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": [],
+  "objects": [
+    {"id": "triggers_scheduler", "path": "objects/triggers/scheduler.py"},
+    {"id": "triggers_queue", "path": "objects/triggers/queue.py"}
+  ],
+  "schemas": [],
+  "permissions": [],
+  "seed": [],
+  "migrations": []
+}
