@@ -42,6 +42,7 @@ import secrets
 from datetime import datetime, timezone
 
 import object_money
+import object_stripe
 import object_records
 
 DATA_DIR_ENV = "DBBASIC_DATA_DIR"
@@ -322,6 +323,43 @@ def _render_partial(invoice: dict, currency: str, base, lines: list[dict]) -> di
     return _page(body, title=f"Invoice {invoice.get('number') or ''} -- partially paid")
 
 
+_PAY_SCRIPT = """
+const btn = document.getElementById("paybtn");
+btn.addEventListener("click", async () => {
+  btn.disabled = true;
+  btn.textContent = "Starting secure checkout\u2026";
+  const token = location.pathname.split("/").pop();
+  let data = {};
+  try {
+    const resp = await fetch("/objects/action_stripe_checkout", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({token: token}),
+    });
+    data = await resp.json();
+  } catch (err) { data = {}; }
+  if (data && data.url) { location.href = data.url; return; }
+  // Never strand the payer: fall back to the instructions already on the
+  // page rather than leaving a dead button.
+  btn.disabled = false;
+  btn.textContent = "Pay by card";
+  document.getElementById("payerror").textContent =
+    (data && data.error) || "Card payment is unavailable right now -- the payment "
+    + "instructions below still work.";
+});
+"""
+
+
+def _pay_button_html() -> str:
+    """Rendered only when Stripe is configured -- see _render_unpaid."""
+    if not object_stripe.stripe_config_from_env().configured:
+        return ""
+    return ('<p style="margin:1rem 0"><button id="paybtn" class="btn primary">'
+            "Pay by card</button> "
+            '<span id="payerror" class="warn" style="margin-left:0.5rem"></span></p>'
+            f"<script>{_PAY_SCRIPT}</script>")
+
+
 def _render_unpaid(invoice: dict, currency: str, base, lines: list[dict]) -> dict:
     total = object_money.format_amount(invoice.get("total_cents") or 0, currency, base_dir=base)
     balance = object_money.format_amount(invoice.get("balance_due_cents") or 0, currency, base_dir=base)
@@ -330,13 +368,15 @@ def _render_unpaid(invoice: dict, currency: str, base, lines: list[dict]) -> dic
 <div class="tile"><div class="n">{balance}</div><div class="l">Amount due</div></div>
 <div class="tile"><div class="n">{total}</div><div class="l">Invoice total</div></div>
 </div>"""
-    # No Pay button: there is no card-processing rail wired up yet, and a
-    # button that posts nowhere is worse than no button at all -- it tells
-    # a customer trying to pay you that something is broken on YOUR end.
+    # The Pay button appears ONLY when card payment can actually succeed.
+    # A button that posts nowhere tells a customer trying to pay you that
+    # something is broken on YOUR end, so an unconfigured server shows the
+    # payment instructions alone rather than a lie with a shadow on it.
     body = _header_html(invoice, base) + (
         '<p><span class="badge bad">Payment due</span></p>'
         + tiles
         + _lines_table_html(lines, currency, base)
+        + _pay_button_html()
         + "<h2>How to pay</h2>"
         + _payment_instructions_html(base)
     )

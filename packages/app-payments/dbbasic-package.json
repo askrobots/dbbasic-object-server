@@ -1,8 +1,8 @@
 {
   "id": "app-payments",
   "name": "Payments",
-  "version": "0.1.0",
-  "description": "Payments and refunds against invoices: append-only money movements, hook-enforced invariants (overpayment gate per app_settings policy; refund <= payment minus prior refunds; invoice_id stamped from the payment), and rollup/formula-derived paid and balance amounts on invoices. First module of the ERP tail; the stress test of the primitive stack (plan/payments-spec.md).",
+  "version": "0.2.0",
+  "description": "Payments and refunds against invoices: append-only money movements, hook-enforced invariants (overpayment gate per app_settings policy; refund <= payment minus prior refunds; invoice_id stamped from the payment), and rollup/formula-derived paid and balance amounts on invoices. First module of the ERP tail; the stress test of the primitive stack (plan/payments-spec.md). 0.2.0 wires Stripe as a PAYMENT METHOD, never the system of record: action_stripe_checkout turns a portal token into a Checkout Session (amount computed server-side from the open balance -- a payer who could name their own price is not paying an invoice), and webhook_stripe verifies the signature over the raw bytes and writes ONE payments row, deduped on the Stripe event id because Stripe redelivers for days. Everything after that is the reaction chain any payment already triggers: the invoice flips, the books compose, the receipt sends. The predecessor's Stripe silo happened because webhook code did bespoke things; here the webhook is just another door into the one pipeline. Storage-level writes bypass the synchronous dispatcher, so a Stripe deployment must enable DBBASIC_ENABLE_CHANGE_DISPATCH -- the third instance of logic-decisions #9 buying the real fix instead of a third workaround.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
@@ -29,6 +29,14 @@
     {
       "id": "system_invoice_status",
       "path": "objects/system/invoice_status.py"
+    },
+    {
+      "id": "webhook_stripe",
+      "path": "objects/webhook/stripe.py"
+    },
+    {
+      "id": "action_stripe_checkout",
+      "path": "objects/action/stripe_checkout.py"
     }
   ],
   "schemas": [

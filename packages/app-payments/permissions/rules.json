@@ -1,15 +1,61 @@
 {
   "rules": [
-    {"effect": "allow", "principal": "registered",
-     "actions": ["create", "read", "update", "delete"],
-     "collection": "payments", "row_filter": {"owner_id": "$user_id"},
-     "reason": "signed-in users manage payments they recorded"},
-    {"effect": "allow", "principal": "registered",
-     "actions": ["create", "read", "update", "delete"],
-     "collection": "refunds", "row_filter": {"owner_id": "$user_id"},
-     "reason": "signed-in users manage refunds they recorded"},
-    {"effect": "allow", "principal": "public", "actions": ["execute"],
-     "object_id": "site_payments",
-     "reason": "the payments page is a public static shell; data stays row-gated"}
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": [
+        "create",
+        "read",
+        "update",
+        "delete"
+      ],
+      "collection": "payments",
+      "row_filter": {
+        "owner_id": "$user_id"
+      },
+      "reason": "signed-in users manage payments they recorded"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": [
+        "create",
+        "read",
+        "update",
+        "delete"
+      ],
+      "collection": "refunds",
+      "row_filter": {
+        "owner_id": "$user_id"
+      },
+      "reason": "signed-in users manage refunds they recorded"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": [
+        "execute"
+      ],
+      "object_id": "site_payments",
+      "reason": "the payments page is a public static shell; data stays row-gated"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": [
+        "execute"
+      ],
+      "object_id": "webhook_stripe",
+      "reason": "Stripe is not a user of this server and cannot hold a credential: authenticity comes from the HMAC signature the object verifies over the raw body, which is why the endpoint must be publicly reachable and the object must fail closed"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": [
+        "execute"
+      ],
+      "object_id": "action_stripe_checkout",
+      "reason": "the payer has no account here; possession of the unguessable portal token IS the authorization, same as viewing the invoice, and the amount is computed server-side from the open balance"
+    }
   ]
 }

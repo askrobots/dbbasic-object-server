@@ -190,6 +190,9 @@ def test_package_manifest_shape():
         "site_payments", "hook_payments", "hook_refunds",
         "system_books",  # journal composer (books spine)
         "system_invoice_status",  # event-driven paid/partial flips (slice 2)
+        # 0.2.0: Stripe as a payment METHOD -- the webhook writes an ordinary
+        # payments row and the existing reaction chain does the rest.
+        "webhook_stripe", "action_stripe_checkout",
     }
     assert "app-invoices" in {d["id"] for d in package["dependencies"]}
     for schema_name in ("payments", "refunds"):
