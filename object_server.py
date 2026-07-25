@@ -655,6 +655,12 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
             await _handle_mcp(send, method, body, headers)
             return
 
+        webhooks_prefix = http_api_contract.WEBHOOKS_PATH + "/"
+        if path.startswith(webhooks_prefix):
+            await _handle_webhook(send, method, path.removeprefix(webhooks_prefix),
+                                  body, query, headers)
+            return
+
         if path == http_api_contract.SEARCH_PATH:
             await _handle_search(send, method, query, headers)
             return
@@ -1987,6 +1993,78 @@ def _identity_password_login_payload(payload: Mapping[str, Any]) -> dict[str, An
         "label": label or "password login",
         "ttl_seconds": payload.get("ttl_seconds"),
     }
+
+
+# Request headers a webhook object may see. A deliberate SAFELIST rather
+# than everything-minus-secrets: providers sign with headers like
+# stripe-signature / x-hub-signature-256, and content negotiation needs
+# content-type -- but authorization and cookie belong to OUR callers, and
+# handing them to package code would turn a webhook object into a
+# credential tap. Extending this list is a conscious act, not a default.
+_WEBHOOK_HEADER_SAFELIST = (
+    "content-type",
+    "user-agent",
+    "stripe-signature",
+    "x-hub-signature-256",
+    "x-signature",
+    "x-request-id",
+    "idempotency-key",
+)
+
+
+async def _handle_webhook(
+    send,
+    method: str,
+    name: str,
+    body: bytes,
+    query: dict[str, str],
+    headers: dict[str, str],
+) -> None:
+    """POST /webhooks/{name} -> execute the `webhook_{name}` object with the
+    RAW request body.
+
+    The one thing webhook objects need that no other route provides:
+    provider signatures (Stripe, GitHub, Twilio) are HMACs over the exact
+    bytes on the wire, and every other path parses the body before the
+    object runs, destroying the thing that must be verified. This endpoint
+    is deliberately provider-neutral core plumbing -- it knows nothing
+    about Stripe; it delivers bytes and safelisted headers to an object a
+    package ships, and the object owns verification and meaning.
+
+    Security posture: webhooks are unauthenticated BY NATURE (the caller
+    is a payment processor, not a user), so authenticity comes from the
+    object verifying a signature over the raw body -- which is exactly why
+    the body must arrive unparsed. The object still needs an explicit
+    public-execute permission rule (no rule, no execution), the body-size
+    limit already applied upstream holds, and the response is always JSON
+    with no reflection of the input.
+    """
+    if method != "POST":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+    clean = name.strip("/")
+    if not clean or "/" in clean or not clean.replace("-", "_").replace("_", "a").isalnum():
+        await _send_json(send, {"status": "error", "error": "Unknown webhook"}, status=404)
+        return
+    object_id = f"webhook_{clean.replace('-', '_')}"
+    if resolve_object_id(object_id, get_object_roots()) is None:
+        await _send_json(send, {"status": "error", "error": "Unknown webhook"}, status=404)
+        return
+
+    payload: dict[str, Any] = dict(query)
+    payload["_raw_body"] = body.decode("utf-8", "replace")
+    payload["_headers"] = {
+        key: value for key, value in headers.items()
+        if key.lower() in _WEBHOOK_HEADER_SAFELIST
+    }
+    await _execute_object_method(
+        send,
+        object_id,
+        "POST",
+        payload,
+        headers,
+        permission_action=object_permissions.EXECUTE,
+    )
 
 
 async def _handle_mcp(

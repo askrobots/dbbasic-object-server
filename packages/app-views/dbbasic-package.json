@@ -1,8 +1,8 @@
 {
   "id": "app-views",
   "name": "Views",
-  "version": "0.2.0",
-  "description": "Dynamic UI: views as records. One universal renderer draws any view from a blocks descriptor (list, form, detail, count, markdown), so pages, dashboards, and saved searches are created and reshaped by writing data, not code. Routed pages need a site_routes record mapping /views/{view_id:uuid} to site_view_render. 0.2.0 adds /flow -- the workflow, viewable: one page per collection showing its state machine (server-rendered SVG, no JS dependencies), every transition with its guard, what gates writes, what reacts, what gets composed, notifications, derived fields, and where it renders -- compiled live by object_governance from the same declarations the server enforces, so the docs cannot disagree with the system. Most apps forgot help and most frameworks forgot docs because their workflow existed only as the union of what every callback did; a compiled picture cannot rot.",
+  "version": "0.3.0",
+  "description": "Dynamic UI: views as records. One universal renderer draws any view from a blocks descriptor (list, form, detail, count, markdown), so pages, dashboards, and saved searches are created and reshaped by writing data, not code. Routed pages need a site_routes record mapping /views/{view_id:uuid} to site_view_render. 0.2.0 adds /flow -- the workflow, viewable: one page per collection showing its state machine (server-rendered SVG, no JS dependencies), every transition with its guard, what gates writes, what reacts, what gets composed, notifications, derived fields, and where it renders -- compiled live by object_governance from the same declarations the server enforces, so the docs cannot disagree with the system. Most apps forgot help and most frameworks forgot docs because their workflow existed only as the union of what every callback did; a compiled picture cannot rot. 0.3.0 adds /urls: every URL the server answers, compiled from convention, the site_routes and views collections, and the fixed core API constants -- with shadowing called out (convention wins over data). A hand-written sitemap is wrong within a week; a compiled one cannot be.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
@@ -14,6 +14,10 @@
     {
       "id": "site_flow",
       "path": "objects/site/flow.py"
+    },
+    {
+      "id": "site_urls",
+      "path": "objects/site/urls.py"
     }
   ],
   "schemas": [

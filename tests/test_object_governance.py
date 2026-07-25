@@ -140,3 +140,31 @@ def test_flow_page_rejects_an_invalid_collection_name(tmp_path, monkeypatch):
                     "collection": "../../../etc/passwd"})
     # An unusable name falls back to the index rather than echoing anything.
     assert "How things work" in detail["body"]
+
+
+# --- the /urls page -------------------------------------------------------------
+
+def test_urls_page_compiles_the_site_map(tmp_path, monkeypatch):
+    """A hand-written sitemap is wrong within a week; a compiled one cannot
+    be. Convention pages, routed patterns, view routes and the core API all
+    appear, and the anonymous gate holds -- the complete map of a server's
+    surface is reconnaissance data."""
+    data_dir = setup_env(tmp_path, monkeypatch)
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR",
+                       str(PACKAGES / "app-views" / "objects"))
+    import object_execution
+    import python_object_runtime
+    runtime = python_object_runtime.PythonObjectRuntime()
+
+    def page(payload):
+        return object_execution.execute_object(
+            runtime,
+            object_execution.ObjectExecutionRequest("site_urls", method="GET",
+                                                    payload=payload),
+            roots=[PACKAGES / "app-views" / "objects"]).result
+
+    assert "Sign in" in page({})["body"]
+    body = page({"_identity": {"user_id": "dan"}})["body"]
+    assert "/webhooks/{name}" in body          # core surface listed
+    assert "site_flow" in body                 # convention pages discovered
+    assert "convention" in body and "core" in body

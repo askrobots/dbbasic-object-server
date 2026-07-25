@@ -34,6 +34,9 @@ def test_get_package_normalizes_app_views_manifest():
         # 0.2.0: /flow -- the workflow viewable, compiled live by
         # object_governance from the declarations the server enforces.
         {"id": "site_flow", "path": "objects/site/flow.py"},
+        # 0.3.0: /urls -- the site map, compiled (convention + routes +
+        # views + core constants), with shadowing called out.
+        {"id": "site_urls", "path": "objects/site/urls.py"},
     ]
     assert package["schemas"] == [{"collection": "views", "path": "schemas/views.json"}]
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
