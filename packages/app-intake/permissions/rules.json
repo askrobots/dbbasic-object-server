@@ -1,0 +1,36 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": [
+        "create",
+        "read",
+        "update"
+      ],
+      "collection": "scans",
+      "row_filter": {
+        "owner_id": "$user_id"
+      },
+      "reason": "people see and manage the documents they sent in; a scan is somebody's paperwork, not the company's noticeboard"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": [
+        "execute"
+      ],
+      "object_id": "action_scan_ingest",
+      "reason": "capture has to be available to whoever is holding the receipt, which is everybody"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": [
+        "execute"
+      ],
+      "object_id": "action_confirm_scan",
+      "reason": "confirming creates a DRAFT expense owned by the confirmer; it still faces the approval gate, which somebody else has to pass it through"
+    }
+  ]
+}

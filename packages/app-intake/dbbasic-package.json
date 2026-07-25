@@ -1,0 +1,54 @@
+{
+  "id": "app-intake",
+  "name": "Document Intake",
+  "version": "0.1.0",
+  "description": "Snap it, confirm it, post it. Paperwork sprawl is the reason small-business books rot: entries are tedious, so they do not get made, and by the time anybody looks the receipts are in a coat pocket. This package is the ENTRY path -- ingest is fast and dumb (store the bytes, return, read it later) because capture has to happen at the moment the paper exists; a reading pass produces a structured GUESS; and a human confirms it into a draft expense stamped generated_from scans/{id}. Nothing an engine reads is ever posted. That boundary (docs/logic-decisions.md #6, #8) is what lets this ship with no AI at all: the default extractor is regex over OCR text -- free, no key, no per-page cost -- and it degrades to 'found nothing, here is your image, type the total' rather than to wrong numbers in the ledger. An AI vision engine plugs into the same shape and simply guesses better, on the owner's own key, which is the only path with a real marginal cost. The image itself is the audit evidence auditors actually want, and it stays attached to the expense, the journal and the invoice line that follow from it. Pairs with bank reconciliation: the bank line says money left, the scan says why.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": [],
+  "objects": [
+    {
+      "id": "action_scan_ingest",
+      "path": "objects/action/scan_ingest.py"
+    },
+    {
+      "id": "hook_scans",
+      "path": "objects/hook/scans.py"
+    },
+    {
+      "id": "system_scan_processor",
+      "path": "objects/system/scan_processor.py"
+    },
+    {
+      "id": "action_confirm_scan",
+      "path": "objects/action/confirm_scan.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "scans",
+      "path": "schemas/scans.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "scans",
+      "path": "seed/scans.tsv"
+    }
+  ],
+  "migrations": [],
+  "schedules": [
+    {
+      "id": "scan_processor_hourly",
+      "object_id": "system_scan_processor",
+      "schedule": "5 * * * *",
+      "description": "Read pending scans and produce confirmable suggestions. Hourly rather than daily because somebody who just photographed a receipt expects to see it read, and nothing here posts anything."
+    }
+  ]
+}
