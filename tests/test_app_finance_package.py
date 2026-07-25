@@ -23,7 +23,17 @@ APP_FINANCE_DIR = PACKAGES_ROOT / "app-finance"
 # -- the doctrine this package must never violate (00-doctrine-and-contract.md).
 _FLOAT_MONEY_TYPES = {"float", "number", "currency"}
 
-_SCHEMA_NAMES = ("fin_accounts", "fin_journals", "fin_journal_lines", "fin_recurring")
+# 0.4.0 added `denominations`: what a unit of value is and how finely it
+# divides (object_money.py). Amounts are integers of the smallest unit, so
+# this is the collection that says where the decimal point goes.
+_SCHEMA_NAMES = ("denominations", "fin_accounts", "fin_journals",
+                 "fin_journal_lines", "fin_recurring")
+
+# Collections that are shared REFERENCE data rather than per-owner business
+# records: a denomination is the same fact in every set of books (gold is
+# gold), so unlike the rest of finance it carries no entity_id scoping FK
+# and it ships seeded rows instead of a bare header.
+_REFERENCE_COLLECTIONS = ("denominations",)
 
 
 def _schema(name):
@@ -96,6 +106,8 @@ def test_schema_json_files_are_valid_and_versioned():
     for name in _SCHEMA_NAMES:
         payload = _schema(name)
         assert payload["name"] == name
+        if name in _REFERENCE_COLLECTIONS:
+            continue
         # entity_id is present on every finance collection, a relation into
         # the entities collection (scoping FK, not composition).
         by_name = {f["name"]: f for f in payload["fields"]}
@@ -242,7 +254,15 @@ def test_seed_tsvs_have_no_data_rows_and_match_schema_field_order():
         schema = _schema(name)
         path = APP_FINANCE_DIR / "seed" / f"{name}.tsv"
         lines = path.read_text().splitlines()
-        assert len(lines) == 1, f"{name}.tsv should be header-only"
+        if name in _REFERENCE_COLLECTIONS:
+            # Reference data, not user data: an install that did not know
+            # USD divides into two places and BTC into eight could not render
+            # an amount at all, so these rows ship. Still schema-ordered, and
+            # every row is_system so operator-defined units stay separable.
+            assert len(lines) > 1, f"{name}.tsv is reference data and should ship rows"
+            assert all(row.split("\t")[6] == "true" for row in lines[1:])
+        else:
+            assert len(lines) == 1, f"{name}.tsv should be header-only"
         header = lines[0].split("\t")
         assert header == [f["name"] for f in schema["fields"]]
 

@@ -4,6 +4,41 @@
       "effect": "allow",
       "principal": "registered",
       "actions": [
+        "read"
+      ],
+      "collection": "denominations",
+      "reason": "denominations are reference data, not private records: any signed-in user needs to know that BTC divides into eight places in order to render an amount correctly at all"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": [
+        "create",
+        "update",
+        "delete"
+      ],
+      "collection": "denominations",
+      "row_filter": {
+        "owner_id": "$user_id"
+      },
+      "reason": "operators may add their own units (a gift-card program, a loyalty point, a barter unit) but cannot edit the seeded ones everybody shares"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": [
+        "read"
+      ],
+      "collection": "denominations",
+      "row_filter": {
+        "is_system": "true"
+      },
+      "reason": "public pages that display money (an invoice pay link, a storefront) must be able to resolve the scale of a standard unit; operator-defined denominations stay behind the sign-in because a custom code can name a business relationship"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": [
         "create",
         "read",
         "update",

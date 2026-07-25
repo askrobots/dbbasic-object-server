@@ -1,0 +1,11 @@
+id	code	name	symbol	kind	scale	is_system	notes	owner_id	created_at
+den-usd	USD	US Dollar	$	fiat	2	true			
+den-eur	EUR	Euro	€	fiat	2	true			
+den-gbp	GBP	Pound Sterling	£	fiat	2	true			
+den-jpy	JPY	Japanese Yen	¥	fiat	0	true	No minor unit: 1500 minor units is 1,500 yen, not 15.00.		
+den-btc	BTC	Bitcoin		crypto	8	true	Smallest unit is the satoshi; 100,000,000 minor units = 1 BTC.		
+den-eth	ETH	Ether		crypto	18	true	Eighteen places (wei). Stored exactly because minor units are unbounded integers.		
+den-usdc	USDC	USD Coin		stablecoin	6	true			
+den-usdt	USDT	Tether		stablecoin	6	true			
+den-xau	XAU	Gold (troy ounce)		metal	4	true	Priced per troy ounce; four places is the common quoting convention, not a law.		
+den-xag	XAG	Silver (troy ounce)		metal	4	true			

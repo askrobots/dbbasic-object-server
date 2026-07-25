@@ -181,6 +181,38 @@ Format per decision: **Decision · Rationale · Applies to · Status.**
   synchronous dispatch. Do not write a third workaround.
 - **Status:** observed twice; extraction pending the third.
 
+### 10. An amount is an integer in its denomination's smallest unit
+
+- **Decision:** Money is stored as a whole number of the smallest unit of
+  its own denomination, and a `denominations` record declares what that unit
+  is (USD scale 2, JPY scale 0, BTC scale 8, ETH scale 18, XAU scale 4).
+  Floats never appear; `Decimal` is used only at the edges to convert human
+  text to and from integers. Amounts in different denominations are never
+  added — combining them requires converting through a rate **stamped at the
+  transaction moment** (#1), which is a deliberate act.
+- **Rationale:** This is the generalization of the founding "money is
+  integer cents" rule rather than a replacement for it — cents were always
+  *USD minor units*. A business holds value in several denominations at once
+  (a bank balance, bitcoin, a stablecoin, a box of cash, gift cards, maybe a
+  weight of metal), and they divide differently. The alternative — a
+  per-denomination `decimal_places` field beside one fixed-scale decimal
+  column — is what the predecessor system did, and it lets a schema *declare*
+  more precision than it can *hold*: the first 18-decimal asset truncates
+  silently, while every ordinary dollar carries six meaningless digits where
+  rounding dust collects. Integer minor units are exact by construction,
+  have no ceiling (Python ints are unbounded), and are what payment
+  processors and chains already use.
+- **Corollary — rounding is a decision, not a parse.** Converting text that
+  does not fit the scale (0.005 USD) raises; a caller that genuinely wants
+  rounding calls `quantize_minor` and says so. Half a cent silently becoming
+  a cent is how a per-row error turns into a real number at scale.
+- **Applies to:** `object_money.py`, the `denominations` collection; new
+  value-bearing collections use `*_minor` + a denomination. Existing
+  USD-only collections keep `*_cents`, which is honest for them — a
+  big-bang rename buys nothing.
+- **Status:** doctrine, shipped with denominations; the value-account layer
+  it founds is specified in `plan/value-accounts-and-denominations-spec.md`.
+
 ---
 
 ## How to use this

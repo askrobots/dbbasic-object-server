@@ -212,6 +212,8 @@ This repository currently contains:
 - `object_analytics.py` - request analytics capture and page-view retention rules
 - `object_connectors.py` - reconcile driver converging external systems to package-declared desired state
 - `object_finance.py` - journal totals, trial balance, and the shared posted-journal composer
+- `object_money.py` - amounts as integers in a denomination's smallest unit (USD cents, satoshis, wei, troy-ounce fractions)
+- `object_banking.py` - bank statement import, its self-checks, and reconciliation
 - `object_stock.py` - derived stock levels folded from the append-only stock-moves ledger
 - `object_activity.py` - activity feed derivation from the record changelog
 - `object_api_keys.py` - durable per-user bearer API keys, hash-only storage

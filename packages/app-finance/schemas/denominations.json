@@ -1,0 +1,31 @@
+{
+  "name": "denominations",
+  "title": "Denominations",
+  "version": 1,
+  "description": "What a unit of value IS: its code, what kind of thing it is, and how finely it divides. Amounts everywhere are stored as an integer count of the smallest unit (150000 USD minor = 1,500.00; 5000000 BTC minor = 0.05 BTC), and this collection is what tells the system where the decimal point goes -- see object_money.py. That is the generalization of this codebase's founding 'money is integer cents' rule: cents were always USD minor units. A business holds value in more than one denomination at once -- a bank balance, bitcoin, a stablecoin, a box of cash, gift cards, possibly a weight of metal -- and they divide differently (JPY has no minor unit at all; ETH has eighteen places). Kept as DATA rather than a code table so an operator can add a gift-card program, a loyalty point, or a barter unit without a deploy. Reconciled against a private predecessor-system audit (not part of this repo): its Currency model carried the same fiat/crypto/metal/commodity split and a per-currency decimal_places, but stored every amount in one fixed 8-decimal column -- a schema that could declare more precision than it could hold. Integer minor units have neither failure: exact by construction, no ceiling, no rounding dust on ordinary dollars.",
+  "fields": [
+    {"name": "id"},
+    {"name": "code", "type": "text", "required": true, "label": "Code",
+     "maxlength": 20,
+     "help": "USD, JPY, BTC, USDC, XAU, or your own (GIFT-ACME, POINTS). Compared case-insensitively."},
+    {"name": "name", "type": "text", "required": true, "label": "Name"},
+    {"name": "symbol", "type": "text", "label": "Symbol", "maxlength": 8,
+     "help": "Optional display prefix ($, EUR). Purely cosmetic -- the code is the identity."},
+    {"name": "kind", "type": "enum", "default": "fiat", "label": "Kind",
+     "enum": ["fiat", "crypto", "stablecoin", "metal", "commodity", "points", "other"],
+     "help": "What class of thing this is. Drives valuation and tax treatment later (crypto disposals are lot-tracked in most jurisdictions; metals are often taxed as collectibles), and nothing today."},
+    {"name": "scale", "type": "integer", "required": true, "default": "2",
+     "label": "Decimal Places",
+     "help": "How many decimal places the unit divides into: 2 for USD, 0 for JPY, 8 for BTC (satoshis), 18 for ETH, 4 for a troy ounce of gold by convention. Amounts are stored as integers of the smallest unit, so this is what makes 150000 mean 1,500.00 rather than 150,000."},
+    {"name": "is_system", "type": "boolean", "default": "false", "label": "Built-in",
+     "help": "Seeded denominations everyone shares. Operator-defined ones (a gift-card program, a loyalty point) are ordinary rows."},
+    {"name": "notes", "type": "textarea", "label": "Notes"},
+    {"name": "owner_id", "type": "text", "label": "Owner"},
+    {"name": "created_at", "type": "datetime", "read_only": true, "label": "Created"}
+  ],
+  "search": {"fields": ["code", "name"]},
+  "forms": {"default": {"fields": ["code", "name", "symbol", "kind", "scale", "notes"]}},
+  "views": {"list_mode": "table",
+            "list_fields": ["code", "name", "kind", "scale"],
+            "filter_fields": ["kind"]}
+}
