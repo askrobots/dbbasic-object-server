@@ -16,13 +16,6 @@ venv/
 /data/
 /objects/
 
-# Working design notes and specs, written before building and kept out of
-# the public repo. This lived only in .git/info/exclude, which is
-# local-only: a fresh clone would not have carried it, and one `git add -A`
-# would have published the lot. An ignore rule that matters belongs where
-# it travels with the repository.
-/plan/
-
 # Closed-source / private packages — the open-core overlay. Proprietary
 # packages (e.g. Mailcow email hosting) live here and are never committed;
 # only the directory's README is tracked, to document the convention.
