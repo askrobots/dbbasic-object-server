@@ -1,0 +1,3 @@
+id	pattern	object_id	priority
+route_flow_index	/flow	site_flow	20
+route_flow_collection	/flow/{collection}	site_flow	10

@@ -30,11 +30,17 @@ def test_get_package_normalizes_app_views_manifest():
     assert package["id"] == "app-views"
     assert package["name"] == "Views"
     assert package["objects"] == [
-        {"id": "site_view_render", "path": "objects/site/view_render.py"}
+        {"id": "site_view_render", "path": "objects/site/view_render.py"},
+        # 0.2.0: /flow -- the workflow viewable, compiled live by
+        # object_governance from the declarations the server enforces.
+        {"id": "site_flow", "path": "objects/site/flow.py"},
     ]
     assert package["schemas"] == [{"collection": "views", "path": "schemas/views.json"}]
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
-    assert package["seed"] == []
+    # 0.2.0 seeds the /flow routes.
+    assert package["seed"] == [
+        {"collection": "site_routes", "path": "seed/site_routes.tsv"}
+    ]
 
 
 def test_dry_run_app_views_package_is_safe(tmp_path):

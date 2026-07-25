@@ -100,3 +100,43 @@ def test_unknown_collection_is_a_plain_empty_report(tmp_path, monkeypatch):
     info = object_governance.governs("nothing_here", base_dir=data_dir, roots=ROOTS)
     assert info["collection"] == "nothing_here"
     assert info["gates"] == [] and info["views"] == []
+
+
+# --- the /flow page -----------------------------------------------------------
+
+def _flow(payload):
+    import object_execution
+    import python_object_runtime
+    runtime = python_object_runtime.PythonObjectRuntime()
+    return object_execution.execute_object(
+        runtime,
+        object_execution.ObjectExecutionRequest("site_flow", method="GET", payload=payload),
+        roots=[PACKAGES / "app-views" / "objects"]).result
+
+
+def test_flow_page_renders_the_compiled_picture(tmp_path, monkeypatch):
+    data_dir = setup_env(tmp_path, monkeypatch)
+    # The page compiles reactions from the SERVER's object roots (in
+    # production: the installed objects dir). Point the env at the package
+    # that carries system_books so the compiled picture has its reactions.
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(PACKAGES / "app-payments" / "objects"))
+    anon = _flow({})
+    assert "Sign in" in anon["body"]          # the map is gated like the data
+
+    index = _flow({"_identity": {"user_id": "dan"}})
+    assert "/flow/invoices" in index["body"]
+
+    detail = _flow({"_identity": {"user_id": "dan"}, "collection": "invoices"})
+    body = detail["body"]
+    assert "<svg" in body                      # the drawn state machine
+    assert "owner_id = $user_id" in body       # guards are readable, not hidden
+    assert "system_books" in body              # reactions listed
+    assert "flowchart LR" in body              # mermaid source for reuse
+
+
+def test_flow_page_rejects_an_invalid_collection_name(tmp_path, monkeypatch):
+    setup_env(tmp_path, monkeypatch)
+    detail = _flow({"_identity": {"user_id": "dan"},
+                    "collection": "../../../etc/passwd"})
+    # An unusable name falls back to the index rather than echoing anything.
+    assert "How things work" in detail["body"]
