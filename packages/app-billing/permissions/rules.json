@@ -1,0 +1,40 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": [
+        "read"
+      ],
+      "collection": "wallets",
+      "row_filter": {
+        "owner_id": "$user_id"
+      },
+      "reason": "a customer may always see their own balance and how it got there; they may not WRITE it -- the balance is a rollup, and the settings that drive auto top-up are changed through an owner-gated form, not by editing a number"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": [
+        "update"
+      ],
+      "collection": "wallets",
+      "row_filter": {
+        "owner_id": "$user_id"
+      },
+      "reason": "owners tune their own auto top-up threshold, amount and cap; balance_minor is computed and refused by the write path regardless"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": [
+        "read"
+      ],
+      "collection": "wallet_entries",
+      "row_filter": {
+        "owner_id": "$user_id"
+      },
+      "reason": "every customer can see exactly why their balance is what it is -- the statement is the ledger, not a summary of it. No create/update/delete: entries are written server-side by the metering, top-up and refund paths, and a client that could append its own credit could print money"
+    }
+  ]
+}
