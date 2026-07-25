@@ -126,6 +126,10 @@ was no gradient from zero code to some code, only a cliff. "Fat models,
 skinny controllers" was a slogan, not a placement table with enforcement
 behind it. A path only exists where placement is decided.
 
+The runtime twin of this page is [`write-pipeline.md`](write-pipeline.md):
+once logic is placed, that page says exactly when it runs, in what order,
+and what can stop a write.
+
 Placement questions beyond this page: the flowchart in
 [`business-logic-patterns.md`](business-logic-patterns.md) decides where
 any individual rule goes, and [`logic-decisions.md`](logic-decisions.md)

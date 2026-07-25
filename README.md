@@ -39,6 +39,8 @@ Common entry points:
   [comparisons](docs/comparisons.md) · [the app suite](docs/app-packages.md)
 - **The generative layer** — [from zero code to some code](docs/zero-to-code.md)
   (the known path: where and in what order real code enters an app) ·
+  [the write pipeline](docs/write-pipeline.md) (what runs on every write,
+  in order, and what can stop it) ·
   [generative UI](docs/generative-ui.md) (one
   renderer: list/table/board, forms, detail) ·
   [schema → forms & views](docs/schema-forms.md) ·
