@@ -1,0 +1,24 @@
+{
+  "name": "usage_summaries",
+  "title": "Usage Summaries",
+  "version": 1,
+  "description": "One subscription's total for one metric over one period -- the bucket rating actually reads. The indirection is deliberate and load-bearing: pricing that folded raw events would make a month of per-request rows part of every invoice render, and would weld the pricing logic to whatever shape the write side happens to have today. With summaries in between, metering can start batching or accumulating in memory later and not one line of pricing changes. Each bucket also carries the summed COST of the events behind it, so margin per customer per metric is a read, not a project.",
+  "fields": [
+    {"name": "id"},
+    {"name": "subscription_id", "label": "Subscription",
+     "relation": {"collection": "subscriptions", "display_field": "customer_name"}},
+    {"name": "metric", "type": "text", "required": true, "label": "Metric"},
+    {"name": "period_start", "type": "date", "required": true, "label": "Period Start"},
+    {"name": "period_end", "type": "date", "required": true, "label": "Period End"},
+    {"name": "quantity", "type": "number", "default": "0", "label": "Quantity"},
+    {"name": "event_count", "type": "integer", "default": "0", "label": "Events"},
+    {"name": "cost_minor", "type": "integer", "default": "0", "label": "Our Cost",
+     "help": "Summed from the events, so revenue minus this is margin for exactly this metric and customer."},
+    {"name": "invoiced", "type": "boolean", "default": "false", "label": "Invoiced"},
+    {"name": "owner_id", "type": "text", "label": "Owner"},
+    {"name": "created_at", "type": "datetime", "read_only": true, "label": "Created"}
+  ],
+  "views": {"list_mode": "table",
+            "list_fields": ["period_start", "metric", "quantity", "cost_minor", "invoiced"],
+            "filter_fields": ["metric", "subscription_id", "invoiced"]}
+}

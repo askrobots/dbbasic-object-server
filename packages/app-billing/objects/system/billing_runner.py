@@ -30,6 +30,7 @@ import json
 import os
 from datetime import date, timedelta
 
+import object_billing
 import object_ids
 import object_records
 
@@ -99,16 +100,43 @@ def _existing_invoice(base, marker):
     return None
 
 
+def _usage_lines(base, subscription, plan, period_start, period_end):
+    """Rated overage for the period, from SUMMARIES not raw events.
+
+    Allowances and tiers are properties of a period's total, so this can
+    only happen at close -- rating each event as it landed would charge
+    the first calls at retail and never apply the included quantity.
+    """
+    prices = object_billing.parse_prices(plan.get("prices"))
+    if not prices:
+        return [], 0, [], []
+    try:
+        rows = object_records.read_collection_records("usage_summaries", base_dir=base)
+    except Exception:
+        return [], 0, [], []
+    mine = [r for r in rows
+            if r.get("subscription_id") == subscription.get("id")
+            and str(r.get("period_start") or "")[:10] == period_start
+            and not _truthy(r.get("invoiced"))]
+    rated = object_billing.rate_period(mine, prices)
+    return rated["lines"], rated["total_minor"], rated["unpriced"], [r["id"] for r in mine]
+
+
 def _raise_invoice(base, subscription, plan, period_start, period_end, today):
-    """One invoice for the period that just ended, plus its base line."""
+    """One invoice for the period that just ended: the base fee, plus any
+    rated usage overage."""
     marker = f"subscriptions/{subscription['id']}:{period_start}"
     existing = _existing_invoice(base, marker)
     if existing:
         return {"skipped": "already invoiced", "marker": marker}
 
     base_minor = _int(plan.get("base_minor"))
-    if base_minor <= 0:
-        return {"skipped": "plan has no base price for this mode"}
+    usage_lines, usage_minor, unpriced, summary_ids = _usage_lines(
+        base, subscription, plan, period_start, period_end)
+    if base_minor <= 0 and usage_minor <= 0:
+        return {"skipped": "nothing to bill for this period",
+                **({"unpriced_metrics": unpriced} if unpriced else {})}
+    total_minor = base_minor + usage_minor
 
     grace = _int(_setting(base, "billing.invoice_due_days", "14"), 14)
     invoice_id = object_ids.new_uuid4()
@@ -124,8 +152,8 @@ def _raise_invoice(base, subscription, plan, period_start, period_end, today):
             "status": "sent",
             "issue_date": today,
             "due_date": (date.fromisoformat(today) + timedelta(days=grace)).isoformat(),
-            "subtotal_cents": str(base_minor),
-            "total_cents": str(base_minor),
+            "subtotal_cents": str(total_minor),
+            "total_cents": str(total_minor),
             # Provenance lives in notes because invoices carry no
             # generated_from column; the marker is what makes a re-run a
             # no-op, so it must be written where it can be found again.
@@ -134,22 +162,47 @@ def _raise_invoice(base, subscription, plan, period_start, period_end, today):
         },
         base_dir=base, actor=ACTOR)
     try:
-        object_records.create_collection_record(
-            "invoice_lines",
-            {
-                "id": object_ids.new_uuid4(),
-                "invoice_id": invoice_id,
-                "description": f"{plan.get('name') or 'Subscription'} "
-                               f"({period_start} to {period_end})",
-                "quantity": "1",
-                "unit_price_cents": str(base_minor),
-                "line_total_cents": str(base_minor),
-                "owner_id": subscription.get("owner_id", ""),
-            },
-            base_dir=base, actor=ACTOR)
+        if base_minor > 0:
+            object_records.create_collection_record(
+                "invoice_lines",
+                {
+                    "id": object_ids.new_uuid4(),
+                    "invoice_id": invoice_id,
+                    "description": f"{plan.get('name') or 'Subscription'} "
+                                   f"({period_start} to {period_end})",
+                    "quantity": "1",
+                    "unit_price_cents": str(base_minor),
+                    "line_total_cents": str(base_minor),
+                    "owner_id": subscription.get("owner_id", ""),
+                },
+                base_dir=base, actor=ACTOR)
+        for line in usage_lines:
+            # The line says what was used, what the plan included, and what
+            # the overage cost -- a bill a customer can check rather than
+            # a single opaque "usage" figure they can only dispute.
+            object_records.create_collection_record(
+                "invoice_lines",
+                {
+                    "id": object_ids.new_uuid4(),
+                    "invoice_id": invoice_id,
+                    "description": (f"{line['metric']}: {line['quantity']} used, "
+                                    f"{line['included']} included, "
+                                    f"{line['overage']} billable"),
+                    "quantity": str(line["overage"]),
+                    "unit_price_cents": str(line["unit_minor"] or 0),
+                    "line_total_cents": str(line["amount_minor"]),
+                    "owner_id": subscription.get("owner_id", ""),
+                },
+                base_dir=base, actor=ACTOR)
+        for summary_id in summary_ids:
+            object_records.update_collection_record(
+                "usage_summaries", summary_id, {"invoiced": "true"},
+                base_dir=base, actor=ACTOR)
     except Exception as exc:
         return {"invoice_id": invoice_id, "warning": f"line not written: {str(exc)[:100]}"}
-    return {"invoice_id": invoice_id, "number": number, "amount_minor": base_minor}
+    return {"invoice_id": invoice_id, "number": number, "amount_minor": total_minor,
+            "base_minor": base_minor, "usage_minor": usage_minor,
+            **({"unpriced_metrics": unpriced} if unpriced else {})}
 
 
 def _unpaid_days(base, subscription, today):

@@ -70,6 +70,31 @@
         "owner_id": "$user_id"
       },
       "reason": "a subscription is owned by the account that sells it; the status ladder is additionally constrained by declared transitions, so even its owner cannot skip from active straight to suspended without the daemon's reasons"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": [
+        "create",
+        "read"
+      ],
+      "collection": "usage_events",
+      "row_filter": {
+        "owner_id": "$user_id"
+      },
+      "reason": "the metered service records its own usage and the customer can read every event behind a bill; nobody updates or deletes one -- a measurement of something that happened is not editable, and a correction is a credit"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": [
+        "read"
+      ],
+      "collection": "usage_summaries",
+      "row_filter": {
+        "owner_id": "$user_id"
+      },
+      "reason": "the buckets a bill is computed from are readable by the person being billed; they are written by the rollup pass alone"
     }
   ]
 }
