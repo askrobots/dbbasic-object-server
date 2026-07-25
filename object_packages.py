@@ -936,7 +936,11 @@ def _schedule_change(
     if live is None:
         action = "create"
     elif all(live.get(field) == entry[field]
-             for field in ("object_id", "method", "payload", "schedule", "type")):
+             for field in ("object_id", "method", "payload", "schedule", "type")) \
+            and (live.get("description") or None) == entry["description"]:
+        # The description is compared too, so a plan that says "unchanged"
+        # is one where nothing at all is about to be written -- a dry run
+        # that under-reports is worse than no dry run.
         action = "unchanged"
     else:
         action = "update"

@@ -153,6 +153,22 @@ def test_an_unchanged_schedule_reports_unchanged(package):
     assert result["schedules"][0]["action"] == "unchanged"
 
 
+def test_a_plan_that_says_unchanged_writes_nothing_at_all(package):
+    """Including the description in the comparison: a dry run that
+    under-reports is worse than no dry run."""
+    install(package)
+    write_manifest(package, schedules=[{**MANIFEST["schedules"][0],
+                                        "description": "Reworded."}])
+    plan = object_packages.dry_run_package(
+        "app-demo", root=package["root"], base_dir=package["data"],
+        object_roots=[package["objects"]])
+    assert plan["schedules"][0]["action"] == "update"
+
+    result = install(package, allow_replace=True)
+    assert result["schedules"][0]["status"] == "updated"
+    assert tasks(package)["nightly_pass"]["description"] == "Reworded."
+
+
 def test_a_hand_made_task_is_adopted_not_duplicated(package):
     """Every schedule on the demo box was hand-entered before packages
     could declare them; installing must take ownership of that row rather
