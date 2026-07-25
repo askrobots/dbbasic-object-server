@@ -107,7 +107,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
 const human = (n) => String(n || "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 const el = (id) => document.getElementById(id);
 
-const KNOWN_KINDS = ["list", "form", "detail", "related", "thread", "count", "aggregate", "markdown", "reader"];
+const KNOWN_KINDS = ["list", "form", "detail", "related", "thread", "count", "aggregate", "markdown", "reader", "object"];
 
 // "notes" -> "Note", "value_accounts" -> "Value Account". Only used for a
 // button label, so a naive de-pluralisation is fine -- a block can always
@@ -524,6 +524,46 @@ function renderReader(block, mount) {
 
 const RENDERERS = {list: renderList, form: renderForm, detail: renderDetail, related: renderRelated,
   thread: renderThread, count: renderCount, aggregate: renderAggregate, markdown: renderMarkdown, reader: renderReader};
+
+// The escape hatch that keeps the generated page from being all-or-nothing.
+//
+// Every generative UI eventually meets something it cannot express, and the
+// usual answer is a cliff: the admin/scaffold works until it doesn't, then
+// you throw the whole screen away and hand-write it. Here a page is a LIST
+// of blocks, so one of them can simply be a hand-written object -- keep the
+// generated list, the generated form and the generated detail, and drop a
+// bespoke panel in the middle of them.
+//
+// The object runs through the ordinary execution path, so permissions,
+// audit, timeouts and correlation ids all still apply: this widens what a
+// page can show, never what a viewer may see.
+function renderObject(block, mount) {
+  const objectId = block.object_id;
+  if (!objectId) { mount.innerHTML = unsupportedCard("object block needs an object_id"); return; }
+  const heading = block.title ? '<h3 class="blocktitle">' + esc(block.title) + "</h3>" : "";
+  mount.innerHTML = heading + '<div class="objectmount"><div class="state">loading&hellip;</div></div>';
+  const target = mount.querySelector(".objectmount");
+  const params = new URLSearchParams(block.params && typeof block.params === "object" ? block.params : {});
+  const qs = params.toString();
+  fetch("/objects/" + encodeURIComponent(objectId) + (qs ? "?" + qs : ""), {
+    credentials: "same-origin",
+  }).then((r) => {
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.text();
+  }).then((body) => {
+    // Objects that return JSON (an action, a report) are shown as data
+    // rather than injected as markup -- a block that silently rendered a
+    // JSON blob as HTML would be a confusing way to find a wiring mistake.
+    const text = String(body || "");
+    if (text.trim().startsWith("{") || text.trim().startsWith("[")) {
+      target.innerHTML = "<pre>" + esc(text.slice(0, 4000)) + "</pre>";
+    } else {
+      target.innerHTML = text;
+    }
+  }).catch((err) => {
+    target.innerHTML = unsupportedCard("object " + esc(objectId) + " did not render (" + esc(String(err.message || err)) + ")");
+  });
+}
 
 function renderBlocks(view) {
   const container = el("blocks");

@@ -38,7 +38,7 @@
       "name": "blocks",
       "type": "textarea",
       "label": "Blocks",
-      "help": "JSON list of block descriptors, validated server-side. Each block has a \"kind\" of list, form, detail, related, thread, count, aggregate, markdown, or reader -- unknown kinds render as a placeholder, never as raw markup.",
+      "help": "JSON list of block descriptors, validated server-side. Each block has a \"kind\" of list, form, detail, related, thread, count, aggregate, markdown, or reader -- unknown kinds render as a placeholder, never as raw markup. The `object` kind renders a hand-written object inline ({\"kind\":\"object\",\"object_id\":\"site_my_panel\"}): the escape hatch that keeps a generated page from being all-or-nothing, so a view can stay generated everywhere except the one part that genuinely needs code. The object runs through the ordinary execution path, so permissions and audit still apply -- it widens what a page can SHOW, never what a viewer may see.",
       "validation": {
         "max_length": 32768
       }

@@ -86,6 +86,65 @@ realtime, and owner actions all fall out of it — the same code for every app.
 The measure isn't the feature list (anyone can claim those); it's the amount of
 per-app code, which is a schema and at most one page object.
 
+## This is not scaffolding
+
+Rails scaffolds and Django's startapp share one failure that defined a
+generation of frameworks: the generator emits **code**, you edit it, and from
+that moment you own all of it. The generator can never help that screen again
+— template improvements don't flow, upgrades don't apply, and nothing records
+which parts you changed. The fork happens at generation time and diverges
+silently forever. "Eject" is the same failure with a button on it.
+
+The rule that keeps this system on the other side of that line:
+
+> **Generated output is never materialized, so it can never be edited.**
+> A page is a view record *interpreted at request time* by a renderer that is
+> itself an ordinary object. Customizing never means editing emitted code,
+> because there is no emitted code. You either change **data** (and keep
+> receiving renderer improvements) or you write **your own object** (which was
+> never generated, so nothing was forked).
+
+### The customization ladder
+
+Each rung says exactly what you take ownership of and what keeps flowing:
+
+1. **Edit the block config** (filters, `title_field`, sort, `row_limit`) — you
+   own the config; every renderer improvement still flows.
+2. **Add blocks** — a view is a list of blocks; put an `aggregate` summary or
+   `markdown` intro above the generated list. Same ownership as (1).
+3. **Customize a shipped view record** — the upgrade system detects it against
+   the package baseline and parks a reconcile instead of clobbering: the system
+   *records* what you own and shows you when upstream moved. Scaffolding's
+   fork is silent; this one has a ledger.
+4. **Drop an `object` block into a generated page** — one hand-written panel
+   among generated ones (`{"kind": "object", "object_id": "site_my_panel"}`).
+   You own that panel; the rest of the page keeps flowing. It runs through the
+   ordinary execution path, so permissions and audit apply — the block widens
+   what a page can *show*, never what a viewer may *see*.
+5. **Write the whole page object.** Convention routing means creating
+   `site/notes.py` instantly overrides the generated `/notes` — and deleting
+   the file reverts to it. The override is total, explicit, and reversible,
+   and it is visible in the objects listing rather than buried in a diff
+   against generator output.
+
+### Why replacing a page is safe here and wasn't in Rails
+
+The deep failure of scaffolds wasn't the HTML — it was that the scaffold
+contained **rules** (validations in the controller, logic in the view), so
+editing it forked the rules. Here the doctrine is that *a page may never be
+the only place a rule exists*: enforcement lives in the schema, hooks,
+transitions, and permissions, on the shared write path that the JSON API, MCP
+agents, and the websocket all go through.
+
+That doctrine is not just policy — the architecture makes the wrong place
+**fail loudly**. A rule written into a page object simply does not gate API or
+MCP writes, so the mistake shows up the first time anything that isn't the
+page touches the collection. In Rails, logic in the controller *worked* for
+web users, which is exactly why the fork stayed invisible for years. The
+residual risk here is someone treating rung 4–5 as a place to put gates; the
+system's answer is that gates there provably don't hold, and the hook is one
+file away.
+
 ## Related
 
 - [`schema-forms.md`](schema-forms.md) — the field-level contract these
