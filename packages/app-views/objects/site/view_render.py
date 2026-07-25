@@ -109,6 +109,17 @@ const el = (id) => document.getElementById(id);
 
 const KNOWN_KINDS = ["list", "form", "detail", "related", "thread", "count", "aggregate", "markdown", "reader"];
 
+// "notes" -> "Note", "value_accounts" -> "Value Account". Only used for a
+// button label, so a naive de-pluralisation is fine -- a block can always
+// pass add_label to say exactly what it wants.
+function singular(collection) {
+  const words = String(collection || "record").split("_");
+  return words.map((w) => {
+    const one = w.endsWith("ies") ? w.slice(0, -3) + "y" : (w.endsWith("s") ? w.slice(0, -1) : w);
+    return one.charAt(0).toUpperCase() + one.slice(1);
+  }).join(" ");
+}
+
 function unsupportedCard(msg) {
   return '<div class="viewblock-error">' + esc(msg || "unsupported block") + "</div>";
 }
@@ -171,6 +182,52 @@ function renderList(block, mount) {
     return;
   }
   const cfg = {mount: listMount};
+  // `search`/`sort`/`add` turn a bare list into the full working page every
+  // collection used to hand-write: a search box, a newest/oldest select, an
+  // Add button, and an inline create/edit panel. Sixteen page objects were
+  // ~55 lines of identical chrome around exactly this, which is why it now
+  // lives in the block instead of in each of them.
+  const toolbarBits = [];
+  if (block.search) toolbarBits.push('<input class="search grow" data-vsearch placeholder="Search&hellip;" autocomplete="off">');
+  if (block.sort) toolbarBits.push('<select data-vsort><option value="newest">Newest</option><option value="oldest">Oldest</option></select>');
+  if (toolbarBits.length) {
+    const bar = document.createElement("div");
+    bar.className = "toolbar";
+    bar.innerHTML = toolbarBits.join("");
+    mount.insertBefore(bar, listMount);
+    if (block.search) cfg.search = bar.querySelector("[data-vsearch]");
+    if (block.sort) cfg.sort = bar.querySelector("[data-vsort]");
+  }
+  // Owner scoping is opt-in per block rather than assumed: a private
+  // collection (notes, tasks) lists only the viewer's rows, while a shared
+  // one (forum topics) must not. The permission engine is still the actual
+  // gate -- this only decides what the page ASKS for.
+  if (block.owner_scoped && typeof VIEWER_ID !== "undefined" && VIEWER_ID) cfg.owner = VIEWER_ID;
+  if (block.add && window.dbbasicForm) {
+    const panel = document.createElement("div");
+    panel.className = "formpanel";
+    panel.style.display = "none";
+    panel.innerHTML = '<h3 class="blocktitle" data-vformtitle></h3><div data-vformmount></div>';
+    mount.insertBefore(panel, listMount);
+    const addBtn = document.createElement("button");
+    addBtn.className = "btn primary";
+    addBtn.textContent = block.add_label || ("+ New " + singular(block.collection));
+    mount.insertBefore(addBtn, panel);
+    const openForm = (record) => {
+      panel.querySelector("[data-vformtitle]").textContent =
+        (record ? "Edit " : "New ") + singular(block.collection);
+      panel.style.display = "block";
+      window.dbbasicForm(block.collection, {
+        mount: panel.querySelector("[data-vformmount]"),
+        record: record || undefined,
+        owner: (typeof VIEWER_ID !== "undefined" ? VIEWER_ID : "") || undefined,
+        onSaved: () => { panel.style.display = "none"; },
+        onCancel: () => { panel.style.display = "none"; },
+      });
+    };
+    addBtn.addEventListener("click", () => openForm(null));
+    cfg.onEdit = openForm;
+  }
   // A collection without a `title`/`name` field (e.g. a rollup target keyed by
   // path/ip/status) would otherwise render each row as its raw id. `title_field`
   // / `subtitle_field` point the row label at real columns -- so an analytics

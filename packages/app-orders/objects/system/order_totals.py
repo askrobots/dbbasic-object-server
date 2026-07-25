@@ -50,6 +50,7 @@ import os
 from decimal import ROUND_FLOOR, Decimal
 
 import object_record_changes
+import object_finance
 import object_records
 
 HANDLES = [
@@ -68,12 +69,15 @@ def _data_dir() -> str:
     return os.environ.get(DATA_DIR_ENV, object_records.DEFAULT_DATA_DIR)
 
 
-def _to_int(value) -> int:
-    """Parse a stored numeric string as an integer; blank/None -> 0."""
-    text = str(value or "").strip()
-    if not text:
-        return 0
-    return int(Decimal(text).to_integral_value(rounding=ROUND_FLOOR))
+def _to_int(value):
+    """The shared defensive ledger parser (object_finance.to_cents).
+
+    This was a byte-identical private copy in three modules. One
+    shared floor-parser is one place to be right about rounding, and
+    a *_cents field left blank by a half-filled draft still reads 0
+    rather than raising.
+    """
+    return object_finance.to_cents(value)
 
 
 def _line_amounts(line: dict) -> tuple[int, int]:

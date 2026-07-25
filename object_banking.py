@@ -40,6 +40,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Iterable
 
+import object_finance
 import object_records
 from object_versions import DEFAULT_DATA_DIR
 
@@ -590,8 +591,14 @@ def reconciliation(bank_account_id: str, *, base_dir: Path | str = DEFAULT_DATA_
         for line in _safe_read(JOURNAL_LINES_COLLECTION, base_dir):
             if line.get("journal_id") not in posted_ids or line.get("account_id") != fin_account_id:
                 continue
-            debit_total += int(line.get("debit_cents") or 0)
-            credit_total += int(line.get("credit_cents") or 0)
+            # object_finance.to_cents, not bare int(): every other ledger fold
+            # in this codebase parses defensively (Decimal, floor, blank -> 0)
+            # because a hand-edited TSV row or a half-filled draft can leave a
+            # *_cents field blank or fractional. A bare int() raises ValueError
+            # on exactly those rows -- and this is the reconciliation view, the
+            # one page whose job is to keep working when the data is wrong.
+            debit_total += object_finance.to_cents(line.get("debit_cents"))
+            credit_total += object_finance.to_cents(line.get("credit_cents"))
         # An asset account: debits increase the balance, credits decrease
         # it -- the same convention object_finance.py uses throughout.
         book_balance_cents = debit_total - credit_total

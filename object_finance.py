@@ -86,8 +86,21 @@ _ACCOUNT_TYPE_ORDER = {
 _STATUS_POSTED = "posted"
 
 
-def _to_cents(value: Any) -> int:
+def to_cents(value: Any) -> int:
     """Parse a stored numeric string as an integer number of cents.
+
+    THE defensive ledger parser for this codebase. Public because three
+    other modules had byte-identical private copies of it (app-invoices'
+    invoice_totals._to_int, app-orders' order_totals._to_int, and an
+    inlined bare int() in object_banking.reconciliation) -- one shared
+    floor-parser is one place to be right about rounding.
+
+    Deliberately NOT the same function as object_money.to_minor (which
+    refuses inexact input) or object_money.quantize_minor (which rounds
+    half-up on request) or object_banking.parse_cents (which also strips
+    currency symbols and locale separators from bank exports). Those are
+    three different policies for three different jobs, and merging them
+    would silently change what a number means somewhere.
 
     Decimal (never a bare float) so a stray fractional value in a
     hand-edited row can't introduce binary-float rounding error before
@@ -98,6 +111,10 @@ def _to_cents(value: Any) -> int:
     if not text:
         return 0
     return int(Decimal(text).to_integral_value(rounding=ROUND_FLOOR))
+
+
+# Historical private name, kept so this module's own callers stay unchanged.
+_to_cents = to_cents
 
 
 def journal_totals(

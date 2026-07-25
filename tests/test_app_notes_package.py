@@ -26,7 +26,9 @@ def _seed_rows(name):
 def test_manifest_drops_the_bespoke_view_object_and_seeds_the_detail_view():
     package = object_packages.get_package("app-notes", root=PACKAGES_ROOT)
     # Only the list page remains an object -- the permalink page is gone.
-    assert {obj["id"] for obj in package["objects"]} == {"site_notes"}
+    # 0.4.0: the bespoke page is gone; notes is now pure data
+    # (schema + permissions + two seeded view records).
+    assert package["objects"] == []
     # The detail view + its route are seeded (into app-views'/site-routing's
     # own shared collections), alongside the notes seed.
     assert {entry["collection"] for entry in package["seed"]} == {
@@ -40,6 +42,8 @@ def test_note_view_object_file_is_deleted():
 
 def test_seeded_detail_view_uses_an_owner_aware_editable_detail_block():
     rows = _seed_rows("views")
+    # 0.4.0 added the index view beside the detail view.
+    rows = [r for r in rows if r["id"] == "view_notes_detail"]
     assert len(rows) == 1
     view = rows[0]
     assert view["id"] == "view_notes_detail"
@@ -59,6 +63,9 @@ def test_seeded_detail_view_uses_an_owner_aware_editable_detail_block():
 
 def test_permalink_route_is_seeded_to_the_view_render_generator():
     rows = _seed_rows("site_routes")
+    # 0.4.0 added the /notes index route alongside the permalink, so assert
+    # on the permalink row rather than a total that keeps growing.
+    rows = [r for r in rows if r["id"] == "route_notes_detail"]
     assert len(rows) == 1
     route = rows[0]
     assert route["pattern"] == "/notes/{note_id}"
