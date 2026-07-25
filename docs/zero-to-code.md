@@ -110,6 +110,22 @@ where every surface shares it. Pages show; they never decide.
 | 5 | a schedule | runner + scheduler/queue | the clock |
 | 6 | a panel, then a page | `object` block → `site/` | presentation only |
 
+## Where this page came from
+
+This path was not designed and then implemented — it was **extracted**. A
+week of building real modules concretely (payments, the books spine, bank
+reconciliation, inventory losses, cash counts) kept producing the same
+placement decisions, and once every kind of business rule had exactly one
+home, the homes sorted themselves into the order an app acquires them.
+The taxonomy is the load-bearing thing; the path is its corollary.
+
+That is also why earlier frameworks never had a page like this. They
+documented their *mechanisms* (models, controllers, middleware, signals)
+but never fixed where *logic* lives — any rule could go anywhere, so there
+was no gradient from zero code to some code, only a cliff. "Fat models,
+skinny controllers" was a slogan, not a placement table with enforcement
+behind it. A path only exists where placement is decided.
+
 Placement questions beyond this page: the flowchart in
 [`business-logic-patterns.md`](business-logic-patterns.md) decides where
 any individual rule goes, and [`logic-decisions.md`](logic-decisions.md)
