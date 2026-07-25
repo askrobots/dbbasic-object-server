@@ -27,6 +27,7 @@ import object_record_changes
 import object_records
 import object_schemas
 import object_source
+import object_state
 from object_namespace import get_object_roots, object_id_from_path, resolve_object_id, validate_object_id
 from object_versions import DEFAULT_DATA_DIR
 
@@ -37,6 +38,24 @@ PACKAGE_MIGRATIONS_DIR = "package_migrations"
 _PACKAGE_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 _VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$")
 _MIGRATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+
+# A package's `schedules` become task_* rows in the scheduler trigger's
+# state, which is where object_daemon.process_scheduler reads them from.
+# Before this existed, every recurring pass on a running server had been
+# hand-entered into that state and appeared NOWHERE in the repository, so
+# rebuilding a box silently lost its daily work -- exactly what the
+# scheduler object's own docstring warns about. A schedule is part of what
+# an app IS, so it ships with the app.
+SCHEDULER_OBJECT_ID = "scheduler"
+_TASK_KEY_PREFIX = "task_"
+_SCHEDULE_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_SCHEDULE_TYPES = ("cron", "onetime")
+_SCHEDULE_METHODS = ("POST", "GET", "PUT", "DELETE")
+# Fields the daemon stamps back onto a task as it runs. An install must
+# never touch them: they are the record of what actually happened, and a
+# package upgrade is not a reason to forget it (doctrine #8 -- independent
+# evidence is never edited).
+_SCHEDULE_RUNTIME_FIELDS = ("next_run", "last_run", "run_count")
 
 
 class InvalidPackageIdError(ValueError):
@@ -130,6 +149,27 @@ def dry_run_package(
         _migration_change(entry, package=package_id, package_dir=package_dir, base_dir=base, warnings=warnings)
         for entry in package["migrations"]
     ]
+    # A schedule may name an object this same install is about to write, so
+    # "does the target exist" is asked of the union of what is already
+    # resolvable and what this package provides -- not of the server as it
+    # stands right now.
+    existing_tasks = _load_scheduler_tasks(base)
+    installable_object_ids = {entry["id"] for entry in package["objects"]}
+    roots_for_lookup = list(object_roots) if object_roots is not None else get_object_roots()
+    for entry in package["schedules"]:
+        if entry["object_id"] in installable_object_ids:
+            continue
+        if resolve_object_id(entry["object_id"], roots_for_lookup) is not None:
+            installable_object_ids.add(entry["object_id"])
+    schedules = [
+        _schedule_change(
+            entry,
+            existing=existing_tasks,
+            installable_object_ids=installable_object_ids,
+            warnings=warnings,
+        )
+        for entry in package["schedules"]
+    ]
 
     return {
         "package": _package_summary(package),
@@ -141,6 +181,7 @@ def dry_run_package(
         "permissions": permissions,
         "seed": seed,
         "migrations": migrations,
+        "schedules": schedules,
         "warnings": warnings,
     }
 
@@ -444,6 +485,12 @@ def install_package(
             }
         )
 
+    # Schedules land last: a task board that points at an object is only
+    # honest once that object is on disk.
+    installed_schedules = _apply_schedules(
+        package["schedules"], plan["schedules"], base_dir=base
+    )
+
     object_package_baselines.record_baseline(
         package_id,
         version=package["version"],
@@ -464,6 +511,7 @@ def install_package(
         "permissions": installed_permissions,
         "seed": installed_seed,
         "migrations": plan["migrations"],
+        "schedules": installed_schedules,
         "reconciles": reconciles,
         "warnings": [],
     }
@@ -601,6 +649,7 @@ def _normalize_manifest(package_id: str, payload: Any) -> dict[str, Any]:
         ),
         "migrations": _normalize_migrations(payload.get("migrations", []), package_id=package_id),
         "connectors": _normalize_connectors(payload.get("connectors", []), package_id=package_id),
+        "schedules": _normalize_schedules(payload.get("schedules", []), package_id=package_id),
     }
 
 
@@ -618,6 +667,7 @@ def _package_summary(package: Mapping[str, Any]) -> dict[str, Any]:
         "migration_count": len(package["migrations"]),
         "dependency_count": len(package["dependencies"]),
         "connector_count": len(package.get("connectors", [])),
+        "schedule_count": len(package.get("schedules", [])),
     }
 
 
@@ -735,6 +785,253 @@ def _normalize_connectors(payload: Any, *, package_id: str) -> list[dict[str, st
             raise InvalidPackageManifestError(f"Invalid connector entry: {entry_name}")
         normalized.append({"collection": collection, "module": module, "entry": entry_name})
     return normalized
+
+
+def _normalize_schedules(payload: Any, *, package_id: str) -> list[dict[str, Any]]:
+    """A `schedules` entry declares a recurring pass the app needs to work:
+    `{id, object_id, schedule, type?, method?, payload?, description?}`.
+
+    Time-driven work belongs to the daemon (docs/logic-decisions.md #2),
+    and until now the declaration of WHICH work lived only in a running
+    server's state. That made a schedule invisible to review, absent from
+    a fresh install, and lost on a rebuild. Declaring it here makes the
+    recurring pass part of the package, like the object it calls.
+
+    The id becomes a `task_<id>` state key, so it is restricted to the
+    characters a key can safely hold; every other field is validated here
+    rather than at 3am inside the daemon, where a bad cron string is a
+    pass that quietly does nothing.
+    """
+    entries = _list_field(payload, package_id=package_id, section="schedules")
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in entries:
+        mapping = _entry_mapping(entry, package_id=package_id, section="schedules")
+        schedule_id = _required_text(mapping, "id", package_id=package_id)
+        if not _SCHEDULE_ID_RE.fullmatch(schedule_id):
+            raise InvalidPackageManifestError(f"Invalid package schedule id: {schedule_id}")
+        if schedule_id in seen:
+            raise InvalidPackageManifestError(
+                f"Duplicate package schedule id: {schedule_id}"
+            )
+        seen.add(schedule_id)
+
+        object_id = _required_text(mapping, "object_id", package_id=package_id)
+        if not validate_object_id(object_id):
+            raise InvalidPackageManifestError(
+                f"Invalid package schedule object_id: {object_id}"
+            )
+
+        schedule_type = (_optional_text(mapping.get("type")) or "cron").lower()
+        if schedule_type not in _SCHEDULE_TYPES:
+            raise InvalidPackageManifestError(
+                f"Package schedule type must be cron|onetime: {schedule_id}"
+            )
+
+        expression = _required_text(mapping, "schedule", package_id=package_id)
+        _validate_schedule_expression(expression, schedule_type, schedule_id=schedule_id)
+
+        method = (_optional_text(mapping.get("method")) or "POST").upper()
+        if method not in _SCHEDULE_METHODS:
+            raise InvalidPackageManifestError(
+                f"Invalid package schedule method: {schedule_id}"
+            )
+
+        task_payload = mapping.get("payload", {})
+        if task_payload in (None, ""):
+            task_payload = {}
+        if not isinstance(task_payload, Mapping):
+            raise InvalidPackageManifestError(
+                f"Package schedule payload must be an object: {schedule_id}"
+            )
+
+        normalized.append({
+            "id": schedule_id,
+            "object_id": object_id,
+            "method": method,
+            "payload": dict(task_payload),
+            "schedule": expression,
+            "type": schedule_type,
+            "description": _optional_text(mapping.get("description")),
+        })
+    return normalized
+
+
+def _validate_schedule_expression(
+    expression: str,
+    schedule_type: str,
+    *,
+    schedule_id: str,
+) -> None:
+    """Reject a schedule that could never fire, at install time.
+
+    The daemon treats an unparseable expression as "no next run" and moves
+    on in silence, so a typo here is a pass that never runs and never
+    complains -- the failure this whole feature exists to end. Cron is
+    checked with croniter where it is installed, and structurally where it
+    is not, so validation degrades rather than disappearing.
+    """
+    if "\t" in expression or "\n" in expression:
+        raise InvalidPackageManifestError(
+            f"Package schedule expression may not contain tabs or newlines: {schedule_id}"
+        )
+    if schedule_type == "onetime":
+        from datetime import datetime
+
+        try:
+            datetime.fromisoformat(expression.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise InvalidPackageManifestError(
+                f"Package onetime schedule must be an ISO timestamp: {schedule_id}"
+            ) from exc
+        return
+
+    try:
+        from croniter import croniter
+    except ImportError:
+        croniter = None
+    if croniter is not None:
+        if not croniter.is_valid(expression):
+            raise InvalidPackageManifestError(
+                f"Invalid package cron expression: {schedule_id}"
+            )
+        return
+    if len(expression.split()) not in (5, 6):
+        raise InvalidPackageManifestError(
+            f"Package cron expression must have 5 or 6 fields: {schedule_id}"
+        )
+
+
+def _load_scheduler_tasks(base_dir: Path) -> dict[str, dict[str, Any]]:
+    """Every task currently on the daemon's board, keyed by schedule id.
+
+    Unreadable rows are skipped rather than raising: one hand-edited task
+    must not make a package uninstallable.
+    """
+    try:
+        state = object_state.get_object_state(SCHEDULER_OBJECT_ID, base_dir=base_dir)
+    except Exception:
+        return {}
+    tasks: dict[str, dict[str, Any]] = {}
+    for key, value in state.items():
+        if not str(key).startswith(_TASK_KEY_PREFIX):
+            continue
+        try:
+            task = json.loads(value)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(task, Mapping):
+            tasks[str(key)[len(_TASK_KEY_PREFIX):]] = dict(task)
+    return tasks
+
+
+def _schedule_change(
+    entry: Mapping[str, Any],
+    *,
+    existing: Mapping[str, dict[str, Any]],
+    installable_object_ids: set[str],
+    warnings: list[str],
+) -> dict[str, Any]:
+    live = existing.get(entry["id"])
+    if live is None:
+        action = "create"
+    elif all(live.get(field) == entry[field]
+             for field in ("object_id", "method", "payload", "schedule", "type")):
+        action = "unchanged"
+    else:
+        action = "update"
+
+    if entry["object_id"] not in installable_object_ids:
+        # A schedule aimed at an object that will not exist is the silent
+        # failure this feature exists to end, so it blocks the install
+        # rather than landing as a task that can never run.
+        warnings.append(
+            f"Schedule {entry['id']} targets an object this install will not "
+            f"provide: {entry['object_id']}"
+        )
+
+    change = {
+        "id": entry["id"],
+        "object_id": entry["object_id"],
+        "schedule": entry["schedule"],
+        "type": entry["type"],
+        "exists": live is not None,
+        "action": action,
+    }
+    if live is not None:
+        change["status"] = live.get("status", "active")
+        change["run_count"] = live.get("run_count", 0)
+    return change
+
+
+def _apply_schedules(
+    schedules: Iterable[Mapping[str, Any]],
+    planned: Iterable[Mapping[str, Any]],
+    *,
+    base_dir: Path,
+) -> list[dict[str, Any]]:
+    """Write the package's schedules onto the daemon's task board.
+
+    Two things are deliberately preserved across an install:
+
+    **Run history** -- last_run/run_count/next_run belong to the daemon,
+    not the package. Resetting them on an upgrade would make an operator's
+    "when did this last work?" unanswerable.
+
+    **A pause** -- if someone paused a task, it stays paused. The package
+    declares what SHOULD run; an operator decides what DOES right now, and
+    a reinstall that silently restarts a deliberately-stopped nightly pass
+    is how an upgrade becomes an incident.
+
+    A changed expression clears next_run so the daemon recomputes it from
+    the new one; an unchanged expression keeps the pending firing exactly
+    where it was, so reinstalling an app does not skip tonight's run.
+    """
+    entries = list(schedules)
+    plans = list(planned)
+    if not entries:
+        return []
+
+    manager = object_state.ObjectStateManager(SCHEDULER_OBJECT_ID, base_dir=base_dir)
+    applied = []
+    for entry, plan in zip(entries, plans, strict=True):
+        key = f"{_TASK_KEY_PREFIX}{entry['id']}"
+        raw = manager.get(key)
+        live: dict[str, Any] = {}
+        if raw is not None:
+            try:
+                parsed = json.loads(raw)
+            except (TypeError, ValueError):
+                parsed = None
+            if isinstance(parsed, Mapping):
+                live = dict(parsed)
+
+        task = {
+            "id": entry["id"],
+            "object_id": entry["object_id"],
+            "method": entry["method"],
+            "payload": entry["payload"],
+            "schedule": entry["schedule"],
+            "type": entry["type"],
+            "status": live.get("status", "active"),
+        }
+        if entry.get("description"):
+            task["description"] = entry["description"]
+        for field in _SCHEDULE_RUNTIME_FIELDS:
+            if field in live:
+                task[field] = live[field]
+        if live and live.get("schedule") != entry["schedule"]:
+            task["next_run"] = None
+
+        if live and json.dumps(live, sort_keys=True) == json.dumps(task, sort_keys=True):
+            status = "unchanged"
+        else:
+            manager.set(key, json.dumps(task))
+            status = "updated" if live else "written"
+
+        applied.append({**plan, "status": status, "task_status": task["status"],
+                        "destination": f"state/{SCHEDULER_OBJECT_ID}/{key}"})
+    return applied
 
 
 def iter_connectors(*, root: Path | str = PACKAGES_DIR) -> list[dict[str, str]]:

@@ -46,7 +46,13 @@ invoices. Small enough to review, complete enough to install and use.
     {"collection": "contacts", "path": "seed/contacts.tsv"}
   ],
   "permissions": [],
-  "migrations": []
+  "migrations": [],
+  "schedules": [
+    {"id": "contacts_dedupe_nightly",
+     "object_id": "contacts_directory",
+     "schedule": "10 6 * * *",
+     "description": "Flag likely duplicate contacts overnight."}
+  ]
 }
 ```
 
@@ -90,6 +96,37 @@ Installs are deliberately conservative:
   Invalid fragments block the whole install.
 - `migrations` are accepted in the manifest and reported in dry-runs, but
   install rejects them until explicit run semantics land.
+- `schedules` become `task_<id>` rows in the scheduler trigger's state,
+  which is where `object_daemon.process_scheduler` reads the board from.
+  **If your app needs a recurring pass, declare it here.** A schedule that
+  exists only in a running server's state is invisible to review, absent
+  from a fresh install, and gone the next time the box is rebuilt — that
+  is precisely how a demo server ended up with four nightly passes that
+  appeared nowhere in this repository. Fields: `id` (becomes the state
+  key, `[a-z][a-z0-9_]*`), `object_id`, `schedule`, and optional `type`
+  (`cron` — the default — or `onetime`), `method` (default `POST`),
+  `payload`, `description`.
+
+  Three properties make declaring a schedule safe to do repeatedly:
+
+  - **Run history survives.** `last_run`, `run_count` and `next_run`
+    belong to the daemon and are never reset by an install. An upgrade
+    that forgot when a pass last worked would make "is this actually
+    running?" unanswerable.
+  - **A pause is honoured.** The package declares what *should* run; an
+    operator decides what *does* right now. A reinstall never restarts a
+    task somebody deliberately paused.
+  - **A changed expression reschedules.** Editing the cron clears
+    `next_run` so the daemon recomputes it; leaving it alone keeps
+    tonight's firing exactly where it was, so shipping a patch does not
+    skip a run.
+
+  Two things are refused outright, at install time rather than at 3am:
+  an unparseable cron (the daemon reads that as "no next run" and moves
+  on in silence — a pass that never runs and never complains), and a
+  schedule aimed at an object neither this package nor the server
+  provides. Removing a schedule from a manifest does **not** delete the
+  task, matching the rest of install: deregistering never destroys.
 - The HTTP install route creates a restore point first and appends changelog
   rows under `data/package_changes/{package_id}/changes.jsonl`.
 

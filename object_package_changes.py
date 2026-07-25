@@ -151,6 +151,7 @@ def dry_run_change_details(plan: Mapping[str, Any]) -> dict[str, Any]:
         "permissions": _action_counts(plan.get("permissions")),
         "seed": _action_counts(plan.get("seed")),
         "migrations": _action_counts(plan.get("migrations")),
+        "schedules": _action_counts(plan.get("schedules")),
         "warnings": _string_list(plan.get("warnings")),
     }
 

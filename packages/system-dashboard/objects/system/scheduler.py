@@ -153,9 +153,15 @@ def _task_rows_html(tasks, latest_by_task):
               f"{_esc(task.get('schedule'))}</code>"
             + (f" <span class=\"muted\">{_esc(task.get('type'))}</span>" if not english else "")
         )
+        # A package that declares a schedule says WHY it exists; showing it
+        # here is the difference between a board of cron strings and a board
+        # an operator can reason about at 3am.
+        description = str(task.get("description") or "")
         out.append(
             "<tr>"
-            f"<td><code>{_esc(tid)}</code></td>"
+            f"<td><code>{_esc(tid)}</code>"
+            + (f"<br><span class=\"muted\">{_esc(description)}</span>" if description else "")
+            + "</td>"
             f"<td><code>{_esc(task.get('object_id'))}</code>.{_esc(task.get('method', 'POST'))}</td>"
             f"<td>{schedule_cell}</td>"
             f"<td class=\"{'ok' if status == 'active' else 'warn'}\">{_esc(status)}</td>"
