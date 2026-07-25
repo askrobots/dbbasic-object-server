@@ -67,3 +67,14 @@ def stage_collection(data_dir, package_id, collection, *, rows="", seed=False):
     else:
         records_path.write_text(schema_header(package_id, collection) + rows)
     return records_path
+
+
+# The e2e browser lane needs playwright, which the per-commit Tests
+# environment deliberately does not install. Deselection via the marker is
+# not enough: pytest still IMPORTS a module to collect it, and an import
+# error fails the whole run. Where the dependency is absent, the lane
+# should be invisible, not broken.
+try:
+    import playwright  # noqa: F401
+except ImportError:
+    collect_ignore_glob = ["e2e/*"]
