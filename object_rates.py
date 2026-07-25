@@ -196,6 +196,28 @@ def rate_entry(entry: dict, cards: list[dict]) -> dict:
     }
 
 
+def with_markup(amount_cents: Any, markup_bps: Any = 0) -> int:
+    """A pass-through cost as it appears on the client's bill.
+
+    Basis points rather than a percentage, matching invoice_lines'
+    tax_rate_bps: 1500 is 15%. Rounded half-up once, on the whole amount,
+    so the line total equals what the arithmetic says and a client
+    checking it with a calculator gets the same answer.
+
+    A markup of zero is the default and means the cost is passed through
+    at cost -- the honest baseline, and the one a client assumes unless
+    the engagement said otherwise.
+    """
+    amount = _num(amount_cents)
+    if amount <= 0:
+        return 0
+    bps = _num(markup_bps)
+    if bps <= 0:
+        return int(amount.to_integral_value(rounding=ROUND_HALF_UP))
+    grossed = amount * (Decimal(10000) + bps) / Decimal(10000)
+    return int(grossed.to_integral_value(rounding=ROUND_HALF_UP))
+
+
 def hours(duration_seconds: Any, increment_minutes: Any = 0) -> str:
     """Billable hours as a human reads them on an invoice line."""
     seconds = Decimal(billable_seconds(duration_seconds, increment_minutes))

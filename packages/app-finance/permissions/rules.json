@@ -173,6 +173,30 @@
         "owner_id": "$user_id"
       },
       "reason": "closing a period is creating a row; reopening -- rare and legitimate -- is deleting it, and both are attributed in the change log so 'who reopened March?' has an answer"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": [
+        "create",
+        "read",
+        "update"
+      ],
+      "collection": "expenses",
+      "row_filter": {
+        "owner_id": "$user_id"
+      },
+      "reason": "people record and submit their own spending"
+    },
+    {
+      "effect": "allow",
+      "principal": "role:manager",
+      "actions": [
+        "read",
+        "update"
+      ],
+      "collection": "expenses",
+      "reason": "approving spending means acting on somebody else's record, which the owner-filtered rule above deliberately cannot do; the hook still refuses self-approval"
     }
   ]
 }

@@ -30,7 +30,11 @@ _SCHEMA_NAMES = ("denominations", "rates", "fin_accounts", "fin_journals",
                  "fin_journal_lines", "fin_recurring",
                  # 0.7.0: settled books stay settled -- the closed-period
                  # gate the predecessor modeled and this system lacked.
-                 "fin_closed_periods")
+                 "fin_closed_periods",
+                 # 0.9.0: the materials half of time and materials. An
+                 # expense is an accounting fact first and a billable item
+                 # second, which is why it lives with the books.
+                 "expenses")
 
 # Collections that are shared REFERENCE data rather than per-owner business
 # records: a denomination is the same fact in every set of books (gold is
@@ -70,6 +74,8 @@ def test_get_package_normalizes_app_finance_manifest():
         # 0.6.0: the P&L + balance sheet page, the two statements this
         # package listed as deferred from v1 (object_finance.py's docstring).
         "site_statements",
+        # 0.9.0: expenses -- the approval gate and the journal it composes.
+        "hook_expenses", "system_expense_books",
     }
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
     # + a site_routes seed for /finance/setup-accounts and /journals/{id},
@@ -147,8 +153,8 @@ def test_schema_json_files_are_valid_and_versioned():
             if payload["name"] == "fin_journal_lines":
                 assert payload["version"] == 3
                 assert payload["hooks"] == {"before_write": "hook_fin_journal_lines"}
-            elif payload["name"] == "fin_closed_periods":
-                assert payload["version"] == 1   # new in 0.7.0
+            elif payload["name"] in ("fin_closed_periods", "expenses"):
+                assert payload["version"] == 1   # new in 0.7.0 / 0.9.0
             else:
                 assert payload["version"] == 2
             assert payload["views"]["list_mode"] == "table"

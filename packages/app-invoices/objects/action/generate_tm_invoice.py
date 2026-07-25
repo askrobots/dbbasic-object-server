@@ -1,12 +1,20 @@
-"""action_generate_tm_invoice -- approved hours become one invoice.
+"""action_generate_tm_invoice -- approved hours and costs become one invoice.
 
 POST {project_id?, customer_name?, through_date?, grouping?, dry_run?}
 
-The last mile of time-and-materials billing, and deliberately the same
-shape as the period biller: collect what is owed, raise ONE invoice, mark
-the sources so a re-run raises nothing. Everything downstream is the
-machinery that already ships -- totals rollup, portal link, send, aging,
-dunning, payment, books.
+The last mile of time-and-materials billing -- both halves of it, since
+the materials are half the name. Deliberately the same shape as the
+period biller: collect what is owed, raise ONE invoice, mark the sources
+so a re-run raises nothing. Everything downstream is the machinery that
+already ships -- totals rollup, portal link, send, aging, dunning,
+payment, books.
+
+Time and expenses land on the SAME invoice rather than two, because a
+client engaged one firm for one project and should receive one bill for
+it. Expenses bill at their stamped billable amount (cost plus whatever
+markup was approved), and the line says so when there is a markup: a
+pass-through cost quietly grossed up is the thing clients discover later
+and remember.
 
 Idempotency lives on the entries rather than in a dedup table. An entry
 that already carries an invoice_id is never billed again, which means a
@@ -90,6 +98,45 @@ def _billable_entries(base, project_id, through):
     return out
 
 
+def _billable_expenses(base, project_id, through):
+    """Approved, unbilled, billable costs for this project up to a date.
+
+    Unbillable expenses are skipped here and only here: they still posted
+    to the books when they were approved, which is where a cost the
+    client never sees belongs.
+    """
+    try:
+        rows = object_records.read_collection_records("expenses", base_dir=base)
+    except Exception:
+        return []
+    out = []
+    for row in rows:
+        if _text(row.get("status")) != "approved":
+            continue
+        if _text(row.get("invoice_id")):
+            continue
+        if not _truthy(row.get("billable")):
+            continue
+        if project_id and _text(row.get("project_id")) != project_id:
+            continue
+        incurred = _text(row.get("incurred_on"))[:10]
+        if through and incurred and incurred > through:
+            continue
+        if _int(row.get("billable_amount_cents")) <= 0:
+            continue
+        out.append(row)
+    return out
+
+
+def _expense_description(expense):
+    incurred = _text(expense.get("incurred_on"))[:10]
+    what = _text(expense.get("description")) or "Expense"
+    markup = _int(expense.get("markup_bps"))
+    if markup <= 0:
+        return f"{incurred} {what} (at cost)"
+    return f"{incurred} {what} (cost plus {markup / 100:g}%)"
+
+
 def _group_key(entry, grouping):
     if grouping == "by_person":
         return _text(entry.get("owner_id")) or "unassigned"
@@ -150,17 +197,23 @@ def POST(request):
     entries = _billable_entries(base, project_id, through)
     if entries is None:
         return {"ok": True, "skipped": "time tracking not installed (time_logs absent)"}
-    if not entries:
+    expenses = _billable_expenses(base, project_id, through)
+    if not entries and not expenses:
         return {"ok": True, "invoiced": 0,
-                "note": "no approved, unbilled time in range"}
+                "note": "no approved, unbilled time or expenses in range"}
 
     buckets = {}
     for entry in entries:
         buckets.setdefault(_group_key(entry, grouping), []).append(entry)
 
-    total_cents = sum(_int(e.get("amount_cents")) for e in entries)
+    time_cents = sum(_int(e.get("amount_cents")) for e in entries)
+    expense_cents = sum(_int(e.get("billable_amount_cents")) for e in expenses)
+    total_cents = time_cents + expense_cents
     if dry_run:
-        return {"ok": True, "would_invoice": len(entries), "lines": len(buckets),
+        return {"ok": True, "would_invoice": len(entries) + len(expenses),
+                "time_entries": len(entries), "expenses": len(expenses),
+                "lines": len(buckets) + len(expenses),
+                "time_cents": time_cents, "expense_cents": expense_cents,
                 "total_cents": total_cents, "through_date": through,
                 "grouping": grouping}
 
@@ -169,7 +222,8 @@ def POST(request):
                      or "Customer")
     due_days = _int(_setting(base, "billing.invoice_due_days", "14"), 14)
     invoice_id = object_ids.new_uuid4()
-    owner = _text(request.get("owner_id")) or _text(entries[0].get("owner_id"))
+    owner = (_text(request.get("owner_id"))
+             or _text((entries or expenses)[0].get("owner_id")))
     marker = f"time_logs:{project_id or 'all'}:{through}"
 
     object_records.create_collection_record(
@@ -220,7 +274,34 @@ def POST(request):
                 base_dir=base, actor=ACTOR)
             billed += 1
 
+    # Expenses are never grouped: one receipt, one line. Collapsing them
+    # would hide exactly what a client wants to see itemised.
+    expenses_billed = 0
+    for expense in sorted(expenses, key=lambda e: (_text(e.get("incurred_on")),
+                                                   _text(e.get("id")))):
+        amount = _int(expense.get("billable_amount_cents"))
+        object_records.create_collection_record(
+            "invoice_lines",
+            {
+                "id": object_ids.new_uuid4(),
+                "invoice_id": invoice_id,
+                "description": _expense_description(expense),
+                "quantity": "1",
+                "unit_price_cents": str(amount),
+                "line_total_cents": str(amount),
+                "owner_id": owner,
+            },
+            base_dir=base, actor=ACTOR)
+        lines += 1
+        object_records.update_collection_record(
+            "expenses", expense["id"],
+            {"status": "billed", "invoice_id": invoice_id},
+            base_dir=base, actor=ACTOR)
+        expenses_billed += 1
+
     return {"ok": True, "invoiced": 1, "invoice_id": invoice_id,
-            "entries_billed": billed, "lines": lines,
+            "entries_billed": billed, "expenses_billed": expenses_billed,
+            "lines": lines, "time_cents": time_cents,
+            "expense_cents": expense_cents,
             "total_cents": total_cents, "through_date": through,
             "grouping": grouping}
