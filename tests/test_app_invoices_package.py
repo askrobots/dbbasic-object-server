@@ -48,6 +48,12 @@ def test_get_package_normalizes_app_invoices_manifest():
         "site_invoices",
         "system_invoice_totals",
         "system_invoice_aging",  # aging + dunning runner (payments slice 2)
+        # 0.5.0 portal: the page a dunning email can finally point at, the
+        # regenerate verb for a leaked link, and the handler that mints a
+        # token the moment an invoice leaves draft.
+        "site_invoice_portal",
+        "action_regenerate_portal_link",
+        "system_invoice_portal_link",
     }
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
     assert {entry["collection"] for entry in package["seed"]} == {
@@ -103,8 +109,11 @@ def test_schema_json_files_are_valid_and_versioned():
     for name in ("invoices", "invoice_lines"):
         payload = json.loads((APP_INVOICES_DIR / "schemas" / f"{name}.json").read_text())
         assert payload["name"] == name
-        # invoices v2: paid/balance became derived (app-payments rollups/formulas)
-        assert payload["version"] == (3 if name == "invoices" else 1)
+        # invoices v2: paid/balance became derived (app-payments rollups/
+        # formulas). v3: dunning fields + lifecycle arcs. v4: the portal
+        # capability URL (portal_token, read_only) plus view counters, which
+        # tell "viewed three times, still unpaid" apart from "never opened".
+        assert payload["version"] == (4 if name == "invoices" else 1)
         assert payload["views"]["list_mode"] == "table"
 
 

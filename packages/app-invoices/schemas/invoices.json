@@ -1,7 +1,7 @@
 {
   "name": "invoices",
   "title": "Invoices",
-  "version": 3,
+  "version": 4,
   "description": "Line-item invoices, quotes, and credit notes. Lines live in invoice_lines; subtotal/tax/total/balance are stamped by the invoice_totals handler, never typed by hand. See plan/vocabulary/20-invoice-spec.md.",
   "fields": [
     {
@@ -271,6 +271,26 @@
       "type": "text",
       "label": "Public Link Token",
       "help": "Separate rotatable token for a future public/printable view (plan/vocabulary/20-invoice-spec.md's /i/{token} route). The public page itself is a later slice -- not built here."
+    },
+    {
+      "name": "portal_token",
+      "type": "text",
+      "read_only": true,
+      "label": "Portal Link Token",
+      "help": "secrets.token_urlsafe(32), minted server-side (action_regenerate_portal_link, or lazily by system_invoice_aging the first time a dunning email needs a working link). Distinct from public_token on purpose -- this token grants a capability (view this one invoice AND see its live balance/payment-instructions state), not merely a read, so it gets its own rotatable credential rather than overloading the printable-view token with a different trust level. read_only because it is never client-submitted; a server-side write uses preserve_read_only, same posture invoice_totals.py documents for stamped totals. Deliberately absent from forms.default.fields, views.list_fields, and search.fields below so the generic form/list/search generators never round-trip it -- and it is further shielded from ever crossing an owner boundary because plain row_filter scoping (permissions/rules.json: {\"owner_id\": \"$user_id\"}) already means a non-owner's list/search call returns zero rows for someone else's invoice, token included."
+    },
+    {
+      "name": "portal_views",
+      "type": "integer",
+      "default": "0",
+      "label": "Portal Views",
+      "help": "Stamped by site_invoice_portal on every /pay/{token} view (best-effort -- a counter write must never break the page the customer is trying to read). Dunning intelligence: 'viewed 3x, still unpaid' is a materially different follow-up than 'never opened', per plan/customer-payment-portal-spec.md."
+    },
+    {
+      "name": "last_viewed_at",
+      "type": "datetime",
+      "label": "Portal Last Viewed",
+      "help": "Stamped alongside portal_views on every portal page view. Blank means never opened."
     },
     {
       "name": "source_order_id",

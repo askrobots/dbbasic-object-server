@@ -20,6 +20,7 @@ Per pass:
 """
 
 import os
+import secrets
 from datetime import date, timedelta
 
 import object_ids
@@ -57,10 +58,50 @@ def _parse(day):
         return None
 
 
+def _portal_link(base, invoice):
+    """The door this dunning email points at
+    (plan/customer-payment-portal-spec.md): closes the loop that makes
+    dunning ACTIONABLE -- an email that says "you owe X" with nowhere to
+    go is the exact gap this whole feature exists to close.
+
+    Mints invoices.portal_token lazily, right here, the first time an
+    invoice needs a working link. action_regenerate_portal_link is the
+    owner-facing way to mint or rotate one on demand, but wiring EAGER
+    issuance into the invoice "send" flow (draft -> sent) lives in objects
+    outside this file's edit boundary (site_invoices / a hook on the
+    invoices collection -- see that action object's own docstring), so
+    without this fallback an invoice could reach its first overdue dunning
+    email with no token yet and no way to get one. Dunning is the moment a
+    working link is most needed, so this is where the fallback lives.
+
+    Returns "" -- never a broken relative URL -- when portal.base_url is
+    unset, or when the mint fails to persist. A dunning email with no link
+    at all is honest about what this deployment has configured; one with a
+    guaranteed-404 link would be worse than the plain amount-owed text it
+    replaces.
+    """
+    base_url = str(_setting(base, "portal.base_url", "") or "").rstrip("/")
+    if not base_url:
+        return ""
+    token = str(invoice.get("portal_token") or "").strip()
+    if not token:
+        token = secrets.token_urlsafe(32)
+        try:
+            object_records.update_collection_record(
+                "invoices", invoice["id"], {"portal_token": token},
+                base_dir=base, actor=ACTOR, preserve_read_only=True,
+            )
+        except Exception:
+            return ""  # could not persist a token: don't mail a dead link
+    return f"{base_url}/pay/{token}"
+
+
 def _queue_dunning_email(base, invoice, level):
     to = (invoice.get("customer_email") or "").strip()
     if not to:
         return False
+    link = _portal_link(base, invoice)
+    pay_line = f"\nView and pay this invoice online: {link}\n" if link else ""
     try:
         object_records.create_collection_record(
             "email_outbox",
@@ -75,7 +116,8 @@ def _queue_dunning_email(base, invoice, level):
                     f"Invoice {invoice.get('number') or invoice.get('id')} for "
                     f"{invoice.get('total_cents') or '0'} cents was due on "
                     f"{invoice.get('due_date') or 'its due date'} and has an outstanding "
-                    f"balance of {invoice.get('balance_due_cents') or '?'} cents.\n\n"
+                    f"balance of {invoice.get('balance_due_cents') or '?'} cents.\n"
+                    f"{pay_line}\n"
                     "Please arrange payment at your earliest convenience.\n"
                 ),
                 "source_object_id": ACTOR,

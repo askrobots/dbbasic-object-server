@@ -34,6 +34,10 @@ def test_manifest_drops_bespoke_invoice_view_page_and_seeds_the_detail_view():
     assert {obj["id"] for obj in package["objects"]} == {
         "site_invoices", "system_invoice_totals",
         "system_invoice_aging",  # aging + dunning runner (payments slice 2)
+        # 0.5.0 portal: /pay/{token}, the regenerate verb, and the handler
+        # that mints a token when an invoice leaves draft.
+        "site_invoice_portal", "action_regenerate_portal_link",
+        "system_invoice_portal_link",
     }
     assert {entry["collection"] for entry in package["seed"]} == {
         "invoices", "invoice_lines", "views", "site_routes",
@@ -79,6 +83,10 @@ def test_invoice_view_composes_detail_flat_related_and_fk_locked_form():
 
 def test_permalink_route_points_to_view_render():
     rows = _seed_rows("site_routes")
+    # 0.5.0 appended /pay/{token}; this test is about the permalink route
+    # pointing at the generic renderer, so assert on that row rather than
+    # on a total that will keep growing.
+    rows = [r for r in rows if r["id"] == "route_invoice_detail"]
     assert len(rows) == 1
     assert rows[0]["id"] == "route_invoice_detail"
     assert rows[0]["pattern"] == "/invoices/{invoice_id}"

@@ -3,25 +3,59 @@
     {
       "effect": "allow",
       "principal": "registered",
-      "actions": ["create", "read", "update", "delete"],
+      "actions": [
+        "create",
+        "read",
+        "update",
+        "delete"
+      ],
       "collection": "invoices",
-      "row_filter": {"owner_id": "$user_id"},
+      "row_filter": {
+        "owner_id": "$user_id"
+      },
       "reason": "signed-in users manage invoices, quotes, and credit notes they created"
     },
     {
       "effect": "allow",
       "principal": "registered",
-      "actions": ["create", "read", "update", "delete"],
+      "actions": [
+        "create",
+        "read",
+        "update",
+        "delete"
+      ],
       "collection": "invoice_lines",
-      "row_filter": {"owner_id": "$user_id"},
+      "row_filter": {
+        "owner_id": "$user_id"
+      },
       "reason": "signed-in users manage line items on documents they created"
     },
     {
       "effect": "allow",
       "principal": "public",
-      "actions": ["execute"],
+      "actions": [
+        "execute"
+      ],
       "object_id": "site_invoices",
       "reason": "the invoices page is public; it shows a sign-in prompt to visitors"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": [
+        "execute"
+      ],
+      "object_id": "site_invoice_portal",
+      "reason": "the /pay/{token} portal is public by design -- the payer has no account; the object looks the invoice up by portal_token with a constant-time compare, never by id, so there is no enumeration path, and it gates every state itself"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": [
+        "execute"
+      ],
+      "object_id": "action_regenerate_portal_link",
+      "reason": "regenerating a portal link is the correct response to a leaked one; the object enforces owner-or-admin on the target invoice"
     }
   ]
 }
