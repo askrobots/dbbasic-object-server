@@ -681,3 +681,43 @@ def balance_sheet(
         "balances": difference_cents == 0,
         "difference_cents": difference_cents,
     }
+
+CLOSED_PERIODS_COLLECTION = "fin_closed_periods"
+
+
+def closed_period_for(date_text, *, base_dir: Path | str = DEFAULT_DATA_DIR,
+                      owner_id: str = "", entity_id: str = "") -> dict | None:
+    """The closed period covering a date, if any -- the period-lock check.
+
+    A closed period is the line under settled books: from start_date
+    through end_date INCLUSIVE, nothing may be written, edited, or posted
+    (the predecessor system modeled exactly this control -- reconciled
+    against a private source audit, not part of this repo -- and it was
+    the one it had that this system lacked). Scoping mirrors how
+    books are scoped everywhere else: a period closes ONE owner's books,
+    and an entity-specific period closes only that entity's journals while
+    an entity-blank period closes the owner's unscoped journals.
+
+    Plain string comparison on ISO dates, same as every date filter in
+    this module. A journal with no date cannot be inside a closed period
+    -- validation owns whether dates are required, not this check.
+    """
+    date = str(date_text or "").strip()[:10]
+    if not date:
+        return None
+    try:
+        rows = object_records.read_collection_records(
+            CLOSED_PERIODS_COLLECTION, base_dir=base_dir)
+    except Exception:
+        return None
+    for row in rows:
+        if owner_id and row.get("owner_id") and row["owner_id"] != owner_id:
+            continue
+        row_entity = str(row.get("entity_id") or "")
+        if row_entity != str(entity_id or ""):
+            continue
+        start = str(row.get("start_date") or "")[:10]
+        end = str(row.get("end_date") or "")[:10]
+        if start and end and start <= date <= end:
+            return row
+    return None

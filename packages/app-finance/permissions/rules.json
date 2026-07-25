@@ -158,6 +158,21 @@
       ],
       "object_id": "site_statements",
       "reason": "the statements page is public execute like every other finance page object; it shows a sign-in prompt to visitors and scopes both statements to the signed-in owner (see objects/site/statements.py)"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": [
+        "create",
+        "read",
+        "update",
+        "delete"
+      ],
+      "collection": "fin_closed_periods",
+      "row_filter": {
+        "owner_id": "$user_id"
+      },
+      "reason": "closing a period is creating a row; reopening -- rare and legitimate -- is deleting it, and both are attributed in the change log so 'who reopened March?' has an answer"
     }
   ]
 }

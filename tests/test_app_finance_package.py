@@ -27,7 +27,10 @@ _FLOAT_MONEY_TYPES = {"float", "number", "currency"}
 # divides (object_money.py). Amounts are integers of the smallest unit, so
 # this is the collection that says where the decimal point goes.
 _SCHEMA_NAMES = ("denominations", "rates", "fin_accounts", "fin_journals",
-                 "fin_journal_lines", "fin_recurring")
+                 "fin_journal_lines", "fin_recurring",
+                 # 0.7.0: settled books stay settled -- the closed-period
+                 # gate the predecessor modeled and this system lacked.
+                 "fin_closed_periods")
 
 # Collections that are shared REFERENCE data rather than per-owner business
 # records: a denomination is the same fact in every set of books (gold is
@@ -60,6 +63,9 @@ def test_get_package_normalizes_app_finance_manifest():
     assert {obj["id"] for obj in package["objects"]} == {
         "site_trial_balance",
         "site_setup_accounts", "hook_fin_journals",
+        # 0.7.0: the line-side closed-period gate -- a journal's amounts
+        # live in its lines, so freezing the journal alone froze nothing.
+        "hook_fin_journal_lines",
         "action_reverse_journal", "system_fin_recurring_runner",
         # 0.6.0: the P&L + balance sheet page, the two statements this
         # package listed as deferred from v1 (object_finance.py's docstring).
@@ -136,8 +142,15 @@ def test_schema_json_files_are_valid_and_versioned():
             assert payload["hooks"] == {"before_write": "hook_fin_journals"}
             assert payload["views"]["list_mode"] == "table"
         else:
-            # fin_journal_lines / fin_recurring: 1 -> 2 (entity_id)
-            assert payload["version"] == 2
+            # fin_journal_lines: 2 -> 3 (hooks.before_write, closed periods);
+            # fin_recurring stays at 2 (entity_id).
+            if payload["name"] == "fin_journal_lines":
+                assert payload["version"] == 3
+                assert payload["hooks"] == {"before_write": "hook_fin_journal_lines"}
+            elif payload["name"] == "fin_closed_periods":
+                assert payload["version"] == 1   # new in 0.7.0
+            else:
+                assert payload["version"] == 2
             assert payload["views"]["list_mode"] == "table"
 
 

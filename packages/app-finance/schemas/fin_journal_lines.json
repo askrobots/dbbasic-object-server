@@ -1,7 +1,7 @@
 {
   "name": "fin_journal_lines",
   "title": "Journal Lines",
-  "version": 2,
+  "version": 3,
   "storage": "append",
   "description": "Debit/credit rows belonging to one journal. A line is a debit OR a credit -- nothing in this schema enforces that split (a row could carry both debit_cents and credit_cents nonzero), matching the source's own JournalLine model, which also never enforced it at the field level (reconciled against a private predecessor-system audit, not part of this repo: 'JournalLine (debit-or-credit, ...)' is a naming/usage convention, not a guarded constraint). Totals are never stamped back onto fin_journals -- see object_finance.journal_totals for the computed fold and packages/app-finance/schemas/fin_journals.json's status field help for why no balance check exists at post.",
   "fields": [
@@ -90,5 +90,8 @@
       "credit_cents",
       "memo"
     ]
+  },
+  "hooks": {
+    "before_write": "hook_fin_journal_lines"
   }
 }

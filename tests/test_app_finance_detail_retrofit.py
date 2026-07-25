@@ -35,11 +35,13 @@ def test_manifest_drops_bespoke_journal_page_and_seeds_the_detail_view():
     assert {obj["id"] for obj in package["objects"]} == {
         "site_trial_balance", "site_setup_accounts",
         "site_statements",
-        "hook_fin_journals",  # pre-write balance hook
+        "hook_fin_journals",  # pre-write balance + closed-period hook
+        "hook_fin_journal_lines",  # 0.7.0: lines of settled journals are settled
         "action_reverse_journal", "system_fin_recurring_runner",  # books spine
     }
     assert {entry["collection"] for entry in package["seed"]} == {
         "denominations",  # 0.4.0: seeded units of value (USD/JPY/BTC/ETH/XAU/...)
+        "fin_closed_periods",  # 0.7.0: settled books stay settled
         "rates",          # 0.5.0: observed conversion rates (header-only; fetched, not seeded)
         "fin_accounts", "fin_journals", "fin_journal_lines", "fin_recurring",
         "views", "site_routes",

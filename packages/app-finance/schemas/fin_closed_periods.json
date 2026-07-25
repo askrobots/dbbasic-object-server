@@ -1,0 +1,26 @@
+{
+  "name": "fin_closed_periods",
+  "title": "Closed Periods",
+  "version": 1,
+  "description": "A closed accounting period: from start_date through end_date inclusive, the books for that stretch are settled and no journal may be written, edited, or posted into it (hook-enforced on fin_journals and fin_journal_lines -- see the hooks' own docstrings). This is the control the predecessor system modeled (ClosedPeriod + period_locked) and most small-business books skip entirely: without it, last year's 'final' numbers stay quietly editable forever, which means the statements you filed and the statements you have can drift apart with nobody deciding they should. Closing a period is creating a row; reopening -- rare, and legitimate (a late auditor adjustment) -- is deleting it, and both land in the change log with an actor, so the question 'who reopened March?' has an answer. What this deliberately is NOT yet: year-end closing ENTRIES (moving net income to retained earnings -- fin_journals' reserved kind=closing, built when a real year-end needs it) and composer awareness (machine-composed journals write at the storage level, which bypasses hooks by design; a late bank-line resolution dated into a closed period is a real case that should surface to the operator rather than be silently blocked or silently shifted -- tracked in the package description until it repeats enough to earn its design).",
+  "fields": [
+    {"name": "id"},
+    {"name": "start_date", "type": "date", "required": true, "label": "From"},
+    {"name": "end_date", "type": "date", "required": true, "label": "Through",
+     "help": "Inclusive. A journal dated exactly on this date is inside the closed period."},
+    {"name": "reason", "type": "text", "label": "Reason",
+     "help": "Why this stretch is settled: 'FY2025 filed', 'Q2 reviewed'."},
+    {"name": "closing_journal_id", "label": "Closing Journal",
+     "relation": {"collection": "fin_journals", "display_field": "description"},
+     "help": "The year-end closing entry for this period, once closing entries exist. Optional until then."},
+    {"name": "notes", "type": "textarea", "label": "Notes"},
+    {"name": "owner_id", "type": "text", "label": "Owner"},
+    {"name": "entity_id", "type": "text", "label": "Entity",
+     "relation": {"collection": "entities", "display_field": "name"},
+     "help": "Which set of books this closes. Blank closes the period for all of the owner's journals without an entity."},
+    {"name": "created_at", "type": "datetime", "read_only": true, "label": "Closed At"}
+  ],
+  "forms": {"default": {"fields": ["start_date", "end_date", "reason", "notes"]}},
+  "views": {"list_mode": "table",
+            "list_fields": ["start_date", "end_date", "reason", "created_at"]}
+}
