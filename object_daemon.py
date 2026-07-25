@@ -33,6 +33,7 @@ except ImportError:
 
 import object_analytics
 import object_books_status
+import object_change_dispatch
 import object_collections
 import object_connectors
 import object_email
@@ -1640,6 +1641,7 @@ def main():
         f"(interval {_env_int(MATERIALIZE_INTERVAL_SECONDS_ENV, _DEFAULT_MATERIALIZE_INTERVAL_SECONDS)}s)"
     )
     print(f"Notify: {'enabled' if object_notify.notify_pass_enabled(base_dir=base_dir) else 'disabled (notify_enabled flag off)'} (every poll)")
+    print(f"Change dispatch: {'enabled' if object_change_dispatch.change_dispatch_enabled(base_dir=base_dir) else 'disabled (DBBASIC_ENABLE_CHANGE_DISPATCH unset)'}")
     # Books readiness is advisory, never a gate -- the composers are
     # deliberately soft dependencies. But a composer that skips because its
     # accounts are unmapped otherwise says so only in a return value nobody
@@ -1735,6 +1737,11 @@ def main():
             process_notifications(base_dir=base_dir)
         except Exception as e:
             log(f"Notify error: {e}", 'ERROR')
+
+        try:
+            object_change_dispatch.dispatch_pending(base_dir=base_dir)
+        except Exception as e:
+            log(f"Change dispatch error: {e}", 'ERROR')
 
         try:
             process_email_outbox(base_dir=base_dir)

@@ -58,6 +58,9 @@ def test_get_package_normalizes_app_finance_manifest():
         "site_accounts", "site_journals", "site_trial_balance",
         "site_setup_accounts", "hook_fin_journals",
         "action_reverse_journal", "system_fin_recurring_runner",
+        # 0.6.0: the P&L + balance sheet page, the two statements this
+        # package listed as deferred from v1 (object_finance.py's docstring).
+        "site_statements",
     }
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
     # + a site_routes seed for /finance/setup-accounts and /journals/{id},

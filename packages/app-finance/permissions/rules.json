@@ -149,6 +149,15 @@
       ],
       "object_id": "action_reverse_journal",
       "reason": "reversing a posted journal is the doctrine-correct correction; the object itself enforces owner-or-admin on the target journal"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": [
+        "execute"
+      ],
+      "object_id": "site_statements",
+      "reason": "the statements page is public execute like every other finance page object; it shows a sign-in prompt to visitors and scopes both statements to the signed-in owner (see objects/site/statements.py)"
     }
   ]
 }

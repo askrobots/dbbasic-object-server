@@ -34,6 +34,7 @@ def test_manifest_drops_bespoke_journal_page_and_seeds_the_detail_view():
     package = object_packages.get_package("app-finance", root=PACKAGES_ROOT)
     assert {obj["id"] for obj in package["objects"]} == {
         "site_accounts", "site_journals", "site_trial_balance", "site_setup_accounts",
+        "site_statements",
         "hook_fin_journals",  # pre-write balance hook
         "action_reverse_journal", "system_fin_recurring_runner",  # books spine
     }
@@ -98,7 +99,10 @@ def test_journal_route_points_to_view_render_and_setup_accounts_route_survives()
     # retrofit APPENDS, it never overwrites the existing site_routes.tsv.
     assert rows[0]["pattern"] == "/finance/setup-accounts"
     assert rows[0]["object_id"] == "site_setup_accounts"
-    assert len(rows) == 2
+    # 0.6.0 appended /statements; this file's point is that the retrofit
+    # APPENDS rather than overwriting, so assert the journal route's
+    # position rather than the total count, which will keep growing.
+    assert len(rows) >= 2
     assert rows[1]["id"] == "route_journal_detail"
     assert rows[1]["pattern"] == "/journals/{journal_id}"
     assert rows[1]["object_id"] == "site_view_render"
