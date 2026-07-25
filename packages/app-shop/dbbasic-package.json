@@ -1,0 +1,58 @@
+{
+  "id": "app-shop",
+  "name": "Shop",
+  "version": "0.1.0",
+  "description": "The missing doorway. Every piece a storefront connects to was already built -- products with prices, stock with books-aware moves, orders with lines and totals, Stripe checkout with a verified webhook, payment to invoice status to journal -- and none of it could be reached by somebody who just wanted to buy something. This package is the basket and the counter. A cart is NOT a draft order (an order is a commitment with a number and a books consequence; a basket is a browsing artefact that usually gets abandoned, and mixing them makes 'how many orders did we take?' unanswerable), it is keyed by a session token rather than an account (requiring signup before purchase is the biggest conversion loss in small-business retail), the price is stamped when a thing goes in and the DISAGREEMENT is surfaced at checkout rather than silently resolved either way, and stock is checked at checkout but moved only when money arrives -- decrementing on checkout would turn every abandoned payment into a phantom sale. The oversell race that leaves is real, documented rather than pretended away, and accepted at this scale because it surfaces at the stock move where it is visible and refundable. What makes this worth having is not the cart, which everybody has: it is that the sale posts itself. Stock moves, the invoice settles and the journal entry lands with no export, no CSV and nobody re-typing anything.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": [],
+  "objects": [
+    {
+      "id": "action_cart",
+      "path": "objects/action/cart.py"
+    },
+    {
+      "id": "action_checkout",
+      "path": "objects/action/checkout.py"
+    },
+    {
+      "id": "system_shop_fulfillment",
+      "path": "objects/system/shop_fulfillment.py"
+    },
+    {
+      "id": "site_shop",
+      "path": "objects/site/shop.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "carts",
+      "path": "schemas/carts.json"
+    },
+    {
+      "collection": "cart_items",
+      "path": "schemas/cart_items.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "carts",
+      "path": "seed/carts.tsv"
+    },
+    {
+      "collection": "cart_items",
+      "path": "seed/cart_items.tsv"
+    },
+    {
+      "collection": "site_routes",
+      "path": "seed/site_routes.tsv"
+    }
+  ],
+  "migrations": []
+}

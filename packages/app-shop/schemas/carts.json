@@ -1,0 +1,35 @@
+{
+  "name": "carts",
+  "title": "Carts",
+  "version": 1,
+  "description": "What somebody intends to buy, before they commit to it. Deliberately NOT a draft order: an order is a commitment with a number, a customer and a books consequence, and it sits in a sequence people count, while a basket is a browsing artefact that usually gets abandoned. Modelling the basket as a draft order fills that sequence with junk and makes 'how many orders did we take?' unanswerable -- so carts are their own collection with their own short lifetime. A cart is keyed by a session token rather than an account, because requiring somebody to sign in before they can put something in a basket is the single biggest conversion loss in small-business retail; owner_id is stamped only if and when they sign in. checked_out_order_id is what makes checkout idempotent: a cart that already became an order never becomes a second one, however many times a browser retries the request.",
+  "fields": [
+    {"name": "id"},
+    {"name": "session_token", "type": "text", "required": true, "label": "Session",
+     "help": "Opaque, client-held, meaningless outside this shop. Not an identity and never a cross-site key: it says which basket, not who."},
+    {"name": "status", "type": "enum", "default": "open", "label": "Status",
+     "enum": ["open", "checked_out", "abandoned"],
+     "transitions": {
+       "open": ["checked_out", "abandoned"],
+       "abandoned": ["open"],
+       "checked_out": []
+     },
+     "help": "abandoned returns to open because somebody coming back a week later to the same basket is a sale, not a mistake. checked_out is terminal -- the order is the thing to change now."},
+    {"name": "customer_email", "type": "text", "label": "Email",
+     "help": "Collected at checkout, not before. It is what an order needs to send a receipt to; an account is offered afterwards, if at all."},
+    {"name": "customer_name", "type": "text", "label": "Name"},
+    {"name": "currency", "type": "text", "default": "USD", "label": "Currency"},
+    {"name": "checked_out_order_id", "label": "Became Order",
+     "relation": {"collection": "orders", "display_field": "number"},
+     "help": "Stamped when the cart becomes an order. Present means done: one cart, one order, however many times a retry arrives."},
+    {"name": "notes", "type": "textarea", "label": "Notes"},
+    {"name": "owner_id", "type": "text", "label": "Owner",
+     "help": "The shop's owner while the basket is anonymous; the shopper once they sign in. A cart always belongs to somebody, so permissions have something to filter on."},
+    {"name": "entity_id", "type": "text", "label": "Entity",
+     "relation": {"collection": "entities", "display_field": "name"}},
+    {"name": "created_at", "type": "datetime", "read_only": true, "label": "Started"}
+  ],
+  "views": {"list_mode": "table",
+            "list_fields": ["created_at", "session_token", "status", "customer_email"],
+            "filter_fields": ["status"]}
+}

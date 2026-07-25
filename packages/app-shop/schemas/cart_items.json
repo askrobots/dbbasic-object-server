@@ -1,0 +1,23 @@
+{
+  "name": "cart_items",
+  "title": "Cart Items",
+  "version": 1,
+  "description": "One product in one basket, with the price it carried when it went in. Stamping the price at add-time is what lets the shop notice later that it moved: a price that changes while somebody is shopping must not silently change what they thought they were agreeing to, and a basket that has sat for three weeks must not hold the seller to a stale price either. Both numbers are kept and the DISAGREEMENT is surfaced at checkout (object_cart.price_changes) rather than resolved in secret in either direction -- the same instinct as stamping a rate at approval and refusing to let a later change restate it (docs/logic-decisions.md #1). No stock is reserved by anything here: availability is decided at checkout, because reserving on add is how a shop shows 'sold out' for goods nobody bought.",
+  "fields": [
+    {"name": "id"},
+    {"name": "cart_id", "required": true, "label": "Cart",
+     "relation": {"collection": "carts", "display_field": "session_token"}},
+    {"name": "product_id", "required": true, "label": "Product",
+     "relation": {"collection": "products", "display_field": "name"}},
+    {"name": "description", "type": "text", "label": "Description",
+     "help": "Stamped from the product name so a basket still reads correctly if the product is later renamed."},
+    {"name": "quantity", "type": "number", "default": "1", "label": "Quantity",
+     "help": "May be fractional -- 1.5 kg, 2.5 hours of setup -- so line money is Decimal arithmetic rounded once per line."},
+    {"name": "unit_price_cents", "type": "integer", "default": "0", "label": "Unit Price",
+     "help": "What it cost when it went in the basket, in integer minor units. Compared against the live price at checkout, never quietly replaced by it."},
+    {"name": "owner_id", "type": "text", "label": "Owner"},
+    {"name": "created_at", "type": "datetime", "read_only": true, "label": "Added"}
+  ],
+  "views": {"list_mode": "table",
+            "list_fields": ["description", "quantity", "unit_price_cents"]}
+}
