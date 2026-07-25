@@ -3,62 +3,128 @@
     {
       "effect": "allow",
       "principal": "registered",
-      "actions": ["create", "read", "update", "delete"],
+      "actions": [
+        "create",
+        "read",
+        "update",
+        "delete"
+      ],
       "collection": "bank_accounts",
-      "row_filter": {"owner_id": "$user_id"},
+      "row_filter": {
+        "owner_id": "$user_id"
+      },
       "reason": "signed-in users manage their own bank accounts, same owner-scoped posture as the rest of finance"
     },
     {
       "effect": "allow",
       "principal": "registered",
-      "actions": ["create", "read", "update", "delete"],
+      "actions": [
+        "create",
+        "read",
+        "update",
+        "delete"
+      ],
       "collection": "bank_import_profiles",
-      "row_filter": {"owner_id": "$user_id"},
+      "row_filter": {
+        "owner_id": "$user_id"
+      },
       "reason": "an import profile is the user's own how-to-read-my-bank configuration"
     },
     {
       "effect": "allow",
       "principal": "registered",
-      "actions": ["create", "read"],
+      "actions": [
+        "create",
+        "read"
+      ],
       "collection": "bank_statement_imports",
-      "row_filter": {"owner_id": "$user_id"},
+      "row_filter": {
+        "owner_id": "$user_id"
+      },
       "reason": "import runs are historical events: readable and creatable by their owner, never updatable or deletable -- the provenance record for imported evidence must not be rewritable"
     },
     {
       "effect": "allow",
       "principal": "registered",
-      "actions": ["create", "read", "update"],
+      "actions": [
+        "create",
+        "read",
+        "update"
+      ],
       "collection": "bank_lines",
-      "row_filter": {"owner_id": "$user_id"},
+      "row_filter": {
+        "owner_id": "$user_id"
+      },
       "reason": "owners read and import their own statement lines, and UPDATE only to record reconciliation work (match_status/matched_to/resolved_as) -- which is attributed in the change log, so who reconciled what is auditable. No delete: imported evidence is append-only, and the transitions on match_status constrain what an update may do to it"
     },
     {
       "effect": "allow",
       "principal": "registered",
-      "actions": ["execute"],
+      "actions": [
+        "execute"
+      ],
       "object_id": "action_import_bank_csv",
       "reason": "importing a statement is an ordinary operator verb; the object requires a signed-in identity and verifies the bank account belongs to the caller"
     },
     {
       "effect": "allow",
       "principal": "registered",
-      "actions": ["execute"],
+      "actions": [
+        "execute"
+      ],
       "object_id": "action_resolve_bank_line",
       "reason": "resolving a line as a fee, interest, transfer or NSF is an ordinary operator verb; the object checks ownership of the line (and of any counterpart account) and composes through the shared journal composer, which is idempotent by provenance"
     },
     {
       "effect": "allow",
       "principal": "registered",
-      "actions": ["execute"],
+      "actions": [
+        "execute"
+      ],
       "object_id": "system_bank_matcher",
       "reason": "the matcher only ever writes SUGGESTIONS onto the caller's own unmatched lines (and auto-confirms solely at the configured tier), so running it is safe for any signed-in owner as well as the scheduler"
     },
     {
       "effect": "allow",
       "principal": "public",
-      "actions": ["execute"],
+      "actions": [
+        "execute"
+      ],
       "object_id": "site_reconcile",
       "reason": "page objects are public execute like every other site_* page (see packages/app-finance's site_trial_balance rule); the object itself gates all data on a signed-in identity and scopes every read to the caller's own bank accounts and lines, so an anonymous or cross-owner request never sees another owner's reconciliation"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": [
+        "create",
+        "read",
+        "update",
+        "delete"
+      ],
+      "collection": "value_accounts",
+      "row_filter": {
+        "owner_id": "$user_id"
+      },
+      "reason": "signed-in users manage their own value accounts; managed_by names who runs one day to day but ownership still governs the record itself"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": [
+        "execute"
+      ],
+      "object_id": "system_bank_escalation",
+      "reason": "the runner only reads bank_lines/payments and creates tasks scoped to the item's own owner (or reconcile.escalate_to), so running it is safe for any signed-in owner as well as the scheduler"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": [
+        "execute"
+      ],
+      "object_id": "action_import_ofx",
+      "reason": "same posture as the CSV importer: a signed-in operator verb that verifies the bank account belongs to the caller before reading anything"
     }
   ]
 }

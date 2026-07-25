@@ -32,6 +32,7 @@ import json
 import os
 
 import object_banking
+import object_books_status
 import object_records
 
 DATA_DIR_ENV = "DBBASIC_DATA_DIR"
@@ -236,6 +237,35 @@ def _page(body, *, title="Reconcile"):
     }
 
 
+def _books_banner_html(base):
+    """Warn, here of all places, when the ledger side cannot post.
+
+    This page's whole claim is that two independent records agree. If the
+    composers are skipping because their accounts are unmapped, the book
+    side is not a second opinion at all -- it is an empty column, and a
+    difference shown against it means nothing. Better to say so where
+    someone is actively reading the comparison than to leave the reason in
+    a return value nobody sees.
+    """
+    try:
+        status = object_books_status.books_status(base_dir=base)
+    except Exception:
+        return ""
+    if status.get("ready"):
+        return ""
+    items = "".join(
+        f"<li><code>{_esc(p.get('id'))}</code> &mdash; {_esc(p.get('impact'))}</li>"
+        for p in status.get("problems", [])[:6])
+    return (
+        '<div class="warn" style="border:1px solid currentColor;border-radius:8px;'
+        'padding:0.75rem 1rem;margin:0 0 1rem">'
+        f"<strong>The books cannot post yet.</strong> {_esc(status.get('summary'))}"
+        + (f"<ul style='margin:0.5rem 0 0'>{items}</ul>" if items else "")
+        + "<p style='margin:0.5rem 0 0;font-size:0.85rem'>Any difference shown below "
+          "is measured against a ledger that is not receiving entries, so it reflects "
+          "configuration rather than a real discrepancy.</p></div>")
+
+
 def GET(request):
     identity = request.get("_identity") or {}
     user_id = identity.get("user_id")
@@ -252,7 +282,8 @@ def GET(request):
     # guessed/borrowed id to another owner's statement.
     selected = next((a for a in accounts if a.get("id") == requested_id), None)
 
-    body = f'<h2>Your bank accounts</h2>{_account_list_html(accounts, requested_id)}'
+    body = _books_banner_html(base) + \
+        f'<h2>Your bank accounts</h2>{_account_list_html(accounts, requested_id)}'
     if selected is not None:
         as_of = str(request.get("as_of") or "").strip()
         result = object_banking.reconciliation(selected["id"], base_dir=base, as_of=as_of)

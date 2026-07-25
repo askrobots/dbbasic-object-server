@@ -325,6 +325,43 @@ def convert_at(amount_minor: Any, from_code: str, to_code: str, *,
     }
 
 
+# --- assurance --------------------------------------------------------------
+
+# How much a reconciliation of an account is actually worth, by the class of
+# evidence behind it. Doctrine #8 says the control is that evidence was
+# authored by someone with no stake in our numbers -- which means these are
+# NOT equivalent, and a system that renders them identically is quietly
+# telling its operator a comfortable lie.
+ASSURANCE_BY_VERIFICATION = {
+    # Anyone can verify it, no institution need be trusted, history is
+    # cryptographically ordered. Stronger evidence than a bank statement.
+    "chain_query": "strong",
+    # An independent third party attests -- but you trust their copy, and
+    # they can restate it.
+    "statement_import": "strong",
+    # The issuer states a number, usually with no line-item history to tie
+    # out against.
+    "issuer_balance": "medium",
+    # Self-certification: the person counting the till is usually the person
+    # who could take from it. Witnessed counts are why this can be lifted.
+    "physical_count": "weak",
+    "none": "none",
+}
+
+
+def assurance_for(verification: str, *, witnessed: bool = False) -> str:
+    """The evidence class a verification method actually provides.
+
+    `witnessed` lifts a physical count out of self-certification: a second
+    person attesting is the oldest control there is against the count and
+    the custody being the same pair of hands.
+    """
+    level = ASSURANCE_BY_VERIFICATION.get(str(verification or "").strip(), "none")
+    if level == "weak" and witnessed:
+        return "medium"
+    return level
+
+
 def same_denomination(*codes: str) -> bool:
     """True when every code given is the same denomination.
 

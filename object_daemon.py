@@ -32,6 +32,7 @@ except ImportError:
     croniter = None
 
 import object_analytics
+import object_books_status
 import object_collections
 import object_connectors
 import object_email
@@ -1639,6 +1640,21 @@ def main():
         f"(interval {_env_int(MATERIALIZE_INTERVAL_SECONDS_ENV, _DEFAULT_MATERIALIZE_INTERVAL_SECONDS)}s)"
     )
     print(f"Notify: {'enabled' if object_notify.notify_pass_enabled(base_dir=base_dir) else 'disabled (notify_enabled flag off)'} (every poll)")
+    # Books readiness is advisory, never a gate -- the composers are
+    # deliberately soft dependencies. But a composer that skips because its
+    # accounts are unmapped otherwise says so only in a return value nobody
+    # reads, which is harmless on a demo box and a data-integrity hole the
+    # day real books arrive. Say it out loud at boot instead.
+    try:
+        _books = object_books_status.books_status(base_dir=base_dir)
+        if _books["ready"]:
+            print("Books: ready (every installed composer can post)")
+        else:
+            print(f"Books: NOT READY -- {_books['summary']}")
+            for _problem in _books.get("problems", [])[:6]:
+                print(f"  - {_problem.get('id')}: {_problem.get('impact')}")
+    except Exception as _exc:  # never let a status check stop the daemon
+        print(f"Books: status unavailable ({_exc})")
     _smtp_config = object_email.smtp_config_from_env()
     if not object_email.email_pass_enabled(base_dir=base_dir):
         _email_state = "disabled (email_enabled flag off)"
