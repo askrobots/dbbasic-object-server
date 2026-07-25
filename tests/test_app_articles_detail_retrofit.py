@@ -27,8 +27,10 @@ def _seed_rows(name):
 
 def test_manifest_drops_the_bespoke_view_object_and_seeds_the_detail_view():
     package = object_packages.get_package("app-articles", root=PACKAGES_ROOT)
-    # Only the list page remains an object -- the permalink page is gone.
-    assert {obj["id"] for obj in package["objects"]} == {"site_articles"}
+    # The permalink page object was gone first; 0.3.0 deletes the bespoke
+    # /articles list page object too -- both held no business logic and are
+    # now seeded VIEW records over the generic `list`/`detail` blocks.
+    assert package["objects"] == []
     # The detail view + its route are seeded (into app-views'/site-routing's
     # own shared collections), alongside the articles seed.
     assert {entry["collection"] for entry in package["seed"]} == {
@@ -42,6 +44,9 @@ def test_article_view_object_file_is_deleted():
 
 def test_seeded_detail_view_uses_an_owner_aware_editable_detail_block():
     rows = _seed_rows("views")
+    # 0.3.0 added the /articles index view alongside this detail view, so
+    # assert on the detail row rather than a total that keeps growing.
+    rows = [r for r in rows if r["id"] == "view_articles_detail"]
     assert len(rows) == 1
     view = rows[0]
     assert view["id"] == "view_articles_detail"
@@ -62,6 +67,9 @@ def test_seeded_detail_view_uses_an_owner_aware_editable_detail_block():
 
 def test_permalink_route_is_seeded_to_the_view_render_generator():
     rows = _seed_rows("site_routes")
+    # 0.3.0 appended the /articles index route, so assert on the detail
+    # row rather than a total that keeps growing.
+    rows = [r for r in rows if r["id"] == "route_articles_detail"]
     assert len(rows) == 1
     route = rows[0]
     assert route["pattern"] == "/articles/{article_id}"
@@ -72,7 +80,10 @@ def test_permissions_no_longer_reference_the_removed_object():
     payload = json.loads((APP_ARTICLES_DIR / "permissions" / "rules.json").read_text())
     object_ids = {rule.get("object_id") for rule in payload["rules"]}
     assert "site_article_view" not in object_ids
-    assert "site_articles" in object_ids  # the list page is still a public object
+    # site_articles' own public-execute rule is left in place even though
+    # the object was deleted in 0.3.0 -- same precedent as app-notes'
+    # site_notes rule (see tests/test_app_notes_package.py).
+    assert "site_articles" in object_ids
 
 
 def test_dry_run_is_safe(tmp_path):

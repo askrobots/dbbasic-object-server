@@ -54,8 +54,11 @@ def test_get_package_normalizes_app_finance_manifest():
     # page is now a seeded 59 view (site_view_render), not a bespoke object.
     # hook_fin_journals: the balance-enforcement pre-write hook (internal --
     # no public execute rule; the write path runs it, never HTTP).
+    # 0.7.0 deletes the bespoke /accounts and /journals list page objects
+    # too: both held no business logic and are now seeded VIEW records over
+    # the generic `list` block.
     assert {obj["id"] for obj in package["objects"]} == {
-        "site_accounts", "site_journals", "site_trial_balance",
+        "site_trial_balance",
         "site_setup_accounts", "hook_fin_journals",
         "action_reverse_journal", "system_fin_recurring_runner",
         # 0.6.0: the P&L + balance sheet page, the two statements this
@@ -97,12 +100,14 @@ def test_install_app_finance_package_loads_schemas(tmp_path):
         schema = object_schemas.get_schema(name, base_dir=data_dir)
         assert schema["name"] == name
 
-    assert (object_root / "site" / "accounts.py").is_file()
-    assert (object_root / "site" / "journals.py").is_file()
     assert (object_root / "site" / "trial_balance.py").is_file()
     # journal_view.py was deleted (stage-6 retrofit): the journal detail
     # page is now a seeded 59 view, not an installed object file.
     assert not (object_root / "site" / "journal_view.py").exists()
+    # accounts.py/journals.py were deleted (0.7.0): the /accounts and
+    # /journals list pages are now seeded VIEW records too.
+    assert not (object_root / "site" / "accounts.py").exists()
+    assert not (object_root / "site" / "journals.py").exists()
 
 
 def test_schema_json_files_are_valid_and_versioned():

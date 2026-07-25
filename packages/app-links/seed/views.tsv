@@ -1,0 +1,2 @@
+id	title	route	layout	blocks	owner_id	is_public	pinned	created_at
+view_links	Links	/links	single	"[{""kind"": ""list"", ""collection"": ""links"", ""search"": true, ""sort"": true, ""add"": true, ""owner_scoped"": true, ""title_field"": ""title"", ""add_label"": ""+ Add Link"", ""href_field"": ""url""}]"		true	false	2026-01-01T00:00:00

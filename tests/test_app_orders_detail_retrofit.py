@@ -31,8 +31,10 @@ def _seed_rows(name):
 
 def test_manifest_drops_bespoke_order_view_page_and_seeds_the_detail_view():
     package = object_packages.get_package("app-orders", root=PACKAGES_ROOT)
+    # 0.3.0 deletes the bespoke /orders list page object too -- see
+    # tests/test_app_orders_package.py.
     assert {obj["id"] for obj in package["objects"]} == {
-        "site_orders", "system_order_totals",
+        "system_order_totals",
     }
     assert {entry["collection"] for entry in package["seed"]} == {
         "orders", "order_lines", "views", "site_routes",
@@ -46,6 +48,9 @@ def test_order_view_object_file_is_deleted():
 
 def test_order_view_composes_detail_related_and_fk_locked_form():
     rows = _seed_rows("views")
+    # 0.3.0 added the /orders index view alongside this detail view, so
+    # assert on the detail row rather than a total that keeps growing.
+    rows = [r for r in rows if r["id"] == "view_order_detail"]
     assert len(rows) == 1
     view = rows[0]
     assert view["id"] == "view_order_detail"
@@ -77,6 +82,9 @@ def test_order_view_composes_detail_related_and_fk_locked_form():
 
 def test_permalink_route_points_to_view_render():
     rows = _seed_rows("site_routes")
+    # 0.3.0 appended the /orders index route, so assert on the detail row
+    # rather than a total that keeps growing.
+    rows = [r for r in rows if r["id"] == "route_order_detail"]
     assert len(rows) == 1
     assert rows[0]["pattern"] == "/orders/{order_id}"
     assert rows[0]["object_id"] == "site_view_render"

@@ -31,8 +31,10 @@ def _seed_rows(name):
 
 def test_manifest_drops_bespoke_invoice_view_page_and_seeds_the_detail_view():
     package = object_packages.get_package("app-invoices", root=PACKAGES_ROOT)
+    # 0.6.0 deletes the bespoke /invoices list page object too -- see
+    # tests/test_app_invoices_package.py.
     assert {obj["id"] for obj in package["objects"]} == {
-        "site_invoices", "system_invoice_totals",
+        "system_invoice_totals",
         "system_invoice_aging",  # aging + dunning runner (payments slice 2)
         # 0.5.0 portal: /pay/{token}, the regenerate verb, and the handler
         # that mints a token when an invoice leaves draft.
@@ -52,6 +54,9 @@ def test_invoice_view_object_file_is_deleted():
 
 def test_invoice_view_composes_detail_flat_related_and_fk_locked_form():
     rows = _seed_rows("views")
+    # 0.6.0 added the /invoices index view alongside this detail view, so
+    # assert on the detail row rather than a total that keeps growing.
+    rows = [r for r in rows if r["id"] == "view_invoice_detail"]
     assert len(rows) == 1
     view = rows[0]
     assert view["id"] == "view_invoice_detail"

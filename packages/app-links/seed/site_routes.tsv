@@ -1,0 +1,2 @@
+id	pattern	object_id	priority
+route_links_index	/links	site_view_render	20

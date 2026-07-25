@@ -44,8 +44,10 @@ def test_get_package_normalizes_app_invoices_manifest():
         "invoices",
         "invoice_lines",
     }
+    # 0.6.0 deletes the bespoke /invoices list page object: it held no
+    # business logic and is now a seeded VIEW record over the generic
+    # `list` block.
     assert {obj["id"] for obj in package["objects"]} == {
-        "site_invoices",
         "system_invoice_totals",
         "system_invoice_aging",  # aging + dunning runner (payments slice 2)
         # 0.5.0 portal: the page a dunning email can finally point at, the
@@ -101,7 +103,9 @@ def test_install_app_invoices_package_loads_schemas(tmp_path):
 
     assert invoices_schema["name"] == "invoices"
     assert lines_schema["name"] == "invoice_lines"
-    assert (object_root / "site" / "invoices.py").is_file()
+    # invoices.py was deleted (0.6.0): the /invoices list page is now a
+    # seeded VIEW record over the generic `list` block.
+    assert not (object_root / "site" / "invoices.py").exists()
     assert (object_root / "system" / "invoice_totals.py").is_file()
 
 
@@ -366,6 +370,10 @@ def test_invoices_page_is_publicly_executable():
     seeded 59 view rendered by site_view_render (app-views' own package),
     not a per-package object, so it has no rule here anymore -- see
     tests/test_app_invoices_detail_retrofit.py.
+
+    site_invoices' own public-execute rule is left in place even though the
+    object was deleted in 0.6.0 (the /invoices list page is now a seeded
+    VIEW record) -- same precedent as app-notes' site_notes rule.
     """
     policy = _app_invoices_policy()
 

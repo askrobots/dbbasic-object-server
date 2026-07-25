@@ -241,6 +241,20 @@ function renderList(block, mount) {
     const lbl = block.subtitle_label ? String(block.subtitle_label) + ": " : "";
     cfg.subtitle = (r) => (r[sf] == null ? "" : lbl + String(r[sf]));
   }
+  // `href_template` points row titles at the collection's REAL detail page
+  // when it differs from the naive /{collection}/{id} default -- fin_journals
+  // renders at /journals/{id}, and guessing would 404. `href_field` makes the
+  // row title open the value of a field (a bookmarked URL): the row IS the
+  // link, so it opens in a new tab and never pretends to be a detail page.
+  if (block.href_template) {
+    const tpl = String(block.href_template);
+    cfg.href = (r) => tpl.replace(/\{(\w+)\}/g, (_, name) => encodeURIComponent(String(r[name] == null ? "" : r[name])));
+  } else if (block.href_field) {
+    const hf = String(block.href_field);
+    cfg.href = (r) => (r[hf] ? String(r[hf]) : "");
+  }
+  // (dbbasicList already opens any custom href in a new tab -- true of the
+  // bespoke pages these blocks replaced, so behaviour is unchanged.)
   // `row_actions: false` -> a read-only list (a log, a report, a rollup target):
   // no per-row edit/delete buttons, and no detail link either (a rollup target
   // has no detail page). Normal data lists keep the owner-based actions and get

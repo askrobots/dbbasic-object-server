@@ -27,10 +27,12 @@ def _seed_rows(name):
 
 def test_manifest_drops_the_bespoke_view_object_and_seeds_the_detail_view():
     package = object_packages.get_package("app-catalog", root=PACKAGES_ROOT)
-    # The permalink page object is gone; the three pages remain, joined in
-    # 0.4.0 by the inventory-adjustments trio (hook/composer/count action).
+    # The permalink page object is gone; 0.4.0 joined it with the
+    # inventory-adjustments trio (hook/composer/count action). 0.5.0 then
+    # deleted the bespoke products/locations list page objects too -- see
+    # tests/test_app_catalog_package.py.
     assert {obj["id"] for obj in package["objects"]} == {
-        "site_products", "site_locations", "site_stock",
+        "site_stock",
         "hook_stock_moves", "system_stock_books", "action_apply_count",
     }
     # The detail view + its route are seeded (into app-views'/site-routing's
@@ -47,6 +49,10 @@ def test_product_view_object_file_is_deleted():
 
 def test_seeded_detail_view_uses_an_owner_aware_editable_detail_block():
     rows = _seed_rows("views")
+    # 0.5.0 added the /products and /locations index views alongside this
+    # detail view, so assert on the detail row rather than a total that
+    # keeps growing.
+    rows = [r for r in rows if r["id"] == "view_products_detail"]
     assert len(rows) == 1
     view = rows[0]
     assert view["id"] == "view_products_detail"
@@ -69,6 +75,9 @@ def test_seeded_detail_view_uses_an_owner_aware_editable_detail_block():
 
 def test_permalink_route_is_seeded_to_the_view_render_generator():
     rows = _seed_rows("site_routes")
+    # 0.5.0 appended the /products and /locations index routes, so assert
+    # on the detail row rather than a total that keeps growing.
+    rows = [r for r in rows if r["id"] == "route_products_detail"]
     assert len(rows) == 1
     route = rows[0]
     assert route["id"] == "route_products_detail"

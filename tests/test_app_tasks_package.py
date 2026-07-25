@@ -36,7 +36,9 @@ def test_get_package_normalizes_app_tasks_manifest():
     assert package["id"] == "app-tasks"
     assert package["name"] == "Tasks"
     assert {schema["collection"] for schema in package["schemas"]} == set(_SCHEMA_NAMES)
-    assert {obj["id"] for obj in package["objects"]} == {"site_tasks"}
+    # 0.2.0 deletes the bespoke /tasks list page object: it held no business
+    # logic and is now a seeded VIEW record over the generic `list` block.
+    assert package["objects"] == []
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
     # Plus "views"/"site_routes": one 59 detail view + route (/tasks/{id})
     # composing task_comments and files as related children.
@@ -66,7 +68,7 @@ def test_dry_run_app_tasks_package_is_safe(tmp_path):
     assert {schema["collection"] for schema in plan["schemas"]} == set(_SCHEMA_NAMES)
 
 
-def test_install_app_tasks_package_loads_schema_and_page(tmp_path):
+def test_install_app_tasks_package_loads_schema(tmp_path):
     data_dir = tmp_path / "data"
     object_root = tmp_path / "objects"
     object_root.mkdir()
@@ -77,7 +79,9 @@ def test_install_app_tasks_package_loads_schema_and_page(tmp_path):
 
     schema = object_schemas.get_schema("tasks", base_dir=data_dir)
     assert schema["name"] == "tasks"
-    assert (object_root / "site" / "tasks.py").is_file()
+    # tasks.py was deleted (0.2.0): the /tasks list page is now a seeded
+    # VIEW record over the generic `list` block, not an installed object file.
+    assert not (object_root / "site" / "tasks.py").exists()
 
 
 def test_schema_json_file_is_valid():

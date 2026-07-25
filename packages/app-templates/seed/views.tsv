@@ -1,0 +1,2 @@
+id	title	route	layout	blocks	owner_id	is_public	pinned	created_at
+view_templates	Templates	/templates	single	"[{""kind"": ""list"", ""collection"": ""templates"", ""search"": true, ""sort"": true, ""add"": true, ""owner_scoped"": true, ""title_field"": ""name"", ""add_label"": ""+ New Template"", ""link"": false}]"		true	false	2026-01-01T00:00:00

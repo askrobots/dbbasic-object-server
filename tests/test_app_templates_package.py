@@ -35,9 +35,14 @@ def test_get_package_normalizes_app_templates_manifest():
     assert package["id"] == "app-templates"
     assert package["name"] == "Templates"
     assert {schema["collection"] for schema in package["schemas"]} == set(_SCHEMA_NAMES)
-    assert {obj["id"] for obj in package["objects"]} == {"site_templates"}
+    # 0.3.0 deletes the bespoke /templates list page object: it held no
+    # business logic and is now a seeded VIEW record over the generic
+    # `list` block.
+    assert package["objects"] == []
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
-    assert {entry["collection"] for entry in package["seed"]} == set(_SCHEMA_NAMES)
+    assert {entry["collection"] for entry in package["seed"]} == set(_SCHEMA_NAMES) | {
+        "views", "site_routes",
+    }
     # No migration mechanism is exercised here: additive field-adds don't
     # need one (see test_additive_field_adds_need_no_migration_entry below).
     assert package["migrations"] == []
@@ -59,7 +64,7 @@ def test_dry_run_app_templates_package_is_safe(tmp_path):
     assert {schema["collection"] for schema in plan["schemas"]} == set(_SCHEMA_NAMES)
 
 
-def test_install_app_templates_package_loads_schema_and_page(tmp_path):
+def test_install_app_templates_package_loads_schema(tmp_path):
     data_dir = tmp_path / "data"
     object_root = tmp_path / "objects"
     object_root.mkdir()
@@ -70,7 +75,9 @@ def test_install_app_templates_package_loads_schema_and_page(tmp_path):
 
     schema = object_schemas.get_schema("templates", base_dir=data_dir)
     assert schema["name"] == "templates"
-    assert (object_root / "site" / "templates.py").is_file()
+    # templates.py was deleted (0.3.0): the /templates list page is now a
+    # seeded VIEW record over the generic `list` block.
+    assert not (object_root / "site" / "templates.py").exists()
 
 
 def test_schema_json_file_is_valid():

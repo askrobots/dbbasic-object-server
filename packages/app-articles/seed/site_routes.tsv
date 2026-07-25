@@ -1,2 +1,3 @@
 id	pattern	object_id	priority
 route_articles_detail	/articles/{article_id}	site_view_render	10
+route_articles_index	/articles	site_view_render	20

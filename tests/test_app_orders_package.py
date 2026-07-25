@@ -43,8 +43,10 @@ def test_get_package_normalizes_app_orders_manifest():
         "orders",
         "order_lines",
     }
+    # 0.3.0 deletes the bespoke /orders list page object: it held no
+    # business logic and is now a seeded VIEW record over the generic
+    # `list` block.
     assert {obj["id"] for obj in package["objects"]} == {
-        "site_orders",
         "system_order_totals",
     }
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
@@ -90,7 +92,9 @@ def test_install_app_orders_package_loads_schemas(tmp_path):
 
     assert orders_schema["name"] == "orders"
     assert lines_schema["name"] == "order_lines"
-    assert (object_root / "site" / "orders.py").is_file()
+    # orders.py was deleted (0.3.0): the /orders list page is now a seeded
+    # VIEW record over the generic `list` block.
+    assert not (object_root / "site" / "orders.py").exists()
     assert (object_root / "system" / "order_totals.py").is_file()
 
 
@@ -351,6 +355,10 @@ def test_orders_page_is_publicly_executable():
     site_view_render object (see test_app_orders_detail_retrofit.py), not
     a bespoke page object of this package's own, so it carries no
     per-package permission rule here.
+
+    site_orders' own public-execute rule is left in place even though the
+    object was deleted in 0.3.0 (the /orders list page is now a seeded
+    VIEW record) -- same precedent as app-notes' site_notes rule.
     """
     policy = _app_orders_policy()
 

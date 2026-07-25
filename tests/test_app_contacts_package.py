@@ -34,7 +34,10 @@ def test_get_package_normalizes_app_contacts_manifest():
     assert package["id"] == "app-contacts"
     assert package["name"] == "Contacts"
     assert {schema["collection"] for schema in package["schemas"]} == set(_SCHEMA_NAMES)
-    assert {obj["id"] for obj in package["objects"]} == {"site_contacts"}
+    # 0.2.0 deletes the bespoke /contacts list page object: it held no
+    # business logic and is now a seeded VIEW record over the generic
+    # `list` block.
+    assert package["objects"] == []
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
     # Plus "views"/"site_routes": one 59 detail view + route per collection,
     # seeded into app-views'/site routing's own shared collections (a soft
@@ -77,7 +80,9 @@ def test_install_app_contacts_package_loads_schemas(tmp_path):
         schema = object_schemas.get_schema(name, base_dir=data_dir)
         assert schema["name"] == name
 
-    assert (object_root / "site" / "contacts.py").is_file()
+    # contacts.py was deleted (0.2.0): the /contacts list page is now a
+    # seeded VIEW record over the generic `list` block.
+    assert not (object_root / "site" / "contacts.py").exists()
 
 
 def test_schema_json_files_are_valid():

@@ -33,7 +33,7 @@ def _seed_rows(name):
 def test_manifest_drops_bespoke_journal_page_and_seeds_the_detail_view():
     package = object_packages.get_package("app-finance", root=PACKAGES_ROOT)
     assert {obj["id"] for obj in package["objects"]} == {
-        "site_accounts", "site_journals", "site_trial_balance", "site_setup_accounts",
+        "site_trial_balance", "site_setup_accounts",
         "site_statements",
         "hook_fin_journals",  # pre-write balance hook
         "action_reverse_journal", "system_fin_recurring_runner",  # books spine
@@ -53,6 +53,10 @@ def test_journal_view_object_file_is_deleted():
 
 def test_journal_view_composes_detail_related_and_fk_locked_form():
     rows = _seed_rows("views")
+    # 0.7.0 added the /accounts and /journals index views alongside this
+    # detail view, so assert on the detail row rather than a total that
+    # keeps growing.
+    rows = [r for r in rows if r["id"] == "view_journal_detail"]
     assert len(rows) == 1
     view = rows[0]
     assert view["id"] == "view_journal_detail"

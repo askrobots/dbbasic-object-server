@@ -1,17 +1,13 @@
 {
   "id": "app-links",
   "name": "Links",
-  "version": "0.1.0",
-  "description": "Saved links: owner-scoped bookmarks with tags and global search.",
+  "version": "0.2.0",
+  "description": "Saved links: owner-scoped bookmarks with tags and global search. 0.2.0 deletes the bespoke /links list page object: it was ~80 lines of chrome around two generator calls with no business logic of its own, and is now a seeded VIEW record over the same `list` block /notes uses.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
-  "objects": [
-    {
-      "id": "site_links",
-      "path": "objects/site/links.py"
-    }
-  ],
+  "dependencies": ["app-views"],
+  "objects": [],
   "schemas": [
     {
       "collection": "links",
@@ -27,6 +23,14 @@
     {
       "collection": "links",
       "path": "seed/links.tsv"
+    },
+    {
+      "collection": "views",
+      "path": "seed/views.tsv"
+    },
+    {
+      "collection": "site_routes",
+      "path": "seed/site_routes.tsv"
     }
   ],
   "migrations": []

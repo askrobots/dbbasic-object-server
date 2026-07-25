@@ -52,9 +52,10 @@ def test_get_package_normalizes_app_catalog_manifest():
     # bespoke page object -- see tests/test_app_catalog_detail_retrofit.py.
     # 0.4.0 added the inventory-adjustments trio (hook gate/stamp, shrinkage
     # composer, count reconciliation -- plan/inventory-adjustments-spec.md).
+    # 0.5.0 deletes the bespoke /products and /locations list page objects
+    # too: both held no business logic and are now seeded VIEW records over
+    # the generic `list` block.
     assert {obj["id"] for obj in package["objects"]} == {
-        "site_products",
-        "site_locations",
         "site_stock",
         "hook_stock_moves",
         "system_stock_books",
@@ -104,11 +105,13 @@ def test_install_app_catalog_package_loads_schema(tmp_path):
     assert locations_schema["name"] == "locations"
     assert stock_moves_schema["name"] == "stock_moves"
     assert stock_moves_schema["storage"] == "append"
-    assert (object_root / "site" / "products.py").is_file()
     # product_view.py was removed in the Stage-6 retrofit (replaced by a
     # seeded detail view); it must no longer be installed.
     assert not (object_root / "site" / "product_view.py").exists()
-    assert (object_root / "site" / "locations.py").is_file()
+    # products.py/locations.py were deleted (0.5.0): both list pages are
+    # now seeded VIEW records too.
+    assert not (object_root / "site" / "products.py").exists()
+    assert not (object_root / "site" / "locations.py").exists()
     assert (object_root / "site" / "stock.py").is_file()
 
 

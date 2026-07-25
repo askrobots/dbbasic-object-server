@@ -1,18 +1,13 @@
 {
   "id": "app-tasks",
   "name": "Tasks",
-  "version": "0.1.0",
-  "description": "Task lifecycle: status transitions enforced by schema, owner and assignee access, project sharing, and global search. v6 adds task_type/template_id/instructions/metadata; template_id is an optional relation into app-templates' templates collection (soft reference only, like invoices' customer_id -> contacts -- no install-order dependency is declared, matching that precedent). Seeds one 59 detail view + site_routes row (/tasks/{id}) composing task_comments and files as related children -- both soft references too, like template_id; without app-collab/app-files installed those two blocks just show a missing-collection error, the rest of the page still renders.",
+  "version": "0.2.0",
+  "description": "Task lifecycle: status transitions enforced by schema, owner and assignee access, project sharing, and global search. v6 adds task_type/template_id/instructions/metadata; template_id is an optional relation into app-templates' templates collection (soft reference only, like invoices' customer_id -> contacts -- no install-order dependency is declared, matching that precedent). Seeds one 59 detail view + site_routes row (/tasks/{id}) composing task_comments and files as related children -- both soft references too, like template_id; without app-collab/app-files installed those two blocks just show a missing-collection error, the rest of the page still renders. 0.2.0 deletes the bespoke /tasks list page object: it was ~80 lines of chrome around two generator calls with no business logic of its own, and is now a seeded VIEW record over the same `list` block /notes uses.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
   "dependencies": ["app-projects"],
-  "objects": [
-    {
-      "id": "site_tasks",
-      "path": "objects/site/tasks.py"
-    }
-  ],
+  "objects": [],
   "schemas": [
     {
       "collection": "tasks",

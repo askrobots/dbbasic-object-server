@@ -1,17 +1,12 @@
 {
   "id": "app-projects",
   "name": "Projects",
-  "version": "0.3.0",
-  "description": "Project records with owner-scoped permissions, self-serve sharing grants (project_access), and a signed-in web page.",
+  "version": "0.4.0",
+  "description": "Project records with owner-scoped permissions, self-serve sharing grants (project_access), and a signed-in web page. 0.4.0 deletes the bespoke /projects list page object: it was ~85 lines of chrome around two generator calls with no business logic of its own, and is now a seeded VIEW record over the same `list` block /notes uses.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
-  "objects": [
-    {
-      "id": "site_projects",
-      "path": "objects/site/projects.py"
-    }
-  ],
+  "objects": [],
   "schemas": [
     {
       "collection": "projects",
