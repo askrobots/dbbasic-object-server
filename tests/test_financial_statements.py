@@ -25,10 +25,10 @@ import object_execution
 import object_finance
 import object_records
 import python_object_runtime
+from conftest import stage_collection
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 PACKAGES = REPO_ROOT / "packages"
-FINANCE_SCHEMAS = PACKAGES / "app-finance" / "schemas"
 FINANCE_OBJECTS = PACKAGES / "app-finance" / "objects"
 
 RUNTIME = python_object_runtime.PythonObjectRuntime()
@@ -41,22 +41,8 @@ CASH, AR, LOAN, EQUITY, REV, EXP = (
 
 def setup_env(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
-    schema_dir = data_dir / "schemas"
-    schema_dir.mkdir(parents=True, exist_ok=True)
     for name in ("fin_accounts", "fin_journals", "fin_journal_lines"):
-        (schema_dir / f"{name}.json").write_text(
-            (FINANCE_SCHEMAS / f"{name}.json").read_text())
-
-    def coll(name, header):
-        d = data_dir / "collections" / name
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "records.tsv").write_text(header)
-
-    coll("fin_accounts", "id\tname\tcode\taccount_type\towner_id\n")
-    coll("fin_journals",
-         "id\tdate\tdescription\tstatus\tkind\towner_id\tentity_id\n")
-    coll("fin_journal_lines",
-         "id\tjournal_id\taccount_id\tdebit_cents\tcredit_cents\towner_id\n")
+        stage_collection(data_dir, "app-finance", name)
 
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(tmp_path / "objects-unused"))

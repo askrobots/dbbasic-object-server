@@ -19,6 +19,7 @@ import object_banking
 import object_execution
 import object_records
 import python_object_runtime
+from conftest import stage_collection
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 PACKAGES = REPO_ROOT / "packages"
@@ -31,25 +32,14 @@ COLUMN_MAP = {"date": "Date", "amount": "Amount", "description": "Description",
               "date_format": "%m/%d/%Y"}
 
 
-def _header(pkg, name):
-    schema = json.loads((PACKAGES / pkg / "schemas" / f"{name}.json").read_text())
-    return "\t".join(f["name"] for f in schema["fields"]) + "\n"
-
-
 def setup_env(tmp_path, monkeypatch, *, column_map=None, has_balances=True):
     data_dir = tmp_path / "data"
-    schema_dir = data_dir / "schemas"
-    schema_dir.mkdir(parents=True)
     for pkg, name in (("app-banking", "value_accounts"),
                       ("app-banking", "bank_import_profiles"),
                       ("app-banking", "bank_statement_imports"),
                       ("app-banking", "bank_lines"),
                       ("app-finance", "fin_accounts")):
-        (schema_dir / f"{name}.json").write_text(
-            (PACKAGES / pkg / "schemas" / f"{name}.json").read_text())
-        coll = data_dir / "collections" / name
-        coll.mkdir(parents=True)
-        (coll / "records.tsv").write_text(_header(pkg, name))
+        stage_collection(data_dir, pkg, name)
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
 
     object_records.create_collection_record(

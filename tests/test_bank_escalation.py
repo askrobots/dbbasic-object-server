@@ -14,6 +14,7 @@ import pathlib
 import object_execution
 import object_records
 import python_object_runtime
+from conftest import stage_collection
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 PACKAGES = REPO_ROOT / "packages"
@@ -24,27 +25,21 @@ ACCOUNT = "bank-1"
 DAN = {"user_id": "dan"}
 
 
-def _header(pkg, name):
-    schema = json.loads((PACKAGES / pkg / "schemas" / f"{name}.json").read_text())
-    return "\t".join(f["name"] for f in schema["fields"]) + "\n"
-
-
 def setup_env(tmp_path, monkeypatch, *, settings=(), with_tasks=True):
     data_dir = tmp_path / "data"
-    schema_dir = data_dir / "schemas"
-    schema_dir.mkdir(parents=True)
     wanted = [("app-banking", "value_accounts"), ("app-banking", "bank_import_profiles"),
               ("app-banking", "bank_statement_imports"), ("app-banking", "bank_lines"),
-              ("app-finance", "fin_accounts"), ("app-settings", "app_settings"),
+              ("app-finance", "fin_accounts"),
               ("app-payments", "payments"), ("app-invoices", "invoices")]
     if with_tasks:
         wanted.append(("app-tasks", "tasks"))
     for pkg, name in wanted:
-        (schema_dir / f"{name}.json").write_text(
-            (PACKAGES / pkg / "schemas" / f"{name}.json").read_text())
-        coll = data_dir / "collections" / name
-        coll.mkdir(parents=True)
-        (coll / "records.tsv").write_text(_header(pkg, name))
+        stage_collection(data_dir, pkg, name)
+
+    rows = ""
+    for i, (k, v) in enumerate(settings):
+        rows += f"s{i}\t{k}\t{v}\t\n"
+    stage_collection(data_dir, "app-settings", "app_settings", rows=rows)
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
 
     object_records.create_collection_record(
@@ -53,11 +48,6 @@ def setup_env(tmp_path, monkeypatch, *, settings=(), with_tasks=True):
     object_records.create_collection_record(
         "value_accounts", {"id": ACCOUNT, "name": "Checking", "fin_account_id": "acct-cash",
                           "owner_id": "dan"}, base_dir=data_dir)
-
-    rows = _header("app-settings", "app_settings")
-    for i, (k, v) in enumerate(settings):
-        rows += f"s{i}\t{k}\t{v}\t\n"
-    (data_dir / "collections" / "app_settings" / "records.tsv").write_text(rows)
     return data_dir
 
 

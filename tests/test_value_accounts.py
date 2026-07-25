@@ -12,6 +12,7 @@ import pathlib
 
 import object_money
 import object_records
+from conftest import stage_collection
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 PACKAGES = REPO_ROOT / "packages"
@@ -19,27 +20,11 @@ BANKING = PACKAGES / "app-banking"
 FINANCE = PACKAGES / "app-finance"
 
 
-def _header(pkg_dir, name):
-    schema = json.loads((pkg_dir / "schemas" / f"{name}.json").read_text())
-    return "\t".join(f["name"] for f in schema["fields"]) + "\n"
-
-
 def setup_env(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
-    schema_dir = data_dir / "schemas"
-    schema_dir.mkdir(parents=True)
-    for pkg_dir, name, seeded in ((BANKING, "value_accounts", False),
-                                  (FINANCE, "denominations", True),
-                                  (FINANCE, "fin_accounts", False)):
-        (schema_dir / f"{name}.json").write_text(
-            (pkg_dir / "schemas" / f"{name}.json").read_text())
-        coll = data_dir / "collections" / name
-        coll.mkdir(parents=True)
-        if seeded:
-            coll.joinpath("records.tsv").write_text(
-                (pkg_dir / "seed" / f"{name}.tsv").read_text())
-        else:
-            coll.joinpath("records.tsv").write_text(_header(pkg_dir, name))
+    stage_collection(data_dir, "app-banking", "value_accounts")
+    stage_collection(data_dir, "app-finance", "denominations", seed=True)
+    stage_collection(data_dir, "app-finance", "fin_accounts")
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
     object_records.create_collection_record(
         "fin_accounts", {"id": "acct-cash", "name": "Cash", "account_type": "asset",

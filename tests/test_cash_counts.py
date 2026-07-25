@@ -7,12 +7,12 @@ the witness cannot be the counter, and a variance is booked as a real
 expense rather than quietly dropped.
 """
 
-import json
 import pathlib
 
 import object_execution
 import object_records
 import python_object_runtime
+from conftest import stage_collection
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 PACKAGES = REPO_ROOT / "packages"
@@ -23,33 +23,21 @@ CASH, OVER_SHORT = "acct-cash", "acct-over-short"
 TILL = "va-till"
 
 
-def _header(pkg, name):
-    schema = json.loads((PACKAGES / pkg / "schemas" / f"{name}.json").read_text())
-    return "\t".join(f["name"] for f in schema["fields"]) + "\n"
-
-
 def setup_env(tmp_path, monkeypatch, *, settings=(("reconcile.journal.cash_over_short_account", OVER_SHORT),)):
     data_dir = tmp_path / "data"
-    schema_dir = data_dir / "schemas"
-    schema_dir.mkdir(parents=True)
     for pkg, name in (("app-banking", "value_accounts"),
                       ("app-banking", "value_account_counts"),
                       ("app-finance", "fin_accounts"),
                       ("app-finance", "fin_journals"),
                       ("app-finance", "fin_journal_lines"),
-                      ("app-finance", "denominations"),
-                      ("app-settings", "app_settings")):
-        (schema_dir / f"{name}.json").write_text(
-            (PACKAGES / pkg / "schemas" / f"{name}.json").read_text())
-        coll = data_dir / "collections" / name
-        coll.mkdir(parents=True)
-        coll.joinpath("records.tsv").write_text(_header(pkg, name))
+                      ("app-finance", "denominations")):
+        stage_collection(data_dir, pkg, name)
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
 
-    rows = _header("app-settings", "app_settings")
+    rows = ""
     for i, (k, v) in enumerate(settings):
         rows += f"s{i}\t{k}\t{v}\t\n"
-    (data_dir / "collections" / "app_settings" / "records.tsv").write_text(rows)
+    stage_collection(data_dir, "app-settings", "app_settings", rows=rows)
 
     for acct, kind in ((CASH, "asset"), (OVER_SHORT, "expense")):
         object_records.create_collection_record(

@@ -14,11 +14,11 @@ import pathlib
 
 import object_records
 import object_server
+from conftest import schema_header, stage_collection
 from test_object_server import (
     TEST_ADMIN_TOKEN,
     enable_admin_token,
     request,
-    write_records,
 )
 
 AUTH = [("authorization", f"Token {TEST_ADMIN_TOKEN}")]
@@ -28,39 +28,25 @@ PACKAGES = REPO_ROOT / "packages"
 
 def setup_env(tmp_path, monkeypatch, *, overpayment_policy=None):
     data_dir = tmp_path / "data"
-    schema_dir = data_dir / "schemas"
-    schema_dir.mkdir(parents=True, exist_ok=True)
-    for pkg, name in (
-        ("app-invoices", "invoices"),
-        ("app-payments", "payments"),
-        ("app-payments", "refunds"),
-        ("app-settings", "app_settings"),
-    ):
-        (schema_dir / f"{name}.json").write_text(
-            (PACKAGES / pkg / "schemas" / f"{name}.json").read_text()
-        )
-    write_records(
-        data_dir,
-        "invoices",
-        "id\tnumber\tcustomer_name\tstatus\ttotal_cents\tpayments_received_cents"
-        "\trefunded_cents\tamount_paid_cents\tbalance_due_cents\towner_id\n"
-        "inv1\tINV-1\tAcme\tsent\t10000\t\t\t\t\tadmin\n",
-    )
-    write_records(
-        data_dir,
-        "payments",
-        "id\tinvoice_id\tamount_cents\tmethod\treceived_on\treference\tnotes"
-        "\tstatus\trefunded_cents\towner_id\tcreated_at\n",
-    )
-    write_records(
-        data_dir,
-        "refunds",
-        "id\tpayment_id\tinvoice_id\tamount_cents\treason\trefunded_on\towner_id\tcreated_at\n",
-    )
-    settings_rows = "id\tkey\tvalue\tdescription\n"
+
+    # inv1 is seeded straight into the TSV (not via create_collection_record)
+    # so it starts life already "sent" with no payments -- pin the row to
+    # the real schema's field order so a later schema edit can't silently
+    # shift these values into the wrong columns.
+    invoice_fields = schema_header("app-invoices", "invoices").strip("\n").split("\t")
+    invoice_values = {"id": "inv1", "number": "INV-1", "customer_name": "Acme",
+                       "status": "sent", "total_cents": "10000", "owner_id": "admin"}
+    invoice_row = "\t".join(invoice_values.get(f, "") for f in invoice_fields) + "\n"
+    stage_collection(data_dir, "app-invoices", "invoices", rows=invoice_row)
+
+    stage_collection(data_dir, "app-payments", "payments")
+    stage_collection(data_dir, "app-payments", "refunds")
+
+    settings_rows = ""
     if overpayment_policy:
-        settings_rows += f"s1\tpayments.overpayment_policy\t{overpayment_policy}\t\n"
-    write_records(data_dir, "app_settings", settings_rows)
+        settings_rows = f"s1\tpayments.overpayment_policy\t{overpayment_policy}\t\n"
+    stage_collection(data_dir, "app-settings", "app_settings", rows=settings_rows)
+
     monkeypatch.setenv(object_server.DATA_DIR_ENV, str(data_dir))
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(PACKAGES / "app-payments" / "objects"))
     enable_admin_token(monkeypatch)

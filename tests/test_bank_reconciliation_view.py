@@ -17,6 +17,7 @@ import object_banking
 import object_execution
 import object_records
 import python_object_runtime
+from conftest import stage_collection
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 PACKAGES = REPO_ROOT / "packages"
@@ -27,25 +28,14 @@ DAN = {"user_id": "dan"}
 PAT = {"user_id": "pat"}
 
 
-def _header(pkg, name):
-    schema = json.loads((PACKAGES / pkg / "schemas" / f"{name}.json").read_text())
-    return "\t".join(f["name"] for f in schema["fields"]) + "\n"
-
-
 def setup_env(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
-    schema_dir = data_dir / "schemas"
-    schema_dir.mkdir(parents=True)
     wanted = [("app-banking", "value_accounts"), ("app-banking", "bank_statement_imports"),
               ("app-banking", "bank_lines"),
               ("app-finance", "fin_accounts"), ("app-finance", "fin_journals"),
               ("app-finance", "fin_journal_lines")]
     for pkg, name in wanted:
-        (schema_dir / f"{name}.json").write_text(
-            (PACKAGES / pkg / "schemas" / f"{name}.json").read_text())
-        coll = data_dir / "collections" / name
-        coll.mkdir(parents=True)
-        (coll / "records.tsv").write_text(_header(pkg, name))
+        stage_collection(data_dir, pkg, name)
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
     return data_dir
 

@@ -14,6 +14,7 @@ collections + app_settings/fin_accounts rows that make a given check
 import pathlib
 
 import object_books_status
+from conftest import schema_header, stage_collection
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 PACKAGES = REPO_ROOT / "packages"
@@ -53,49 +54,50 @@ def setup_env(
     banking each install just the one collection whose presence gates that
     area (payments, stock_moves, bank_lines) -- no real payment/move/line
     rows are needed since this module only checks account mapping, never
-    the operational data itself.
+    the operational data itself, so those three stay a deliberate one-column
+    placeholder rather than the real schema (see below).
 
     settings_rows is raw extra app_settings TSV row text (id\\tkey\\tvalue
     \\tdescription\\n per row); accounts_rows is an iterable of
     (id, name, account_type) tuples for fin_accounts.
     """
     data_dir = tmp_path / "data"
+
+    if books:
+        stage_collection(data_dir, "app-finance", "fin_journals")
+        stage_collection(data_dir, "app-finance", "fin_journal_lines")
+        # fin_accounts rows are pinned to the real schema's field order (via
+        # schema_header) rather than hand-typed, so a later schema edit
+        # can't silently shift account_type/owner_id into the wrong column.
+        account_fields = schema_header("app-finance", "fin_accounts").strip("\n").split("\t")
+        accounts_text = ""
+        for account_id, name, account_type in accounts_rows:
+            values = {"id": account_id, "name": name, "account_type": account_type,
+                      "owner_id": "dan"}
+            accounts_text += "\t".join(values.get(f, "") for f in account_fields) + "\n"
+        stage_collection(data_dir, "app-finance", "fin_accounts", rows=accounts_text)
+
+    if app_settings:
+        stage_collection(data_dir, "app-settings", "app_settings", rows=settings_rows)
+
     schema_dir = data_dir / "schemas"
     schema_dir.mkdir(parents=True, exist_ok=True)
 
-    if books:
-        _copy_schema(schema_dir, "app-finance", "fin_journals")
-        _copy_schema(schema_dir, "app-finance", "fin_journal_lines")
-        _copy_schema(schema_dir, "app-finance", "fin_accounts")
-        _write_tsv(
-            data_dir, "fin_journals",
-            "id\tdate\tdescription\tstatus\tkind\tgenerated_from\towner_id\n",
-        )
-        _write_tsv(
-            data_dir, "fin_journal_lines",
-            "id\tjournal_id\taccount_id\tdebit_cents\tcredit_cents\towner_id\n",
-        )
-        accounts_text = "id\tname\taccount_type\towner_id\n"
-        for account_id, name, account_type in accounts_rows:
-            accounts_text += f"{account_id}\t{name}\t{account_type}\tdan\n"
-        _write_tsv(data_dir, "fin_accounts", accounts_text)
-
-    if app_settings:
-        _copy_schema(schema_dir, "app-settings", "app_settings")
-        _write_tsv(
-            data_dir, "app_settings",
-            "id\tkey\tvalue\tdescription\n" + settings_rows,
-        )
-
     if payments:
+        # Deliberately NOT the real payments schema shape: this module only
+        # checks whether the collection is installed, never reads a payment
+        # row, so a one-column placeholder proves the same "installed" gate
+        # without pretending to be real payment data.
         _copy_schema(schema_dir, "app-payments", "payments")
         _write_tsv(data_dir, "payments", "id\n")
 
     if inventory:
+        # Same placeholder posture as payments above, for stock_moves.
         _copy_schema(schema_dir, "app-catalog", "stock_moves")
         _write_tsv(data_dir, "stock_moves", "id\n")
 
     if banking:
+        # Same placeholder posture as payments above, for bank_lines.
         _copy_schema(schema_dir, "app-banking", "bank_lines")
         _write_tsv(data_dir, "bank_lines", "id\n")
 

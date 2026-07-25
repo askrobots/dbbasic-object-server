@@ -11,6 +11,7 @@ import object_execution
 import object_records
 import object_state
 import python_object_runtime
+from conftest import stage_collection
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 PACKAGES = REPO_ROOT / "packages"
@@ -19,11 +20,6 @@ RUNTIME = python_object_runtime.PythonObjectRuntime()
 
 ADMIN = {"user_id": "dan", "roles": ["admin"]}
 MEMBER = {"user_id": "pat", "roles": []}
-
-
-def _header_from_schema(pkg, name):
-    schema = json.loads((PACKAGES / pkg / "schemas" / f"{name}.json").read_text())
-    return "\t".join(f["name"] for f in schema["fields"]) + "\n"
 
 
 def setup_env(tmp_path, monkeypatch, *, with_runs_collection=True):
@@ -39,14 +35,7 @@ def setup_env(tmp_path, monkeypatch, *, with_runs_collection=True):
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     if with_runs_collection:
-        schema_dir = data_dir / "schemas"
-        schema_dir.mkdir()
-        (schema_dir / "scheduler_runs.json").write_text(
-            (PACKAGES / "system-dashboard" / "schemas" / "scheduler_runs.json").read_text())
-        coll = data_dir / "collections" / "scheduler_runs"
-        coll.mkdir(parents=True)
-        (coll / "records.tsv").write_text(
-            _header_from_schema("system-dashboard", "scheduler_runs"))
+        stage_collection(data_dir, "system-dashboard", "scheduler_runs")
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(objects_dir))
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
     return objects_dir, data_dir

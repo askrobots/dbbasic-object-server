@@ -3,7 +3,6 @@ taxonomy, the cost-stamping/gating hook, the shrinkage composer, and count
 reconciliation. Losses are MOVEMENTS with a financial shadow -- never edits
 to an on-hand number (docs/logic-decisions.md #3)."""
 
-import json
 import pathlib
 from decimal import Decimal
 
@@ -12,6 +11,7 @@ import object_records
 import object_schemas
 import object_stock
 import python_object_runtime
+from conftest import stage_collection
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 PACKAGES = REPO_ROOT / "packages"
@@ -21,33 +21,22 @@ CATALOG_OBJECTS = PACKAGES / "app-catalog" / "objects"
 INV, SHRINK, THEFT = "acct-inventory", "acct-shrinkage", "acct-theft"
 
 
-def _header_from_schema(pkg, name):
-    schema = json.loads((PACKAGES / pkg / "schemas" / f"{name}.json").read_text())
-    return "\t".join(f["name"] for f in schema["fields"]) + "\n"
-
-
 def setup_env(tmp_path, monkeypatch, *, settings=None):
     data_dir = tmp_path / "data"
-    schema_dir = data_dir / "schemas"
-    schema_dir.mkdir(parents=True, exist_ok=True)
     wanted = [("app-catalog", "products"), ("app-catalog", "locations"),
-              ("app-catalog", "stock_moves"), ("app-settings", "app_settings"),
+              ("app-catalog", "stock_moves"),
               ("app-finance", "fin_journals"), ("app-finance", "fin_journal_lines"),
               ("app-finance", "fin_accounts")]
     for pkg, name in wanted:
-        (schema_dir / f"{name}.json").write_text(
-            (PACKAGES / pkg / "schemas" / f"{name}.json").read_text())
-        d = data_dir / "collections" / name
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "records.tsv").write_text(_header_from_schema(pkg, name))
+        stage_collection(data_dir, pkg, name)
 
     if settings is None:
         settings = (("inventory.journal.inventory_account", INV),
                     ("inventory.journal.shrinkage_account", SHRINK))
-    rows = _header_from_schema("app-settings", "app_settings")
+    rows = ""
     for i, (k, v) in enumerate(settings):
         rows += f"s{i}\t{k}\t{v}\t\n"
-    (data_dir / "collections" / "app_settings" / "records.tsv").write_text(rows)
+    stage_collection(data_dir, "app-settings", "app_settings", rows=rows)
 
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
     for acct in (INV, SHRINK, THEFT):

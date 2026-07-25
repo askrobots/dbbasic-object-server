@@ -27,6 +27,7 @@ import object_execution
 import object_permissions
 import object_records
 import python_object_runtime
+from conftest import stage_collection
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 PACKAGES = REPO_ROOT / "packages"
@@ -36,44 +37,30 @@ RUNTIME = python_object_runtime.PythonObjectRuntime()
 
 def setup_env(tmp_path, monkeypatch, *, settings=(), with_invoice_lines=False):
     data_dir = tmp_path / "data"
+
+    # invoices: header is the real seed file's own header line -- kept in
+    # sync with the schema by construction (the seed IS real invoice data),
+    # rather than a second hand-typed field list that could drift. Not
+    # schema_header(): deliberately verbatim, per this module's docstring.
     schema_dir = data_dir / "schemas"
     schema_dir.mkdir(parents=True, exist_ok=True)
-
-    schemas = [("app-invoices", "invoices"), ("app-payments", "payments"),
-               ("app-payments", "refunds"), ("app-settings", "app_settings"),
-               ("app-email", "email_outbox")]
-    if with_invoice_lines:
-        schemas.append(("app-invoices", "invoice_lines"))
-    for pkg, name in schemas:
-        (schema_dir / f"{name}.json").write_text(
-            (PACKAGES / pkg / "schemas" / f"{name}.json").read_text())
-
-    def coll(name, header):
-        d = data_dir / "collections" / name
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "records.tsv").write_text(header)
-
-    # The real seed header -- kept in sync with the schema by construction,
-    # rather than a second hand-typed field list that could drift.
+    (schema_dir / "invoices.json").write_text(
+        (APP_INVOICES / "schemas" / "invoices.json").read_text())
     invoices_header = (APP_INVOICES / "seed" / "invoices.tsv").read_text().splitlines()[0] + "\n"
-    coll("invoices", invoices_header)
-    coll("payments",
-         "id\tinvoice_id\tamount_cents\tmethod\treceived_on\treference\tnotes"
-         "\tstatus\trefunded_cents\towner_id\tcreated_at\n")
-    coll("refunds",
-         "id\tpayment_id\tinvoice_id\tamount_cents\treason\trefunded_on\towner_id\tcreated_at\n")
-    coll("email_outbox",
-         "id\tto\tfrom_addr\treply_to\tsubject\ttext_body\thtml_body\tstatus"
-         "\tattempts\tmax_attempts\tlast_error\tnext_attempt_at\tcreated_at"
-         "\tupdated_at\tsent_at\tsource_object_id\textra\n")
+    invoices_coll = data_dir / "collections" / "invoices"
+    invoices_coll.mkdir(parents=True, exist_ok=True)
+    (invoices_coll / "records.tsv").write_text(invoices_header)
+
+    stage_collection(data_dir, "app-payments", "payments")
+    stage_collection(data_dir, "app-payments", "refunds")
+    stage_collection(data_dir, "app-email", "email_outbox")
     if with_invoice_lines:
-        coll("invoice_lines",
-             "id\tinvoice_id\tdescription\tquantity\tunit_price_cents"
-             "\tline_total_cents\ttax_rate_bps\tline_tax_cents\towner_id\tcreated_at\n")
-    rows = "id\tkey\tvalue\tdescription\n"
+        stage_collection(data_dir, "app-invoices", "invoice_lines")
+
+    rows = ""
     for i, (k, v) in enumerate(settings):
         rows += f"s{i}\t{k}\t{v}\t\n"
-    coll("app_settings", rows)
+    stage_collection(data_dir, "app-settings", "app_settings", rows=rows)
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
     return data_dir
 

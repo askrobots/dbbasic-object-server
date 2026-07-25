@@ -14,6 +14,7 @@ import pathlib
 import object_execution
 import object_records
 import python_object_runtime
+from conftest import stage_collection
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 PACKAGES = REPO_ROOT / "packages"
@@ -22,36 +23,14 @@ RUNTIME = python_object_runtime.PythonObjectRuntime()
 
 def setup_env(tmp_path, monkeypatch, *, settings=()):
     data_dir = tmp_path / "data"
-    schema_dir = data_dir / "schemas"
-    schema_dir.mkdir(parents=True, exist_ok=True)
     for pkg, name in (("app-invoices", "invoices"), ("app-payments", "payments"),
-                      ("app-payments", "refunds"), ("app-settings", "app_settings"),
-                      ("app-email", "email_outbox")):
-        (schema_dir / f"{name}.json").write_text(
-            (PACKAGES / pkg / "schemas" / f"{name}.json").read_text())
+                      ("app-payments", "refunds"), ("app-email", "email_outbox")):
+        stage_collection(data_dir, pkg, name)
 
-    def coll(name, header):
-        d = data_dir / "collections" / name
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "records.tsv").write_text(header)
-
-    coll("invoices",
-         "id\tnumber\tcustomer_name\tcustomer_email\tstatus\tissue_date\tdue_date"
-         "\ttotal_cents\tpayments_received_cents\trefunded_cents\tamount_paid_cents"
-         "\tbalance_due_cents\tdunning_level\tlast_dunned_on\towner_id\n")
-    coll("payments",
-         "id\tinvoice_id\tamount_cents\tmethod\treceived_on\treference\tnotes"
-         "\tstatus\trefunded_cents\towner_id\tcreated_at\n")
-    coll("refunds",
-         "id\tpayment_id\tinvoice_id\tamount_cents\treason\trefunded_on\towner_id\tcreated_at\n")
-    coll("email_outbox",
-         "id\tto\tfrom_addr\treply_to\tsubject\ttext_body\thtml_body\tstatus"
-         "\tattempts\tmax_attempts\tlast_error\tnext_attempt_at\tcreated_at"
-         "\tupdated_at\tsent_at\tsource_object_id\textra\n")
-    rows = "id\tkey\tvalue\tdescription\n"
+    rows = ""
     for i, (k, v) in enumerate(settings):
         rows += f"s{i}\t{k}\t{v}\t\n"
-    coll("app_settings", rows)
+    stage_collection(data_dir, "app-settings", "app_settings", rows=rows)
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
     return data_dir
 

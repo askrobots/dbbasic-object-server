@@ -4,34 +4,23 @@ plan/inventory-adjustments-spec.md section 5). Callers own policy; these
 tests pin the mechanics: idempotency by provenance, draft -> lines ->
 re-read -> verify -> post, and the fail-soft shapes."""
 
-import json
 import pathlib
 
 import object_finance
 import object_records
+from conftest import stage_collection
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 PACKAGES = REPO_ROOT / "packages"
 
 
-def _header_from_schema(pkg, name):
-    schema = json.loads((PACKAGES / pkg / "schemas" / f"{name}.json").read_text())
-    return "\t".join(f["name"] for f in schema["fields"]) + "\n"
-
-
 def setup_env(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
-    schema_dir = data_dir / "schemas"
-    schema_dir.mkdir(parents=True, exist_ok=True)
     for pkg, name in (("app-finance", "fin_journals"),
                       ("app-finance", "fin_journal_lines"),
                       ("app-finance", "fin_accounts"),
                       ("app-entities", "entities")):
-        (schema_dir / f"{name}.json").write_text(
-            (PACKAGES / pkg / "schemas" / f"{name}.json").read_text())
-        d = data_dir / "collections" / name
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "records.tsv").write_text(_header_from_schema(pkg, name))
+        stage_collection(data_dir, pkg, name)
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
     for acct in ("a-dr", "a-cr", "a", "b"):
         object_records.create_collection_record(

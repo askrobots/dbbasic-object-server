@@ -14,6 +14,7 @@ import pathlib
 import object_execution
 import object_records
 import python_object_runtime
+from conftest import schema_header, stage_collection
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 PACKAGES = REPO_ROOT / "packages"
@@ -23,53 +24,47 @@ CASH, AR, REV = "acct-cash", "acct-ar", "acct-rev"
 
 def setup_env(tmp_path, monkeypatch, *, basis="cash", configured=True, books=True):
     data_dir = tmp_path / "data"
-    schema_dir = data_dir / "schemas"
-    schema_dir.mkdir(parents=True, exist_ok=True)
-    names = [("app-invoices", "invoices"), ("app-payments", "payments"),
-             ("app-payments", "refunds"), ("app-settings", "app_settings")]
-    if books:
-        names += [("app-finance", "fin_journals"), ("app-finance", "fin_journal_lines"),
-                  ("app-finance", "fin_accounts"), ("app-finance", "fin_recurring")]
-    for pkg, name in names:
-        (schema_dir / f"{name}.json").write_text(
-            (PACKAGES / pkg / "schemas" / f"{name}.json").read_text())
 
-    def coll(name, header):
-        d = data_dir / "collections" / name
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "records.tsv").write_text(header)
+    # inv1 is seeded straight into the TSV (not via create_collection_record)
+    # so every test starts from the same draft invoice with no payments yet
+    # -- pin the row to the real schema's field order so a later schema
+    # edit can't silently shift these values into the wrong columns.
+    invoice_fields = schema_header("app-invoices", "invoices").strip("\n").split("\t")
+    invoice_values = {"id": "inv1", "number": "INV-1", "customer_name": "Acme",
+                       "status": "draft", "issue_date": "2026-07-01",
+                       "total_cents": "10000", "owner_id": "dan"}
+    invoice_row = "\t".join(invoice_values.get(f, "") for f in invoice_fields) + "\n"
+    stage_collection(data_dir, "app-invoices", "invoices", rows=invoice_row)
 
-    coll("invoices",
-         "id\tnumber\tcustomer_name\tstatus\tissue_date\ttotal_cents"
-         "\tpayments_received_cents\trefunded_cents\tamount_paid_cents"
-         "\tbalance_due_cents\towner_id\n"
-         "inv1\tINV-1\tAcme\tdraft\t2026-07-01\t10000\t\t\t\t\tdan\n")
-    coll("payments",
-         "id\tinvoice_id\tamount_cents\tmethod\treceived_on\treference\tnotes"
-         "\tstatus\trefunded_cents\towner_id\tcreated_at\n")
-    coll("refunds",
-         "id\tpayment_id\tinvoice_id\tamount_cents\treason\trefunded_on\towner_id\tcreated_at\n")
-    settings = "id\tkey\tvalue\tdescription\n"
-    settings += f"s0\tpayments.accounting_basis\t{basis}\t\n"
+    stage_collection(data_dir, "app-payments", "payments")
+    stage_collection(data_dir, "app-payments", "refunds")
+
+    settings = f"s0\tpayments.accounting_basis\t{basis}\t\n"
     if configured:
         settings += (f"s1\tpayments.journal.cash_account\t{CASH}\t\n"
                      f"s2\tpayments.journal.receivable_account\t{AR}\t\n"
                      f"s3\tpayments.journal.revenue_account\t{REV}\t\n")
-    coll("app_settings", settings)
+    stage_collection(data_dir, "app-settings", "app_settings", rows=settings)
+
     if books:
-        coll("fin_accounts",
-             "id\tname\taccount_type\towner_id\n"
-             f"{CASH}\tCash\tasset\tdan\n{AR}\tAR\tasset\tdan\n{REV}\tRevenue\tincome\tdan\n")
-        coll("fin_journals",
-             "id\tdate\tdescription\tstatus\tkind\tcontact_id\treference\tcurrency"
-             "\tgenerated_from\tdebit_total_cents\tcredit_total_cents\towner_id"
-             "\tentity_id\tcreated_at\n")
-        coll("fin_journal_lines",
-             "id\tjournal_id\taccount_id\tdebit_cents\tcredit_cents\tmemo"
-             "\towner_id\tentity_id\tcreated_at\n")
-        coll("fin_recurring",
-             "id\tname\ttemplate_lines\tfrequency\tnext_run\tlast_run\tauto_post"
-             "\tis_active\towner_id\tentity_id\tcreated_at\n")
+        # CASH/AR/REV are likewise seeded straight into the TSV (a chart of
+        # accounts every test in this file can rely on existing already);
+        # same field-order pinning as the invoice row above.
+        account_fields = schema_header("app-finance", "fin_accounts").strip("\n").split("\t")
+
+        def account_row(account_id, name, account_type):
+            values = {"id": account_id, "name": name, "account_type": account_type,
+                      "owner_id": "dan"}
+            return "\t".join(values.get(f, "") for f in account_fields) + "\n"
+
+        accounts = (account_row(CASH, "Cash", "asset")
+                    + account_row(AR, "AR", "asset")
+                    + account_row(REV, "Revenue", "income"))
+        stage_collection(data_dir, "app-finance", "fin_accounts", rows=accounts)
+        stage_collection(data_dir, "app-finance", "fin_journals")
+        stage_collection(data_dir, "app-finance", "fin_journal_lines")
+        stage_collection(data_dir, "app-finance", "fin_recurring")
+
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
     monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(tmp_path / "objects-unused"))
     return data_dir
