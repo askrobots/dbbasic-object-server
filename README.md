@@ -37,7 +37,9 @@ Common entry points:
 
 - **Understand it** — [why it is different](docs/why-dbbasic.md) ·
   [comparisons](docs/comparisons.md) · [the app suite](docs/app-packages.md)
-- **The generative layer** — [generative UI](docs/generative-ui.md) (one
+- **The generative layer** — [from zero code to some code](docs/zero-to-code.md)
+  (the known path: where and in what order real code enters an app) ·
+  [generative UI](docs/generative-ui.md) (one
   renderer: list/table/board, forms, detail) ·
   [schema → forms & views](docs/schema-forms.md) ·
   [capabilities](docs/capabilities.md) (comments, attachments, sharing from a
