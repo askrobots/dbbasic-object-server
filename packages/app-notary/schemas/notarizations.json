@@ -1,0 +1,30 @@
+{
+  "name": "notarizations",
+  "title": "Notarizations",
+  "version": 1,
+  "storage": "append",
+  "description": "A digest somebody asked this server to remember, and when it did. This is the smallest useful collection in the building and its emptiness is the point: a notary that holds your documents is a breach liability and a subpoena target, one that holds thirty-two bytes is neither, and a submitter who never sends content can prove something existed without ever revealing what it was. THREE PROPERTIES CARRY IT. FIRST, IT IS APPEND STORAGE AND THE PERMISSION RULES GRANT NEITHER UPDATE NOR DELETE -- not as an oversight but as the product. A notary with an edit path is a notary whose operator can be leaned on, and every claim made from this log rests on there being no way to amend it after the fact; docs/logic-decisions.md #8 says independent evidence is never edited, and this collection is the purest case of it on the box. SECOND, IDEMPOTENCY RUNS BACKWARDS FROM THE USUAL RULE. Everywhere else a repeated write is suppressed to avoid a duplicate (#7); here object_notary.first_seen returns the EARLIEST row for a digest and action_notarize hands that same row back to every later submission, because the claim being made is 'this existed BY then' and a later submission cannot make a thing earlier. Walking a timestamp forward is the only direction an attacker would want to walk it, and there is no way to do it here. THIRD, THE RECORD IS PUBLIC. site_notary serves a lookup with no account, deliberately, because an attestation only as good as your relationship with the notary is not an attestation -- it is a favour. What the collection does NOT hold is as deliberate: no content, no filename, no size, no content type, nothing that would let an observer reconstruct or recognise what was hashed beyond what the submitter chose to write in the label. The algorithm set is closed to sha256 and sha512 rather than open, because storing a claim under an algorithm nobody can check is storing nothing, and accepting md5 or sha1 would mean storing a claim somebody can forge a collision against -- precisely the attack a notary exists to prevent. What is NOT here yet and is named so it reads as a decision rather than a gap: no signature over the receipt (that needs a key, a rotation story and a published public key -- plan/notary-spec.md), and no hash chain over this log itself, which belongs in the storage layer where each link can be computed under the same lock that appends the row. Doing it at the package layer would read the tail and then append without the lock, and two submissions landing together would fork the chain -- a chain that forks under ordinary load spends its credibility on false alarms and is worse than none.",
+  "fields": [
+    {"name": "id"},
+    {"name": "digest", "type": "text", "required": true, "label": "Digest",
+     "validation": {"max_length": 128},
+     "help": "The hex digest, lower-cased. NEVER the data itself -- this server has no way to accept content and no field to put it in. Compared lower-cased and trimmed, with a leading '0x' or 'sha256:' stripped, because a hex digest is the same value in either case and losing a lookup to a capital letter is not a policy anybody chose. Not unique as a constraint: two rows with the same digest are two people who both notarized the same thing, which is ordinary, and the EARLIEST is the one that counts."},
+    {"name": "algorithm", "type": "enum", "required": true, "default": "sha256",
+     "label": "Algorithm", "enum": ["sha256", "sha512"],
+     "help": "How the digest was computed. A closed set: md5 and sha1 are refused rather than unsupported, because a digest somebody can find a collision for lets them notarize one document and later produce a different one with the same hash -- which is the whole attack this collection exists to make hard."},
+    {"name": "label", "type": "text", "label": "Label",
+     "validation": {"max_length": 200},
+     "help": "The submitter's own note about what this was -- 'payroll ledger head, 26 July', 'signed contract with Acme'. PUBLIC: anyone checking this digest sees it. Optional and deliberately so, because the entire point of storing only a hash is that a submitter who does not want to say what it is does not have to, and they usually have an excellent reason."},
+    {"name": "submitter", "type": "text", "label": "Submitter",
+     "help": "Who lodged it, as the server saw them -- an account, a service key, or 'public' where anonymous submission is allowed. Operator-visible, not shown on the public check page: what a digest is worth as evidence does not depend on who filed it, and publishing who anchored what would leak the shape of somebody's records without adding anything to the attestation."},
+    {"name": "source", "type": "text", "label": "Source",
+     "help": "How it arrived -- the object that wrote it, or the peer install that anchored to this one. Plumbing, for an operator working out why a row exists."},
+    {"name": "created_at", "type": "datetime", "read_only": true, "label": "Recorded",
+     "help": "The moment this server saw the digest, which IS the attestation. Everything this collection claims reduces to this one field being honestly stamped and never afterwards editable, and the two guarantees behind it are that the field is read-only and that the collection has no update path at all."}
+  ],
+  "search": {"fields": ["digest", "label"]},
+  "forms": {"default": {"fields": ["digest", "algorithm", "label"]}},
+  "views": {"list_mode": "table",
+            "list_fields": ["created_at", "digest", "algorithm", "label", "submitter"],
+            "filter_fields": ["algorithm"]}
+}

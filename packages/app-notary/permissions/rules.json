@@ -1,0 +1,25 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_notary",
+      "reason": "an attestation only its submitter can look up is not an attestation, it is a favour -- the entire value of lodging a digest with an independent party is that a third person (a customer, an auditor, the other side of an argument) can check it without an account here, a relationship with the operator, or anybody's permission. The page reads nothing keyed to a person and returns nothing but a hex string, a timestamp and the submitter's own chosen label"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "action_notarize",
+      "reason": "PUBLIC on the object, GATED IN THE OBJECT: action_notarize refuses an anonymous submission with a 409 naming notary.public_submission unless the operator has set it. The gate lives in the code rather than here because the two deployments are one setting apart -- a notary run as a service for other people must accept strangers, a notary run for one business's own ledger heads must not -- and an operator should not have to edit permission rules to change which one they are running. Accepting a digest is close to the safest write on this box in any case: it stores 64 hex characters, learns nothing about the submitter, and cannot overwrite or move an existing record"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["read"],
+      "collection": "notarizations",
+      "reason": "READ ONLY, and read only is the entire product. No update and no delete are granted here because a notary with an edit path is a notary whose operator can be leaned on, and every claim anybody makes from this log rests on there being no way to amend it after the fact. No create either: action_notarize is the one writer, because a row typed by hand is a timestamp somebody chose rather than one the server observed, and the object is also what enforces that resubmitting returns the ORIGINAL record instead of a later one. The collection is append storage besides, so there is no update or delete to grant even if somebody wanted to"
+    }
+  ]
+}

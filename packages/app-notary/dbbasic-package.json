@@ -1,0 +1,66 @@
+{
+  "id": "app-notary",
+  "name": "Notary",
+  "version": "0.1.0",
+  "description": "Store a digest, check it later. The smallest app on the box, and the one every tamper-evidence claim here eventually leans on. THE PROBLEM IT SOLVES: a hash chain that lives inside the file it protects, checked only by the machine that wrote it, defends against accident and casual editing but not against anybody who actually wanted to -- recomputing a chain over a million rows is a couple of seconds. What makes tampering expensive is recording the head somewhere the attacker cannot reach. This is that somewhere, and the security property is INDEPENDENCE rather than cleverness: a dumb append-only list of (digest, when) held by a third party is a stronger guarantee than elaborate cryptography run by the party with the motive. THREE REFUSALS ARE THE DESIGN. It never stores content -- there is no field for it and no code path that would accept one, which is why notarizing something confidential is safe and why this collection is not worth stealing. Nothing is ever amended or removed -- append storage, no update, no delete, no delete verb, not as an oversight but as the product. And it attests EXISTENCE and nothing else: not authorship, not ownership, not meaning, not that the digest is of what the submitter says it is. object_notary.attestation() is the exact wording and every surface renders it beside the answer rather than in a footnote, because the failure mode of a notary is not technical -- it is a reader taking 'notarized' to mean verified, owned or approved. IDEMPOTENCY RUNS BACKWARDS FROM THE HOUSE RULE. Everywhere else a repeated write is suppressed to avoid a duplicate (docs/logic-decisions.md #7); here object_notary.first_seen returns the EARLIEST row and action_notarize hands it back to every later submission, because the claim is 'this existed BY then' and a later submission cannot make a thing earlier. Walking a timestamp forward is the only direction an attacker would want to walk it, and there is no way to do it. The CHECK is public and the SUBMISSION is not, unless the operator sets notary.public_submission -- an attestation only its submitter can look up is a favour rather than evidence, while an open write endpoint is a decision a service makes and a private ledger anchor does not. The page hashes a dropped file in the browser with SubtleCrypto and uploads nothing, which earns its place by demonstrating the central claim instead of asking to be believed. Algorithms are a closed set of sha256 and sha512: md5 and sha1 are refused rather than unsupported, because a digest somebody can collide lets them notarize one document today and produce a different one with the same hash tomorrow, which is the exact attack this exists to make hard. WHAT IS DELIBERATELY NOT HERE, named so it reads as a decision: no signature over the receipt (it would let a submitter prove what this server said even if this server later denied it -- a real strengthening that needs a key, a rotation story and a published public key, and lives in plan/notary-spec.md); no hash chain over this log itself, which belongs in the storage layer where each link can be computed under the same lock that appends the row, since doing it at the package layer would read the tail then append without the lock and two submissions landing together would fork the chain, and a chain that forks under ordinary load spends its credibility on false alarms; and no Merkle batching, which is the right answer at volume and pure overhead below it.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": ["app-views"],
+  "objects": [
+    {
+      "id": "site_notary",
+      "path": "objects/site/notary.py"
+    },
+    {
+      "id": "action_notarize",
+      "path": "objects/action/notarize.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "notarizations",
+      "path": "schemas/notarizations.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "notarizations",
+      "path": "seed/notarizations.tsv"
+    },
+    {
+      "collection": "site_routes",
+      "path": "seed/site_routes.tsv"
+    },
+    {
+      "collection": "views",
+      "path": "seed/views.tsv"
+    }
+  ],
+  "migrations": [],
+  "nav": [
+    {
+      "id": "notary",
+      "label": "Notary",
+      "path": "/notary",
+      "blurb": "Lodge a digest, and prove later that it already existed",
+      "surface": "public",
+      "group": "System",
+      "order": 685
+    },
+    {
+      "id": "notarizations",
+      "label": "Notarizations",
+      "path": "/notarizations",
+      "blurb": "Every digest this server has been asked to remember",
+      "surface": "operator",
+      "group": "System",
+      "order": 686
+    }
+  ]
+}

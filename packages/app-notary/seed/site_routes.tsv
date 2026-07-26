@@ -1,0 +1,4 @@
+id	pattern	object_id	priority
+route_notary_check	/notary/{digest}	site_notary	10
+route_notary_index	/notary	site_notary	20
+route_notarizations	/notarizations	site_view_render	20

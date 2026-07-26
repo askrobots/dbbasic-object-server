@@ -335,12 +335,23 @@ def test_the_public_tier_is_only_the_pages_a_visitor_should_meet():
     `privacy` earns its place the same way the other two do: app-privacy
     grants `public` execute on site_privacy, and a privacy policy behind
     a sign-in is not a privacy policy.
+
+    `notary` earns it by the same argument turned up one notch. An
+    attestation that only its submitter can look up is not an attestation,
+    it is a favour -- the whole value of lodging a digest with an
+    independent party is that a THIRD person can check it without an
+    account here or a relationship with the operator, and a door they
+    cannot find is a door they do not have. app-notary grants `public`
+    execute on site_notary to match. Note that the OPERATOR-facing
+    `notarizations` list in the same manifest is deliberately not on this
+    tier: reading the whole log is a different question from checking one
+    digest you were already given.
     """
     public = {entry["id"]
               for manifest in _manifests().values()
               for entry in manifest.get("nav") or []
               if entry.get("surface") == "public"}
-    assert public == {"home", "shop", "privacy"}
+    assert public == {"home", "shop", "privacy", "notary"}
 
 
 def test_app_nav_declares_its_own_front_door():
