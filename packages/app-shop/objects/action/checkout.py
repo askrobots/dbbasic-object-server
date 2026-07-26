@@ -1,7 +1,7 @@
 """action_checkout -- a basket becomes an order AND the bill for it.
 
 POST {session_token, customer_email, customer_name?, confirm_prices?,
-      preview?}
+      preview?, customer_note?, gift_message?}
 
 This is where browsing turns into a commitment, so it is where every
 check happens at once:
@@ -90,6 +90,24 @@ gap: orders has no shipping_cents column yet. The moment one exists this
 file stamps it (it checks the schema rather than assuming), and until
 then the itemisation lives where a customer actually reads it, on the
 invoice.
+
+**Special instructions and a gift message: two fields, not a subsystem.**
+customer_note is what the shopper needs the PACKER to know ("leave it
+with the neighbour"), gift_message is what should be printed on the slip.
+Both are optional, both are stamped on the cart, and both are stamped on
+the ORDER through the same `_has_field` check shipping_cents uses -- the
+picker and the packer read the order, and a note that lives only on a
+basket is a note nobody in the warehouse ever sees. Until orders declares
+those two columns the values stay on the cart rather than being written
+into a column that does not exist, and the response says so
+(`notes_on_cart_only`) instead of pretending the packer will get them:
+the failure that prevents is a birthday message the shopper typed, the
+shop charged for, and nobody ever printed.
+
+There is deliberately no gift FLAG. The packing slip carries no prices by
+construction (site_packing_slip), so every parcel is already gift-safe,
+and a flag somebody forgets to tick is exactly how a present arrives with
+the amount paid stapled to it. The message is about warmth, not secrecy.
 """
 
 import os
@@ -334,6 +352,23 @@ def POST(request):
     }
     if summary["shipping_cents"] and _has_field(base, "orders", "shipping_cents"):
         order_row["shipping_cents"] = str(summary["shipping_cents"])
+
+    # The two merchandising fields, on the order the moment orders declares
+    # them -- see the module docstring. Same schema-aware posture as
+    # shipping_cents above: a missing column costs the packer a note (which
+    # the cart still holds and this response still reports), a rejected
+    # write would cost the shopper their order.
+    notes = {"customer_note": _text(request.get("customer_note")),
+             "gift_message": _text(request.get("gift_message"))}
+    carried_on_cart = []
+    for field, value in notes.items():
+        if not value:
+            continue
+        if _has_field(base, "orders", field):
+            order_row[field] = value
+        else:
+            carried_on_cart.append(field)
+
     object_records.create_collection_record(
         "orders", order_row, base_dir=base, actor=ACTOR)
 
@@ -354,12 +389,15 @@ def POST(request):
 
     # Stamp the cart BEFORE anything else can retry: the stamp is what
     # makes a second click a no-op rather than a second order.
+    stamp = {"status": "checked_out", "checked_out_order_id": order_id,
+             "customer_email": email,
+             "customer_name": _text(request.get("customer_name"))}
+    # Always on the cart, whether or not orders took them: this is where
+    # the shopper typed them, and it is the only copy that survives a shop
+    # whose orders schema has not caught up yet.
+    stamp.update({field: value for field, value in notes.items() if value})
     object_records.update_collection_record(
-        "carts", cart["id"],
-        {"status": "checked_out", "checked_out_order_id": order_id,
-         "customer_email": email,
-         "customer_name": _text(request.get("customer_name"))},
-        base_dir=base, actor=ACTOR)
+        "carts", cart["id"], stamp, base_dir=base, actor=ACTOR)
 
     # From here on the sale is already made. Everything below is wrapped so
     # that an invoicing problem costs the shopper a pay link, not the order
@@ -478,6 +516,10 @@ def POST(request):
               "status_of_order": "draft",
               "note": "order raised; stock moves and the order confirms when "
                       "payment arrives"}
+    if carried_on_cart:
+        # Reported, not swallowed. Somebody has to know that what the
+        # shopper typed did not reach the order the packer will read.
+        result["notes_on_cart_only"] = carried_on_cart
     if invoice_error:
         # Say what went wrong rather than returning a cheerful ok: somebody
         # has to raise this bill, and they can only do that if the failure

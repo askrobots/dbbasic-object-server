@@ -1,1 +1,1 @@
-id	session_token	status	customer_email	customer_name	currency	checked_out_order_id	notes	owner_id	entity_id	created_at
+id	session_token	status	customer_email	customer_name	currency	checked_out_order_id	customer_note	gift_message	notes	owner_id	entity_id	created_at

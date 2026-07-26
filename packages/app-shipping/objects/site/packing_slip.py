@@ -20,12 +20,19 @@ page sits behind the ordinary registered permission rather than a
 capability token like the invoice portal's.
 
 customer_note and gift_message are printed WHEN THEY EXIST, read with
-.get: the merchandising slice that adds those two fields to orders has
-not landed yet (plan/fulfillment-logistics-spec.md), and a slip that
-crashed on an older order would be a page that breaks itself waiting for
-a feature. The packer is the one who needs both -- special instructions
-are useless to anyone else, and a gift message unprinted is a gift
-message that never happened.
+.get. Checkout now collects both and stamps them on the order the moment
+the orders schema declares the columns (action_checkout's `_has_field`
+gate); until it does, the shop carries them on the cart and says so, and
+older orders simply have neither. So .get stays: a slip that crashed on
+an order predating the fields would be a page breaking itself over a
+column somebody added last week. The packer is the one who needs both --
+special instructions are useless to anyone else, and a gift message
+unprinted is a gift message that never happened.
+
+The gift message needs no gift flag beside it. This page shows no prices
+at all, by construction, so every parcel is already gift-safe: the
+message is about warmth, not secrecy, and a flag somebody forgets to tick
+is precisely how the amount paid ends up stapled to a present.
 
 An unknown shipment is a friendly 404 in the same shell, never a
 traceback: a mistyped link is somebody who is still at their desk trying

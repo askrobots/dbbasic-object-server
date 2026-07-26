@@ -1,0 +1,96 @@
+{
+  "name": "receipt_lines",
+  "title": "Receipt Lines",
+  "version": 1,
+  "hooks": {"before_write": "hook_receipt_lines"},
+  "description": "Expected against received against rejected, per ordered thing. This is the collection the discrepancy IS: three columns rather than one, because 'we received 8' is not an answer to 'the supplier billed us for 10'. quantity_expected is what the purchase order line said, stamped here so the sheet still reads correctly after somebody amends the PO; quantity_received is what went onto the shelf and is what composes the `purchase` stock move; quantity_rejected is what physically arrived and is going straight back. The gate that makes the fold trustworthy lives in hook_receipt_lines: cumulative quantity_received across every receipt of one order line may never exceed the quantity ordered, refused with all three numbers rather than a shrug, exactly as hook_shipment_lines does on the sales side. description is STAMPED from the order line at creation so a receiving sheet printed next year still says what the dock actually counted, even if the product has since been renamed (docs/logic-decisions.md #1).",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "receipt_id",
+      "type": "relation",
+      "required": true,
+      "relation": {
+        "collection": "receipts",
+        "display_field": "id"
+      },
+      "label": "Receipt",
+      "help": "Set once at creation and not intended to change after -- not schema read_only for the same reason order_lines.order_id is not: a required, client-submitted-at-creation field cannot also be read_only on this platform."
+    },
+    {
+      "name": "order_line_id",
+      "type": "text",
+      "required": true,
+      "label": "Order Line",
+      "help": "Which purchase order line these goods satisfy. Required, and not merely a cross-reference: without it the over-receiving gate has nothing to count against, and 'eight of something turned up' is not an answer to 'did the supplier send what we ordered?'. Plain text rather than a declared relation, so this package can be installed alongside an app-orders that is not there yet -- the same reasoning shipment_lines.order_line_id carries, and the hook does the real check and says so in words."
+    },
+    {
+      "name": "product_id",
+      "label": "Product",
+      "relation": {
+        "collection": "products",
+        "display_field": "name"
+      },
+      "help": "Optional cross-reference to app-catalog's products, mirroring order_lines.product_id. It is what the purchase stock move is composed against; a line with no product moves no stock, which is correct for a service, a delivery charge, or a free-text line that never sat on a shelf."
+    },
+    {
+      "name": "description",
+      "type": "text",
+      "label": "Description",
+      "validation": {"max_length": 300},
+      "help": "Stamped from the purchase order line at creation. The receiving sheet prints THIS, not a live product lookup: the paperwork about a delivery must keep saying what was counted off the pallet."
+    },
+    {
+      "name": "quantity_expected",
+      "type": "number",
+      "default": "0",
+      "label": "Expected",
+      "help": "What the purchase order line said was coming, stamped at creation. Kept alongside the received count rather than looked up live, because a PO amended after the fact would otherwise rewrite history and make an honest short delivery look like a clean one. A count/measure, not money -- may be fractional, the same deliberate exception order_lines.quantity documents; read with Decimal everywhere."
+    },
+    {
+      "name": "quantity_received",
+      "type": "number",
+      "default": "0",
+      "label": "Received",
+      "help": "What went onto the shelf. This is the number the `purchase` stock move is composed for and the number the PO's derived status is folded from; the over-receiving gate counts cumulative values of THIS field across every receipt against one order line. Zero is allowed and sometimes correct (the pallet arrived empty of this item), but a zero line must carry a rejected quantity or a discrepancy note -- see hook_receipt_lines."
+    },
+    {
+      "name": "quantity_rejected",
+      "type": "number",
+      "default": "0",
+      "label": "Rejected",
+      "help": "Goods that PHYSICALLY ARRIVED and are being sent back -- damaged, wrong size, past date. They are NOT a short delivery, and conflating the two is how a supplier gets paid for what they never delivered: a short delivery means the goods were never sent and must never be invoiced, while a rejection means they were sent, we hold the evidence, and the argument is about credit. Rejected quantities compose NO stock move, because they never entered stock (system_receipt_posting)."
+    },
+    {
+      "name": "discrepancy_note",
+      "type": "textarea",
+      "label": "Discrepancy Note",
+      "help": "Why the three numbers disagree, in the receiver's own words: 'two cartons crushed', 'supplier substituted the 500ml'. Free text on purpose -- a reason-code enum invented before anyone has read a hundred real ones is a taxonomy that makes the dock pick the closest wrong answer. Required by hook_receipt_lines on any line that received nothing, because a blank zero is indistinguishable from a data-entry slip."
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    }
+  ],
+  "forms": {
+    "default": {
+      "fields": ["receipt_id", "order_line_id", "product_id", "description",
+                 "quantity_expected", "quantity_received", "quantity_rejected",
+                 "discrepancy_note"]
+    }
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["description", "quantity_expected", "quantity_received",
+                    "quantity_rejected", "receipt_id"]
+  }
+}

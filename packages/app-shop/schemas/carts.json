@@ -1,8 +1,8 @@
 {
   "name": "carts",
   "title": "Carts",
-  "version": 1,
-  "description": "What somebody intends to buy, before they commit to it. Deliberately NOT a draft order: an order is a commitment with a number, a customer and a books consequence, and it sits in a sequence people count, while a basket is a browsing artefact that usually gets abandoned. Modelling the basket as a draft order fills that sequence with junk and makes 'how many orders did we take?' unanswerable -- so carts are their own collection with their own short lifetime. A cart is keyed by a session token rather than an account, because requiring somebody to sign in before they can put something in a basket is the single biggest conversion loss in small-business retail; owner_id is stamped only if and when they sign in. checked_out_order_id is what makes checkout idempotent: a cart that already became an order never becomes a second one, however many times a browser retries the request.",
+  "version": 2,
+  "description": "What somebody intends to buy, before they commit to it. Deliberately NOT a draft order: an order is a commitment with a number, a customer and a books consequence, and it sits in a sequence people count, while a basket is a browsing artefact that usually gets abandoned. Modelling the basket as a draft order fills that sequence with junk and makes 'how many orders did we take?' unanswerable -- so carts are their own collection with their own short lifetime. A cart is keyed by a session token rather than an account, because requiring somebody to sign in before they can put something in a basket is the single biggest conversion loss in small-business retail; owner_id is stamped only if and when they sign in. checked_out_order_id is what makes checkout idempotent: a cart that already became an order never becomes a second one, however many times a browser retries the request. v2 adds customer_note and gift_message: two fields, entered at checkout, not a subsystem. They are collected here because here is where the shopper is typing, and action_checkout stamps them onto the ORDER as well the moment orders declares the same two columns -- the picker and the packer are the people who need them, and they read the order, not somebody's abandoned basket.",
   "fields": [
     {"name": "id"},
     {"name": "session_token", "type": "text", "required": true, "label": "Session",
@@ -22,6 +22,10 @@
     {"name": "checked_out_order_id", "label": "Became Order",
      "relation": {"collection": "orders", "display_field": "number"},
      "help": "Stamped when the cart becomes an order. Present means done: one cart, one order, however many times a retry arrives."},
+    {"name": "customer_note", "type": "textarea", "label": "Special Instructions",
+     "help": "What the shopper needs the PACKER to know -- leave it with the neighbour, do not ring the bell, this one is fragile. Collected at checkout, optional, and printed on the packing slip and the pick list, because the picker and the packer are the only people it is any use to. Distinct from `notes`, which is the shop's own scratch field about the basket: one is the customer talking to the warehouse, the other is the warehouse talking to itself, and merging them would mean an internal remark printed into a stranger's parcel."},
+    {"name": "gift_message", "type": "textarea", "label": "Gift Message",
+     "help": "Printed on the packing slip when present. There is no gift FLAG and there does not need to be one: the slip carries no prices by construction, so every parcel this shop sends is already gift-safe, and a flag somebody forgets to tick is exactly how a present arrives with the amount paid stapled to it. This field is about warmth, not secrecy."},
     {"name": "notes", "type": "textarea", "label": "Notes"},
     {"name": "owner_id", "type": "text", "label": "Owner",
      "help": "The shop's owner while the basket is anonymous; the shopper once they sign in. A cart always belongs to somebody, so permissions have something to filter on."},

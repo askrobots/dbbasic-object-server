@@ -1,8 +1,8 @@
 {
   "name": "orders",
   "title": "Orders",
-  "version": 2,
-  "description": "Sales and purchase orders (doc_type on one shared schema, mirroring app-invoices' doc_type split). Lines live in order_lines; subtotal/tax/total are stamped by the order_totals handler, never typed by hand. Reconciled against a private predecessor-system audit, not part of this repo (its Order+Lines note: 'SO/PO; convert_to_invoice').",
+  "version": 4,
+  "description": "Sales and purchase orders (doc_type on one shared schema, mirroring app-invoices' doc_type split). Lines live in order_lines; subtotal/tax/total are stamped by the order_totals handler, never typed by hand. Reconciled against a private predecessor-system audit, not part of this repo (its Order+Lines note: 'SO/PO; convert_to_invoice'). v4 carries the two fields a shopper types at checkout -- customer_note and gift_message -- because the packing slip is printed from the ORDER, not from the basket somebody abandoned on the way to it.",
   "fields": [
     {
       "name": "id"
@@ -12,7 +12,10 @@
       "type": "enum",
       "label": "Document Type",
       "default": "sale",
-      "enum": ["sale", "purchase"],
+      "enum": [
+        "sale",
+        "purchase"
+      ],
       "help": "sale/purchase share this schema -- the real predecessor's SO/PO split, carried as one field the same way app-invoices folds invoice/credit_note/quote into doc_type."
     },
     {
@@ -25,7 +28,10 @@
     {
       "name": "customer_id",
       "label": "Customer (contact)",
-      "relation": {"collection": "contacts", "display_field": "first_name"},
+      "relation": {
+        "collection": "contacts",
+        "display_field": "first_name"
+      },
       "help": "Optional cross-reference only. The snapshot fields below are what every surface renders -- editing the contact later never rewrites an already-placed order. Same snapshot decision as app-invoices' customer_id."
     },
     {
@@ -33,52 +39,146 @@
       "type": "text",
       "required": true,
       "label": "Customer",
-      "validation": {"min_length": 1, "max_length": 200}
+      "validation": {
+        "min_length": 1,
+        "max_length": 200
+      }
     },
     {
       "name": "customer_email",
       "type": "text",
       "label": "Customer Email",
-      "validation": {"max_length": 254}
+      "validation": {
+        "max_length": 254
+      }
     },
     {
       "name": "currency",
       "type": "text",
       "default": "USD",
       "label": "Currency (ISO 4217)",
-      "validation": {"pattern": "^[A-Z]{3}$"}
+      "validation": {
+        "pattern": "^[A-Z]{3}$"
+      }
     },
     {
       "name": "status",
       "type": "enum",
       "label": "Status",
       "default": "draft",
-      "enum": ["draft", "confirmed", "processing", "partial", "shipped", "delivered", "cancelled"],
+      "enum": [
+        "draft",
+        "confirmed",
+        "processing",
+        "partial",
+        "shipped",
+        "delivered",
+        "received",
+        "cancelled"
+      ],
       "transitions": {
         "draft": [
-          {"to": "confirmed", "when": {"owner_id": "$user_id"}},
-          {"to": "cancelled", "when": {"owner_id": "$user_id"}}
+          {
+            "to": "confirmed",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          },
+          {
+            "to": "cancelled",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          }
         ],
         "confirmed": [
-          {"to": "processing", "when": {"owner_id": "$user_id"}},
-          {"to": "partial", "when": {"owner_id": "$user_id"}},
-          {"to": "shipped", "when": {"owner_id": "$user_id"}},
-          {"to": "cancelled", "when": {"owner_id": "$user_id"}}
+          {
+            "to": "processing",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          },
+          {
+            "to": "partial",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          },
+          {
+            "to": "shipped",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          },
+          {
+            "to": "received",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          },
+          {
+            "to": "cancelled",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          }
         ],
         "processing": [
-          {"to": "partial", "when": {"owner_id": "$user_id"}},
-          {"to": "shipped", "when": {"owner_id": "$user_id"}},
-          {"to": "cancelled", "when": {"owner_id": "$user_id"}}
+          {
+            "to": "partial",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          },
+          {
+            "to": "shipped",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          },
+          {
+            "to": "received",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          },
+          {
+            "to": "cancelled",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          }
         ],
         "partial": [
-          {"to": "shipped", "when": {"owner_id": "$user_id"}},
-          {"to": "cancelled", "when": {"owner_id": "$user_id"}}
+          {
+            "to": "shipped",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          },
+          {
+            "to": "received",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          },
+          {
+            "to": "cancelled",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          }
         ],
         "shipped": [
-          {"to": "delivered", "when": {"owner_id": "$user_id"}}
+          {
+            "to": "delivered",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          }
         ]
       },
-      "help": "delivered and cancelled are terminal. Every other move requires the order owner. Matches the real order lifecycle (reconciled against a private predecessor-system audit, not part of this repo): draft->confirmed/cancelled, confirmed->processing/cancelled, processing->shipped/cancelled, shipped->delivered. v2 adds `partial`, and it is MACHINE-DERIVED: system_order_fulfillment (app-shipping) folds shipment lines against ordered quantities and stamps partial when some but not all of what was ordered is on a shipment that has left, shipped when all of it is, delivered when every one of those shipments arrived. Never hand-set -- typing partial into this field claims a fact about boxes that no box supports, and the next derivation pass will disagree with you. confirmed->shipped is allowed alongside confirmed->partial for the same reason: the zero-touch shop (app-shop's auto_fulfill) ships a whole order the moment it is paid for and never passes through processing, and forcing a bookkeeping hop nobody performed would leave paid, shipped orders sitting at confirmed forever."
+      "help": "delivered, received and cancelled are terminal. Every other move requires the order owner. Matches the real order lifecycle (reconciled against a private predecessor-system audit, not part of this repo): draft->confirmed/cancelled, confirmed->processing/cancelled, processing->shipped/cancelled, shipped->delivered. v2 adds `partial`, and it is MACHINE-DERIVED: system_order_fulfillment (app-shipping) folds shipment lines against ordered quantities and stamps partial when some but not all of what was ordered is on a shipment that has left, shipped when all of it is, delivered when every one of those shipments arrived. Never hand-set -- typing partial into this field claims a fact about boxes that no box supports, and the next derivation pass will disagree with you. confirmed->shipped is allowed alongside confirmed->partial for the same reason: the zero-touch shop (app-shop's auto_fulfill) ships a whole order the moment it is paid for and never passes through processing, and forcing a bookkeeping hop nobody performed would leave paid, shipped orders sitting at confirmed forever. v3 adds `received`, the PURCHASE side's terminal state, also machine-derived: system_receipt_posting (app-receiving) folds receipt lines against ordered quantities and stamps partial when some of what was ordered has turned up on the dock and received when all of it has. It is a new value rather than a reuse of `delivered` because this enum is shared by SO and PO (doc_type), and `delivered` on a purchase order reads as a claim about something WE sent -- in a status-filtered list, where doc_type is two columns away, that is actively misleading. `received` can only ever mean one thing in either direction: the goods turned up HERE. `partial` is therefore shared by both sides and means the same thing on both -- some of what this document promised has physically moved -- which is the point of one shared lifecycle rather than two."
     },
     {
       "name": "order_date",
@@ -118,6 +218,18 @@
       "help": "Provenance link recorded once this order has been converted to an invoice (real predecessor's convert_to_invoice). The conversion ACTION itself is deferred -- not built in this slice -- but the field is kept now so a future convert-to-invoice flow has somewhere to write without a backfill."
     },
     {
+      "name": "customer_note",
+      "type": "textarea",
+      "label": "Special Instructions",
+      "help": "What the shopper needs the PACKER to know -- leave it with the neighbour, do not ring the bell, this one is fragile. Stamped from the basket at checkout and printed on the packing slip and pick list, because the picker and the packer are the only people it is any use to. Distinct from `notes`, which is the shop talking to itself: merging them would print an internal remark into a stranger's parcel."
+    },
+    {
+      "name": "gift_message",
+      "type": "textarea",
+      "label": "Gift Message",
+      "help": "Printed on the packing slip when present. There is no gift FLAG and there need not be one: the slip carries no prices by construction, so every parcel is already gift-safe, and a flag somebody forgets to tick is exactly how a present arrives with the amount paid stapled to it."
+    },
+    {
       "name": "notes",
       "type": "textarea",
       "label": "Notes"
@@ -135,15 +247,35 @@
     }
   ],
   "forms": {
-    "default": {"fields": ["doc_type", "number", "customer_id", "customer_name",
-                           "customer_email", "currency", "order_date", "expected_date",
-                           "status", "notes"]}
+    "default": {
+      "fields": [
+        "doc_type",
+        "number",
+        "customer_id",
+        "customer_name",
+        "customer_email",
+        "currency",
+        "order_date",
+        "expected_date",
+        "status",
+        "notes"
+      ]
+    }
   },
   "views": {
     "list_mode": "table",
-    "list_fields": ["number", "customer_name", "status", "total_cents", "expected_date"]
+    "list_fields": [
+      "number",
+      "customer_name",
+      "status",
+      "total_cents",
+      "expected_date"
+    ]
   },
   "search": {
-    "fields": ["number", "customer_name"]
+    "fields": [
+      "number",
+      "customer_name"
+    ]
   }
 }

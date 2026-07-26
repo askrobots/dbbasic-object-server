@@ -12,8 +12,21 @@ basket is not a commitment: reserving stock on add is how a shop shows
 "sold out" for goods nobody bought, and quietly repricing a basket is how
 a shopper is charged something they never agreed to. Both are decided at
 checkout, where a person is looking.
+
+One thing IS refused here, and it is a merchandising rule rather than a
+stock one: a product that has variants and no price of its own is a
+display heading, not a thing. "Tote bag" is what somebody is looking for;
+"Tote bag, medium, navy" is what they can actually be sent, and it is a
+products row of its own with its own SKU, price and stock level (see
+products.json's own description on why a variant IS a product). Adding
+the heading would put a line with no price on an order nobody can pick,
+so it is refused HERE, in the object that owns the rule, and the refusal
+names the options -- a "no" that does not say what to do instead is a
+lost sale. site_shop mirrors the same rule when it decides whether to
+draw an Add button, so the page never offers what this would refuse.
 """
 
+import json
 import os
 
 import object_cart
@@ -23,6 +36,8 @@ import object_records
 ACTOR = "action_cart"
 
 ACTIONS = ("get", "add", "set", "remove", "clear")
+
+INACTIVE = ("false", "0", "no", "off")
 
 
 def _base_dir():
@@ -46,6 +61,51 @@ def _shop_owner(base):
     except Exception:
         pass
     return "shop"
+
+
+def _price_cents(product):
+    try:
+        return int(_text(product.get("price_cents")) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _options(product):
+    """The option map a variant declares, or {} for anything that is not
+    one.
+
+    Parsed here as well as in site_shop rather than shared through a
+    module: it is six lines, and a page and an action reaching for the
+    same import across an object boundary is a coupling neither of them
+    needs. Bad JSON is {} -- a mistyped brace must not decide whether a
+    product can be sold.
+    """
+    raw = _text(product.get("options"))
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return ({str(key): str(value) for key, value in parsed.items()}
+            if isinstance(parsed, dict) else {})
+
+
+def _variants_of(base, product_id):
+    """The variants that display under this product and are still on sale.
+
+    Read fresh every time. This is the gate that decides whether a row is
+    a thing or a heading, and a stale answer either sells a heading or
+    refuses a real product.
+    """
+    try:
+        rows = object_records.read_collection_records("products", base_dir=base)
+    except Exception:
+        return []
+    return [row for row in rows
+            if _text(row.get("parent_product_id")) == product_id
+            and _text(row.get("id")) != product_id
+            and _text(row.get("is_active")).lower() not in INACTIVE]
 
 
 def _find_cart(base, token):
@@ -131,9 +191,39 @@ def POST(request):
         product = None
     if not product:
         return {"status": 404, "error": f"No such product: {product_id}"}
-    if _text(product.get("is_active")).lower() in ("false", "0", "no", "off"):
+    if _text(product.get("is_active")).lower() in INACTIVE:
         return {"status": 409,
                 "error": f"{_text(product.get('name')) or product_id} is not for sale."}
+
+    variants = _variants_of(base, product_id)
+    if variants and _price_cents(product) <= 0:
+        name = _text(product.get("name")) or product_id
+        # Name the options in the sentence AND hand back the ids: the
+        # sentence is for the shopper reading a page, the list is for an
+        # API client or an agent that has to pick one without scraping
+        # prose. Both, because this refusal is the whole of the guidance
+        # either of them gets.
+        choices = [{"product_id": _text(variant.get("id")),
+                    "label": " / ".join(
+                        value for value in _options(variant).values() if value)
+                             or _text(variant.get("name")),
+                    "price_cents": str(_price_cents(variant))}
+                   for variant in variants]
+        # "Choose a size" beats "choose an option" when the seller has said
+        # what the axis is called -- it is their word for it, and reading
+        # it back is the difference between a form and a conversation.
+        axes = []
+        for variant in variants:
+            for key in _options(variant):
+                if key not in axes:
+                    axes.append(key)
+        what = " and ".join(axes) if axes else "option"
+        listed = ", ".join(choice["label"] for choice in choices)
+        return {"status": 409,
+                "error": f"{name} comes in more than one {what}. "
+                         f"Choose one: {listed}.",
+                "product_id": product_id,
+                "options": choices}
 
     wanted = object_cart._num(request.get("quantity"), 1)
     if action == "add" and existing:

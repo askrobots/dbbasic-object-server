@@ -1,0 +1,1 @@
+id	receipt_id	order_line_id	product_id	description	quantity_expected	quantity_received	quantity_rejected	discrepancy_note	owner_id	created_at

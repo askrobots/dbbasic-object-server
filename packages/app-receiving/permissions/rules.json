@@ -1,0 +1,34 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update"],
+      "collection": "receipts",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "a receipt is the operator's own paperwork about their own goods; no delete, because a delivery that arrived cannot be made not to have arrived -- a mistake is a cancelled receipt or an adjustment move, never a vanished row"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update"],
+      "collection": "receipt_lines",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "the lines are the receipt; same scope and the same no-delete posture, and the over-receiving gate in hook_receipt_lines runs on this path whoever the caller is"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "action_receive_goods",
+      "reason": "checking a delivery in is warehouse work, not owner-only work: anybody signed in can book a pallet in, and everything they can put on it is bounded by what the purchase order already committed to"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "site_receiving_sheet",
+      "reason": "the receiver has to be signed in for the page to know whose warehouse to fold, and the sheet names a supplier and everything we buy from them -- deliberately NOT public, because a page addressed by an internal order id would be an enumeration oracle for the whole purchase ledger; the page itself shows a sign-in prompt rather than an error to anyone who is not"
+    }
+  ]
+}

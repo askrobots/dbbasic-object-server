@@ -119,8 +119,9 @@ def test_schema_json_file_is_valid_and_versioned():
     payload = _products_schema()
     assert payload["name"] == "products"
     # v1 -> v2: ASSET-only fields gained `visible_when` (Stage-6). v2 -> v3:
-    # entity_id scoping FK (65 multi-entity). Both additive.
-    assert payload["version"] == 3
+    # entity_id scoping FK (65 multi-entity). v3 -> v4: merchandising --
+    # category, parent_product_id, options, image_file_id. All additive.
+    assert payload["version"] == 4
     assert payload["views"]["list_mode"] == "table"
     # entity_id is a relation into the entities collection (scoping FK).
     by_name = {f["name"]: f for f in payload["fields"]}
@@ -222,13 +223,17 @@ def test_finance_account_and_digital_file_pointers_carried_as_text():
 
 def test_products_forms_and_views_match_the_brief():
     schema = _products_schema()
+    # v4 put `category` on the form and in the list, and made it the one
+    # filter: it is the field the shop page groups on, so somebody typing
+    # it in has to be able to see what they already used.
     assert schema["forms"]["default"]["fields"] == [
-        "name", "sku", "product_type", "description",
+        "name", "sku", "product_type", "category", "description",
         "price_cents", "cost_cents", "currency", "unit", "is_active",
     ]
     assert schema["views"]["list_fields"] == [
-        "name", "sku", "product_type", "price_cents", "is_active",
+        "name", "sku", "product_type", "category", "price_cents", "is_active",
     ]
+    assert schema["views"]["filter_fields"] == ["category"]
 
 
 def test_search_fields_cover_only_content_fields():
@@ -249,8 +254,13 @@ def test_search_fields_cover_only_content_fields():
 
 def test_products_schema_field_order_matches_the_brief():
     field_names = [f["name"] for f in _products_schema()["fields"]]
+    # The four merchandising fields (v4) sit together after description --
+    # what a thing is filed under, what it is a variant of, which variant
+    # it is, and what it looks like -- rather than being appended past the
+    # asset block, so the schema still reads top to bottom as a product.
     assert field_names == [
         "id", "name", "sku", "product_type", "description",
+        "category", "parent_product_id", "options", "image_file_id",
         "price_cents", "cost_cents", "currency", "unit", "is_active",
         "income_account", "expense_account", "digital_file_id",
         "useful_life_months", "purchase_date", "salvage_value_cents",

@@ -99,9 +99,13 @@ def test_install_app_orders_package_loads_schemas(tmp_path):
 
 
 def test_schema_json_files_are_valid_and_versioned():
-    # orders is at v2: the fulfillment slice added the machine-derived
-    # `partial` status (see the transitions test below).
-    expected_versions = {"orders": 2, "order_lines": 1}
+    # orders is at v3: the fulfillment slice added the machine-derived
+    # `partial` status and the receiving slice added `received`, the
+    # purchase side's terminal state (see the transitions test below).
+    # orders v4: customer_note + gift_message, so the packing slip prints
+    # what the shopper typed at checkout (v3 added `received` for the PO
+    # side, v2 added `partial`).
+    expected_versions = {"orders": 4, "order_lines": 1}
     for name in ("orders", "order_lines"):
         payload = json.loads((APP_ORDERS_DIR / "schemas" / f"{name}.json").read_text())
         assert payload["name"] == name
@@ -176,7 +180,7 @@ def test_orders_guarded_status_transitions_match_the_real_lifecycle():
     status_field = next(f for f in _orders_schema()["fields"] if f["name"] == "status")
     assert status_field["enum"] == [
         "draft", "confirmed", "processing", "partial", "shipped", "delivered",
-        "cancelled",
+        "received", "cancelled",
     ]
     assert status_field["default"] == "draft"
 
@@ -190,22 +194,32 @@ def test_orders_guarded_status_transitions_match_the_real_lifecycle():
     # DERIVED by system_order_fulfillment from shipment lines, and the
     # zero-touch shop (app-shop's auto_fulfill) ships a paid order without
     # ever passing through processing.
+    # `received` is reachable from the same three states for the mirror
+    # reason on the PURCHASE side: system_receipt_posting derives it from
+    # receipt lines, and a PO that was received in one delivery never passed
+    # through partial.
     confirmed_targets = {entry["to"]: entry["when"] for entry in transitions["confirmed"]}
     assert confirmed_targets == {"processing": owner_guard, "partial": owner_guard,
-                                 "shipped": owner_guard, "cancelled": owner_guard}
+                                 "shipped": owner_guard, "received": owner_guard,
+                                 "cancelled": owner_guard}
 
     processing_targets = {entry["to"]: entry["when"] for entry in transitions["processing"]}
     assert processing_targets == {"partial": owner_guard, "shipped": owner_guard,
-                                  "cancelled": owner_guard}
+                                  "received": owner_guard, "cancelled": owner_guard}
 
     partial_targets = {entry["to"]: entry["when"] for entry in transitions["partial"]}
-    assert partial_targets == {"shipped": owner_guard, "cancelled": owner_guard}
+    assert partial_targets == {"shipped": owner_guard, "received": owner_guard,
+                               "cancelled": owner_guard}
 
     shipped_targets = {entry["to"]: entry["when"] for entry in transitions["shipped"]}
     assert shipped_targets == {"delivered": owner_guard}
 
-    # delivered and cancelled are terminal: no entries in the transitions map at all.
+    # delivered, received and cancelled are terminal: no entries in the
+    # transitions map at all. received is terminal for the same reason
+    # delivered is -- goods that arrived cannot un-arrive, and a miscount is
+    # an adjustment move, never an edit.
     assert "delivered" not in transitions
+    assert "received" not in transitions
     assert "cancelled" not in transitions
 
 

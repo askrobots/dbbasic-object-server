@@ -1,8 +1,8 @@
 {
   "name": "products",
   "title": "Products",
-  "version": 3,
-  "description": "Sellable items: physical goods, digital downloads, services, subscriptions, and depreciable assets share this one schema via product_type. Locations and stock_moves (derived stock levels) now live alongside this schema in the same package -- see schemas/locations.json, schemas/stock_moves.json, and object_stock.py. Orders and order lines are a separate package (app-orders); this schema's product_id is what their order_lines optionally relate to. price_cents/cost_cents/salvage_value_cents are integer cents, never a float or currency type.",
+  "version": 4,
+  "description": "Sellable items: physical goods, digital downloads, services, subscriptions, and depreciable assets share this one schema via product_type. Locations and stock_moves (derived stock levels) now live alongside this schema in the same package -- see schemas/locations.json, schemas/stock_moves.json, and object_stock.py. Orders and order lines are a separate package (app-orders); this schema's product_id is what their order_lines optionally relate to. price_cents/cost_cents/salvage_value_cents are integer cents, never a float or currency type. v4 is merchandising, and its one load-bearing decision is that A VARIANT IS A PRODUCT: a size/colour configuration gets its own row here -- own SKU, own price, own stock level -- with parent_product_id naming the row it displays under and options saying what it is. Stock moves, pricing, checkout, fulfillment and the books all key on product_id TODAY, so variants-as-products means every one of those keeps working with ZERO changes, and 'how many medium navy totes are left?' is the same question as any other stock question, answered by the same fold. The alternative -- a variants table hanging under one product -- is the model that gives every integration a products-vs-variants split personality, two ids for one sellable thing, and a stock report that cannot answer the question anybody actually asks. category is one flat text field and deliberately not a taxonomy tree; image_file_id is a POINTER into the owner's files (served by the existing /api/files/{id} endpoint), never bytes in the catalogue.",
   "fields": [
     {
       "name": "id"
@@ -43,6 +43,40 @@
       "name": "description",
       "type": "textarea",
       "label": "Description"
+    },
+    {
+      "name": "category",
+      "type": "text",
+      "label": "Category",
+      "validation": {
+        "max_length": 80
+      },
+      "help": "One flat name -- \"Mugs\", \"Prints\", \"Workshops\" -- and deliberately NOT a taxonomy tree. A tree is what a store builds because a platform offers one and then fights forever over which branch a thing belongs on; a small business has eight categories and already knows what they are called. The shop page groups on this exact string, so two spellings really are two categories: that is the price of a field anybody can fill in without asking permission, and it is cheaper than the argument. Blank is fine and is not an error -- an uncategorised product still sells, it just lands under \"Everything else\" at the bottom of the page. If a real catalogue ever outgrows flat, tags already exist as a system."
+    },
+    {
+      "name": "parent_product_id",
+      "type": "text",
+      "label": "Variant Of",
+      "relation": {
+        "collection": "products",
+        "display_field": "name"
+      },
+      "help": "The product this one displays under -- DISPLAY GROUPING ONLY, and nothing else. It does not change how this row is sold, counted, picked or booked: the variant has its own SKU, its own price_cents and its own stock level, and every system in the building still keys on product_id exactly as it did. That is the whole point (see this schema's description): the shop page collapses children under the parent card and the product page offers a picker, and no other code learns a new noun. Blank for the ordinary case, which is most products."
+    },
+    {
+      "name": "options",
+      "type": "text",
+      "label": "Options",
+      "validation": {
+        "max_length": 400
+      },
+      "help": "What this variant IS, as a small JSON object: {\"size\": \"M\", \"colour\": \"navy\"}. Text and not a typed field because the option NAMES are the seller's vocabulary -- size, colour, grind, length, finish -- and a schema that enumerated them would be a schema every seller has to fight before they can list a product. Key order is the seller's order and the shop renders it in that order, so \"size\" first reads the way a label is written. Unparseable JSON renders as nothing rather than as an error: a mistyped brace must not take a product off the shelf."
+    },
+    {
+      "name": "image_file_id",
+      "type": "text",
+      "label": "Image",
+      "help": "The file id of the product photograph in the owner's files, served by the endpoint that already exists at /api/files/{id}. The catalogue stores a POINTER and never bytes -- same posture as digital_file_id, and the reason a product row stays a row. Mark that file public (files.is_public) or a shopper who is not signed in gets nothing back. Blank renders a neutral placeholder block on the shop page rather than a broken image: a text-only shop is not a shop, but a broken-image icon is worse than an honest blank."
     },
     {
       "name": "price_cents",
@@ -178,6 +212,7 @@
         "name",
         "sku",
         "product_type",
+        "category",
         "description",
         "price_cents",
         "cost_cents",
@@ -193,8 +228,12 @@
       "name",
       "sku",
       "product_type",
+      "category",
       "price_cents",
       "is_active"
+    ],
+    "filter_fields": [
+      "category"
     ]
   },
   "search": {

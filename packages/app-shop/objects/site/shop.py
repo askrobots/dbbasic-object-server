@@ -17,6 +17,27 @@ cards is a list of names and prices, and nobody buys a thing they cannot
 read about first. Its add-to-basket form posts to /shop, the same index
 the cards post to, so there is one basket path and not two.
 
+**A variant IS a product**, and this page is the only place that has to
+know it. A size or a colour is its own products row -- own SKU, own
+price, own stock level -- carrying parent_product_id (which card it
+displays under) and options ({"size": "M", "colour": "navy"}). Stock
+moves, pricing, checkout, fulfillment and the books all key on
+product_id today, so variants-as-products means every one of those keeps
+working with ZERO changes, and "how many medium navy totes are left?" is
+the same question as any other stock question. The alternative -- a
+variants table hanging under one product -- is the model that gives
+every integration a products-vs-variants split personality and two ids
+for one sellable thing. The cost lands here and nowhere else: the index
+collapses children under one card, and the product page renders a picker
+whose radios post the CHILD's product_id into the same add form every
+other card uses.
+
+Categories are one flat text field, grouped into <h2> headings in
+alphabetical order, with the uncategorised last under "Everything else".
+Never hidden: a product nobody got round to filing must still be
+sellable, and a shop that quietly refused to show its own stock over a
+blank field would be losing sales it could not even see.
+
 All the actual decisions live in action_cart and action_checkout; this
 object only renders them and passes the token along. That split is what
 lets the same flow be driven by an API client, an agent over MCP, or a
@@ -24,6 +45,7 @@ different front end, without the rules living in a template.
 """
 
 import html
+import json
 import os
 import secrets
 import urllib.parse
@@ -45,11 +67,31 @@ COOKIE = "cart"
 # happily take.
 STOCKED_TYPES = ("physical", "asset", "")
 
+# Where product photographs already live: http_api_contract.USER_FILES_PATH,
+# the endpoint app-files has served since it existed. Not a shop-specific
+# image route -- inventing one would mean a second way to read the same
+# bytes, with its own permission story to get wrong.
+FILES_PATH = "/api/files"
+
+# The heading for products nobody has categorised. Last on the page and
+# never hidden: a blank field is a filing omission, not a decision to stop
+# selling something.
+UNCATEGORISED = "Everything else"
+
 _STYLE = """
 .shop-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 1rem; margin: 1rem 0 2rem; }
 .shop-card { border: 1px solid var(--line, #38384a); border-radius: 8px; padding: 0.9rem; display: flex; flex-direction: column; gap: 0.4rem; }
 .shop-card .price { font-size: 1.15rem; font-weight: 600; }
 .shop-card .sku { font-size: 0.8rem; opacity: 0.65; }
+.shop-category { font-size: 1rem; margin: 1.8rem 0 0.2rem; opacity: 0.85; }
+.shop-image { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 6px; }
+.shop-image.placeholder { background: var(--line, #38384a); opacity: 0.3; }
+.shop-detail .shop-image { max-width: 22rem; margin-bottom: 0.8rem; border-radius: 8px; }
+.options { border: 0; margin: 0.8rem 0; padding: 0; display: flex; flex-direction: column; gap: 0.35rem; }
+.options legend { padding: 0; font-weight: 600; }
+.option { display: block; }
+.option.out { opacity: 0.6; }
+.checkout textarea { width: 100%; max-width: 32rem; }
 .cart-table { width: 100%; border-collapse: collapse; margin: 0.5rem 0 1rem; }
 .cart-table th, .cart-table td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--line, #38384a); }
 .cart-table td.num, .cart-table th.num { text-align: right; }
@@ -113,16 +155,20 @@ def _products(base):
     return sorted(live, key=lambda row: str(row.get("name") or ""))
 
 
-def _find_product(base, product_id):
+def _find_product(products, product_id):
     """One product, or None when it is missing OR withdrawn from sale.
 
     Withdrawn and missing answer the same way on purpose: a public page that
     distinguished them would tell a stranger which ids exist.
+
+    Takes the already-read list rather than re-reading the collection: the
+    detail page needs the whole catalogue anyway, to find this product's
+    variants and its parent.
     """
     wanted = str(product_id or "").strip()
     if not wanted:
         return None
-    for row in _products(base):
+    for row in products:
         if str(row.get("id") or "") == wanted:
             return row
     return None
@@ -130,6 +176,96 @@ def _find_product(base, product_id):
 
 def _detail_path(product_id):
     return "/shop/" + urllib.parse.quote(str(product_id or ""), safe="")
+
+
+def _price_cents(product):
+    try:
+        return int(str(product.get("price_cents") or "0").strip() or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _options(product):
+    """The option map a variant declares, or {} for anything that is not one.
+
+    Bad JSON is {} rather than an error. A mistyped brace in one product's
+    options must not take that product off the shelf, and there is nobody
+    on this page who could fix it anyway.
+    """
+    raw = str(product.get("options") or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    # Insertion order is the SELLER's order -- "size" then "colour" reads
+    # the way a label is written -- so it is kept rather than sorted.
+    return {str(key): str(value) for key, value in parsed.items()}
+
+
+def _option_label(product):
+    """"M / navy" -- one line naming which variant this is.
+
+    Falls back to the product's own name so a row with no options (a
+    parent that is also sellable on its own) still has something to be
+    called in a picker.
+    """
+    values = [value for value in _options(product).values() if value]
+    return " / ".join(values) or str(product.get("name") or "")
+
+
+def _children_by_parent(products):
+    """Variants grouped under the product they display beneath.
+
+    Only parents that are themselves on sale count. A child whose parent
+    is withdrawn or missing would otherwise be collapsed under a card that
+    is not on the page at all -- a product nobody can see and nobody can
+    buy -- so it falls back to being its own card, which is exactly what
+    it was before anybody set the field.
+    """
+    live = {str(row.get("id") or "") for row in products}
+    groups = {}
+    for row in products:
+        parent = str(row.get("parent_product_id") or "").strip()
+        if parent and parent in live and parent != str(row.get("id") or ""):
+            groups.setdefault(parent, []).append(row)
+    return groups
+
+
+def _sellable(product, children):
+    """Can this row go in a basket on its own?
+
+    A parent WITH children and no price of its own is a display heading,
+    not a thing: "Tote bag" at 0.00 is not what anybody is buying, and
+    selling it would be charging nothing for a parcel nobody can pick. A
+    parent that does carry a price is a real base product that happens to
+    have variants too, and stays sellable.
+
+    action_cart is the authority and refuses the sale there; this mirrors
+    the rule so the page never offers a button that would be refused --
+    the same posture as _availability, for the same reason.
+    """
+    return not (children and _price_cents(product) <= 0)
+
+
+def _image(product):
+    """The product photograph, or an honest blank.
+
+    The catalogue stores a file id, never bytes, and the bytes come back
+    from the endpoint app-files already serves. A missing photograph is a
+    plain block rather than an <img> pointed at nothing: a broken-image
+    icon reads as a shop whose pages do not work, which is worse than a
+    product nobody has photographed yet.
+    """
+    file_id = str(product.get("image_file_id") or "").strip()
+    if not file_id:
+        return '<div class="shop-image placeholder"></div>'
+    src = FILES_PATH + "/" + urllib.parse.quote(file_id, safe="")
+    return (f'<img class="shop-image" src="{_esc(src)}" '
+            f'alt="{_esc(product.get("name"))}" loading="lazy">')
 
 
 def _add_form(product, token):
@@ -148,42 +284,111 @@ def _add_form(product, token):
 </form>"""
 
 
+def _card(product, children, token):
+    """One card. A parent with variants gets ONE, not one per size.
+
+    A grid with Small, Medium and Large as three separate tiles is a grid
+    nobody can read: the shopper is looking for a tote bag, not for the
+    medium. When the parent is only a heading (variants priced, parent
+    not) the card shows the cheapest child's price as a "from" and offers
+    the only thing that is actually possible -- go and choose -- because a
+    disabled Add button is a dead control that teaches a shopper the shop
+    is broken.
+    """
+    currency = _esc(product.get("currency") or "USD")
+    if _sellable(product, children):
+        price = f"{currency} {_money(product.get('price_cents'))}"
+        action = _add_form(product, token)
+    else:
+        price = f"from {currency} {_money(min(_price_cents(c) for c in children))}"
+        action = (f'<a href="{_esc(_detail_path(product.get("id")))}">'
+                  f'Choose options</a>')
+    return f"""
+<div class="shop-card">
+  <a href="{_esc(_detail_path(product.get('id')))}">{_image(product)}</a>
+  <div><strong><a href="{_esc(_detail_path(product.get('id')))}">{_esc(product.get('name'))}</a></strong></div>
+  <div class="sku">{_esc(product.get('sku') or '')}</div>
+  <div class="price">{price}</div>
+  {action}
+</div>"""
+
+
+def _grid(products, groups, token):
+    cards = [_card(product, groups.get(str(product.get("id") or ""), []), token)
+             for product in products]
+    return f'<div class="shop-grid">{"".join(cards)}</div>'
+
+
 def _product_cards(products, token):
+    """The catalogue, collapsed by variant and grouped by category.
+
+    A shop that has categorised nothing gets EXACTLY the grid it had
+    before any of this: it is not a shop with one category called
+    "Everything else", it is a shop that does not use categories, and a
+    heading over the whole page would be furniture pretending to be
+    information. Headings appear the moment somebody actually fills the
+    field in.
+    """
     if not products:
         return ('<p class="hint">Nothing is for sale yet. Add products in '
                 '<a href="/products">the catalogue</a>.</p>')
-    cards = []
-    for product in products:
-        cards.append(f"""
-<div class="shop-card">
-  <div><strong><a href="{_esc(_detail_path(product.get('id')))}">{_esc(product.get('name'))}</a></strong></div>
-  <div class="sku">{_esc(product.get('sku') or '')}</div>
-  <div class="price">{_esc(product.get('currency') or 'USD')} {_money(product.get('price_cents'))}</div>
-  {_add_form(product, token)}
-</div>""")
-    return f'<div class="shop-grid">{"".join(cards)}</div>'
+
+    groups = _children_by_parent(products)
+    collapsed = {str(child.get("id") or "")
+                 for children in groups.values() for child in children}
+    top = [row for row in products if str(row.get("id") or "") not in collapsed]
+
+    buckets = {}
+    for product in top:
+        buckets.setdefault(str(product.get("category") or "").strip(),
+                           []).append(product)
+    named = sorted((key for key in buckets if key), key=str.lower)
+    if not named:
+        return _grid(top, groups, token)
+
+    sections = [f'<h2 class="shop-category">{_esc(name)}</h2>'
+                f'{_grid(buckets[name], groups, token)}' for name in named]
+    if buckets.get(""):
+        # Last, and never hidden. A product nobody got round to filing is
+        # still stock somebody paid for, and a shop that dropped it off the
+        # page would be refusing sales it could not even see it was losing.
+        sections.append(f'<h2 class="shop-category">{UNCATEGORISED}</h2>'
+                        f'{_grid(buckets[""], groups, token)}')
+    return "".join(sections)
+
+
+def _stock_state(base, product):
+    """True, False, or None when nothing in this shop counts this thing.
+
+    The three-way answer is the point. None is not "out": a service, a
+    download, or a server with no stock app installed has no shelf, and
+    collapsing that into False would refuse to sell the things that never
+    run out. It is the same tracked-type rule action_checkout applies, so
+    the page cannot promise what checkout would refuse -- nor refuse what
+    checkout would happily take.
+    """
+    if object_stock is None:
+        return None
+    if str(product.get("product_type") or "") not in STOCKED_TYPES:
+        return None
+    try:
+        return object_stock.total_quantity(product.get("id"), base_dir=base) > 0
+    except Exception:
+        return None
 
 
 def _availability(base, product):
     """One low-key line: in stock, out of stock, or nothing at all.
 
-    Silence is the right answer more often than it looks -- for a service
-    or a download, and for a server with no stock app installed. Guessing
-    there would turn a shop that simply does not count things into a shop
-    that appears to have sold out of everything. Where stock IS counted,
-    zero means zero: checkout refuses that sale, and a page that promised
-    otherwise would be sending shoppers into a wall.
+    Silence is the right answer more often than it looks -- see
+    _stock_state. Where stock IS counted, zero means zero: checkout
+    refuses that sale, and a page that promised otherwise would be sending
+    shoppers into a wall.
     """
-    if object_stock is None:
+    state = _stock_state(base, product)
+    if state is None:
         return ""
-    if str(product.get("product_type") or "") not in STOCKED_TYPES:
-        return ""
-    try:
-        quantity = object_stock.total_quantity(product.get("id"), base_dir=base)
-    except Exception:
-        return ""
-    state = "In stock" if quantity > 0 else "Out of stock"
-    return f'<p class="stock">{state}</p>'
+    return f'<p class="stock">{"In stock" if state else "Out of stock"}</p>'
 
 
 def _preview(token):
@@ -272,12 +477,26 @@ def _cart_table(cart, token, preview=None):
 
 
 def _checkout_form(token):
+    """Two optional textareas, and no gift FLAG anywhere near them.
+
+    The packing slip carries no prices by construction, so every parcel
+    this shop sends is already gift-safe -- a tickbox would only be one
+    more thing to forget, and forgetting it is how a present arrives with
+    the amount paid stapled to it. The placeholder says so out loud,
+    because a shopper who does not know that will not risk the message.
+    """
     return f"""
-<form method="post" action="/shop">
+<form method="post" action="/shop" class="checkout">
   <input type="hidden" name="do" value="checkout">
   <input type="hidden" name="session_token" value="{_esc(token)}">
   <p><label>Name<br><input type="text" name="customer_name"></label></p>
   <p><label>Email<br><input type="email" name="customer_email" required></label></p>
+  <p><label>Special instructions (optional)<br>
+  <textarea name="customer_note" rows="2"
+    placeholder="Anything the packer needs to know"></textarea></label></p>
+  <p><label>Gift message (optional)<br>
+  <textarea name="gift_message" rows="2"
+    placeholder="Printed on the packing slip, which never shows prices"></textarea></label></p>
   <p><button type="submit">Place order</button></p>
 </form>"""
 
@@ -368,19 +587,94 @@ payment arrives.</p>"""
     return _response("Shop", body, token, fresh)
 
 
-def _render_detail(base, product, token, fresh):
+def _picker(base, product, children, token):
+    """Choose a variant: plain radios in the same add form as everywhere.
+
+    This is where variants-as-products pays for itself. The radio's value
+    is a product_id, the form posts to /shop with do=add like every card
+    on the index, and action_cart, checkout, the stock ledger and the
+    books never learn that a "variant" is a word anybody uses.
+
+    Out-of-stock children are SHOWN and disabled, never dropped. Hiding
+    the medium is how a shopper concludes this shop does not sell their
+    size and goes to one that does; saying "Out of stock" tells them to
+    come back, and it is also simply true.
+
+    Nothing is pre-selected. A default that quietly ships the small
+    because it sorted first is a wrong parcel, a return and a refund; a
+    form that insists on being answered is a second of the shopper's time.
+    The parent itself appears as a choice only when it is sellable in its
+    own right -- otherwise it is a heading, not a thing to buy.
+    """
+    choices = ([product] if _sellable(product, children) else []) + list(children)
+    rows = []
+    for choice in choices:
+        label = _esc(_option_label(choice))
+        value = _esc(choice.get("id"))
+        if _stock_state(base, choice) is False:
+            rows.append(f'<label class="option out"><input type="radio" '
+                        f'name="product_id" value="{value}" disabled> {label} '
+                        f'&mdash; Out of stock</label>')
+        else:
+            money = (f'{_esc(choice.get("currency") or "USD")} '
+                     f'{_money(choice.get("price_cents"))}')
+            rows.append(f'<label class="option"><input type="radio" '
+                        f'name="product_id" value="{value}" required> {label} '
+                        f'&mdash; {money}</label>')
+    return f"""
+<form method="post" action="/shop" class="shop-form">
+  <input type="hidden" name="do" value="add">
+  <input type="hidden" name="session_token" value="{_esc(token)}">
+  <fieldset class="options"><legend>Choose an option</legend>
+  {"".join(rows)}
+  </fieldset>
+  <input class="qty" type="number" name="quantity" value="1" min="1" step="1">
+  <button type="submit">Add</button>
+</form>"""
+
+
+def _variant_of(parent, product):
+    """The line on a child's page that says what it is and where it came
+    from.
+
+    A shopper who landed on the medium from a search result needs the way
+    back to the other sizes, or the only size this shop appears to sell is
+    the one Google happened to index.
+    """
+    options = _options(product)
+    named = ", ".join(f"{key}: {value}" for key, value in options.items())
+    said = f'<p class="options-said">{_esc(named)}</p>' if named else ""
+    return (f'{said}<p><a href="{_esc(_detail_path(parent.get("id")))}">'
+            f'All options of {_esc(parent.get("name"))}</a></p>')
+
+
+def _render_detail(base, product, children, parent, token, fresh):
     description = product.get("description") or ""
     unit = f" / {_esc(product.get('unit'))}" if product.get("unit") else ""
+    currency = _esc(product.get("currency") or "USD")
+    if _sellable(product, children):
+        price = f"{currency} {_money(product.get('price_cents'))}{unit}"
+    else:
+        # A heading has no price of its own, and printing 0.00 would be a
+        # number the shopper cannot buy anything at.
+        price = f"from {currency} {_money(min(_price_cents(c) for c in children))}"
+    # Availability belongs to a thing that can be added; for a parent the
+    # answer is per-variant and lives on each radio, where the choice is.
+    stock = "" if children else _availability(base, product)
+    buy = (_picker(base, product, children, token) if children
+           else _add_form(product, token))
     body = f"""
 <div class="breadcrumb"><a href="/">Home</a> / <a href="/shop">Shop</a> /
 {_esc(product.get('name'))}</div>
 <div class="pagehead"><h1>{_esc(product.get('name'))}</h1></div>
 <div class="shop-detail">
+  {_image(product)}
   <div class="sku">{_esc(product.get('sku') or '')}</div>
-  <div class="price">{_esc(product.get('currency') or 'USD')} {_money(product.get('price_cents'))}{unit}</div>
-  {_availability(base, product)}
+  <div class="price">{price}</div>
+  {stock}
   <div class="description">{_esc(description)}</div>
-  {_add_form(product, token)}
+  {buy}
+  {_variant_of(parent, product) if parent is not None else ''}
 </div>
 <p><a href="/shop">Back to shop</a></p>"""
     return _response(str(product.get("name") or "Product"), body, token, fresh)
@@ -399,10 +693,18 @@ have a typo in it.</p>
 def _detail(request, product_id):
     base = _base_dir()
     token, fresh = _token(request)
-    product = _find_product(base, product_id)
+    products = _products(base)
+    product = _find_product(products, product_id)
     if product is None:
         return _render_missing(token, fresh)
-    return _render_detail(base, product, token, fresh)
+    children = _children_by_parent(products).get(str(product.get("id") or ""), [])
+    # A parent that is withdrawn or missing is the same as no parent at
+    # all: the child is a product in its own right and its page must still
+    # sell it, rather than pointing at a card that is not on the shop.
+    parent = _find_product(products, product.get("parent_product_id"))
+    if parent is not None and str(parent.get("id") or "") == str(product.get("id") or ""):
+        parent = None
+    return _render_detail(base, product, children, parent, token, fresh)
 
 
 def _handle(request):
@@ -423,6 +725,10 @@ def _handle(request):
             "session_token": token,
             "customer_email": form.get("customer_email"),
             "customer_name": form.get("customer_name"),
+            # Two optional fields, straight through: the page decides
+            # nothing about them, action_checkout decides where they land.
+            "customer_note": form.get("customer_note"),
+            "gift_message": form.get("gift_message"),
             # A second attempt after seeing the new prices IS the shopper
             # agreeing to them, which is why this is not a hidden default.
             "confirm_prices": form.get("confirm_prices")})

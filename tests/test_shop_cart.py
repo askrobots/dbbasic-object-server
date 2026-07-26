@@ -915,3 +915,115 @@ def test_the_basket_page_is_untouched_when_nothing_is_configured(
     assert "Shipping" not in body and "Subtotal" not in body
     assert "24.00" in body
     assert '<tfoot><tr><th colspan="3">Total</th>' in body
+
+
+# =============================================================================
+# MERCHANDISING
+#
+# Categories, variants and the two words a shopper types at checkout. The
+# basket did not change to support any of it -- a variant IS a product, so
+# every add, price check and stock check here is the same code path it
+# always was -- which is exactly why the tests belong beside the basket's:
+# what they hold is that the page collapses and groups without the basket
+# learning a new noun, and that the one refusal this adds says what to do
+# instead. The full variant/image/gift story lives in
+# tests/test_merchandising.py; this section is the basket's own view of it.
+# =============================================================================
+
+def variants(data_dir, *, parent_cents=0):
+    """A parent that is a heading and one variant that is a real thing."""
+    product(data_dir, "tote", "Tote Bag", parent_cents, category="Bags")
+    product(data_dir, "tote-m", "Tote Bag, medium", 2000, category="Bags",
+            product_type="service", parent_product_id="tote",
+            options='{"size": "M", "colour": "navy"}')
+
+
+def test_the_index_groups_by_category_and_never_hides_the_unfiled(
+        tmp_path, monkeypatch):
+    """Alphabetical headings, uncategorised last under "Everything else".
+    Last, not gone: a product nobody got round to filing is still stock
+    somebody paid for."""
+    data_dir = setup_env(tmp_path, monkeypatch, page=True)
+    product(data_dir, "p1", "Enamel Mug", 1200, category="Kitchen")
+    product(data_dir, "p2", "Linocut Print", 4000, category="Art")
+    product(data_dir, "p3", "Odd Thing", 500)
+    body = page()["body"]
+
+    assert '<h2 class="shop-category">Art</h2>' in body
+    assert '<h2 class="shop-category">Everything else</h2>' in body
+    assert body.index("Art</h2>") < body.index("Kitchen</h2>")
+    assert body.index("Kitchen</h2>") < body.index("Everything else</h2>")
+    assert "Odd Thing" in body[body.index("Everything else</h2>"):]
+
+
+def test_a_parent_shows_one_card_and_the_basket_refuses_it_by_name(
+        tmp_path, monkeypatch):
+    """The card is a doorway, not an Add button: the parent has no price
+    of its own, so there is nothing to charge and nothing to pick. The
+    refusal names the options, because a "no" that does not say what to do
+    instead is a lost sale."""
+    data_dir = setup_env(tmp_path, monkeypatch, page=True)
+    variants(data_dir)
+    body = page()["body"]
+
+    assert body.count('<div class="shop-card">') == 1
+    assert "Tote Bag, medium" not in body               # collapsed, not listed
+    assert "Choose options" in body and "from USD 20.00" in body
+    assert 'name="do" value="add"' not in body
+
+    refused = cart("add", product_id="tote")
+    assert refused["status"] == 409
+    assert "M / navy" in refused["error"]
+    assert refused["options"][0]["product_id"] == "tote-m"
+
+
+def test_adding_a_variant_is_an_ordinary_add(tmp_path, monkeypatch):
+    """The whole argument, in the basket: a product_id went in and a
+    description came out. Nothing here knows what a variant is."""
+    data_dir = setup_env(tmp_path, monkeypatch, page=True)
+    variants(data_dir)
+    assert cart("add", product_id="tote-m")["subtotal_cents"] == 2000
+    item = object_records.read_collection_records("cart_items",
+                                                  base_dir=data_dir)[0]
+    assert item["description"] == "Tote Bag, medium"
+
+    body = page()["body"]
+    assert "Tote Bag, medium" in body                   # the basket line
+    assert "20.00" in body
+
+
+def test_the_checkout_form_carries_the_note_and_the_gift_message(
+        tmp_path, monkeypatch):
+    """Straight through the page to action_checkout, which decides where
+    they land. Both optional, and no gift flag: the packing slip shows no
+    prices by construction, so every parcel is already gift-safe."""
+    data_dir = setup_env(tmp_path, monkeypatch, page=True)
+    product(data_dir, "p1", "Mug", 1200, product_type="service")
+    cart("add", product_id="p1")
+    assert '<textarea name="customer_note"' in page()["body"]
+
+    result = checkout(customer_email="buyer@example.test",
+                      customer_note="Leave with the neighbour",
+                      gift_message="Happy birthday, Ada")
+    basket = object_records.get_collection_record("carts", result["cart_id"],
+                                                  base_dir=data_dir)
+    assert basket["customer_note"] == "Leave with the neighbour"
+    assert basket["gift_message"] == "Happy birthday, Ada"
+
+
+def test_a_product_with_no_category_and_no_variants_renders_as_it_always_did(
+        tmp_path, monkeypatch):
+    """The regression guard. Every field this slice added is optional, and
+    a shop that sets none of them must not be able to tell it happened --
+    apart from the photograph placeholder, which is the one deliberate
+    change to a page that was text-only."""
+    data_dir = setup_env(tmp_path, monkeypatch, page=True)
+    product(data_dir, "p1", "Enamel Mug", 1200, product_type="service")
+    body = page()["body"]
+
+    assert '<a href="/shop/p1">Enamel Mug</a>' in body
+    assert "USD 12.00" in body
+    assert 'name="product_id" value="p1"' in body
+    assert '<h2 class="shop-category">' not in body
+    assert '<div class="shop-image placeholder"></div>' in body
+    assert cart("add", product_id="p1", quantity="2")["subtotal_cents"] == 2400
