@@ -1423,6 +1423,64 @@ def process_email_outbox(*, base_dir: Path | str = "data") -> dict | None:
     return {"attempted": attempted, "sent": sent, "dead": dead, "rate_limited": rate_limited}
 
 
+CHANGE_LOG_RETENTION_MARKER_NAME = ".change_log_retention_last_run"
+CHANGE_LOG_RETENTION_INTERVAL_ENV = "DBBASIC_CHANGE_LOG_RETENTION_INTERVAL_SECONDS"
+_DEFAULT_CHANGE_LOG_RETENTION_INTERVAL = 21600  # 6h -- rewriting every log is not cheap
+
+
+def process_change_log_retention(*, base_dir: Path | str = "data") -> dict | None:
+    """Rotate, archive and (only if asked) remove record change logs.
+
+    Returns None when no policy is configured or the pass is not due.
+    Off unless an operator sets a retention window or an entry cap: a
+    change log IS the audit trail, and deciding how much of it to keep is
+    not a decision a daemon makes on somebody's behalf.
+
+    When it IS configured, expired entries are ARCHIVED by default rather
+    than deleted -- rotated into a timestamped gzip segment beside the log
+    (object_record_changes.prune_all_record_changes). Somebody asking for
+    a smaller hot file has not asked to lose the history, and the hot file
+    is the only part that costs anything: it is what every feed render
+    reads. On the box that motivated this, 1.1GB of logs became 22MB hot
+    plus a 115MB archive with all 1.7 million entries still in it.
+
+    Runs on a 6h marker, the same shape as the analytics retention pass,
+    because rewriting every collection's log is not something to do on a
+    tick -- the first live sweep took three minutes.
+    """
+    policy = object_record_changes.retention_policy()
+    if not policy["days"] and not policy["max_entries"]:
+        return None
+
+    marker_path = Path(base_dir) / CHANGE_LOG_RETENTION_MARKER_NAME
+    interval = _env_int(CHANGE_LOG_RETENTION_INTERVAL_ENV,
+                        _DEFAULT_CHANGE_LOG_RETENTION_INTERVAL)
+    now = time.time()
+    try:
+        if now - marker_path.stat().st_mtime < interval:
+            return None
+    except OSError:
+        pass  # no marker yet -> run now
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    marker_path.write_text(str(now))
+
+    try:
+        result = object_record_changes.prune_all_record_changes(
+            base_dir=base_dir,
+            days=policy["days"],
+            max_entries=policy["max_entries"],
+            archive=policy["archive"],
+            keep_archives=policy["keep_archives"],
+        )
+    except OSError:
+        return None
+    if result.get("removed"):
+        verb = "archived" if policy["archive"] else "removed"
+        log(f"Change logs: {verb} {result['removed']} entr(ies) across "
+            f"{result['collections']} log(s)")
+    return result
+
+
 ANALYTICS_RETENTION_MARKER_NAME = ".analytics_retention_last_run"
 ANALYTICS_RETENTION_INTERVAL_ENV = "DBBASIC_ANALYTICS_RETENTION_INTERVAL_SECONDS"
 _DEFAULT_ANALYTICS_RETENTION_INTERVAL = 21600  # 6h -- a rewrite of a big file isn't cheap
@@ -1473,6 +1531,192 @@ def process_analytics_retention(*, base_dir: Path | str = "data") -> dict | None
         log(f"Analytics: pruned {result['removed']} page_view(s) {bound} "
             f"({result['rows_before']} -> {result['rows_after']})")
     return result
+
+
+ATTENTION_SOURCES_COLLECTION = "attention_sources"
+ATTENTION_COUNTS_COLLECTION = "attention_counts"
+ATTENTION_MARKER_NAME = ".attention_last_run"
+ATTENTION_INTERVAL_ENV = "DBBASIC_ATTENTION_INTERVAL_SECONDS"
+# Five minutes. A count that is five minutes stale is fine -- nobody
+# confirms a receipt in the seconds after it lands -- and the page says
+# how old the number is rather than implying it is live.
+_DEFAULT_ATTENTION_INTERVAL = 300
+ATTENTION_ACTOR = "daemon:attention"
+ATTENTION_METHOD = "COUNT"
+_ATTENTION_DETAIL_LIMIT = 200
+_ATTENTION_ERROR_LIMIT = 400
+_TRUE_TEXT = ("true", "1", "yes", "on")
+
+
+def _attention_text(value) -> str:
+    return str(value if value is not None else "").strip()
+
+
+def _attention_count_value(answer) -> int:
+    """The integer a provider promised, or a refusal to guess.
+
+    Raises ValueError rather than coercing, because every coercion here is
+    a way for a broken provider to look like an empty queue. A provider
+    that answers with a string, a float, a bool, or nothing at all has a
+    bug, and the only useful thing to do with it is say so.
+    """
+    if not isinstance(answer, dict):
+        raise ValueError(f"provider returned {type(answer).__name__}, expected an object")
+    if "count" not in answer:
+        raise ValueError("provider returned no 'count'")
+    count = answer["count"]
+    if isinstance(count, bool) or not isinstance(count, int):
+        raise ValueError(f"provider returned a {type(count).__name__} count, expected an integer")
+    if count < 0:
+        raise ValueError(f"provider returned a negative count: {count}")
+    return count
+
+
+def process_attention(*, base_dir: Path | str = "data") -> dict | None:
+    """Run every declared attention provider and write the counts down.
+
+    Packages declare what "needs a human" means in their own domain
+    (object_packages' `attention` section -> the attention_sources
+    collection). This pass executes each declaration's object with method
+    COUNT -- a distinct verb, so the same object may also expose GET or
+    POST for a person -- and stores the answer in attention_counts, which
+    is the one small table the home page and the app list read.
+
+    **Why a rollup and not a live fold.** Because folding a dozen
+    collections on every home render is how a home page becomes the
+    slowest page, and worse than slow: this box went to 675MB resident and
+    started swapping because something folded a big collection on a timer.
+    A home screen that folds a dozen collections per render is that exact
+    mistake with a nicer name -- and it makes the front page's cost grow
+    with the number of installed packages, which is the one place cost
+    must not grow. The pass is marker-gated (DBBASIC_ATTENTION_INTERVAL_
+    SECONDS, default 300) like process_compactions and
+    process_materializations, so the page's cost is one small read no
+    matter how many apps declare a queue, and the staleness is bounded and
+    stated rather than pretended away.
+
+    **A broken provider must look broken, never look calm.** A provider
+    that raises, or answers with something that is not an integer, has its
+    `error` written and its PREVIOUS count kept. Zeroing it would report
+    an empty queue when what actually happened is that nobody looked, and
+    a queue that looks handled is the single worst thing this table could
+    say. `computed_at` is left at the last SUCCESSFUL run for the same
+    reason: the age on the page should describe the number, not the
+    attempt.
+
+    Zero counts are written and kept. The absence of a row means nobody
+    has ever run the provider, which is a different fact from "the queue
+    is empty", and only the surfaces decide that zeros are not news.
+
+    A source the operator muted is not executed at all, and its stored
+    count is removed -- a muted queue should cost nothing and show
+    nothing, and leaving the last number behind would show a stale one.
+
+    Returns None when the collection is not installed (app-nav absent) or
+    the interval has not elapsed; otherwise a summary of the pass.
+    """
+    try:
+        sources = object_records.read_collection_records(
+            ATTENTION_SOURCES_COLLECTION, base_dir=base_dir)
+    except (object_collections.CollectionNotFoundError,
+            object_collections.InvalidCollectionNameError, OSError, ValueError):
+        return None
+    if not sources:
+        return None
+
+    marker_path = Path(base_dir) / ATTENTION_MARKER_NAME
+    interval = _env_int(ATTENTION_INTERVAL_ENV, _DEFAULT_ATTENTION_INTERVAL)
+    now = time.time()
+    try:
+        if now - marker_path.stat().st_mtime < interval:
+            return None
+    except OSError:
+        pass  # no marker yet -> run now
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    marker_path.write_text(str(now))
+
+    try:
+        from python_object_runtime import PythonObjectRuntime
+    except ImportError:
+        return None
+    runtime = PythonObjectRuntime(base_dir=str(base_dir))
+
+    try:
+        existing = {row["id"]: row for row in object_records.read_collection_records(
+            ATTENTION_COUNTS_COLLECTION, base_dir=base_dir) if row.get("id")}
+    except (object_collections.CollectionNotFoundError,
+            object_collections.InvalidCollectionNameError, OSError, ValueError):
+        # The counts collection is what this pass exists to write. Without
+        # it there is nowhere to put an answer, so there is no point
+        # running any provider.
+        return None
+
+    computed_at = datetime.now(timezone.utc).isoformat()
+    counted = failed = muted = 0
+
+    for source in sources:
+        source_id = _attention_text(source.get("id"))
+        if not source_id:
+            continue
+        live = existing.get(source_id)
+
+        if _attention_text(source.get("operator_muted")).lower() in _TRUE_TEXT:
+            muted += 1
+            if live is not None:
+                try:
+                    object_records.delete_collection_record(
+                        ATTENTION_COUNTS_COLLECTION, source_id,
+                        base_dir=base_dir, actor=ATTENTION_ACTOR)
+                except Exception:  # noqa: BLE001 -- a stuck row must not stop the pass
+                    pass
+            continue
+
+        row = {
+            "source_id": source_id,
+            "label": _attention_text(source.get("label")),
+            "path": _attention_text(source.get("path")),
+            "nav_id": _attention_text(source.get("nav_id")),
+            "group": _attention_text(source.get("group")) or "Apps",
+            "severity": _attention_text(source.get("severity")) or "normal",
+        }
+
+        object_id = _attention_text(source.get("object_id"))
+        try:
+            answer = _execute_target(runtime, object_id, ATTENTION_METHOD, {})
+            count = _attention_count_value(answer)
+        except Exception as exc:  # noqa: BLE001 -- one bad provider must not blind the rest
+            failed += 1
+            log(f"Attention: {source_id} ({object_id}) failed: {exc}", "ERROR")
+            row["error"] = f"{type(exc).__name__}: {exc}"[:_ATTENTION_ERROR_LIMIT]
+            # The previous number survives, and so does its timestamp: an
+            # unanswered question is not the answer zero.
+            row["count"] = _attention_text((live or {}).get("count")) or "0"
+            row["detail"] = _attention_text((live or {}).get("detail"))
+            row["computed_at"] = _attention_text((live or {}).get("computed_at"))
+        else:
+            counted += 1
+            row["count"] = str(count)
+            row["detail"] = _attention_text(answer.get("detail"))[:_ATTENTION_DETAIL_LIMIT]
+            row["error"] = ""
+            row["computed_at"] = computed_at
+
+        try:
+            if live is None:
+                object_records.create_collection_record(
+                    ATTENTION_COUNTS_COLLECTION, {"id": source_id, **row},
+                    base_dir=base_dir, actor=ATTENTION_ACTOR)
+            elif any(_attention_text(live.get(field)) != row[field] for field in row):
+                object_records.update_collection_record(
+                    ATTENTION_COUNTS_COLLECTION, source_id, row,
+                    base_dir=base_dir, actor=ATTENTION_ACTOR, preserve_read_only=True)
+        except Exception as exc:  # noqa: BLE001
+            log(f"Attention: {source_id} count could not be stored: {exc}", "ERROR")
+
+    if counted or failed:
+        log(f"Attention: counted {counted} queue(s)"
+            + (f", {failed} provider(s) failed" if failed else "")
+            + (f", {muted} muted" if muted else ""))
+    return {"sources": len(sources), "counted": counted, "failed": failed, "muted": muted}
 
 
 def _connector_package_roots() -> list[str]:
@@ -1657,6 +1901,20 @@ def main():
     )
     print(f"Notify: {'enabled' if object_notify.notify_pass_enabled(base_dir=base_dir) else 'disabled (notify_enabled flag off)'} (every poll)")
     print(f"Change dispatch: {'enabled' if object_change_dispatch.change_dispatch_enabled(base_dir=base_dir) else 'disabled (DBBASIC_ENABLE_CHANGE_DISPATCH unset)'}")
+    _clp = object_record_changes.retention_policy()
+    if _clp["days"] or _clp["max_entries"]:
+        _bounds = " and ".join(
+            part for part in (
+                f"{_clp['days']}d" if _clp["days"] else "",
+                f"{_clp['max_entries']} entries" if _clp["max_entries"] else "",
+            ) if part)
+        _fate = "archived" if _clp["archive"] else "DELETED"
+        _keep = ("all archives kept" if not _clp["keep_archives"]
+                 else f"newest {_clp['keep_archives']} archives kept")
+        print(f"Change logs: keep {_bounds}; older entries {_fate} ({_keep})")
+    else:
+        print("Change logs: unbounded (set DBBASIC_CHANGE_LOG_RETENTION_DAYS "
+              "or DBBASIC_CHANGE_LOG_MAX_ENTRIES)")
     # Books readiness is advisory, never a gate -- the composers are
     # deliberately soft dependencies. But a composer that skips because its
     # accounts are unmapped otherwise says so only in a return value nobody
@@ -1689,6 +1947,20 @@ def main():
         _connectors_state = f"{len(_connector_decls)} connector(s): " + ", ".join(
             f"{d['package_id']}/{d['collection']}" for d in _connector_decls)
     print(f"Connectors: {_connectors_state}")
+    try:
+        _attention_sources = object_records.read_collection_records(
+            ATTENTION_SOURCES_COLLECTION, base_dir=base_dir)
+    except Exception:
+        _attention_sources = None
+    if _attention_sources is None:
+        _attention_state = "no attention_sources collection (app-nav not installed)"
+    elif not _attention_sources:
+        _attention_state = "no queues declared"
+    else:
+        _attention_state = (
+            f"{len(_attention_sources)} queue(s) "
+            f"(interval {_env_int(ATTENTION_INTERVAL_ENV, _DEFAULT_ATTENTION_INTERVAL)}s)")
+    print(f"Attention: {_attention_state}")
     if object_analytics.analytics_enabled():
         print(f"Analytics: capture ON (retention {object_analytics.retention_days()}d)")
     else:
@@ -1772,6 +2044,16 @@ def main():
             process_analytics_retention(base_dir=base_dir)
         except Exception as e:
             log(f"Analytics retention error: {e}", 'ERROR')
+
+        try:
+            process_change_log_retention(base_dir=base_dir)
+        except Exception as e:
+            log(f"Change log retention error: {e}", 'ERROR')
+
+        try:
+            process_attention(base_dir=base_dir)
+        except Exception as e:
+            log(f"Attention error: {e}", 'ERROR')
 
         now = time.time()
         if now - last_event_cleanup >= EVENT_CLEANUP_INTERVAL_SECONDS:

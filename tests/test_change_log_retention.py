@@ -244,3 +244,44 @@ def test_compression_is_worth_doing(tmp_path):
     object_record_changes.prune_record_changes("notes", keep_last=1, base_dir=tmp_path)
     segment = object_record_changes.list_archives("notes", base_dir=tmp_path)[0]
     assert segment.stat().st_size * 5 < plain
+
+
+# --- the scheduled pass -----------------------------------------------------------
+
+def test_the_daemon_pass_is_off_until_somebody_configures_it(tmp_path, monkeypatch):
+    """Deciding how much audit trail to keep is not a decision a daemon
+    makes on somebody's behalf."""
+    import object_daemon
+
+    monkeypatch.delenv("DBBASIC_CHANGE_LOG_RETENTION_DAYS", raising=False)
+    monkeypatch.delenv("DBBASIC_CHANGE_LOG_MAX_ENTRIES", raising=False)
+    write_entries(tmp_path, "notes", [f"2026-07-26T00:00:{i:02d}Z" for i in range(40)])
+
+    assert object_daemon.process_change_log_retention(base_dir=tmp_path) is None
+    assert len(entries(tmp_path, "notes")) == 40
+
+
+def test_the_daemon_pass_rotates_and_archives_when_asked(tmp_path, monkeypatch):
+    import object_daemon
+
+    monkeypatch.setenv("DBBASIC_CHANGE_LOG_MAX_ENTRIES", "10")
+    write_entries(tmp_path, "notes", [f"2026-07-26T00:00:{i:02d}Z" for i in range(40)])
+
+    result = object_daemon.process_change_log_retention(base_dir=tmp_path)
+    assert result["removed"] == 30
+    assert len(entries(tmp_path, "notes")) == 10
+    assert object_record_changes.list_archives("notes", base_dir=tmp_path)
+
+
+def test_the_pass_honours_its_interval(tmp_path, monkeypatch):
+    """Rewriting every collection's log took three minutes on the box that
+    motivated this; it is not something to do on a tick."""
+    import object_daemon
+
+    monkeypatch.setenv("DBBASIC_CHANGE_LOG_MAX_ENTRIES", "10")
+    write_entries(tmp_path, "notes", [f"2026-07-26T00:00:{i:02d}Z" for i in range(40)])
+
+    assert object_daemon.process_change_log_retention(base_dir=tmp_path) is not None
+    write_entries(tmp_path, "notes", [f"2026-07-26T00:00:{i:02d}Z" for i in range(40)])
+    assert object_daemon.process_change_log_retention(base_dir=tmp_path) is None
+    assert len(entries(tmp_path, "notes")) == 40      # untouched, not due
