@@ -162,21 +162,28 @@ def hook(objects_root, record, action="create"):
                {"action": action, "collection": "shipment_lines", "record": record})
 
 
-def fulfil_shipment(objects_root, shipment_id):
-    """The dispatcher's own payload shape: EVENT verb, record_id, raw action."""
-    return run(objects_root, "system_order_fulfillment", "EVENT",
-               {"event": "shipments.record.updated", "collection": "shipments",
-                "record_id": shipment_id, "action": "update"})
+def fulfil_shipment(objects_root, shipment_id, *, today=None):
+    """The dispatcher's own payload shape: EVENT verb, record_id, raw action.
+
+    `today` is the same optional stamp every other pass in this house takes
+    -- the handler dates the handover with it, so a test can put parcels on
+    a named day instead of on whatever day it is being run.
+    """
+    payload = {"event": "shipments.record.updated", "collection": "shipments",
+               "record_id": shipment_id, "action": "update"}
+    if today:
+        payload["today"] = today
+    return run(objects_root, "system_order_fulfillment", "EVENT", payload)
 
 
-def ship(data_dir, objects_root, shipment_id):
+def ship(data_dir, objects_root, shipment_id, *, today=None):
     """Take a shipment out of the door the way a packer would, then let the
     handler react to it."""
     for status in ("packed", "shipped"):
         object_records.update_collection_record(
             "shipments", shipment_id, {"status": status},
             base_dir=data_dir, actor="test")
-    return fulfil_shipment(objects_root, shipment_id)
+    return fulfil_shipment(objects_root, shipment_id, today=today)
 
 
 def stocked_shop(tmp_path, monkeypatch, *, quantity="3", auto=None,
@@ -519,6 +526,148 @@ def test_the_pick_list_asks_a_stranger_to_sign_in(tmp_path, monkeypatch):
     body = pick_list(objects_root, user_id="")["body"]
     assert "Sign in" in body
     assert "Enamel Mug" not in body
+
+
+# --- the manifest: what the driver signs for ------------------------------------
+
+def manifest(objects_root, user_id="shop", **params):
+    payload = {"_identity": {"user_id": user_id}} if user_id else {}
+    payload.update(params)
+    return run(objects_root, "site_manifest", "GET", payload)
+
+
+def hand_over(data_dir, objects_root, *, carrier, tracking, on, quantity="1"):
+    """One parcel, out of the door on a named day with a named carrier."""
+    created = create_shipment(objects_root, order_id="ord-1", carrier=carrier,
+                              lines=[{"order_line_id": "line-1",
+                                      "quantity": quantity}])
+    object_records.update_collection_record(
+        "shipments", created["shipment_id"], {"tracking_number": tracking},
+        base_dir=data_dir, actor="test")
+    ship(data_dir, objects_root, created["shipment_id"], today=on)
+    return created["shipment_id"]
+
+
+def test_the_handover_date_is_stamped_when_the_shipment_reaches_shipped(
+        tmp_path, monkeypatch):
+    """Nothing wrote shipped_on before the carrier slice needed it, so every
+    shipment the shop's own automation raised had a blank one -- and a
+    manifest keyed on it would have printed an empty page for a real
+    morning's work."""
+    data_dir, objects_root = stocked_shop(tmp_path, monkeypatch)
+    created = create_shipment(objects_root, order_id="ord-1")
+    assert object_records.get_collection_record(
+        "shipments", created["shipment_id"], base_dir=data_dir)["shipped_on"] == ""
+
+    ship(data_dir, objects_root, created["shipment_id"], today="2026-07-24")
+    assert object_records.get_collection_record(
+        "shipments", created["shipment_id"],
+        base_dir=data_dir)["shipped_on"] == "2026-07-24"
+
+
+def test_a_date_somebody_typed_is_never_overwritten(tmp_path, monkeypatch):
+    """An operator backdating a parcel knows something the handler does
+    not."""
+    data_dir, objects_root = stocked_shop(tmp_path, monkeypatch)
+    created = create_shipment(objects_root, order_id="ord-1")
+    object_records.update_collection_record(
+        "shipments", created["shipment_id"], {"shipped_on": "2026-07-01"},
+        base_dir=data_dir, actor="operator")
+
+    ship(data_dir, objects_root, created["shipment_id"], today="2026-07-24")
+    assert object_records.get_collection_record(
+        "shipments", created["shipment_id"],
+        base_dir=data_dir)["shipped_on"] == "2026-07-01"
+
+
+def test_the_manifest_lists_one_day_for_one_carrier_and_nothing_else(
+        tmp_path, monkeypatch):
+    """A driver signs for the pile in front of them: yesterday's parcels and
+    the other carrier's parcels are not that pile."""
+    data_dir, objects_root = stocked_shop(tmp_path, monkeypatch)
+    hand_over(data_dir, objects_root, carrier="Van Lines", tracking="TRK-A",
+              on="2026-07-24")
+    hand_over(data_dir, objects_root, carrier="Post Office", tracking="TRK-B",
+              on="2026-07-24")
+    hand_over(data_dir, objects_root, carrier="Van Lines", tracking="TRK-C",
+              on="2026-07-23")
+
+    body = manifest(objects_root, date="2026-07-24", carrier="Van Lines")["body"]
+    assert "TRK-A" in body
+    assert "TRK-B" not in body and "TRK-C" not in body
+    assert "1 parcel" in body
+    assert "SO-0001" in body and "Ada Lovelace" in body and "ground" in body
+
+
+def test_a_parcel_still_on_the_bench_is_on_no_manifest(tmp_path, monkeypatch):
+    """A manifest joins at `shipped`, which is when the handover date is
+    stamped: a packed box nobody has handed over has been handed to
+    nobody."""
+    data_dir, objects_root = stocked_shop(tmp_path, monkeypatch)
+    created = create_shipment(objects_root, order_id="ord-1", carrier="Van Lines")
+    object_records.update_collection_record(
+        "shipments", created["shipment_id"], {"tracking_number": "TRK-BENCH"},
+        base_dir=data_dir, actor="test")
+
+    body = manifest(objects_root, date="2026-07-24")["body"]
+    assert "TRK-BENCH" not in body
+    assert "Nothing was handed over" in body
+
+
+def test_each_carrier_gets_its_own_pile_and_its_own_signature(
+        tmp_path, monkeypatch):
+    """Two carriers collecting from one dock take two piles, and one list
+    mixing them is a list neither driver can sign."""
+    data_dir, objects_root = stocked_shop(tmp_path, monkeypatch)
+    hand_over(data_dir, objects_root, carrier="Van Lines", tracking="TRK-A",
+              on="2026-07-24")
+    hand_over(data_dir, objects_root, carrier="Post Office", tracking="TRK-B",
+              on="2026-07-24")
+
+    body = manifest(objects_root, date="2026-07-24")["body"]
+    assert "Van Lines" in body and "Post Office" in body
+    assert body.count("Signature") == 2
+    assert "2 carriers" in body and "2 parcels" in body
+
+
+def test_the_manifest_prints_and_never_says_what_anything_cost(
+        tmp_path, monkeypatch):
+    """This document goes to a third party. A carrier who can read the value
+    of every parcel in the van has been handed a theft list."""
+    data_dir, objects_root = stocked_shop(tmp_path, monkeypatch)
+    hand_over(data_dir, objects_root, carrier="Van Lines", tracking="TRK-A",
+              on="2026-07-24")
+
+    body = manifest(objects_root, date="2026-07-24")["body"]
+    assert "$" not in body
+    assert "1200" not in body and "12.00" not in body
+    assert "_cents" not in body
+    assert "@media print" in body
+    # A fold, not a form: nothing on the page changes anything.
+    assert "<form" not in body and "<button" not in body
+    # No weight column, because no row carries a weight -- shipments
+    # declares no such field, and a column of blanks on a signed document is
+    # worse than no column.
+    assert "Weight" not in body
+
+
+def test_the_manifest_asks_a_stranger_to_sign_in(tmp_path, monkeypatch):
+    data_dir, objects_root = stocked_shop(tmp_path, monkeypatch)
+    hand_over(data_dir, objects_root, carrier="Van Lines", tracking="TRK-A",
+              on="2026-07-24")
+
+    body = manifest(objects_root, user_id="", date="2026-07-24")["body"]
+    assert "Sign in" in body
+    assert "TRK-A" not in body
+
+
+def test_a_date_nobody_can_read_prints_today_and_says_so(tmp_path, monkeypatch):
+    """Somebody is standing at a dock holding parcels; the page's job is to
+    print."""
+    _, objects_root = stocked_shop(tmp_path, monkeypatch)
+    body = manifest(objects_root, date="last tuesday")["body"]
+    assert "not a date this page can read" in body
+    assert "Traceback" not in body
 
 
 # --- the shop's zero-touch path, through the new noun ---------------------------

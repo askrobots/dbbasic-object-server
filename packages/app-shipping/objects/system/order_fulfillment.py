@@ -32,6 +32,15 @@ own marker and moves nothing. Per line and not per shipment because a
 shipment can gain a line while still open, and a shipment-level marker
 would silently skip the goods added after the first pass.
 
+**The handover date is stamped here too**, and only when it is blank. A
+shipment reaching `shipped` IS the handover, so shipped_on is a fact about
+that moment (#1) -- and until the carrier slice needed it, nothing in the
+box ever wrote it, so every shipment the shop's own automation raised
+carried a blank date and site_manifest, which keys on it, would have printed
+an empty page for a morning's real work. An operator-typed date is never
+overwritten: somebody backdating a parcel knows something this handler does
+not.
+
 Missing settings do not cost anybody a shipment. If shop.stock_location is
 unconfigured the parcel still ships, the order status still derives, and
 the gap is reported in `warning` -- the same posture the payment-side
@@ -297,6 +306,28 @@ def EVENT(request):
               "moved": 0}
 
     if _text(shipment.get("status")) in SHIPPED_ONWARD:
+        if not _text(shipment.get("shipped_on")):
+            # The handover date, stamped at the moment we observe the handover
+            # (docs/logic-decisions.md #1 -- a fact about a moment). Nothing
+            # stamped it before, which meant the field was blank on every
+            # shipment the shop's own automation raised, and a manifest keyed
+            # on it printed an empty page. Only when blank: an operator who
+            # typed a date knows something this handler does not, and a
+            # backdated shipment must keep the day it actually went. The write
+            # re-fires this handler once through the change dispatcher; the
+            # second pass finds the date set and the provenance markers
+            # already there, so it writes nothing and stops.
+            today = _text(request.get("today")) or date.today().isoformat()
+            try:
+                object_records.update_collection_record(
+                    "shipments", shipment["id"], {"shipped_on": today},
+                    base_dir=base, actor=ACTOR)
+                shipment["shipped_on"] = today
+                result["shipped_on"] = today
+            except Exception as exc:
+                # The parcel still went; a date we could not write is a gap
+                # to see, not a shipment to refuse.
+                result["shipped_on_error"] = str(exc)[:200]
         try:
             moves = object_records.read_collection_records("stock_moves",
                                                            base_dir=base)

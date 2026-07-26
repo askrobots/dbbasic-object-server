@@ -1,12 +1,12 @@
 {
   "id": "app-shipping",
   "name": "Shipping",
-  "version": "0.1.0",
-  "description": "One missing noun, and most of a warehouse falls out of it. An order says what is OWED; a shipment says what physically moved -- when, in which box, with which tracking number -- and every system that tries to hold both facts in one status field ends up lying about at least one of them. The immediate payoff is partial fulfillment, which stops being a flag somebody has to remember and becomes a COUNT: two of the three mugs went today, the third goes on Friday, and orders.status derives itself (partial -> shipped -> delivered) from what is on shipment lines rather than from anybody's memory. The gate that makes the derivation trustworthy is one hook -- cumulative shipped quantity per order line may never exceed what was ordered, refused with all three numbers so the packer knows which shipment is the wrong one -- and the goods leave the shelf when the box does: one sale stock move per line at the moment a shipment reaches shipped, idempotent by a per-line provenance marker, because a replayed event must move nothing twice. The other two objects here are READS, not tables, and deliberately so: a packing slip is one shipment printed (with no prices, ever -- a slip is not an invoice, and pricelessness by construction is what makes every parcel gift-safe without a flag anybody can forget to tick), and a pick list is ordered-minus-shipped folded live and grouped by product so a picker walks each shelf once, the same doctrine that keeps stock levels out of a table. app-shop keeps its zero-touch path: shop.auto_fulfill defaults true, so a payment still ships the whole order and still moves the stock -- it now travels through the shipment noun instead of writing moves directly, which is what lets a pick/pack shop set auto_fulfill=false and take over the packing bench without either shop reimplementing the other's behavior. What is deliberately NOT here, named so it reads as a decision rather than an omission: carrier labels and tracking polls (a connector boundary, manual-first until credentials exist), inbound returns and their disposition (the direction field carries the shape; the authorization ladder and the restock-or-waste choice are their own slice), PO receiving, and disputes.",
+  "version": "0.2.0",
+  "description": "One missing noun, and most of a warehouse falls out of it. An order says what is OWED; a shipment says what physically moved -- when, in which box, with which tracking number -- and every system that tries to hold both facts in one status field ends up lying about at least one of them. The immediate payoff is partial fulfillment, which stops being a flag somebody has to remember and becomes a COUNT: two of the three mugs went today, the third goes on Friday, and orders.status derives itself (partial -> shipped -> delivered) from what is on shipment lines rather than from anybody's memory. The gate that makes the derivation trustworthy is one hook -- cumulative shipped quantity per order line may never exceed what was ordered, refused with all three numbers so the packer knows which shipment is the wrong one -- and the goods leave the shelf when the box does: one sale stock move per line at the moment a shipment reaches shipped, idempotent by a per-line provenance marker, because a replayed event must move nothing twice. The other two objects here are READS, not tables, and deliberately so: a packing slip is one shipment printed (with no prices, ever -- a slip is not an invoice, and pricelessness by construction is what makes every parcel gift-safe without a flag anybody can forget to tick), and a pick list is ordered-minus-shipped folded live and grouped by product so a picker walks each shelf once, the same doctrine that keeps stock levels out of a table. app-shop keeps its zero-touch path: shop.auto_fulfill defaults true, so a payment still ships the whole order and still moves the stock -- it now travels through the shipment noun instead of writing moves directly, which is what lets a pick/pack shop set auto_fulfill=false and take over the packing bench without either shop reimplementing the other's behavior. What is deliberately NOT here, named so it reads as a decision rather than an omission: carrier labels and tracking polls (a connector boundary, manual-first until credentials exist), inbound returns and their disposition (the direction field carries the shape; the authorization ladder and the restock-or-waste choice are their own slice), PO receiving, and disputes. 0.2.0 is the carrier-facing layer, and the sentence that governs all of it is that a shop with NO carrier configured must lose nothing: you type the tracking number on the shipment, the manifest prints, the poll changes nothing and counts nothing against anybody, and the label button explains what to configure instead of 404ing or pretending to have bought postage. That is not a fallback path, it is the path -- most small shops will never hold a carrier API key, and a warehouse layer that only works with one is a warehouse layer for somebody else. The manifest is the third READ in this package and the strictest: /shipments/manifest?date=&carrier= is a fold over the parcels handed over on one day, grouped per carrier because that is the unit of handover, with a signature line under each pile, no prices at all (this document goes to a third party, and a carrier who can read the value of every parcel in the van has been handed a theft list), and NO way to change anything from the page -- a manifest you can edit after the van has left is not a manifest, it is a story about a van. It keys on shipped_on, which nothing in the box had ever written: system_order_fulfillment now stamps that date the moment it observes a shipment reach shipped, only when blank, so an operator who backdated a parcel keeps their date and the shop's own automation stops producing shipments that were never, on paper, handed to anybody. Tracking is one scheduled pass, system_tracking_poll, and its whole design is about the two kinds of silence: a carrier that cannot be asked (nothing configured, module missing, provider named that nobody installed) leaves every row untouched and counts NO attempt, so fixing the configuration drains the backlog with nothing to un-fail first; a parcel that cannot be READ counts one, and at three it stops being polled and starts being visible -- the same distinction system_scan_processor draws with `recoverable`, borrowed here under the connector contract's own word (`skip`) rather than spelled a third way. Hourly is the cadence: a carrier scan lands a handful of times a day so hourly is well inside the resolution of the facts, while a shop with parcels out is a shop whose customers are asking TODAY, and a nightly pass would make the answer to 'did it arrive?' up to a day stale exactly when somebody is standing there asking it. The carrier itself is a CONNECTOR, using the mechanism that already exists rather than a second one: connectors/manual.py is declared in this manifest for the shipments collection, resolved through object_packages.iter_connectors (escape-checked, package-relative, private overlay wins) and loaded by object_connectors.load_connector, so installing a real adapter is installing a package that declares the same collection. Its `reconcile` declines every tick on purpose and says why -- a parcel is not desired state, we cannot make a van arrive by wishing, and reading a carrier is time-driven work that belongs to a schedule. action_buy_label is one verb for both directions, because a return label is the same purchase with the addresses reversed and a second verb would be a second place for the credentials and the refusals to drift; unconfigured, it is a 409 naming carrier.provider (Stripe's precedent: the shop can see the button, so the button owes them a sentence they can act on), and with `manual` it records the tracking number the operator brought back from the counter plus the label PDF if they were handed one -- stored as evidence through object_user_files with a files row so it actually opens, a NEW file id per label rather than an overwrite, because the last label may be on a box somewhere. The attention count is parcels stuck in_transit past carrier.stuck_days (default 10), severity warning because nobody chose to put them there and the clock is running in a customer's inbox; it counts in_transit only, since `shipped` for a manual shop is every parcel forever and a band that is always lit is a band nobody reads. Two new doors: the manifest, and a plain /shipments index -- the count needed a page showing the rows it counted, and until now a shipment could only be reached by a URL you already knew.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
-  "dependencies": ["app-orders"],
+  "dependencies": ["app-orders", "app-views"],
   "objects": [
     {
       "id": "hook_shipment_lines",
@@ -27,6 +27,22 @@
     {
       "id": "site_pick_list",
       "path": "objects/site/pick_list.py"
+    },
+    {
+      "id": "site_manifest",
+      "path": "objects/site/manifest.py"
+    },
+    {
+      "id": "system_tracking_poll",
+      "path": "objects/system/tracking_poll.py"
+    },
+    {
+      "id": "action_buy_label",
+      "path": "objects/action/buy_label.py"
+    },
+    {
+      "id": "system_shipment_attention",
+      "path": "objects/system/shipment_attention.py"
     }
   ],
   "schemas": [
@@ -56,10 +72,38 @@
     {
       "collection": "site_routes",
       "path": "seed/site_routes.tsv"
+    },
+    {
+      "collection": "views",
+      "path": "seed/views.tsv"
     }
   ],
   "migrations": [],
+  "connectors": [
+    {
+      "collection": "shipments",
+      "module": "connectors/manual.py",
+      "entry": "reconcile"
+    }
+  ],
+  "schedules": [
+    {
+      "id": "tracking_poll_hourly",
+      "object_id": "system_tracking_poll",
+      "schedule": "25 * * * *",
+      "description": "Ask the configured carrier where each parcel in flight is, and move the ones it reports delivered. Hourly, not nightly: a carrier scan lands a handful of times a day, so hourly is well inside the resolution of the underlying facts, while a shop with parcels out is a shop whose customers are asking about them today -- a nightly pass makes the answer to 'did it arrive?' up to a day stale exactly when somebody is standing there asking. Costs nothing on a box with no carrier configured, which is most of them: the pass declines, writes nothing and counts nothing. At 25 past so it does not collide with the top-of-hour crowd."
+    }
+  ],
   "nav": [
+    {
+      "id": "shipments",
+      "label": "Shipments",
+      "path": "/shipments",
+      "blurb": "Every parcel that has gone out, with its carrier and tracking number",
+      "surface": "operator",
+      "group": "Warehouse",
+      "order": 510
+    },
     {
       "id": "pick_list",
       "label": "Pick List",
@@ -68,6 +112,26 @@
       "surface": "member",
       "group": "Warehouse",
       "order": 520
+    },
+    {
+      "id": "manifest",
+      "label": "Manifest",
+      "path": "/shipments/manifest",
+      "blurb": "One day's handover, per carrier, printable and signed for",
+      "surface": "operator",
+      "group": "Warehouse",
+      "order": 540
+    }
+  ],
+  "attention": [
+    {
+      "id": "shipments_stuck_in_transit",
+      "object_id": "system_shipment_attention",
+      "label": "Parcels not moving",
+      "path": "/shipments",
+      "group": "Warehouse",
+      "severity": "warning",
+      "nav_id": "shipments"
     }
   ]
 }

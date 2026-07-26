@@ -1,8 +1,8 @@
 {
   "name": "shipments",
   "title": "Shipments",
-  "version": 2,
-  "description": "What physically moved. An order says what is OWED; a shipment says what left the building -- when, in which box, with which tracking number -- and the two are different facts that small systems collapse into one status field and then cannot uncollapse. Partial fulfillment is the proof: it is not a flag on the order, it is a COUNT of shipments, and the order's status is DERIVED from shipment lines by system_order_fulfillment (docs/logic-decisions.md #1: the quantities are the facts, the order status is the read). Everything else the warehouse asks for falls out of this noun as a view -- a packing slip is one shipment printed, a manifest is today's shipments folded by carrier, a pick list is what is not on a shipment yet. ship_to_name/ship_to_address are STAMPED from the order at creation and never re-read: an address is what it was when the box left, and a customer who moves house next month must not silently rewrite where last month's parcel went. direction carries the return case (plan/fulfillment-logistics-spec.md): an RMA is this same document with the sign reversed, which is why there is no separate returns collection -- v2 lands the inbound half of the status ladder (authorized -> in_transit -> received -> dispositioned, plus expired), driven by app-returns' authorize and disposition actions.",
+  "version": 3,
+  "description": "What physically moved. An order says what is OWED; a shipment says what left the building -- when, in which box, with which tracking number -- and the two are different facts that small systems collapse into one status field and then cannot uncollapse. Partial fulfillment is the proof: it is not a flag on the order, it is a COUNT of shipments, and the order's status is DERIVED from shipment lines by system_order_fulfillment (docs/logic-decisions.md #1: the quantities are the facts, the order status is the read). Everything else the warehouse asks for falls out of this noun as a view -- a packing slip is one shipment printed, a manifest is today's shipments folded by carrier, a pick list is what is not on a shipment yet. ship_to_name/ship_to_address are STAMPED from the order at creation and never re-read: an address is what it was when the box left, and a customer who moves house next month must not silently rewrite where last month's parcel went. direction carries the return case (plan/fulfillment-logistics-spec.md): an RMA is this same document with the sign reversed, which is why there is no separate returns collection -- v2 lands the inbound half of the status ladder (authorized -> in_transit -> received -> dispositioned, plus expired), driven by app-returns' authorize and disposition actions. v3 adds the three honest fields the carrier-facing layer needs -- tracking_checked_at, tracking_attempts, tracking_error -- and adds nothing else, because carrier, service, tracking_number, tracking_status and label_file_id were already here waiting for something to fill them in. They are the same three fields scans carries for the same reason: a machine that talks to somebody else's system will sometimes get no answer, and the difference between 'nobody has asked yet', 'we asked and the carrier said nothing new' and 'we asked three times and this parcel cannot be read' is the difference between a queue that drains and a queue nobody trusts. What is deliberately still absent is a weight column: the manifest prints one when a deployment adds `weight` as an extra field, and inventing a schema field the packing bench has no scale for would only produce a column of blanks on a document a driver signs.",
   "fields": [
     {
       "name": "id"
@@ -96,7 +96,27 @@
       "name": "label_file_id",
       "type": "text",
       "label": "Label File",
-      "help": "The label PDF, stored as a file the same way a scanned receipt is: evidence posture (docs/logic-decisions.md #8). Blank on every manual shipment, which is most of them."
+      "help": "The label PDF, stored as a file the same way a scanned receipt is: evidence posture (docs/logic-decisions.md #8). Blank on every manual shipment, which is most of them. Written by action_buy_label -- with no carrier configured that action refuses and names the setting rather than inventing a label, and with carrier.provider=manual it stores the PDF the operator bought at the post office counter, because a label somebody paid for is evidence whoever printed it."
+    },
+    {
+      "name": "tracking_checked_at",
+      "type": "datetime",
+      "label": "Tracking Checked",
+      "help": "When system_tracking_poll last got an ANSWER out of the carrier -- not when it last tried. A parcel whose tracking has not been read for three days is a different fact from a parcel the carrier says has not moved for three days, and a field that conflated them would let a broken poll look like a stalled van."
+    },
+    {
+      "name": "tracking_attempts",
+      "type": "integer",
+      "default": "0",
+      "label": "Tracking Attempts",
+      "help": "Failed reads against THIS parcel, counted the way scans.attempts is: a shipment that keeps failing stops being polled and starts being visible, rather than churning a metered carrier API forever. Reset to 0 by a successful read. Deliberately NOT incremented when the host is the problem -- an unconfigured or unloadable provider declines the tick (the connector contract's `skip`), leaving the row untouched, because counting the shop's missing credentials against a parcel would quietly retire every shipment on the box while somebody was still fetching the API key."
+    },
+    {
+      "name": "tracking_error",
+      "type": "text",
+      "label": "Tracking Error",
+      "validation": {"max_length": 500},
+      "help": "What the carrier said when it could not answer, kept verbatim and short. The honest half of the attempt counter: a number saying a parcel failed three times is a mystery, and 'unknown tracking number' is a job."
     },
     {
       "name": "ship_to_name",

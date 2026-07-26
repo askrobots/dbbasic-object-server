@@ -1,1 +1,1 @@
-id	order_id	direction	status	carrier	service	tracking_number	tracking_status	label_file_id	ship_to_name	ship_to_address	shipped_on	delivered_on	notes	owner_id	entity_id	created_at
+id	order_id	direction	status	carrier	service	tracking_number	tracking_status	label_file_id	tracking_checked_at	tracking_attempts	tracking_error	ship_to_name	ship_to_address	shipped_on	delivered_on	notes	owner_id	entity_id	created_at

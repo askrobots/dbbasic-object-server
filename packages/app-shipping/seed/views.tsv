@@ -1,0 +1,2 @@
+id	title	route	layout	blocks	owner_id	is_public	pinned	created_at
+view_shipments_index	Shipments	/shipments	single	"[{""kind"": ""list"", ""collection"": ""shipments"", ""where"": {""direction"": ""outbound""}, ""search"": true, ""sort"": true, ""owner_scoped"": true, ""title_field"": ""tracking_number"", ""link"": false}]"		true	false	2026-01-01T00:00:00

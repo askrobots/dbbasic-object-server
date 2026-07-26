@@ -36,6 +36,27 @@
       "actions": ["execute"],
       "object_id": "site_pick_list",
       "reason": "the picker has to be signed in for the page to know whose warehouse to fold; the page itself shows a sign-in prompt rather than an error to anyone who is not"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "site_manifest",
+      "reason": "same gate as the pick list and for the same reason: the page folds the signed-in operator's own dock, and it shows a sign-in prompt rather than an error to anybody else. Deliberately not public even though a driver reads it -- the paper in their hand is the copy they get, and a public URL listing every parcel, its destination and its tracking number would be a delivery-route map for anyone who guessed the date"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "action_buy_label",
+      "reason": "buying postage is bench work, not owner-only work, and it is bounded on every side: it writes nothing but a tracking number and a label file onto one existing shipment, it refuses a parcel whose journey is already over, and with no carrier configured it can only record what an operator typed. The money a real carrier adapter can spend is bounded by that adapter's own credentials, which a signed-in packer does not hold"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "system_tracking_poll",
+      "reason": "the scheduler runs this hourly, and an operator watching a parcel should be able to poke it in between without an admin token: it only writes back what the carrier said, and the one derived move it makes (delivered) is the move the carrier just reported"
     }
   ]
 }
