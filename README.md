@@ -172,6 +172,85 @@ push, and global search, because those read the schema, not the app. And
 gates, and reactions live, compiled from the same declarations the server
 enforces.
 
+## Records That Can Be Checked A Year Later
+
+Most business software can tell you what a record says now. Very little of
+it can tell you whether that is what the record said last March. The usual
+answer is an audit log -- which lives in the same database, under the same
+credentials, as the thing it audits.
+
+Two small apps close that, and the interesting part is how little machinery
+it took.
+
+**`app-notary` -- lodge a digest, check it later.** An append-only list of
+`(digest, when)` and nothing else. Submit a hash; anybody can confirm later,
+with no account, that the data it came from already existed by then.
+[`/notary`](https://object.dbbasic.com/notary) hashes a dropped file in your
+browser with SubtleCrypto and uploads nothing, which is the claim made
+visible rather than asserted. Three refusals are the design:
+
+- **it never stores content** -- no field for it, no code path that accepts
+  one, which is why notarizing something confidential is safe and why the
+  collection is not worth stealing
+- **nothing is ever amended or removed** -- append storage, no update, no
+  delete, and a test that greps the package so a later tidy-up cannot add one
+- **it attests existence and nothing else** -- not authorship, not ownership,
+  not meaning. Every surface renders that caveat beside the answer, because
+  the failure mode of a notary is a reader taking "notarized" for "verified"
+
+Idempotency runs backwards from the usual rule: resubmitting a digest returns
+the **first** record, because the claim is "this existed *by* then" and later
+is the only direction anyone would want to move a timestamp.
+
+**`app-integrity` -- anchor the ledgers.** A daily pass digests each money
+ledger (`wallet_entries`, `fin_journal_lines`, `payments`, `refunds`,
+`stock_moves`, and the notary's own log) and lodges the digest with whatever
+notaries are configured. `/ledger-integrity` recomputes them and reports (operator-only:
+the page states the row count of every money ledger, which is commercially
+sensitive in a way the digests themselves are not -- the public half of the
+story is the notary lookup).
+
+No hash chain was needed, and that is the design note worth stealing: **for
+an append-only log, a prefix digest is a chain head.** A chain is only an
+incremental way of computing prefix digests as rows arrive; a digest wanted
+once a day, over a file being read anyway, folds directly in one pass -- no
+per-row column, no work under the append lock, no fork risk. The fold is
+identical to what an in-storage chain would produce, so moving it into the
+append path later would not orphan an anchor already published.
+
+Two catches, both about not crying wolf, both with tests:
+
+- hash **logical rows, never file bytes** -- compaction rewrites append logs
+  as routine maintenance, and a byte-level digest would report tampering on a
+  schedule
+- store the **field list in the anchor**, not read it from today's schema --
+  otherwise adding a column turns every historical anchor red at once and
+  makes an ordinary migration indistinguishable from an attack
+
+A single anchor says "something in the first N rows changed". Anchors
+accumulate into a ladder, and `locate()` brackets a break between the newest
+that verifies and the oldest that does not -- at a daily interval, a day-sized
+window on which rows were touched.
+
+### What this does not claim
+
+An anchor stored in the same directory as the ledger it describes is defeated
+by anybody who could have edited the ledger. So `/ledger-integrity` **refuses
+to show a clean verdict for a digest nobody else holds**: with no
+`notary.endpoints` configured it says "anchored, but only here", names what
+that rules out and what it does not, and says which setting changes it. The
+distinction it draws is not verified-versus-broken but **checkable-by-a-
+stranger versus checkable-only-by-us** -- the first is evidence, the second is
+a claim. Pointing the setting at your own server is detected and refused,
+because that would turn an honest missing claim into a specific false one.
+
+**On this repository's own server, no independent notary is configured** --
+it is a staging and development box that also serves dbbasic.com, and
+standing up a second host for it is not yet worth the money. So the page says
+"anchored, but only here", which is true. Configuring a notary somebody else
+runs is one line and is the whole difference between *detectable by us* and
+*provable to you*.
+
 ## What Objects Can Do
 
 - handle HTTP requests
