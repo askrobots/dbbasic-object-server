@@ -1174,6 +1174,11 @@ async def _handle_site_route(
     # reserved, underscore-prefixed key (like _identity); objects that don't
     # need it ignore it. See view_render._resolve_view_and_record.
     payload["_path"] = path
+    # App cookies, minus the identity session -- see _object_visible_cookies.
+    # Without this a public page has no way to recognise a returning visitor:
+    # the shop minted a new basket on every GET because the `cart` cookie the
+    # browser was faithfully sending never reached the object.
+    payload["_cookies"] = _object_visible_cookies(headers)
 
     permission_action = object_permissions.EXECUTE
     if method == "PUT":
@@ -11286,15 +11291,42 @@ def _current_identity_session(headers: dict[str, str]) -> object_identity.Identi
         return None
 
 
-def _session_cookie_token(headers: dict[str, str]) -> str | None:
-    cookie_header = headers.get("cookie", "")
-    if not cookie_header:
-        return None
-    for part in cookie_header.split(";"):
+def _parse_cookie_header(cookie_header: str) -> dict[str, str]:
+    """Split a `cookie:` request header into name -> value.
+
+    First occurrence wins, matching the single-cookie lookup this replaced:
+    a duplicated name is either a browser sending both a host-scoped and a
+    domain-scoped cookie or somebody trying to shadow one, and taking the
+    first is the stable, non-surprising reading in either case.
+    """
+    cookies: dict[str, str] = {}
+    for part in (cookie_header or "").split(";"):
         name, _, value = part.strip().partition("=")
-        if name == SESSION_COOKIE_NAME and value:
-            return value
-    return None
+        if name and value:
+            cookies.setdefault(name, value)
+    return cookies
+
+
+def _session_cookie_token(headers: dict[str, str]) -> str | None:
+    return _parse_cookie_header(headers.get("cookie", "")).get(SESSION_COOKIE_NAME) or None
+
+
+def _object_visible_cookies(headers: dict[str, str]) -> dict[str, str]:
+    """The cookies a routed object may see: everything EXCEPT the session.
+
+    A page object has a real need for its own cookies -- a basket token, a
+    display preference -- and no way to read them otherwise. It has no need
+    at all for `dbbasic_session`, which is not data but an authentication
+    CAPABILITY: anyone holding that string is the signed-in user. Handing it
+    to every object a package installs would make each public page a place
+    where a stranger's session can be read and posted somewhere else, and
+    the shopper who lost their account would have done nothing but visit a
+    shop. Same reasoning that keeps `cookie` and `authorization` out of
+    _WEBHOOK_HEADER_SAFELIST: app state travels, the credential does not.
+    """
+    cookies = _parse_cookie_header(headers.get("cookie", ""))
+    cookies.pop(SESSION_COOKIE_NAME, None)
+    return cookies
 
 
 def _cookie_request_origin_allowed(headers: dict[str, str]) -> bool:
@@ -11999,7 +12031,7 @@ def _normalize_object_response(payload: Any) -> tuple[int, list[tuple[str, str]]
     if isinstance(payload, dict) and payload.get("content_type"):
         status = payload.get("status_code", payload.get("http_status", payload.get("status", 200)))
         headers = [("content-type", str(payload["content_type"]))]
-        headers.extend(_normalize_headers(payload.get("headers", [])))
+        headers.extend(_object_set_cookie_headers(payload))
         return _normalize_status(status), headers, _normalize_body(payload.get("body", b""))
 
     if isinstance(payload, str):
@@ -12030,6 +12062,32 @@ def _normalize_object_response(payload: Any) -> tuple[int, list[tuple[str, str]]
 
     body = json.dumps(payload).encode("utf-8")
     return 200, [("content-type", "application/json; charset=utf-8")], body
+
+
+def _object_set_cookie_headers(payload: dict[str, Any]) -> list[tuple[str, str]]:
+    """The one response header an object may set: `set_cookie` (a string).
+
+    A SAFELIST OF ONE, and deliberately so. A page object has a legitimate
+    need to remember something about this visitor across requests, and no
+    other way to do it. It has no legitimate need to set `location`,
+    `access-control-allow-origin`, `content-security-policy` or
+    `cache-control` -- those are the SERVER's security posture, and a
+    general headers passthrough would hand every installed package the
+    ability to rewrite it. Widening this is a conscious act, not a default.
+
+    Cookie *attributes* are the object's business (Path, HttpOnly,
+    SameSite, Max-Age); the server only refuses a value that would break
+    out of the header itself.
+    """
+    value = payload.get("set_cookie")
+    if not isinstance(value, str) or not value.strip():
+        return []
+    if "\r" in value or "\n" in value:
+        # Response splitting: a newline lets the object append headers of its
+        # own -- or a whole second response -- to the wire. Dropped rather
+        # than raised: the page still renders, it just does not get a cookie.
+        return []
+    return [("set-cookie", value)]
 
 
 async def _send_response(

@@ -81,7 +81,7 @@ def _record_for(request, base):
         return None
 
 
-def POST(request):
+def EVENT(request):
     base = _base_dir()
     expense = _record_for(request, base)
     if not expense:
@@ -125,3 +125,10 @@ def POST(request):
         entity_id=_text(expense.get("entity_id")),
         actor=ACTOR,
     )
+
+
+# EVENT is the verb the change dispatcher calls handlers with (see
+# object_change_dispatch); the same POST-instead-of-EVENT slip as
+# system_shop_fulfillment, fixed the same day. POST stays as an alias so
+# an operator can poke the handler by hand over HTTP.
+POST = EVENT

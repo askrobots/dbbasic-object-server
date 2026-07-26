@@ -22,9 +22,10 @@ SHOP_OBJECTS = PACKAGES / "app-shop" / "objects"
 RUNTIME = python_object_runtime.PythonObjectRuntime()
 
 TOKEN = "sess-abc123"
+COOKIE = "cart"
 
 
-def setup_env(tmp_path, monkeypatch, *, settings=()):
+def setup_env(tmp_path, monkeypatch, *, settings=(), page=False):
     data_dir = tmp_path / "data"
     for pkg, name in (("app-shop", "carts"), ("app-shop", "cart_items"),
                       ("app-catalog", "products"), ("app-catalog", "locations"),
@@ -36,6 +37,10 @@ def setup_env(tmp_path, monkeypatch, *, settings=()):
     rows = "".join(f"s{i}\t{k}\t{v}\t\n" for i, (k, v) in enumerate(settings))
     stage_collection(data_dir, "app-settings", "app_settings", rows=rows)
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    if page:
+        # site_shop calls its siblings by object id with no roots of its
+        # own, so the page tests need the shop's objects on the search path.
+        monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(SHOP_OBJECTS))
     return data_dir
 
 
@@ -88,6 +93,16 @@ def fulfil(payment):
         object_execution.ObjectExecutionRequest(
             "system_shop_fulfillment", method="POST",
             payload={"collection": "payments", "record": payment}),
+        roots=[SHOP_OBJECTS]).result
+
+
+def page(**payload):
+    """GET the public shop page, the way the site router would call it."""
+    payload.setdefault("_cookies", {COOKIE: TOKEN})
+    return object_execution.execute_object(
+        RUNTIME,
+        object_execution.ObjectExecutionRequest(
+            "site_shop", method="GET", payload=payload),
         roots=[SHOP_OBJECTS]).result
 
 
@@ -474,3 +489,102 @@ def test_an_unconfigured_location_still_lets_the_sale_stand(tmp_path, monkeypatc
     assert "stock_location" in result["warning"]
     assert object_records.get_collection_record(
         "orders", order_id, base_dir=data_dir)["status"] == "confirmed"
+
+
+# --- the page a shopper actually looks at ------------------------------------
+
+def test_a_product_card_links_to_the_product(tmp_path, monkeypatch):
+    """The grid was a dead end: names were bold text, so a shopper could add
+    a thing to a basket but never find out what it was."""
+    data_dir = setup_env(tmp_path, monkeypatch, page=True)
+    product(data_dir, "p1", "Enamel Mug", 1200)
+    body = page()["body"]
+    assert '<a href="/shop/p1">Enamel Mug</a>' in body
+
+
+def test_the_product_page_says_what_it_is_and_offers_to_sell_it(
+        tmp_path, monkeypatch):
+    """Name, price and full description in one place, with an add form that
+    posts to /shop -- the SAME route the cards post to, so there is one way
+    into a basket rather than two that can drift apart."""
+    data_dir = setup_env(tmp_path, monkeypatch, page=True)
+    product(data_dir, "p1", "Enamel Mug", 1200,
+            description="Twelve ounces. Chips beautifully.")
+    body = page(product_id="p1")["body"]
+
+    assert "Enamel Mug" in body
+    assert "P1" in body                                 # the sku
+    assert "12.00" in body
+    assert "Twelve ounces. Chips beautifully." in body
+    assert '<form method="post" action="/shop"' in body
+    assert 'name="do" value="add"' in body
+    assert f'name="session_token" value="{TOKEN}"' in body
+    assert 'name="product_id" value="p1"' in body
+    assert '<a href="/shop">Back to shop</a>' in body
+
+
+def test_a_physical_product_says_whether_it_is_there(tmp_path, monkeypatch):
+    """Low-key, but the question every shopper has. Derived from the stock
+    ledger, never stored."""
+    data_dir = setup_env(tmp_path, monkeypatch, page=True)
+    location(data_dir, "loc-shelf", "Shelf")
+    product(data_dir, "p1", "Mug", 1200)
+    product(data_dir, "p2", "Bowl", 900)
+    stock_in(data_dir, "p1", 4)
+    assert "In stock" in page(product_id="p1")["body"]
+    assert "Out of stock" in page(product_id="p2")["body"]
+
+
+def test_something_that_never_runs_out_says_nothing_about_stock(
+        tmp_path, monkeypatch):
+    """An hour of work has no shelf. Saying "Out of stock" about it would
+    refuse a sale that checkout would happily take."""
+    data_dir = setup_env(tmp_path, monkeypatch, page=True)
+    product(data_dir, "p1", "Setup", 2500, product_type="service")
+    body = page(product_id="p1")["body"]
+    assert "In stock" not in body and "Out of stock" not in body
+
+
+def test_an_unknown_product_is_a_friendly_404_not_a_traceback(
+        tmp_path, monkeypatch):
+    """A mistyped link is a shopper who is still in the shop."""
+    setup_env(tmp_path, monkeypatch, page=True)
+    result = page(product_id="no-such-thing")
+    assert result["status"] == 404
+    assert result["content_type"].startswith("text/html")
+    assert "Back to shop" in result["body"]
+    assert "Traceback" not in result["body"]
+
+
+def test_a_withdrawn_product_reads_the_same_as_a_missing_one(
+        tmp_path, monkeypatch):
+    """Distinguishing them would tell a stranger which product ids exist."""
+    data_dir = setup_env(tmp_path, monkeypatch, page=True)
+    product(data_dir, "p1", "Retired Mug", 1000, is_active="false")
+    assert page(product_id="p1")["status"] == 404
+
+
+def test_the_page_reuses_the_basket_the_cookie_names(tmp_path, monkeypatch):
+    """The bug this whole change exists for: a returning shopper's basket
+    was minted fresh every visit, so nothing ever survived a page load."""
+    data_dir = setup_env(tmp_path, monkeypatch, page=True)
+    product(data_dir, "p1", "Mug", 1200, product_type="service")
+    cart("add", product_id="p1", quantity="2")
+
+    result = page()
+    assert "24.00" in result["body"]                     # the basket total
+    # A cookie the browser already holds is not re-set on every response.
+    assert "set_cookie" not in result
+
+
+def test_a_shopper_with_no_cookie_is_given_one(tmp_path, monkeypatch):
+    """Path-scoped, http-only, SameSite=Lax: it says WHICH basket, never
+    who, and it is useless anywhere but here."""
+    setup_env(tmp_path, monkeypatch, page=True)
+    result = page(_cookies={})
+    cookie = result["set_cookie"]
+    assert cookie.startswith("cart=")
+    assert "Path=/" in cookie and "HttpOnly" in cookie
+    assert "SameSite=Lax" in cookie and "Max-Age=1209600" in cookie
+    # The old key is gone: the server accepts `set_cookie` and nothing else.
+    assert "headers" not in result

@@ -1,2 +1,3 @@
 id	pattern	object_id	priority
 route_shop	/shop	site_shop	10
+route_shop_product	/shop/{product_id}	site_shop	5

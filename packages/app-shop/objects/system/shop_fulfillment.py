@@ -80,7 +80,7 @@ def _order_for_invoice(base, invoice_id):
     return None
 
 
-def POST(request):
+def EVENT(request):
     base = _base_dir()
     payment = _payment_for(request, base)
     if not payment:
@@ -158,3 +158,11 @@ def POST(request):
         # round: a missing setting must not cost somebody a paid order.
         result["warning"] = skipped[0]
     return result
+
+
+# EVENT is the verb the change dispatcher calls handlers with (see
+# object_change_dispatch); it went unnoticed here because in-process tests
+# invoked POST directly and the dispatcher's method-not-supported error
+# only surfaced on the live box. POST stays as an alias so an operator can
+# poke the handler by hand over HTTP.
+POST = EVENT

@@ -8,7 +8,14 @@ phone with one bar of signal in a shop doorway.
 
 The basket is identified by a `cart` cookie holding an opaque session
 token. It is not an identity and it is not a cross-site key -- it says
-WHICH basket, never who. Nothing here reads or sets anything else.
+WHICH basket, never who. Nothing here reads or sets anything else: the
+server hands routed objects every cookie EXCEPT the identity session, and
+accepts exactly one response header back, `set_cookie`.
+
+A product also has a page of its own at /shop/{product_id} -- a grid of
+cards is a list of names and prices, and nobody buys a thing they cannot
+read about first. Its add-to-basket form posts to /shop, the same index
+the cards post to, so there is one basket path and not two.
 
 All the actual decisions live in action_cart and action_checkout; this
 object only renders them and passes the token along. That split is what
@@ -19,12 +26,24 @@ different front end, without the rules living in a template.
 import html
 import os
 import secrets
+import urllib.parse
 
 import object_execution
 import object_records
 import python_object_runtime
 
+try:
+    import object_stock
+except ImportError:     # no stock app installed: the page says nothing at all
+    object_stock = None
+
 COOKIE = "cart"
+
+# The product types that sit on a shelf and can run out, same rule
+# action_checkout applies. A download or an hour of work never does, and
+# saying "Out of stock" about one would refuse a sale that checkout would
+# happily take.
+STOCKED_TYPES = ("physical", "asset", "")
 
 _STYLE = """
 .shop-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 1rem; margin: 1rem 0 2rem; }
@@ -38,6 +57,9 @@ _STYLE = """
 .notice.ok { border-left-color: #6a6; }
 .shop-form { display: inline; }
 .qty { width: 4rem; }
+.shop-detail .price { font-size: 1.4rem; font-weight: 600; margin: 0.4rem 0; }
+.shop-detail .description { white-space: pre-wrap; margin: 1rem 0; max-width: 42rem; }
+.shop-detail .stock { font-size: 0.9rem; opacity: 0.7; }
 """
 
 
@@ -91,6 +113,41 @@ def _products(base):
     return sorted(live, key=lambda row: str(row.get("name") or ""))
 
 
+def _find_product(base, product_id):
+    """One product, or None when it is missing OR withdrawn from sale.
+
+    Withdrawn and missing answer the same way on purpose: a public page that
+    distinguished them would tell a stranger which ids exist.
+    """
+    wanted = str(product_id or "").strip()
+    if not wanted:
+        return None
+    for row in _products(base):
+        if str(row.get("id") or "") == wanted:
+            return row
+    return None
+
+
+def _detail_path(product_id):
+    return "/shop/" + urllib.parse.quote(str(product_id or ""), safe="")
+
+
+def _add_form(product, token):
+    """The one way anything enters a basket: a POST to /shop.
+
+    The detail page uses this form too, so a product page is a different
+    VIEW of the shop and not a second checkout path to keep in step.
+    """
+    return f"""
+<form method="post" action="/shop" class="shop-form">
+  <input type="hidden" name="do" value="add">
+  <input type="hidden" name="session_token" value="{_esc(token)}">
+  <input type="hidden" name="product_id" value="{_esc(product.get('id'))}">
+  <input class="qty" type="number" name="quantity" value="1" min="1" step="1">
+  <button type="submit">Add</button>
+</form>"""
+
+
 def _product_cards(products, token):
     if not products:
         return ('<p class="hint">Nothing is for sale yet. Add products in '
@@ -99,18 +156,34 @@ def _product_cards(products, token):
     for product in products:
         cards.append(f"""
 <div class="shop-card">
-  <div><strong>{_esc(product.get('name'))}</strong></div>
+  <div><strong><a href="{_esc(_detail_path(product.get('id')))}">{_esc(product.get('name'))}</a></strong></div>
   <div class="sku">{_esc(product.get('sku') or '')}</div>
   <div class="price">{_esc(product.get('currency') or 'USD')} {_money(product.get('price_cents'))}</div>
-  <form method="post" action="/shop" class="shop-form">
-    <input type="hidden" name="do" value="add">
-    <input type="hidden" name="session_token" value="{_esc(token)}">
-    <input type="hidden" name="product_id" value="{_esc(product.get('id'))}">
-    <input class="qty" type="number" name="quantity" value="1" min="1" step="1">
-    <button type="submit">Add</button>
-  </form>
+  {_add_form(product, token)}
 </div>""")
     return f'<div class="shop-grid">{"".join(cards)}</div>'
+
+
+def _availability(base, product):
+    """One low-key line: in stock, out of stock, or nothing at all.
+
+    Silence is the right answer more often than it looks -- for a service
+    or a download, and for a server with no stock app installed. Guessing
+    there would turn a shop that simply does not count things into a shop
+    that appears to have sold out of everything. Where stock IS counted,
+    zero means zero: checkout refuses that sale, and a page that promised
+    otherwise would be sending shoppers into a wall.
+    """
+    if object_stock is None:
+        return ""
+    if str(product.get("product_type") or "") not in STOCKED_TYPES:
+        return ""
+    try:
+        quantity = object_stock.total_quantity(product.get("id"), base_dir=base)
+    except Exception:
+        return ""
+    state = "In stock" if quantity > 0 else "Out of stock"
+    return f'<p class="stock">{state}</p>'
 
 
 def _cart_table(cart, token):
@@ -190,24 +263,19 @@ def _notice(result):
     return f'<div class="notice"><strong>{_esc(error)}</strong>{extra}{confirm}</div>'
 
 
-def _render(token, cart, products, notice, fresh):
-    body = f"""
-<div class="breadcrumb"><a href="/">Home</a> / Shop</div>
-<div class="pagehead"><h1>Shop</h1></div>
-{notice}
-{_product_cards(products, token)}
-<h2 style="font-size:1rem">Your basket</h2>
-{_cart_table(cart, token)}
-{_checkout_form(token) if (cart.get('lines') or []) else ''}
-<p class="hint">Prices are confirmed when you order. Nothing is reserved until
-payment arrives.</p>"""
+def _response(title, body, token, fresh, status=200):
+    """One shell for every page this object serves -- index, product, 404.
 
+    A shopper who mistypes a product id is still in the shop, so the not-
+    found page is the same page furniture with a different sentence in it,
+    never a traceback and never a bare JSON error.
+    """
     html_page = f"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Shop</title>
+<title>{_esc(title)}</title>
 <link rel="stylesheet" href="/style">
 <style>{_STYLE}</style>
 </head>
@@ -219,15 +287,66 @@ payment arrives.</p>"""
 </body>
 </html>"""
 
-    response = {"status": 200, "content_type": "text/html; charset=utf-8",
+    response = {"status": status, "content_type": "text/html; charset=utf-8",
                 "body": html_page}
     if fresh:
-        # Path-scoped, http-only, SameSite=Lax: it identifies a basket and
-        # is useless anywhere else.
-        response["headers"] = {
-            "set-cookie": f"{COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=1209600"
-        }
+        # Path-scoped, http-only, SameSite=Lax: it identifies a basket and is
+        # useless anywhere else. `set_cookie` is the single response header
+        # the server accepts from an object -- see _object_set_cookie_headers.
+        response["set_cookie"] = (
+            f"{COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=1209600")
     return response
+
+
+def _render(token, cart, products, notice, fresh):
+    body = f"""
+<div class="breadcrumb"><a href="/">Home</a> / Shop</div>
+<div class="pagehead"><h1>Shop</h1></div>
+{notice}
+{_product_cards(products, token)}
+<h2 style="font-size:1rem">Your basket</h2>
+{_cart_table(cart, token)}
+{_checkout_form(token) if (cart.get('lines') or []) else ''}
+<p class="hint">Prices are confirmed when you order. Nothing is reserved until
+payment arrives.</p>"""
+    return _response("Shop", body, token, fresh)
+
+
+def _render_detail(base, product, token, fresh):
+    description = product.get("description") or ""
+    unit = f" / {_esc(product.get('unit'))}" if product.get("unit") else ""
+    body = f"""
+<div class="breadcrumb"><a href="/">Home</a> / <a href="/shop">Shop</a> /
+{_esc(product.get('name'))}</div>
+<div class="pagehead"><h1>{_esc(product.get('name'))}</h1></div>
+<div class="shop-detail">
+  <div class="sku">{_esc(product.get('sku') or '')}</div>
+  <div class="price">{_esc(product.get('currency') or 'USD')} {_money(product.get('price_cents'))}{unit}</div>
+  {_availability(base, product)}
+  <div class="description">{_esc(description)}</div>
+  {_add_form(product, token)}
+</div>
+<p><a href="/shop">Back to shop</a></p>"""
+    return _response(str(product.get("name") or "Product"), body, token, fresh)
+
+
+def _render_missing(token, fresh):
+    body = """
+<div class="breadcrumb"><a href="/">Home</a> / <a href="/shop">Shop</a></div>
+<div class="pagehead"><h1>Not for sale</h1></div>
+<p>We could not find that. It may have sold out for good, or the link may
+have a typo in it.</p>
+<p><a href="/shop">Back to shop</a></p>"""
+    return _response("Not for sale", body, token, fresh, status=404)
+
+
+def _detail(request, product_id):
+    base = _base_dir()
+    token, fresh = _token(request)
+    product = _find_product(base, product_id)
+    if product is None:
+        return _render_missing(token, fresh)
+    return _render_detail(base, product, token, fresh)
 
 
 def _handle(request):
@@ -261,6 +380,12 @@ def _handle(request):
 
 
 def GET(request):
+    # /shop/{product_id} arrives as a top-level route capture. POST is
+    # deliberately NOT routed here: every basket change posts to /shop, so
+    # there is one add path and the detail page is only ever a view.
+    product_id = str(request.get("product_id") or "").strip()
+    if product_id:
+        return _detail(request, product_id)
     return _handle(request)
 
 
