@@ -588,3 +588,17 @@ def test_none_means_not_configured_rather_than_a_host_called_none(data_dir):
     anchor = object_records.read_collection_records("anchors",
                                                     base_dir=data_dir)[0]
     assert anchor["note"] == ""
+
+
+def test_the_page_and_the_pass_use_the_same_endpoint_parser(data_dir):
+    """They cannot import each other, so the parser lives in
+    object_notary. When they briefly each had their own, the page reported
+    an endpoint the pass was correctly ignoring -- a small lie in the one
+    place whose whole job is to be believed."""
+    setting(data_dir, "ledger.anchored_collections", "wallet_entries")
+    setting(data_dir, "notary.endpoints", "none")
+    wallet_entry(data_dir, 1000)
+
+    passed = run("system_publish_head")
+    page = json.loads(integrity_page(path="/ledger-integrity.json")["body"])
+    assert passed["endpoints"] == page["endpoints"] == []

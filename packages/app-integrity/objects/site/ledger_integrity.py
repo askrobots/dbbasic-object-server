@@ -40,6 +40,7 @@ import json
 import os
 
 import object_ledger_head
+import object_notary
 import object_records
 import object_schemas
 
@@ -114,8 +115,11 @@ def report(*, base=None):
     """
     base = _base_dir() if base is None else base
     settings = _settings(base)
-    endpoints = [part.strip() for part in settings.get(ENDPOINTS_KEY, "").split(",")
-                 if part.strip()]
+    # The SAME parser the pass uses (object_notary), not a second one
+    # spelled the same way. When these drifted, the page reported an
+    # endpoint the pass was correctly ignoring.
+    endpoints = object_notary.endpoints_from_setting(
+        settings.get(ENDPOINTS_KEY, ""))
 
     try:
         anchor_rows = object_records.read_collection_records(ANCHORS,

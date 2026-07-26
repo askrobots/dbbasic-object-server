@@ -120,6 +120,29 @@ def is_self_endpoint(endpoint, own_base_url="", *, allow_loopback=False):
     return bool(own) and host == own
 
 
+# app_settings requires a non-empty value, so "not configured" needs a
+# word. `none` is already this codebase's sentinel for it --
+# carrier.provider reads "", "none" and "manual" the same way -- and an
+# operator who writes it to mean nothing must not get a daily failed
+# lodgement against a host literally called `none`, which is a false alarm
+# indistinguishable from a real notary being down.
+NOT_CONFIGURED = frozenset({"none", "off", "disabled", "-"})
+
+
+def endpoints_from_setting(value):
+    """Parse `notary.endpoints` into a list. THE one parser.
+
+    Lives here rather than in either object because both the pass that
+    lodges digests and the page that reports on them must agree about what
+    "none" means, and they cannot import each other. When they disagreed
+    -- briefly, on the live box -- the page reported an endpoint that the
+    pass was correctly ignoring, which is a small lie in the one place
+    whose whole job is to be believed.
+    """
+    return [part.strip() for part in str(value or "").split(",")
+            if part.strip() and part.strip().lower() not in NOT_CONFIGURED]
+
+
 def _host_of(url):
     text = str(url if url is not None else "").strip().lower()
     if not text:
