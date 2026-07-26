@@ -1,8 +1,8 @@
 {
   "name": "shipments",
   "title": "Shipments",
-  "version": 1,
-  "description": "What physically moved. An order says what is OWED; a shipment says what left the building -- when, in which box, with which tracking number -- and the two are different facts that small systems collapse into one status field and then cannot uncollapse. Partial fulfillment is the proof: it is not a flag on the order, it is a COUNT of shipments, and the order's status is DERIVED from shipment lines by system_order_fulfillment (docs/logic-decisions.md #1: the quantities are the facts, the order status is the read). Everything else the warehouse asks for falls out of this noun as a view -- a packing slip is one shipment printed, a manifest is today's shipments folded by carrier, a pick list is what is not on a shipment yet. ship_to_name/ship_to_address are STAMPED from the order at creation and never re-read: an address is what it was when the box left, and a customer who moves house next month must not silently rewrite where last month's parcel went. direction carries the return case (plan/fulfillment-logistics-spec.md): an RMA is this same document with the sign reversed, which is why there is no separate returns collection -- the authorized status and the disposition flow are a later slice, deliberately absent here rather than half-present.",
+  "version": 2,
+  "description": "What physically moved. An order says what is OWED; a shipment says what left the building -- when, in which box, with which tracking number -- and the two are different facts that small systems collapse into one status field and then cannot uncollapse. Partial fulfillment is the proof: it is not a flag on the order, it is a COUNT of shipments, and the order's status is DERIVED from shipment lines by system_order_fulfillment (docs/logic-decisions.md #1: the quantities are the facts, the order status is the read). Everything else the warehouse asks for falls out of this noun as a view -- a packing slip is one shipment printed, a manifest is today's shipments folded by carrier, a pick list is what is not on a shipment yet. ship_to_name/ship_to_address are STAMPED from the order at creation and never re-read: an address is what it was when the box left, and a customer who moves house next month must not silently rewrite where last month's parcel went. direction carries the return case (plan/fulfillment-logistics-spec.md): an RMA is this same document with the sign reversed, which is why there is no separate returns collection -- v2 lands the inbound half of the status ladder (authorized -> in_transit -> received -> dispositioned, plus expired), driven by app-returns' authorize and disposition actions.",
   "fields": [
     {
       "name": "id"
@@ -24,14 +24,14 @@
       "label": "Direction",
       "default": "outbound",
       "enum": ["outbound", "inbound"],
-      "help": "outbound is goods leaving us; inbound is a customer return coming back (an RMA IS a shipment with the sign reversed, which is why there is no separate returns collection). Only outbound moves stock today -- system_order_fulfillment skips inbound entirely, because a return that has not been dispositioned yet has not decided whether it is restock or waste, and guessing would put damaged goods back on the shelf."
+      "help": "outbound is goods leaving us; inbound is a customer return coming back (an RMA IS a shipment with the sign reversed, which is why there is no separate returns collection). system_order_fulfillment still skips inbound entirely, because a return that has not been dispositioned yet has not decided whether it is restock or waste, and guessing would put damaged goods back on the shelf; the decision -- and the only stock move a return ever composes -- belongs to app-returns' action_disposition_return, where a human names restock or dispose per line."
     },
     {
       "name": "status",
       "type": "enum",
       "label": "Status",
       "default": "open",
-      "enum": ["open", "packed", "shipped", "in_transit", "delivered", "returned_to_sender", "lost"],
+      "enum": ["open", "packed", "shipped", "in_transit", "delivered", "returned_to_sender", "lost", "authorized", "received", "dispositioned", "expired"],
       "transitions": {
         "open": [
           {"to": "packed", "when": {"owner_id": "$user_id"}}
@@ -49,10 +49,19 @@
         "in_transit": [
           {"to": "delivered", "when": {"owner_id": "$user_id"}},
           {"to": "returned_to_sender", "when": {"owner_id": "$user_id"}},
-          {"to": "lost", "when": {"owner_id": "$user_id"}}
+          {"to": "lost", "when": {"owner_id": "$user_id"}},
+          {"to": "received", "when": {"owner_id": "$user_id"}}
+        ],
+        "authorized": [
+          {"to": "in_transit", "when": {"owner_id": "$user_id"}},
+          {"to": "received", "when": {"owner_id": "$user_id"}},
+          {"to": "expired", "when": {"owner_id": "$user_id"}}
+        ],
+        "received": [
+          {"to": "dispositioned", "when": {"owner_id": "$user_id"}}
         ]
       },
-      "help": "open -> packed -> shipped -> in_transit -> delivered is the full ladder, and shipped -> delivered directly is deliberately allowed as well: a shop that hands parcels to a driver and never touches a tracking API would otherwise have to fake an in_transit it never observed, and fake precision is worse than a short ladder. packed -> open is the repacking move (the box was opened again before it left; nothing has physically happened yet, so nothing needs compensating). Nothing moves BACK from shipped: once it has left the dock the correction is a new document -- a return is an inbound shipment referencing this one, never an edit to this row (docs/logic-decisions.md #3). delivered, returned_to_sender and lost are terminal. Stock moves are composed when this reaches shipped, once per line, idempotent by provenance marker."
+      "help": "ONE enum, two ladders, told apart by direction. OUTBOUND: open -> packed -> shipped -> in_transit -> delivered, and shipped -> delivered directly is deliberately allowed as well: a shop that hands parcels to a driver and never touches a tracking API would otherwise have to fake an in_transit it never observed, and fake precision is worse than a short ladder. packed -> open is the repacking move (the box was opened again before it left; nothing has physically happened yet, so nothing needs compensating). Nothing moves BACK from shipped: once it has left the dock the correction is a new document -- a return is an inbound shipment referencing this one, never an edit to this row (docs/logic-decisions.md #3). delivered, returned_to_sender and lost are terminal. Stock moves are composed when this reaches shipped, once per line, idempotent by provenance marker. INBOUND (an RMA, raised by action_authorize_return): authorized -> in_transit -> received -> dispositioned, with authorized -> received allowed directly for the customer who walks the goods into the shop and never posts anything, the same honesty the outbound shortcut buys. authorized means we granted the return and the goods are still with the customer; received means the parcel is on our dock and nobody has judged it yet; dispositioned means a human decided per line what each item is, which is the only moment a return moves stock or composes a refund (action_disposition_return). A RETURN THAT NEVER ARRIVES IS `expired`, NOT `lost`, and the distinction is not pedantry: `lost` is a claim about a parcel that was handed to a carrier and vanished -- it feeds carrier disputes and insurance, and a shop filtering on it is looking for money somebody owes them. An RMA the customer simply never posted is the opposite fact: nothing ever moved, nobody is at fault, and the OFFER lapsed at expires_on. Filing those under `lost` would salt the dispute list with parcels that never existed. A return genuinely lost IN THE POST still reaches `lost` the ordinary way, from in_transit, because by then there really was a parcel. There is deliberately no `cancelled`: this collection has never had one, an authorized RMA is an offer rather than a commitment, and `expired` already says what happens to an offer nobody takes up. Mixing the two ladders -- moving an outbound shipment to `received`, or an inbound one to `packed` -- is prevented by the OBJECTS, not by this enum: an enum cannot condition on a sibling field, so the transition map here is the union of both ladders and the guards live where they can see `direction` (action_disposition_return refuses anything not inbound-and-received, system_order_fulfillment skips inbound outright, system_return_posting skips outbound). Naming that here rather than letting a reader assume the enum is airtight is the point of this paragraph."
     },
     {
       "name": "carrier",

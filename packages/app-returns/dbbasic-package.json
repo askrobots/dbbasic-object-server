@@ -1,0 +1,51 @@
+{
+  "id": "app-returns",
+  "name": "Returns",
+  "version": "0.1.0",
+  "description": "A customer return is not an undo. The shipment that left the building is a true statement about what went out on a particular day, in a particular box, and it stays true whatever comes back afterwards -- so this package adds documents that REFERENCE the original rather than editing it (docs/logic-decisions.md #3), and adds exactly one collection to do it. The parcel coming back is not a new noun: it is a shipment with direction=inbound, the same rows, the same lines, the same over-quantity arithmetic with the sign reversed, which is why app-shipping's schema gained an inbound ladder (authorized -> in_transit -> received -> dispositioned, plus expired) instead of this package growing a returns table and a returns_lines table that could only ever disagree with the shipment about what is in the box. What an RMA genuinely knows that a parcel does not is who granted it, why the customer asked, when the offer stops being good and which refund it produced -- and that is precisely the field list of return_authorizations, no wider. The three gates are the ones a shop discovers the hard way: you cannot return what never left (the order has to be shipped, delivered or partial -- goods still on our own shelf come off an order by cancelling it, which is different money), you cannot return more than was shipped minus what an earlier RMA already claimed (refused with all the numbers, the mirror of the over-ship gate, because a second RMA for the same mug is how two refunds get paid for one sale), and a return has to say WHY -- the reason decides whether disposal is `damage` or `waste`, whether the mistake was ours, and whether a restocking fee is fair, and a reason asked for a week later is a guess. Goods arriving and goods being judged are two different events on purpose: system_return_posting stamps the authorization when the parcel lands and touches no stock and no money at all, because a box on the dock could hold a mug in its wrapping or the same mug in three pieces, and a handler that guessed would put damaged goods back on the shelf or write off sellable stock depending on which was cheaper to code. A human then makes one call -- action_disposition_return -- which is the ONE place a return and its refund compose, so they cannot drift into a shop that restocked on Monday and refunded on Thursday and can no longer say which goods the money was for. Restock composes a `return` stock move from the customer location back to the shelf; DISPOSAL COMPOSES A MOVE TOO (`waste`, or `damage` when the customer said it arrived broken), because goods that left inventory with no trace is exactly how shrinkage hides and a loss report that only counts what somebody remembered to write down is guaranteed to be optimistic. The refund ceiling is not reimplemented here: hook_refunds already knows what a payment can give back, so this action asks it and surfaces its refusal verbatim, and refund: none is a first-class silent outcome because restocking-fee-only, replacement-instead-of-refund and goodwill restocks are all ordinary. A dispositioned return answers a retry with ok and a note -- no second moves, no second refund -- which is the property the whole slice is judged on. What is deliberately NOT here, named so it reads as a decision rather than an omission: carrier return LABELS (a connector boundary with BYO credentials, manual-first, later slice -- the page says so instead of showing a dead button), a customer-facing tokened return door (it needs a token field on orders, which is another package's schema; the page requires sign-in and says why), a daemon pass sweeping stale authorizations to `expired` (time-driven work belongs with the tracking poll), restocking fees, replacement shipments, and disputes.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": ["app-orders", "app-shipping", "app-payments", "app-catalog"],
+  "objects": [
+    {
+      "id": "action_authorize_return",
+      "path": "objects/action/authorize_return.py"
+    },
+    {
+      "id": "action_disposition_return",
+      "path": "objects/action/disposition_return.py"
+    },
+    {
+      "id": "system_return_posting",
+      "path": "objects/system/return_posting.py"
+    },
+    {
+      "id": "site_return_form",
+      "path": "objects/site/return_form.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "return_authorizations",
+      "path": "schemas/return_authorizations.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "return_authorizations",
+      "path": "seed/return_authorizations.tsv"
+    },
+    {
+      "collection": "site_routes",
+      "path": "seed/site_routes.tsv"
+    }
+  ],
+  "migrations": [],
+  "nav_optional": true
+}

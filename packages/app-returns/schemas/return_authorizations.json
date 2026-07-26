@@ -1,0 +1,119 @@
+{
+  "name": "return_authorizations",
+  "title": "Return Authorizations",
+  "version": 1,
+  "description": "The paperwork that says a customer MAY send something back, and what happened when they did. A return does not un-ship anything: the outbound shipment is a fact about what left the building on a particular day, in a particular box, and it stays true forever no matter what comes back afterwards (docs/logic-decisions.md #3). So an RMA is its own document REFERENCING the original rather than an edit to it, and the goods coming back are their own shipment with direction=inbound -- the same noun with the sign reversed, which is why the parcel itself has no collection here. What this row adds on top of that shipment is the thing a shipment cannot say: WHO granted the return, WHY the customer asked, WHEN the offer stops being good, and WHICH refund (if any) was issued when somebody finally looked in the box. expires_on is the field that keeps the whole process auditable: an RMA is an offer with a deadline, and goods trickling back six months later against an order everybody has forgotten -- with no line still open to match them to and no refund anybody can justify -- is exactly how a returns process turns into a drawer of unexplained parcels. refund_ref points at 'refunds/{id}' when money went back, and stays blank when it did not, because a restocking-fee-only return, a replacement instead of a refund, and a goodwill restock are all normal outcomes rather than failures worth flagging. The money itself is NOT recomputed here: refunds already exist, already cap themselves at what a payment can give back, and action_disposition_return defers to that gate rather than growing a second opinion about the same ceiling.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "order_id",
+      "type": "relation",
+      "required": true,
+      "relation": {
+        "collection": "orders",
+        "display_field": "number"
+      },
+      "label": "Order",
+      "help": "The original sale this return is against, and the provenance link the refund arithmetic walks back along -- what a returned line is worth is what the customer actually paid for it on this order, not what the catalog charges today. Set once at creation and not intended to change after; not schema read_only for the same reason order_lines.order_id is not (a required, client-submitted-at-creation field cannot also be read_only on this platform)."
+    },
+    {
+      "name": "shipment_id",
+      "type": "relation",
+      "relation": {
+        "collection": "shipments",
+        "display_field": "id"
+      },
+      "label": "Inbound Shipment",
+      "help": "The INBOUND shipment this RMA is carried by -- the parcel coming back, raised in `authorized` by action_authorize_return and carrying one shipment line per returned order line. Not required, so a return can be recorded for something that will never be posted (a customer keeping a damaged item we refund anyway), but every RMA the actions raise has one: the lines live there, not here, because they are the same lines a shipment has always had and a second lines collection would only be able to disagree with the first."
+    },
+    {
+      "name": "customer_email",
+      "type": "text",
+      "label": "Customer",
+      "help": "Stamped from the order at creation, never re-read. The customer of THIS return is whoever bought the goods, and an order record edited next month must not silently redirect an old return's correspondence (docs/logic-decisions.md #1)."
+    },
+    {
+      "name": "reason",
+      "type": "enum",
+      "required": true,
+      "label": "Reason",
+      "enum": ["damaged", "wrong_item", "not_as_described", "no_longer_wanted", "arrived_late", "other"],
+      "help": "Why the customer says they are sending it back, in their words reduced to six. The list is short on purpose and every entry earns its place by changing what somebody DOES: `damaged` makes disposal the default and turns the disposal move into a `damage` move rather than `waste`, which is the difference between 'we broke this' and 'this arrived broken' in the loss taxonomy; `wrong_item` and `not_as_described` are OUR mistakes and belong in a report the buying and listing side reads; `no_longer_wanted` is a return we could charge a restocking fee for and the others are not; `arrived_late` is a carrier argument. A longer taxonomy would be a survey, and a survey nobody acts on is a field people stop filling in honestly."
+    },
+    {
+      "name": "reason_note",
+      "type": "textarea",
+      "label": "Reason Note",
+      "help": "The customer's own sentence, kept verbatim next to the enum rather than folded into it. The enum is what a report counts; this is what a human reads when the count looks wrong."
+    },
+    {
+      "name": "status",
+      "type": "enum",
+      "required": true,
+      "label": "Status",
+      "default": "requested",
+      "enum": ["requested", "authorized", "declined", "closed"],
+      "transitions": {
+        "requested": [
+          {"to": "authorized", "when": {"owner_id": "$user_id"}},
+          {"to": "declined", "when": {"owner_id": "$user_id"}}
+        ],
+        "authorized": [
+          {"to": "closed", "when": {"owner_id": "$user_id"}},
+          {"to": "declined", "when": {"owner_id": "$user_id"}}
+        ]
+      },
+      "help": "requested is a customer asking (the return form writes this); authorized is a granted offer with a deadline; declined is a refusal that is kept rather than deleted, because 'we said no on the 3rd' is the answer to the email that arrives on the 20th; closed is the end -- the goods were dispositioned and whatever money was going back has gone. authorized -> declined stays open on purpose for the return that turns out to be fraudulent before the parcel arrives. Nothing moves back out of closed or declined: a second return is a second RMA, never a reopened one, for the same reason a refund is a new record and not an edited payment. action_authorize_return creates the row already `authorized` (an operator granting it IS the authorization), and action_disposition_return is the only thing that closes it, in the same pass that composes the moves and the refund -- so the status can never drift from the money."
+    },
+    {
+      "name": "authorized_by",
+      "type": "text",
+      "label": "Authorized By",
+      "help": "Who granted it. The same second-person approval shape time and expenses use: a return costs the shop money, so the record says which human agreed to spend it, and an empty value means it came in through a path that could not name one rather than that nobody approved."
+    },
+    {
+      "name": "authorized_at",
+      "type": "datetime",
+      "label": "Authorized"
+    },
+    {
+      "name": "expires_on",
+      "type": "date",
+      "label": "Expires",
+      "help": "The day the offer stops being good, stamped at authorization from the shop's window (returns.window_days, default 30) rather than derived at read time -- the terms in force when we made the promise are the terms we keep, even if the policy changes next week (docs/logic-decisions.md #1). DATA, not a gate: nothing in this slice refuses a late parcel, because a box on the dock is a box on the dock and refusing to write down that it arrived would make the process less auditable, not more. What the date buys today is that system_return_posting says `past_expiry` when the goods land after it, so the person deciding restock-or-dispose knows they are outside the promise before they decide; a daemon pass that sweeps stale RMAs to `expired` is named in plan/fulfillment-logistics-spec.md's tracking slice, alongside the other time-driven pass, and is deliberately not invented here."
+    },
+    {
+      "name": "refund_ref",
+      "type": "text",
+      "label": "Refund",
+      "help": "'refunds/{id}' when money went back, blank when it did not. A pointer rather than an amount, because the amount already lives on the refund and two copies of one number is a disagreement waiting to be discovered by a customer. Blank is a legitimate, silent outcome -- restocking-fee-only, replacement-instead-of-refund and goodwill restocks are all ordinary returns, and a system that treats them as anomalies teaches its operators to ignore warnings."
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    }
+  ],
+  "forms": {
+    "default": {
+      "fields": ["order_id", "shipment_id", "customer_email", "reason",
+                 "reason_note", "status", "authorized_by", "expires_on"]
+    }
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["order_id", "status", "reason", "expires_on", "refund_ref"],
+    "filter_fields": ["status", "reason"]
+  },
+  "search": {
+    "fields": ["customer_email", "reason_note"]
+  }
+}

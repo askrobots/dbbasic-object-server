@@ -1,0 +1,40 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update"],
+      "collection": "return_authorizations",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "an RMA is the operator's own paperwork about their own goods and their own promise; no delete, because a return that was granted cannot be made not to have been granted -- a mistake is a declined RMA or a closed one with no refund, never a vanished row, and 'we said no on the 3rd' is the answer to the email that arrives on the 20th"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "action_authorize_return",
+      "reason": "granting a return is counter work, not owner-only work: anybody signed in can say yes, and everything they can say yes TO is bounded by what the order actually shipped -- the gate refuses more than was sent, with the numbers, whoever is asking"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "action_disposition_return",
+      "reason": "the person who opens the box is the person who knows what is in it, and making them fetch an owner before they can say 'this one is fine' is how goods end up on a bench for a week; the money it can move is bounded by hook_refunds, which caps every refund at what the payment can give back regardless of who called this"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "system_return_posting",
+      "reason": "a change handler runs as the dispatcher, and it only ever stamps a status to keep an RMA in step with its parcel -- it moves no stock and composes no money, so there is nothing here worth guarding more tightly than the write that triggered it"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "site_return_form",
+      "reason": "deliberately NOT public: the page is addressed by an internal order id, and an order id is not a secret good enough to protect a customer's name, address and purchase history from whoever guesses one. The customer's own door is a capability token like the invoice portal's, which needs a token field on orders and therefore a later slice; until then a stranger gets a sign-in prompt rather than an error, and the shop raises returns the way it already raises everything else"
+    }
+  ]
+}
