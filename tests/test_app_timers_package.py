@@ -389,3 +389,93 @@ def test_mcp_start_timer_rejects_non_string_task_id():
 def test_mcp_tools_registered_in_catalog():
     names = {tool["name"] for tool in object_mcp.TOOLS}
     assert {"start_timer", "stop_timer", "get_running_timer"} <= names
+
+
+# --- 0.5.0: the approval queue finally has a page ----------------------------
+#
+# "No page object" was true and also meant no page. The attention count
+# pointed at /time-logs?status=submitted and nothing on the box answered
+# /time-logs at all, so the only surface that tells an approver a queue
+# exists linked into thin air. The rule survives the fix: what got added
+# is DATA -- a `views` record and a site_routes row -- not a page object.
+
+APP_TIMERS_DIR = PACKAGES_ROOT / "app-timers"
+
+
+def _timers_seed_rows(name):
+    import csv
+
+    with open(APP_TIMERS_DIR / "seed" / f"{name}.tsv", newline="") as handle:
+        return list(csv.DictReader(handle, delimiter="\t"))
+
+
+def test_the_index_is_a_seeded_view_not_a_new_page_object():
+    package = object_packages.get_package("app-timers", root=PACKAGES_ROOT)
+
+    # Still exactly one site object, and it is the start/stop route, not a list.
+    assert [entry["id"] for entry in package["objects"] if entry["id"].startswith("site_")] == [
+        "site_timer_actions"]
+    assert {entry["collection"] for entry in package["seed"]} == {
+        "time_logs", "rate_cards", "views", "site_routes"}
+    # Seeding into app-views' shared `views` collection is a real install-order
+    # dependency, not a soft reference: without the schema the rows have nowhere
+    # to land.
+    assert "app-views" in {entry["id"] for entry in package["dependencies"]}
+
+
+def test_the_time_logs_index_lists_time_logs_and_promises_no_search_it_cannot_do():
+    rows = [row for row in _timers_seed_rows("views") if row["id"] == "view_time_logs"]
+    assert len(rows) == 1
+    view = rows[0]
+    assert view["route"] == "/time-logs"
+    blocks = json.loads(view["blocks"])
+    assert len(blocks) == 1
+    block = blocks[0]
+    assert block["kind"] == "list"
+    assert block["collection"] == "time_logs"
+    # time_logs declares no `search` fields, so a search box would query
+    # nothing and report nothing found -- a lie about the collection.
+    schema = json.loads((APP_TIMERS_DIR / "schemas" / "time_logs.json").read_text())
+    assert schema.get("search") is None
+    assert "search" not in block
+    # Retroactive logging is ordinary and the schema was always meant to be
+    # form-managed, so Add stays.
+    assert block["add"] is True
+    # No /time-logs/{id} permalink is seeded, so rows must not pretend to link.
+    assert block["link"] is False
+
+
+def test_the_index_route_points_at_the_generic_renderer():
+    rows = [row for row in _timers_seed_rows("site_routes")
+            if row["id"] == "route_time_logs_index"]
+    assert len(rows) == 1
+    assert rows[0]["pattern"] == "/time-logs"
+    assert rows[0]["object_id"] == "site_view_render"
+
+
+def test_the_seed_headers_match_their_schemas_field_order():
+    for name in ("time_logs", "rate_cards"):
+        schema = json.loads((APP_TIMERS_DIR / "schemas" / f"{name}.json").read_text())
+        header = (APP_TIMERS_DIR / "seed" / f"{name}.tsv").read_text().splitlines()[0]
+        assert header.split("\t") == [field["name"] for field in schema["fields"]]
+
+
+def test_the_package_now_declares_a_door_instead_of_opting_out():
+    manifest = json.loads((APP_TIMERS_DIR / "dbbasic-package.json").read_text())
+
+    # nav_optional was the reviewable claim "this app has no front page".
+    # It ships one now, so the claim is retired rather than left lying around.
+    assert "nav_optional" not in manifest
+    assert manifest["nav"] == [{
+        "id": "time_logs", "label": "Time", "path": "/time-logs",
+        "blurb": "Hours logged against tasks, and the ones waiting for an approver",
+        "surface": "member", "group": "Work", "order": 45}]
+
+
+def test_the_count_opens_the_page_it_counted_and_claims_no_filter():
+    manifest = json.loads((APP_TIMERS_DIR / "dbbasic-package.json").read_text())
+    source = manifest["attention"][0]
+
+    assert source["path"] == "/time-logs"
+    assert "?" not in source["path"]   # nothing reads a query param into a filter
+    assert source["nav_id"] == "time_logs"

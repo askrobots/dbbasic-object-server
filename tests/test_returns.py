@@ -785,3 +785,116 @@ def test_the_return_form_is_a_friendly_404_for_an_unknown_order(
     result = form(objects_root, order_id="no-such-order")
     assert result["status"] == 404
     assert "Traceback" not in result["body"]
+
+
+# --- the bench (0.3.0) -------------------------------------------------------
+#
+# The count shipped pointing at /orders: a path this package does not own,
+# serving a list containing none of the rows it counted, because the goods
+# coming back had no page anywhere. The tests below are about the one
+# property that makes a badge worth clicking -- the page it opens has to
+# show what the badge counted -- and about the two choices that follow
+# from it: the index is over SHIPMENTS (an RMA is an intention; the parcel
+# is the thing with a person waiting on it), and it uses `where` rather
+# than `filters` so it renders as the schema's real table instead of a
+# column of raw shipment ids.
+
+import csv  # noqa: E402
+import json  # noqa: E402
+
+import object_packages  # noqa: E402
+
+APP_RETURNS_DIR = PACKAGES / "app-returns"
+
+
+def _returns_seed_rows(name):
+    with open(APP_RETURNS_DIR / "seed" / f"{name}.tsv", newline="") as handle:
+        return list(csv.DictReader(handle, delimiter="\t"))
+
+
+def test_the_bench_lists_the_collection_the_count_actually_reads():
+    """The provider counts inbound shipments, and says in its own docstring
+    that counting return_authorizations would be counting intentions. The
+    page has to agree with it about what a return even is."""
+    provider = (APP_RETURNS_DIR / "objects" / "system" / "return_attention.py").read_text()
+    assert 'object_records.read_collection_records("shipments"' in provider
+
+    rows = [row for row in _returns_seed_rows("views") if row["id"] == "view_returns_bench"]
+    assert len(rows) == 1
+    view = rows[0]
+    assert view["route"] == "/returns"
+    blocks = json.loads(view["blocks"])
+    assert len(blocks) == 1
+    block = blocks[0]
+    assert block["kind"] == "list"
+    assert block["collection"] == "shipments"
+
+
+def test_the_bench_is_scoped_with_where_so_it_renders_as_a_real_table():
+    """`filters` would drop the page into the view layer's client-side
+    fallback, which titles each row `title || name || id` -- and a shipment
+    has neither a title nor a name, so every row would read as a raw id.
+    `where` compiles to the server-side narrowing `related` uses and keeps
+    the schema's table, filter bar, search and row cap."""
+    view = next(row for row in _returns_seed_rows("views") if row["id"] == "view_returns_bench")
+    block = json.loads(view["blocks"])[0]
+
+    assert block["where"] == {"direction": "inbound"}
+    assert "filters" not in block
+    # The renderer has to actually honour it, or the page silently lists
+    # every outbound parcel too.
+    renderer = (PACKAGES / "app-views" / "objects" / "site" / "view_render.py").read_text()
+    assert "cfg.where = block.where" in renderer
+
+
+def test_the_bench_shows_the_whole_inbound_ladder_not_only_the_undecided():
+    """`received` is what the badge counts, and the bench deliberately shows
+    more than that: a returns bench that hides what is in transit and what
+    was settled yesterday cannot answer either question somebody standing at
+    it asks. The narrowing to `received` is one pick in the filter bar the
+    schema already declares."""
+    view = next(row for row in _returns_seed_rows("views") if row["id"] == "view_returns_bench")
+    block = json.loads(view["blocks"])[0]
+    assert "status" not in block["where"]
+
+    shipments = json.loads((PACKAGES / "app-shipping" / "schemas" / "shipments.json").read_text())
+    assert "status" in shipments["views"]["filter_fields"]
+    assert "received" in next(field for field in shipments["fields"]
+                              if field["name"] == "status")["enum"]
+
+
+def test_the_bench_route_points_at_the_generic_renderer_beside_the_return_form():
+    rows = _returns_seed_rows("site_routes")
+    by_id = {row["id"]: row for row in rows}
+
+    assert by_id["route_returns_index"]["pattern"] == "/returns"
+    assert by_id["route_returns_index"]["object_id"] == "site_view_render"
+    # The per-order customer form keeps its own, more specific pattern.
+    assert by_id["route_return_form"]["pattern"] == "/returns/{order_id}"
+
+
+def test_the_package_declares_a_warehouse_door_instead_of_opting_out():
+    manifest = json.loads((APP_RETURNS_DIR / "dbbasic-package.json").read_text())
+    assert "nav_optional" not in manifest
+
+    package = object_packages.get_package("app-returns", root=PACKAGES)
+    entry = package["nav"][0]
+    assert entry["id"] == "returns"
+    assert entry["path"] == "/returns"
+    assert entry["group"] == "Warehouse"
+    assert entry["surface"] == "operator"
+    assert "app-views" in {dep["id"] for dep in package["dependencies"]}
+
+
+def test_the_count_opens_the_bench_and_stays_visible_to_whoever_clears_it():
+    """No nav_id, on purpose. A count bound to a door inherits that door's
+    audience, and this door is filed under the operator tier -- but
+    permissions/rules.json lets ANY signed-in person disposition a parcel,
+    on the stated grounds that the person who opens the box is the person
+    who knows what is in it. Hiding the number from them to keep the menu
+    tidy would undo the reason the queue is counted."""
+    package = object_packages.get_package("app-returns", root=PACKAGES)
+    source = package["attention"][0]
+
+    assert source["path"] == "/returns"
+    assert source["nav_id"] == ""

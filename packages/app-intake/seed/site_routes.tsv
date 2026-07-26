@@ -1,0 +1,2 @@
+id	pattern	object_id	priority
+route_scans_index	/scans	site_view_render	20

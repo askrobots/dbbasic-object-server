@@ -335,3 +335,97 @@ def test_confirming_a_scan_that_does_not_exist_says_so(tmp_path, monkeypatch):
     setup_env(tmp_path, monkeypatch)
     assert run("action_confirm_scan", {"scan_id": "nope"})["status"] == 404
     assert run("action_confirm_scan", {})["status"] == 400
+
+
+# --- the door (0.3.0) --------------------------------------------------------
+#
+# system_scan_processor has returned a key called `needing_a_human` since
+# the day it was written, and 0.2.0 finally put that number on the home
+# page -- pointing at /scans?status=extracted, which nothing on the box
+# served. The most valuable queue here was a dead link for a whole
+# version. These tests are about the page, not the reading: that the
+# count opens something, that what it opens lists scans, and that the
+# page makes no promise the generic renderer cannot keep.
+
+import csv  # noqa: E402  (structural tests below; the behavior tests above need none)
+
+import object_packages  # noqa: E402
+import object_site_routes  # noqa: E402
+
+APP_INTAKE_DIR = PACKAGES / "app-intake"
+
+
+def _intake_seed_rows(name):
+    with open(APP_INTAKE_DIR / "seed" / f"{name}.tsv", newline="") as handle:
+        return list(csv.DictReader(handle, delimiter="\t"))
+
+
+def test_the_scans_index_is_a_seeded_view_and_not_a_page_object():
+    package = object_packages.get_package("app-intake", root=PACKAGES)
+
+    assert [entry["id"] for entry in package["objects"]
+            if entry["id"].startswith("site_")] == []
+    assert {entry["collection"] for entry in package["seed"]} == {
+        "scans", "views", "site_routes"}
+    # Rows seeded into app-views' shared collections need app-views' schema
+    # to have landed first -- a real install-order dependency.
+    assert "app-views" in {entry["id"] for entry in package["dependencies"]}
+
+
+def test_the_index_lists_scans_and_offers_no_form_that_could_not_work():
+    rows = [row for row in _intake_seed_rows("views") if row["id"] == "view_scans"]
+    assert len(rows) == 1
+    view = rows[0]
+    assert view["route"] == "/scans"
+    blocks = json.loads(view["blocks"])
+    assert len(blocks) == 1
+    block = blocks[0]
+    assert block["kind"] == "list"
+    assert block["collection"] == "scans"
+    # No Add button: a scan is bytes plus a hash raised by action_scan_ingest.
+    # A form that let somebody type a filename would create a row with no
+    # document behind it, which the processor would then try to read.
+    assert "add" not in block
+    # No /scans/{id} permalink is seeded, so a row must not behave like a link
+    # to one.
+    assert block["link"] is False
+
+
+def test_the_index_route_resolves_to_the_generic_renderer():
+    rows = _intake_seed_rows("site_routes")
+    assert len(rows) == 1
+    assert rows[0]["pattern"] == "/scans"
+    assert rows[0]["object_id"] == "site_view_render"
+    # Convention routing wins over seeded records, so a site_scans object
+    # would silently shadow this page. There isn't one, and this is where
+    # somebody finds out if that changes.
+    assert object_site_routes.convention_object_id("/scans") == "site_scans"
+
+
+def test_the_receipts_queue_now_has_a_door_of_its_own():
+    """The manifest used to say, in as many words, that this package ships
+    no door and the count files under Money anyway. It ships one now."""
+    package = object_packages.get_package("app-intake", root=PACKAGES)
+    entry = package["nav"][0]
+
+    assert entry["id"] == "scans"
+    assert entry["path"] == "/scans"
+    assert entry["group"] == "Money"
+    assert entry["surface"] == "member"
+    assert entry["blurb"]
+
+
+def test_the_count_opens_the_index_rather_than_a_filter_nothing_honours():
+    package = object_packages.get_package("app-intake", root=PACKAGES)
+    source = package["attention"][0]
+
+    assert source["path"] == "/scans"
+    assert "?" not in source["path"]
+    assert source["nav_id"] == "scans"
+    # The status filter is real, it just lives on the page: the generic list
+    # builds its filter bar from the schema, and `extracted` -- the exact
+    # status the provider counts -- is one pick away in it.
+    schema = json.loads((APP_INTAKE_DIR / "schemas" / "scans.json").read_text())
+    assert "status" in schema["views"]["filter_fields"]
+    scan_attention = (APP_INTAKE_DIR / "objects" / "system" / "scan_attention.py").read_text()
+    assert 'WAITING_STATUS = "extracted"' in scan_attention

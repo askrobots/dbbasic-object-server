@@ -61,6 +61,26 @@ offer:
     box, live edit/delete, row styling) for free. `related` never takes
     this path -- it always compiles to window.dbbasicList's `where` option
     (58's real, server-side filter), never the client-side fallback.
+
+    A list block that needs a STANDING narrowing rather than a one-off
+    client-side slice says `where` instead of `filters`, and gets exactly
+    what `related` gets: cfg.where, one query param per pair, applied by
+    the server after its own permission row filter. The difference is not
+    cosmetic. `filters` drops the page into renderFilteredList, which can
+    only draw bare rows titled `title || name || id` -- fine for a
+    collection that has a title, useless for one that does not, where
+    every row reads as a raw id. `where` keeps the real generator, so the
+    schema's own list_mode/list_fields table, its filter bar, search,
+    sort, the row cap and realtime all still apply, and the operator can
+    narrow FURTHER from the filter bar (a picked value layers on top of
+    the block's `where` rather than replacing the base scope). This is
+    what an index page over one slice of a shared collection needs:
+    app-returns' returns bench is every shipment with direction=inbound,
+    which is a permanent property of that page and not a filter anybody
+    should have to re-pick. Values are literals -- `where` is deliberately
+    NOT run through $record_id resolution, because a parent-scoped child
+    list is what `related` is for and two spellings of one thing is how
+    block vocabularies rot.
   - `form`'s optional `form` key (an alternate form name) has no
     equivalent either -- window.dbbasicForm always renders
     schema.forms.default. Only `record_id` is honored.
@@ -182,6 +202,16 @@ function renderList(block, mount) {
     return;
   }
   const cfg = {mount: listMount};
+  // `where`: the block's standing scope, compiled to the SAME server-side
+  // filter `related` uses (one field=value param per pair, applied after the
+  // permission row filter, so it can only ever narrow what the viewer may
+  // already see). Unlike `filters` this keeps the real generator -- table
+  // mode, the schema's filter bar, search, sort, realtime -- which is what an
+  // index over one slice of a shared collection (inbound shipments) needs.
+  // The filter bar layers the operator's picks on top of this base scope.
+  if (block.where && typeof block.where === "object" && Object.keys(block.where).length) {
+    cfg.where = block.where;
+  }
   // `search`/`sort`/`add` turn a bare list into the full working page every
   // collection used to hand-write: a search box, a newest/oldest select, an
   // Add button, and an inline create/edit panel. Sixteen page objects were

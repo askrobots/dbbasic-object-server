@@ -1,13 +1,14 @@
 {
   "id": "app-timers",
   "name": "Timers",
-  "version": "0.4.0",
-  "description": "Time logs against tasks: server-enforced start/stop (62 — Timer) over an is_running/duration_seconds pair, at most one running timer per owner. No page object — generated UIs (Scroll) manage time logs from the schema; start/stop/running are server routes (objects/site/timer_actions.py), not a generator page. Ships an attention provider for the `submitted` gate: approval is by design somebody other than the person who logged the hours, which makes it the kind of queue that can only be cleared by a person who has no reason to know it exists. The count carries hours in its detail, because nine entries and sixty-two hours are different amounts of afternoon.",
+  "version": "0.5.0",
+  "description": "Time logs against tasks: server-enforced start/stop (62 \u2014 Timer) over an is_running/duration_seconds pair, at most one running timer per owner. No page object \u2014 generated UIs (Scroll) manage time logs from the schema; start/stop/running are server routes (objects/site/timer_actions.py), not a generator page. Ships an attention provider for the `submitted` gate: approval is by design somebody other than the person who logged the hours, which makes it the kind of queue that can only be cleared by a person who has no reason to know it exists. The count carries hours in its detail, because nine entries and sixty-two hours are different amounts of afternoon. 0.5.0 gives the approval queue somewhere to go. \"No page object\" was true and also meant no page: the attention count pointed at /time-logs?status=submitted and nothing answered that path, so the one surface that could tell an approver a queue exists linked nowhere. This version keeps the no-page-object rule and satisfies it the way the rest of the box does -- a seeded `views` record over the generic `list` block and a site_routes row to site_view_render, which is data, not a page object -- so `nav_optional` is retired and the app finally declares a door. The list omits the search box because time_logs declares no `search` fields (a box that searches nothing is a lie about the collection), keeps Add because retroactive logging is ordinary and the schema was always meant to be form-managed, and does not link rows because no /time-logs/{id} permalink is seeded. The attention path drops its query string: the generic filter bar comes from the schema's views.filter_fields and reads nothing from the URL, so ?status=submitted would have promised a filtered queue and delivered the whole collection. Worth naming as a live gap rather than hiding: every generic edit affordance is owner-gated, so an approver can SEE the submitted rows here but still approves through the API, because a manager is by definition not the owner of the hours they are approving.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
   "dependencies": [
-    "app-tasks"
+    "app-tasks",
+    "app-views"
   ],
   "objects": [
     {
@@ -50,18 +51,33 @@
     {
       "collection": "rate_cards",
       "path": "seed/rate_cards.tsv"
+    },
+    {
+      "collection": "views",
+      "path": "seed/views.tsv"
     }
   ],
   "migrations": [],
-  "nav_optional": true,
+  "nav": [
+    {
+      "id": "time_logs",
+      "label": "Time",
+      "path": "/time-logs",
+      "blurb": "Hours logged against tasks, and the ones waiting for an approver",
+      "surface": "member",
+      "group": "Work",
+      "order": 45
+    }
+  ],
   "attention": [
     {
       "id": "time_to_approve",
       "object_id": "system_time_attention",
       "label": "Time to approve",
-      "path": "/time-logs?status=submitted",
+      "path": "/time-logs",
       "group": "Money",
-      "severity": "normal"
+      "severity": "normal",
+      "nav_id": "time_logs"
     }
   ]
 }

@@ -3,4 +3,5 @@ route_finance_setup_accounts	/finance/setup-accounts	site_setup_accounts	10
 route_journal_detail	/journals/{journal_id}	site_view_render	10
 route_statements	/statements	site_statements	10
 route_fin_accounts_index	/accounts	site_view_render	20
+route_expenses_index	/expenses	site_view_render	20
 route_fin_journals_index	/journals	site_view_render	20

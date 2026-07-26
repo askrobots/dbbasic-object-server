@@ -1,0 +1,2 @@
+id	title	route	layout	blocks	owner_id	is_public	pinned	created_at
+view_time_logs	Time Logs	/time-logs	single	"[{""kind"": ""list"", ""collection"": ""time_logs"", ""sort"": true, ""add"": true, ""owner_scoped"": true, ""title_field"": ""notes"", ""add_label"": ""+ Log Time"", ""link"": false}]"		true	false	2026-01-01T00:00:00

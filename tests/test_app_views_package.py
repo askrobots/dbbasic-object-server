@@ -376,3 +376,42 @@ def test_view_render_has_an_aggregate_block_for_document_totals():
     # money-aware (cents -> whole units) and the balance badge
     assert '/_cents$/.test(String(f)) ? (Number(n) / 100).toFixed(2)' in source
     assert "block.balance" in source and "Balanced" in source and "Not balanced" in source
+
+
+def test_a_list_block_can_carry_a_standing_where_instead_of_a_client_side_filter():
+    """0.4.0: `where` on a `list` block compiles to the same server-side
+    narrowing `related` has always used (window.dbbasicList's `where`, one
+    field=value param applied after the permission row filter), so an index
+    over ONE SLICE of a shared collection keeps the real generator.
+
+    The distinction matters because the alternative is not merely worse, it
+    is unusable: `filters` routes the block through renderFilteredList,
+    which titles every row `title || name || id`, so a collection with
+    neither a title nor a name (shipments) renders as a column of raw ids
+    with no table, no filter bar, no search and no row cap. app-returns'
+    inbound bench is the case that surfaced it.
+    """
+    source = (APP_VIEWS_DIR / "objects" / "site" / "view_render.py").read_text()
+
+    assert "cfg.where = block.where" in source
+    # It must NOT divert into the client-side fallback: that branch keys off
+    # `filters`/`limit` only, and `where` has to reach window.dbbasicList.
+    assert "const hasFilters = block.filters && Object.keys(block.filters).length;" in source
+    assert "block.where" not in source.split("const hasFilters")[1].split("const cfg =")[0]
+    # Literals only -- a parent-scoped child list is what `related` is for.
+    assert "resolveRecordId(block.where" not in source
+
+
+def test_the_where_key_is_documented_where_a_view_author_would_look():
+    """A block option nobody can discover is a private API. The module
+    docstring is the vocabulary reference for this renderer, and it has to
+    say why `where` exists next to `filters` rather than just that it
+    does."""
+    source = (APP_VIEWS_DIR / "objects" / "site" / "view_render.py").read_text()
+    docstring = source.split('"""')[1]
+
+    assert "`where`" in docstring
+    assert "filters" in docstring
+    manifest = json.loads((APP_VIEWS_DIR / "dbbasic-package.json").read_text())
+    assert manifest["version"] == "0.4.0"
+    assert "`where`" in manifest["description"]

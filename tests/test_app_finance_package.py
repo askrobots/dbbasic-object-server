@@ -404,3 +404,65 @@ def test_object_finance_module_has_no_disallowed_org_names():
     path = Path(__file__).resolve().parents[1] / "object_finance.py"
     text = path.read_text(encoding="utf-8", errors="ignore")
     assert not banned.search(text), f"disallowed reference found in {path}"
+
+
+# --- 0.11.0: the expenses index the attention count had been assuming --------
+#
+# 0.10.0 shipped a provider counting expenses at `submitted` and pointed it
+# at /expenses?status=submitted. `expenses` had a schema, a hook, a books
+# poster and a badge on the home page, and no route on the box served
+# /expenses -- so the queue was a number on a poster. Same fix as /accounts
+# and /journals got in 0.7.0: a views record, a route, a door.
+
+
+def _finance_seed_rows(name):
+    import csv
+
+    with open(APP_FINANCE_DIR / "seed" / f"{name}.tsv", newline="") as handle:
+        return list(csv.DictReader(handle, delimiter="\t"))
+
+
+def test_the_expenses_index_is_a_seeded_view_over_the_list_block():
+    rows = [row for row in _finance_seed_rows("views") if row["id"] == "view_expenses"]
+    assert len(rows) == 1
+    view = rows[0]
+    assert view["route"] == "/expenses"
+    blocks = json.loads(view["blocks"])
+    assert len(blocks) == 1
+    block = blocks[0]
+    assert block["kind"] == "list"
+    assert block["collection"] == "expenses"
+    assert block["add"] is True          # claiming an expense is form work
+    assert block["link"] is False        # /expenses/{id} is not seeded here
+
+
+def test_the_expenses_route_points_at_the_generic_renderer():
+    rows = [row for row in _finance_seed_rows("site_routes")
+            if row["id"] == "route_expenses_index"]
+    assert len(rows) == 1
+    assert rows[0]["pattern"] == "/expenses"
+    assert rows[0]["object_id"] == "site_view_render"
+
+
+def test_expenses_gets_a_money_door_beside_the_ledger_pages():
+    package = object_packages.get_package("app-finance", root=PACKAGES_ROOT)
+    entry = next(row for row in package["nav"] if row["id"] == "expenses")
+
+    assert entry["path"] == "/expenses"
+    assert entry["group"] == "Money"
+    assert entry["surface"] == "member"
+
+
+def test_the_expenses_count_opens_the_index_and_claims_no_filter():
+    """The status filter comes from the schema's own filter_fields, drawn
+    as a bar on the page. Nothing reads it out of the URL, so the path
+    that ships is the honest index rather than a link that would land on
+    every expense while the badge beside it said four."""
+    package = object_packages.get_package("app-finance", root=PACKAGES_ROOT)
+    source = next(row for row in package["attention"]
+                  if row["id"] == "expenses_to_approve")
+
+    assert source["path"] == "/expenses"
+    assert "?" not in source["path"]
+    assert source["nav_id"] == "expenses"
+    assert "status" in _schema("expenses")["views"]["filter_fields"]

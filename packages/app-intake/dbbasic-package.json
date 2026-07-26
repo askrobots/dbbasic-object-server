@@ -1,12 +1,14 @@
 {
   "id": "app-intake",
   "name": "Document Intake",
-  "version": "0.2.0",
-  "description": "Snap it, confirm it, post it. Paperwork sprawl is the reason small-business books rot: entries are tedious, so they do not get made, and by the time anybody looks the receipts are in a coat pocket. This package is the ENTRY path -- ingest is fast and dumb (store the bytes, return, read it later) because capture has to happen at the moment the paper exists; a reading pass produces a structured GUESS; and a human confirms it into a draft expense stamped generated_from scans/{id}. Nothing an engine reads is ever posted. That boundary (docs/logic-decisions.md #6, #8) is what lets this ship with no AI at all: the default extractor is regex over OCR text -- free, no key, no per-page cost -- and it degrades to 'found nothing, here is your image, type the total' rather than to wrong numbers in the ledger. An AI vision engine plugs into the same shape and simply guesses better, on the owner's own key, which is the only path with a real marginal cost. The image itself is the audit evidence auditors actually want, and it stays attached to the expense, the journal and the invoice line that follow from it. Pairs with bank reconciliation: the bank line says money left, the scan says why. Ships an attention provider: a scan at `extracted` is the pipeline's honest stopping point, where a machine declined to turn somebody's money into an expense on its own, and system_scan_processor has been returning a key literally named `needing_a_human` that no surface ever read. Now it is a number on the home page. No nav entry: app-intake still ships no door of its own, so the count files under Money and clicks through to the scans list.",
+  "version": "0.3.0",
+  "description": "Snap it, confirm it, post it. Paperwork sprawl is the reason small-business books rot: entries are tedious, so they do not get made, and by the time anybody looks the receipts are in a coat pocket. This package is the ENTRY path -- ingest is fast and dumb (store the bytes, return, read it later) because capture has to happen at the moment the paper exists; a reading pass produces a structured GUESS; and a human confirms it into a draft expense stamped generated_from scans/{id}. Nothing an engine reads is ever posted. That boundary (docs/logic-decisions.md #6, #8) is what lets this ship with no AI at all: the default extractor is regex over OCR text -- free, no key, no per-page cost -- and it degrades to 'found nothing, here is your image, type the total' rather than to wrong numbers in the ledger. An AI vision engine plugs into the same shape and simply guesses better, on the owner's own key, which is the only path with a real marginal cost. The image itself is the audit evidence auditors actually want, and it stays attached to the expense, the journal and the invoice line that follow from it. Pairs with bank reconciliation: the bank line says money left, the scan says why. Ships an attention provider: a scan at `extracted` is the pipeline's honest stopping point, where a machine declined to turn somebody's money into an expense on its own, and system_scan_processor has been returning a key literally named `needing_a_human` that no surface ever read. Now it is a number on the home page. No nav entry: app-intake still ships no door of its own, so the count files under Money and clicks through to the scans list. 0.3.0 gives the count a page to land on. The manifest has been claiming since 0.2.0 that the receipts queue \"clicks through to the scans list\", and there was no scans list: the attention path pointed at /scans?status=extracted, which no route answered, so the most valuable number on the home page was a dead link -- a notification rather than a workflow. The fix is a seeded `views` record over the generic `list` block plus a site_routes row to site_view_render, the same zero-page-code shape /products, /invoices and /accounts already use, and the nav entry that was previously declared absent. The list has no Add button on purpose: a scan is bytes plus a hash, raised by action_scan_ingest from whatever took the photograph, and a form that let somebody type a filename would create a row with no document behind it for the processor to choke on. Rows do not link either -- there is no /scans/{id} permalink in this slice, and a row that navigates to a 404 is worse than a row that does not navigate. The path is now the UNFILTERED index, deliberately: the generic list renderer builds its filter bar from the schema's views.filter_fields and takes no preselection from the query string, so ?status=extracted would have been a link that silently landed on the whole collection while claiming to be a queue. An honest broader list with `status` one click away in the filter bar beats a filter that does nothing.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
-  "dependencies": [],
+  "dependencies": [
+    "app-views"
+  ],
   "objects": [
     {
       "id": "action_scan_ingest",
@@ -44,6 +46,14 @@
     {
       "collection": "scans",
       "path": "seed/scans.tsv"
+    },
+    {
+      "collection": "views",
+      "path": "seed/views.tsv"
+    },
+    {
+      "collection": "site_routes",
+      "path": "seed/site_routes.tsv"
     }
   ],
   "migrations": [],
@@ -55,14 +65,26 @@
       "description": "Read pending scans and produce confirmable suggestions. Hourly rather than daily because somebody who just photographed a receipt expects to see it read, and nothing here posts anything."
     }
   ],
+  "nav": [
+    {
+      "id": "scans",
+      "label": "Scans",
+      "path": "/scans",
+      "blurb": "Paperwork photographed in, waiting to be read and confirmed",
+      "surface": "member",
+      "group": "Money",
+      "order": 380
+    }
+  ],
   "attention": [
     {
       "id": "scans_to_confirm",
       "object_id": "system_scan_attention",
       "label": "Receipts to confirm",
-      "path": "/scans?status=extracted",
+      "path": "/scans",
       "group": "Money",
-      "severity": "normal"
+      "severity": "normal",
+      "nav_id": "scans"
     }
   ]
 }
