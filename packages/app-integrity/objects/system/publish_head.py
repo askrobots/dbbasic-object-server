@@ -122,9 +122,18 @@ def _settings(base):
             for row in rows if _text(row.get("key"))}
 
 
+# app_settings requires a non-empty value, so "not configured" needs a
+# word rather than an empty string. `none` is already this codebase's
+# sentinel for it (carrier.provider reads "", "none" and "manual" the same
+# way), and without honouring it here an operator who writes `none` to
+# mean "nothing" gets a daily failed lodgement against a host called
+# `none` -- noise that looks exactly like a real notary being down.
+NOT_CONFIGURED = frozenset({"none", "off", "disabled", "-"})
+
+
 def _csv_setting(settings, key):
     return [part.strip() for part in settings.get(key, "").split(",")
-            if part.strip()]
+            if part.strip() and part.strip().lower() not in NOT_CONFIGURED]
 
 
 def _schema_fields(base, collection):

@@ -568,3 +568,23 @@ def test_the_loopback_escape_is_an_env_var_and_not_a_setting(data_dir,
     assert refused["results"][0]["status"] == "failed"
     assert "is this server" in object_records.read_collection_records(
         "anchors", base_dir=data_dir)[0]["note"]
+
+
+def test_none_means_not_configured_rather_than_a_host_called_none(data_dir):
+    """app_settings requires a non-empty value, so "nothing" needs a word.
+    Without this an operator who writes `none` to mean "no notary" gets a
+    daily failed lodgement against a host literally called `none` -- noise
+    indistinguishable from a real notary being down, which is the worst
+    shape a false alarm can take."""
+    setting(data_dir, "ledger.anchored_collections", "wallet_entries")
+    setting(data_dir, "notary.endpoints", "none")
+    wallet_entry(data_dir, 1000)
+
+    result = run("system_publish_head")
+    assert result["endpoints"] == []
+    assert result["results"][0]["status"] == "recorded"     # not "failed"
+    assert "notary.endpoints" in result["warning"]
+
+    anchor = object_records.read_collection_records("anchors",
+                                                    base_dir=data_dir)[0]
+    assert anchor["note"] == ""
