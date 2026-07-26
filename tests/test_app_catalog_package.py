@@ -46,6 +46,7 @@ def test_get_package_normalizes_app_catalog_manifest():
     assert package["name"] == "Catalog"
     assert {schema["collection"] for schema in package["schemas"]} == {
         "products", "locations", "stock_moves",
+        "backorders", "reorder_suggestions",
     }
     # site_product_view was removed in the Stage-6 retrofit: the product
     # permalink is now a seeded 59 detail view (site_view_render), not a
@@ -55,15 +56,21 @@ def test_get_package_normalizes_app_catalog_manifest():
     # 0.5.0 deletes the bespoke /products and /locations list page objects
     # too: both held no business logic and are now seeded VIEW records over
     # the generic `list` block.
+    # 0.7.0 adds the commerce-ops trio: the nightly reorder fold and the
+    # two counts (products to reorder, backorders waiting).
     assert {obj["id"] for obj in package["objects"]} == {
         "site_stock",
         "hook_stock_moves",
         "system_stock_books",
         "action_apply_count",
+        "system_reorder_check",
+        "system_reorder_attention",
+        "system_backorder_attention",
     }
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
     assert {entry["collection"] for entry in package["seed"]} == {
         "products", "locations", "stock_moves", "views", "site_routes",
+        "backorders", "reorder_suggestions",
     }
 
 
@@ -82,6 +89,7 @@ def test_dry_run_app_catalog_package_is_safe(tmp_path):
     assert plan["warnings"] == []
     assert {schema["collection"] for schema in plan["schemas"]} == {
         "products", "locations", "stock_moves",
+        "backorders", "reorder_suggestions",
     }
 
 
@@ -120,8 +128,11 @@ def test_schema_json_file_is_valid_and_versioned():
     assert payload["name"] == "products"
     # v1 -> v2: ASSET-only fields gained `visible_when` (Stage-6). v2 -> v3:
     # entity_id scoping FK (65 multi-entity). v3 -> v4: merchandising --
-    # category, parent_product_id, options, image_file_id. All additive.
-    assert payload["version"] == 4
+    # category, parent_product_id, options, image_file_id. v4 -> v5: the
+    # commerce money layer -- is_gift_card, backorder_policy, reorder_point,
+    # reorder_quantity. All additive, and every one of them defaults to the
+    # behaviour the shop already had.
+    assert payload["version"] == 5
     assert payload["views"]["list_mode"] == "table"
     # entity_id is a relation into the entities collection (scoping FK).
     by_name = {f["name"]: f for f in payload["fields"]}
@@ -226,9 +237,13 @@ def test_products_forms_and_views_match_the_brief():
     # v4 put `category` on the form and in the list, and made it the one
     # filter: it is the field the shop page groups on, so somebody typing
     # it in has to be able to see what they already used.
+    # v5 put the two stock-policy questions on the form beside is_active --
+    # what to do when it runs out, and when to buy more -- because they are
+    # decisions about the same shelf.
     assert schema["forms"]["default"]["fields"] == [
-        "name", "sku", "product_type", "category", "description",
-        "price_cents", "cost_cents", "currency", "unit", "is_active",
+        "name", "sku", "product_type", "is_gift_card", "category",
+        "description", "price_cents", "cost_cents", "currency", "unit",
+        "is_active", "backorder_policy", "reorder_point", "reorder_quantity",
     ]
     assert schema["views"]["list_fields"] == [
         "name", "sku", "product_type", "category", "price_cents", "is_active",
@@ -258,10 +273,15 @@ def test_products_schema_field_order_matches_the_brief():
     # what a thing is filed under, what it is a variant of, which variant
     # it is, and what it looks like -- rather than being appended past the
     # asset block, so the schema still reads top to bottom as a product.
+    # v5's three stock-policy fields sit together after is_active -- what
+    # happens when the shelf is empty, and when to buy more -- because they
+    # are one conversation about one shelf. is_gift_card sits beside
+    # product_type instead, since it answers what the thing IS.
     assert field_names == [
-        "id", "name", "sku", "product_type", "description",
+        "id", "name", "sku", "product_type", "is_gift_card", "description",
         "category", "parent_product_id", "options", "image_file_id",
         "price_cents", "cost_cents", "currency", "unit", "is_active",
+        "backorder_policy", "reorder_point", "reorder_quantity",
         "income_account", "expense_account", "digital_file_id",
         "useful_life_months", "purchase_date", "salvage_value_cents",
         "depreciation_method", "asset_status", "owner_id", "entity_id", "created_at",

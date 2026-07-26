@@ -1,12 +1,14 @@
 {
   "id": "app-catalog",
   "name": "Catalog",
-  "version": "0.6.0",
-  "description": "Product catalog + STOCK: owner-scoped CRUD on products, locations, and stock_moves. Money is integer cents (price_cents/cost_cents/salvage_value_cents/unit_cost_cents), never a float or currency type. Locations are a self-parent hierarchy (warehouse->zone->aisle->shelf->bin) plus virtual customer/supplier/virtual counterparties, reconciled against a private predecessor-system catalog audit, not part of this repo (its Location model: 'warehouse->bin hierarchy + virtual customer/supplier'). stock_moves is an append-mode, immutable ledger (docs/append-only-storage-design.md) -- stock LEVELS are never stored, only derived by folding the log (see object_stock.py at the repo root, imported by objects/site/stock.py the same way app-orders' order_totals.py imports object_records), matching the source model's own 'StockMove immutable, levels DERIVED not stored.' /stock computes its owner-scoped summary server-side rather than adding a new API endpoint -- see objects/site/stock.py's own module docstring for why. Deferred to a later slice: orders/invoices wiring a stock_moves row on ship/receive (the source's own WEAK note: 'order confirm/deliver does NOT create StockMoves'), the actual finance-account linkage / depreciation-schedule behavior behind income_account/expense_account/the ASSET fields (carried as plain fields now so nothing needs a backfill later), and a public storefront view (products stay owner-scoped, same posture as app-invoices). The /products/{product_id:uuid} permalink is a seeded 59 detail view (site_view_render) with an owner-aware editable/deletable detail block -- no bespoke per-product page. 0.5.0 deletes the bespoke /products and /locations list page objects too: both were ~85-90 lines of chrome around two generator calls with no business logic of their own, and are now seeded VIEW records over the same `list` block the product detail's own retrofit already established the precedent for. 0.6.0 is merchandising, and it is four fields and no new machinery: category, parent_product_id, options and image_file_id. The decision worth writing down is that A VARIANT IS A PRODUCT. A size or a colour gets its own products row -- own SKU, own price_cents, own stock level -- with parent_product_id naming the row it displays under and options ({\"size\": \"M\", \"colour\": \"navy\"}) saying what it is. stock_moves, pricing, checkout, fulfillment and system_stock_books ALL key on product_id today, so variants-as-products means every one of them keeps working with zero changes, and \"how many medium navy totes are left?\" is answered by the same fold that answers every other stock question, on the same ledger, with no special case. The alternative -- a variants table hanging under one product, which is the model most platforms ship -- gives every integration a products-vs-variants split personality, two ids for one sellable thing, and a stock report that cannot answer the question anybody actually asks. The whole cost of the decision lands in one place, the shop page, which collapses children under the parent card and offers a picker; nothing else in the building learns a new noun. category is ONE FLAT TEXT FIELD on purpose: a taxonomy tree is what a store builds because a platform offers one and then argues about forever, while a small business has eight categories and knows their names, and tags already exist for anyone who genuinely outgrows flat. image_file_id is a POINTER into the owner's files served by the endpoint app-files already has (/api/files/{id}) -- the catalogue stores an id, never bytes, exactly as digital_file_id does, which is what keeps a product row a row.",
+  "version": "0.7.0",
+  "description": "Product catalog + STOCK: owner-scoped CRUD on products, locations, and stock_moves. Money is integer cents (price_cents/cost_cents/salvage_value_cents/unit_cost_cents), never a float or currency type. Locations are a self-parent hierarchy (warehouse->zone->aisle->shelf->bin) plus virtual customer/supplier/virtual counterparties, reconciled against a private predecessor-system catalog audit, not part of this repo (its Location model: 'warehouse->bin hierarchy + virtual customer/supplier'). stock_moves is an append-mode, immutable ledger (docs/append-only-storage-design.md) -- stock LEVELS are never stored, only derived by folding the log (see object_stock.py at the repo root, imported by objects/site/stock.py the same way app-orders' order_totals.py imports object_records), matching the source model's own 'StockMove immutable, levels DERIVED not stored.' /stock computes its owner-scoped summary server-side rather than adding a new API endpoint -- see objects/site/stock.py's own module docstring for why. Deferred to a later slice: orders/invoices wiring a stock_moves row on ship/receive (the source's own WEAK note: 'order confirm/deliver does NOT create StockMoves'), the actual finance-account linkage / depreciation-schedule behavior behind income_account/expense_account/the ASSET fields (carried as plain fields now so nothing needs a backfill later), and a public storefront view (products stay owner-scoped, same posture as app-invoices). The /products/{product_id:uuid} permalink is a seeded 59 detail view (site_view_render) with an owner-aware editable/deletable detail block -- no bespoke per-product page. 0.5.0 deletes the bespoke /products and /locations list page objects too: both were ~85-90 lines of chrome around two generator calls with no business logic of their own, and are now seeded VIEW records over the same `list` block the product detail's own retrofit already established the precedent for. 0.6.0 is merchandising, and it is four fields and no new machinery: category, parent_product_id, options and image_file_id. The decision worth writing down is that A VARIANT IS A PRODUCT. A size or a colour gets its own products row -- own SKU, own price_cents, own stock level -- with parent_product_id naming the row it displays under and options ({\"size\": \"M\", \"colour\": \"navy\"}) saying what it is. stock_moves, pricing, checkout, fulfillment and system_stock_books ALL key on product_id today, so variants-as-products means every one of them keeps working with zero changes, and \"how many medium navy totes are left?\" is answered by the same fold that answers every other stock question, on the same ledger, with no special case. The alternative -- a variants table hanging under one product, which is the model most platforms ship -- gives every integration a products-vs-variants split personality, two ids for one sellable thing, and a stock report that cannot answer the question anybody actually asks. The whole cost of the decision lands in one place, the shop page, which collapses children under the parent card and offers a picker; nothing else in the building learns a new noun. category is ONE FLAT TEXT FIELD on purpose: a taxonomy tree is what a store builds because a platform offers one and then argues about forever, while a small business has eight categories and knows their names, and tags already exist for anyone who genuinely outgrows flat. image_file_id is a POINTER into the owner's files served by the endpoint app-files already has (/api/files/{id}) -- the catalogue stores an id, never bytes, exactly as digital_file_id does, which is what keeps a product row a row. 0.7.0 is the catalogue's half of the commerce money layer, and it is four product fields plus two small collections. BACKORDERS: products.backorder_policy (refuse | allow | notify) decides what checkout does when the shelf is empty, and it defaults to REFUSE, which is exactly today's behaviour -- that default is the whole safety of the feature, because a catalogue written before the column existed, or a value typed wrong, behaves as the shop behaved yesterday and nothing starts selling stock it does not have. allow takes the order and records a backorders row, because real stores sell the incoming shipment and a hard refusal on every empty shelf is a shop turning away money; notify still refuses but keeps the customer's interest, since refusing while remembering beats refusing and forgetting. REORDER POINTS: reorder_point and reorder_quantity feed system_reorder_check, a nightly pass that folds the stock ledger and writes a SUGGESTION -- never a purchase order, and the noun is the design. The fold can see the shelf; it cannot see the supplier's minimum, the lead time, the case size, the promotion about to triple demand or the cash in the bank, and a machine that orders on its own is how a business ends up with forty pallets of the wrong thing. The server notices, the person decides. One OPEN suggestion per product, refreshed rather than appended, because a nightly pass that added a row a night would turn one true fact into ninety and a queue nobody reads. Both collections carry an attention count at severity warning: nobody chose to be in either queue, and in the backorder case somebody has already paid. is_gift_card is the fourth field and belongs to app-billing's half of the slice: it marks a product that sells STORED VALUE rather than a thing, an ordinary sale whose fulfilment credits a wallet instead of putting something in a box. It is a flag and not a sixth product_type on purpose -- a gift card can be physical or digital, and folding it into that enum would make every place that asks 'does this sit on a shelf?' learn a new answer.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
-  "dependencies": ["app-views"],
+  "dependencies": [
+    "app-views"
+  ],
   "objects": [
     {
       "id": "site_stock",
@@ -23,6 +25,18 @@
     {
       "id": "action_apply_count",
       "path": "objects/action/apply_count.py"
+    },
+    {
+      "id": "system_reorder_check",
+      "path": "objects/system/reorder_check.py"
+    },
+    {
+      "id": "system_reorder_attention",
+      "path": "objects/system/reorder_attention.py"
+    },
+    {
+      "id": "system_backorder_attention",
+      "path": "objects/system/backorder_attention.py"
     }
   ],
   "schemas": [
@@ -37,6 +51,14 @@
     {
       "collection": "stock_moves",
       "path": "schemas/stock_moves.json"
+    },
+    {
+      "collection": "backorders",
+      "path": "schemas/backorders.json"
+    },
+    {
+      "collection": "reorder_suggestions",
+      "path": "schemas/reorder_suggestions.json"
     }
   ],
   "permissions": [
@@ -64,6 +86,14 @@
     {
       "collection": "site_routes",
       "path": "seed/site_routes.tsv"
+    },
+    {
+      "collection": "backorders",
+      "path": "seed/backorders.tsv"
+    },
+    {
+      "collection": "reorder_suggestions",
+      "path": "seed/reorder_suggestions.tsv"
     }
   ],
   "migrations": [],
@@ -94,6 +124,52 @@
       "surface": "member",
       "group": "Warehouse",
       "order": 510
+    },
+    {
+      "id": "reorder",
+      "label": "Reorder",
+      "path": "/reorder",
+      "blurb": "Products at or below their reorder point, with how many to buy",
+      "surface": "member",
+      "group": "Warehouse",
+      "order": 505
+    },
+    {
+      "id": "backorders",
+      "label": "Backorders",
+      "path": "/backorders",
+      "blurb": "Goods somebody is waiting for, and people to tell when stock lands",
+      "surface": "member",
+      "group": "Warehouse",
+      "order": 507
+    }
+  ],
+  "schedules": [
+    {
+      "id": "reorder_check_daily",
+      "object_id": "system_reorder_check",
+      "schedule": "15 4 * * *",
+      "description": "Fold stock levels and suggest what to reorder. Nightly rather than hourly because a reorder point is a decision somebody makes once a day at most, and a queue that changed every hour would be one nobody trusts. Early, at 4:15, so the suggestion is waiting when the shop opens and so it does not collide with the accounting passes later in the morning. It never raises a purchase order: the shelf is the only thing it can see."
+    }
+  ],
+  "attention": [
+    {
+      "id": "products_to_reorder",
+      "object_id": "system_reorder_attention",
+      "label": "Products to reorder",
+      "path": "/reorder",
+      "group": "Warehouse",
+      "severity": "warning",
+      "nav_id": "reorder"
+    },
+    {
+      "id": "backorders_waiting",
+      "object_id": "system_backorder_attention",
+      "label": "Backorders waiting",
+      "path": "/backorders",
+      "group": "Warehouse",
+      "severity": "warning",
+      "nav_id": "backorders"
     }
   ]
 }

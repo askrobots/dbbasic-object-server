@@ -1,0 +1,3 @@
+id	title	route	layout	blocks	owner_id	is_public	pinned	created_at
+view_promotions	Promotions	/promotions	single	"[{""kind"": ""list"", ""collection"": ""promotions"", ""search"": true, ""sort"": true, ""add"": true, ""owner_scoped"": true, ""title_field"": ""code"", ""add_label"": ""+ New Code""}]"		true	false	2026-01-01T00:00:00
+view_promotion_redemptions	Redemptions	/promotions/redemptions	single	"[{""kind"": ""list"", ""collection"": ""promotion_redemptions"", ""search"": false, ""sort"": true, ""add"": false, ""owner_scoped"": true, ""title_field"": ""code_used""}]"		true	false	2026-01-01T00:00:00

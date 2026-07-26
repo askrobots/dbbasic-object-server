@@ -2,3 +2,5 @@ id	pattern	object_id	priority
 route_products_detail	/products/{product_id}	site_view_render	10
 route_locations_index	/locations	site_view_render	20
 route_products_index	/products	site_view_render	20
+route_reorder_index	/reorder	site_view_render	20
+route_backorders_index	/backorders	site_view_render	20

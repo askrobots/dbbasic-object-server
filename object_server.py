@@ -369,6 +369,7 @@ async def app(scope: dict[str, Any], receive, send) -> None:
         request_headers.get(object_correlation.CORRELATION_ID_HEADER)
     )
     correlation_token = object_correlation.set_current_correlation_id(correlation_id)
+    minted_visitor_token = _mint_visitor_token(path, request_headers)
 
     async def send_with_metrics(message):
         nonlocal status_code
@@ -385,6 +386,14 @@ async def app(scope: dict[str, Any], receive, send) -> None:
                         correlation_id.encode("latin-1"),
                     )
                 )
+            if minted_visitor_token:
+                headers.append((
+                    b"set-cookie",
+                    object_analytics.visitor_cookie_header(
+                        minted_visitor_token,
+                        secure=_cookie_secure_enabled(),
+                    ).encode("latin-1"),
+                ))
             message = {**message, "headers": headers}
         await send(message)
 
@@ -394,12 +403,36 @@ async def app(scope: dict[str, Any], receive, send) -> None:
         object_correlation.reset_current_correlation_id(correlation_token)
         duration_ms = (time.perf_counter() - started_at) * 1000
         _metrics.record_request(method, path, status_code, duration_ms)
-        await _capture_page_view(scope, method, path, status_code, request_headers)
+        await _capture_page_view(scope, method, path, status_code, request_headers,
+                                 minted_visitor_token=minted_visitor_token)
+
+
+def _mint_visitor_token(path: str, headers: dict[str, str]) -> str:
+    """A new anonymous visitor token for this response, or "" for none.
+
+    Decided ONCE per request, before the response starts, because the same
+    answer is needed in two places: the `set-cookie` header on the way out
+    and the `page_views.session_id` stamp on the row that request writes.
+    Minting it twice would give a visitor a cookie whose value never
+    appears in the log.
+
+    Every refusal (analytics off, DNT, Sec-GPC, an existing cookie, a
+    non-page path) lives in object_analytics.should_set_visitor_cookie,
+    which is pure and tested; this function is the wiring and nothing
+    else. Best-effort like the rest of the analytics path: a visitor
+    counter may never be the reason a response fails.
+    """
+    try:
+        if not object_analytics.should_set_visitor_cookie(path, headers):
+            return ""
+        return object_analytics.new_visitor_token()
+    except Exception:  # noqa: BLE001 -- analytics must never break a response
+        return ""
 
 
 async def _capture_page_view(
     scope: dict[str, Any], method: str, path: str, status_code: int,
-    headers: dict[str, str],
+    headers: dict[str, str], *, minted_visitor_token: str = "",
 ) -> None:
     """Append one page_views row for this request (analytics). Off unless
     DBBASIC_ANALYTICS is set; skips asset/infra paths; the file write is
@@ -418,6 +451,10 @@ async def _capture_page_view(
             # stays cheap, and a signed-in member browsing is deliberately
             # still counted as the real traffic it is.
             is_operator=_request_is_operator(headers),
+            # The cookie this response is setting. The browser cannot have
+            # sent it back yet, so without it the first page of every visit
+            # is threadless and every funnel starts one step late.
+            minted_visitor_token=minted_visitor_token,
         )
         base_dir = _data_dir()
 
@@ -11335,7 +11372,8 @@ def _session_cookie_token(headers: dict[str, str]) -> str | None:
 
 
 def _object_visible_cookies(headers: dict[str, str]) -> dict[str, str]:
-    """The cookies a routed object may see: everything EXCEPT the session.
+    """The cookies a routed object may see: everything EXCEPT the session
+    and the analytics visitor token.
 
     A page object has a real need for its own cookies -- a basket token, a
     display preference -- and no way to read them otherwise. It has no need
@@ -11346,9 +11384,20 @@ def _object_visible_cookies(headers: dict[str, str]) -> dict[str, str]:
     the shopper who lost their account would have done nothing but visit a
     shop. Same reasoning that keeps `cookie` and `authorization` out of
     _WEBHOOK_HEADER_SAFELIST: app state travels, the credential does not.
+
+    `dbbasic_visitor` is withheld for a different reason and just as
+    firmly. It is not a credential -- it is an opaque analytics thread,
+    and it is worth nothing to the object that would read it, because the
+    server already stamps it into `page_views` itself. What an object
+    COULD do with it is the problem: write it next to a `user_id` in some
+    collection of its own, which is the join docs/analytics.md's cookie
+    rule 4 forbids, performed by a package the operator installed rather
+    than by anything in this repo. A token nobody but the capture hook
+    can see cannot be joined to anything.
     """
     cookies = _parse_cookie_header(headers.get("cookie", ""))
     cookies.pop(SESSION_COOKIE_NAME, None)
+    cookies.pop(object_analytics.VISITOR_COOKIE_NAME, None)
     return cookies
 
 

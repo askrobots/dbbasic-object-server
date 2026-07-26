@@ -26,6 +26,29 @@
     },
     {
       "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update"],
+      "collection": "backorders",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "signed-in users manage the backorders raised against their own catalogue, same owner-scoped posture as products. No DELETE: a customer who waited and was let down is a fact the shop should still be able to find, and `cancelled` says that out loud where a missing row would say nothing at all"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["read", "update"],
+      "collection": "reorder_suggestions",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "a suggestion is written by system_reorder_check and ANSWERED by a human -- marked ordered when somebody bought some, dismissed when somebody looked and said no -- so read and update are the whole of what a person needs. No CREATE: a suggestion typed by hand is an observation of a shelf nobody looked at, and the nightly fold is the only thing here that has looked. No DELETE either: the pass keeps one open row per product and refreshes it, so there is nothing to tidy up, and a dismissed row is the record that somebody decided"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "system_reorder_check",
+      "reason": "an operator who has just set a reorder point should be able to poke the nightly pass without an admin token. It is safe to run by hand for the same reason it is safe to retry: it writes SUGGESTIONS and never a purchase order, it keeps one open row per product and refreshes rather than appends, so the worst a signed-in person can do with it is learn today's answer a few hours early"
+    },
+    {
+      "effect": "allow",
       "principal": "public",
       "actions": ["execute"],
       "object_id": "site_products",

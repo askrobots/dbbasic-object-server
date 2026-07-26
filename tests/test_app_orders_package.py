@@ -132,12 +132,14 @@ def test_schema_json_files_are_valid_and_versioned():
     # of the status ladder. Five fields and three enum values rather than a
     # new collection, because everything about the money was already here
     # and only the time was missing; see tests/test_pickup_slots.py.
-    # order_lines v2: line_note and modifier_cents, the per-line half of
+    # order_lines v3: `backordered`, so the shipment builder can tell a
+    # line the shop agreed to owe from one it can actually pack.
+    # v2 added line_note and modifier_cents, the per-line half of
     # the same slice -- "no onions" is an instruction on one line of one
     # order and has no SKU, and "oat milk +60c" is that instruction with a
     # price delta, which is why the delta lives on the line rather than in
     # the price book. See tests/test_pickup_service.py.
-    expected_versions = {"orders": 7, "order_lines": 2}
+    expected_versions = {"orders": 7, "order_lines": 3}
     for name in ("orders", "order_lines"):
         payload = json.loads((APP_ORDERS_DIR / "schemas" / f"{name}.json").read_text())
         assert payload["name"] == name
@@ -311,10 +313,12 @@ def test_order_lines_schema_matches_the_brief():
     # v2 puts line_note and modifier_cents next to the unit price they
     # qualify, and before the line total they are folded into -- reading
     # order is the argument: the note and the delta belong to the thing
-    # being sold, not to the arithmetic underneath it.
+    # being sold, not to the arithmetic underneath it. v3 adds
+    # `backordered` last among the facts about the sale and still ahead of
+    # the arithmetic, for the same reason.
     assert field_names == [
         "id", "order_id", "product_id", "description", "quantity", "unit_price_cents",
-        "line_note", "modifier_cents",
+        "line_note", "modifier_cents", "backordered",
         "line_total_cents", "tax_rate_bps", "line_tax_cents", "owner_id", "created_at",
     ]
     by_name = {f["name"]: f for f in schema["fields"]}

@@ -354,11 +354,21 @@ def test_a_shipping_checkout_is_exactly_what_it_was(tmp_path, monkeypatch):
 
     result = checkout(objects_root, today="2026-07-27")
     assert result["ok"] is True
+    # No pickup key of any kind. The three money-layer totals are always
+    # present and always zero here: discount_cents, credit_applied_cents
+    # and an amount_due_cents that equals the total are what "this shop
+    # runs no promotions and took no gift card" looks like, and a response
+    # that omitted them would make a storefront ask whether the shop had
+    # them rather than read the number.
     assert set(result) == {
         "ok", "order_id", "cart_id", "subtotal_cents", "shipping_cents",
         "shipping_free", "tax_cents", "total_cents", "lines",
         "status_of_order", "note", "track_path", "invoice_id", "pay_path",
+        "discount_cents", "credit_applied_cents", "amount_due_cents",
     }
+    assert result["discount_cents"] == 0
+    assert result["credit_applied_cents"] == 0
+    assert result["amount_due_cents"] == result["total_cents"]
 
     order = orders(data_dir)[0]
     # `shipping` arrives from the schema default, not from this file: the

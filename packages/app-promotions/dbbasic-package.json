@@ -1,0 +1,61 @@
+{
+  "id": "app-promotions",
+  "name": "Promotions",
+  "version": "0.1.0",
+  "description": "Discount codes, and two decisions that keep them from becoming a money leak. FIRST: THE TERMS ARE STAMPED AT REDEMPTION. promotion_redemptions copies the kind, the value, the minimum and the stacking rule onto its own row at the moment somebody uses a code, so raising SPRING20 from 10% to 20% next month changes what the NEXT shopper gets and restates nothing anybody has already been given -- the same act as stamping a rate on an approved time entry and a price on an invoice line (docs/logic-decisions.md #1). Without it, a shop that edits a live promotion silently rewrites every receipt issued under it, and the customer holding one is right and cannot be answered. SECOND: THE COUNT OF REDEMPTIONS IS A FOLD OVER THE REDEMPTIONS. promotions.redemptions_used is a rollup and nothing may write it; object_promotions.blockers counts the ROWS rather than reading the caption, because a gate that trusts a derived number it could recompute authorises the 1001st use of a 1000-use code the instant that number goes stale -- the identical argument hook_wallet_entries makes about summing the ledger instead of reading wallets.balance_minor. Codes VERSION FORWARD like rate_cards and billing_plans: re-running a campaign on new terms is a new row with a later starts_on, never an edit, and object_promotions.resolve picks the newest one that had already started and NEVER LOOKS FORWARD. The arithmetic lives in object_promotions at the repo root -- pure, no I/O, testable without a data directory, the same posture as object_rates and object_cart -- and the shop calls it: action_checkout resolves the code, folds its blockers in beside the price, stock and collection-time blockers so every reason a checkout cannot proceed is reported TOGETHER, and passes the discount through object_cart.checkout_totals, which is the single fold every caller restates. The discount comes off the TAXABLE BASE BEFORE TAX IS COMPUTED, which is not a preference but what every jurisdiction levying a sales or value-added tax actually requires: tax is owed on the consideration, a seller's own price reduction reduces it, and charging tax on a pre-discount price is the kind of small systematic error an audit finds by multiplying one rate by one column. On the invoice the discount is a LINE, negative, so the invoice total stays the sum of its own lines and a customer can see what came off instead of finding it welded into a number they cannot check. Refusals name their NUMBER or their DATE -- 'that code ended on the 30th of June' ends the conversation where 'that code has expired' starts a support ticket -- and object_promotions.blockers returns a list rather than a first failure, because a checkout that reveals one problem per attempt is a checkout people abandon. action_check_promotion is the basket page's 'apply' button and is public on the OBJECT and never on the collection: it quotes, it reserves nothing, it writes nothing, and there is no way to enumerate codes through it, which is what stops it becoming an oracle for every unpublished campaign the shop is holding back. What is deliberately NOT here, named so it reads as a decision: automatic promotions with no code (a rule engine over baskets, which is a product and not a field), buy-one-get-one and other line-shaped offers (they need a promotion to reason about LINES, and this one reasons about a total), and stacking more than one code per basket -- the field exists, the fold honours it, and checkout applies one code, because two codes each meant to be the whole offer add up to a discount nobody signed off.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": ["app-orders", "app-views"],
+  "objects": [
+    {
+      "id": "action_check_promotion",
+      "path": "objects/action/check_promotion.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "promotions",
+      "path": "schemas/promotions.json"
+    },
+    {
+      "collection": "promotion_redemptions",
+      "path": "schemas/promotion_redemptions.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "promotions",
+      "path": "seed/promotions.tsv"
+    },
+    {
+      "collection": "promotion_redemptions",
+      "path": "seed/promotion_redemptions.tsv"
+    },
+    {
+      "collection": "site_routes",
+      "path": "seed/site_routes.tsv"
+    },
+    {
+      "collection": "views",
+      "path": "seed/views.tsv"
+    }
+  ],
+  "migrations": [],
+  "nav": [
+    {
+      "id": "promotions",
+      "label": "Promotions",
+      "path": "/promotions",
+      "blurb": "Discount codes, what each takes off, and how many times it has been used",
+      "surface": "operator",
+      "group": "Commerce",
+      "order": 440
+    }
+  ]
+}

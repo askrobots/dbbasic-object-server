@@ -1,0 +1,25 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update"],
+      "collection": "promotions",
+      "reason": "a discount code is shop-wide furniture rather than one person's paperwork -- whoever is running the campaign writes it and whoever is on shift has to be able to read it back when a customer rings about it. No DELETE: a promotion somebody has already redeemed cannot be made not to have existed, and its redemption rows point at it; the way to stop a code is is_active=false, which leaves every past receipt readable"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["read"],
+      "collection": "promotion_redemptions",
+      "reason": "READ ONLY, deliberately, and for everyone rather than nobody. These rows are the redemption count that gates every code, so a person answering 'why was my code refused?' needs to see them -- and nothing but action_checkout may write one, because a redemption typed by hand is a use of a code that never happened against an order that never got the discount. The collection is append-storage besides, so there is no update or delete to grant"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "action_check_promotion",
+      "reason": "PUBLIC on the check action only, never on the collection: this shop's default sale is a guest checkout, so the person typing a code has no account and this is the read their basket page needs. What it hands back is bounded to what a shop would print on the offer itself -- whether the code works on this basket, what it takes off, and every reason it does not -- with no owner, no notes, no list of codes to enumerate and no way to redeem anything. The same split app-pickup uses for action_pickup_slots and app-invoices for site_invoice_portal"
+    }
+  ]
+}

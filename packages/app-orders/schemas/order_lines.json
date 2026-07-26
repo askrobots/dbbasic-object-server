@@ -1,8 +1,8 @@
 {
   "name": "order_lines",
   "title": "Order Lines",
-  "version": 2,
-  "description": "Line items belonging to one order. line_total_cents and line_tax_cents are stamped by the order_totals handler on every create/update/delete. See objects/system/order_totals.py. A line also carries what was ASKED FOR on it (line_note) and what that instruction cost (modifier_cents), which is how a kitchen order works: a large latte is genuinely its own product with its own SKU, price and stock, and variants-as-products already handles that, but 'no onions' is not a product -- it has no SKU, it is an instruction on one line of one order, and modelling it as a product would put thousands of dead rows in the catalogue. 'Oat milk +60c' is the same instruction with a price delta, which is why the delta lives on the line rather than in the price book. The note is never money and the delta always is: the note prints on the kitchen ticket and touches no total, while the delta is inside line_total_cents everywhere that number is folded.",
+  "version": 3,
+  "description": "Line items belonging to one order. line_total_cents and line_tax_cents are stamped by the order_totals handler on every create/update/delete. See objects/system/order_totals.py. A line also carries what was ASKED FOR on it (line_note) and what that instruction cost (modifier_cents), which is how a kitchen order works: a large latte is genuinely its own product with its own SKU, price and stock, and variants-as-products already handles that, but 'no onions' is not a product -- it has no SKU, it is an instruction on one line of one order, and modelling it as a product would put thousands of dead rows in the catalogue. 'Oat milk +60c' is the same instruction with a price delta, which is why the delta lives on the line rather than in the price book. The note is never money and the delta always is: the note prints on the kitchen ticket and touches no total, while the delta is inside line_total_cents everywhere that number is folded. v3 records whether a line was BACKORDERED -- sold with the shop's open agreement that the goods are not here yet. The shipment builder reads it so a parcel never claims to carry what the shelf does not hold.",
   "fields": [
     {
       "name": "id"
@@ -21,7 +21,10 @@
     {
       "name": "product_id",
       "label": "Product",
-      "relation": {"collection": "products", "display_field": "name"},
+      "relation": {
+        "collection": "products",
+        "display_field": "name"
+      },
       "help": "Optional cross-reference to app-catalog's products collection. A line may reference a catalog product or stand alone as a free-text description -- optional, not required, so this package has no hard dependency on app-catalog."
     },
     {
@@ -65,6 +68,13 @@
       "validation": {
         "min": 0
       }
+    },
+    {
+      "name": "backordered",
+      "type": "boolean",
+      "default": "false",
+      "label": "Backordered",
+      "help": "The shop sold this line knowing it did not have the goods, and said so at checkout. It lives HERE, on the order, because the picker and the packer read the order -- a fact kept only in another app's collection is a fact the warehouse never sees, and the consequence of not seeing it is a short parcel plus a stock ledger driven negative on goods nobody could pick. Written by checkout, read by the shipment builder, which packs what is on the shelf and leaves the rest owed."
     },
     {
       "name": "line_total_cents",

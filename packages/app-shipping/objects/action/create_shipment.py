@@ -36,6 +36,7 @@ from decimal import Decimal, InvalidOperation
 
 import object_ids
 import object_records
+import object_stock
 
 ACTOR = "action_create_shipment"
 
@@ -65,6 +66,10 @@ def _number(value):
     return format(value.normalize(), "f")
 
 
+def _truthy(value):
+    return _text(value).strip().lower() in ("true", "1", "yes", "on")
+
+
 def _remaining_by_line(base, order_id, order_lines):
     """How much of each order line is still owed: ordered minus everything
     already sitting on a shipment that has not been lost or bounced back.
@@ -90,11 +95,49 @@ def _remaining_by_line(base, order_id, order_lines):
         shipped[key] = shipped.get(key, Decimal(0)) + (
             _quantity(line.get("quantity")) or Decimal(0))
 
+    # A BACKORDERED line is one the shop openly agreed it did not have. It
+    # is owed, not packable: putting it in a parcel would send the customer
+    # a short box AND drive the stock ledger negative on goods nobody could
+    # pick, breaking both halves of the promise `backorder_policy: allow`
+    # makes. So its shippable remainder is capped at what is actually on
+    # the shelf -- the rest simply stays owed until stock arrives and a
+    # second shipment carries it, which is the ordinary partial-fulfilment
+    # path this action already supports.
+    on_hand = _available_by_product(base, order_lines)
+
     remaining = {}
     for line in order_lines:
         ordered = _quantity(line.get("quantity")) or Decimal(0)
-        remaining[line["id"]] = ordered - shipped.get(line["id"], Decimal(0))
+        owed = ordered - shipped.get(line["id"], Decimal(0))
+        if _truthy(line.get("backordered")):
+            product_id = _text(line.get("product_id"))
+            available = on_hand.get(product_id, Decimal(0))
+            owed = min(owed, available if available > 0 else Decimal(0))
+            on_hand[product_id] = available - owed
+        remaining[line["id"]] = owed
     return remaining
+
+
+def _available_by_product(base, order_lines):
+    """On-hand quantity for the products this order touches.
+
+    Read once for the whole order rather than per line, and only consulted
+    for backordered lines -- an ordinary line's shippable quantity is what
+    was ordered, exactly as before, because deciding availability at
+    pack time for every line would quietly turn this action into a second
+    stock gate competing with the one at checkout.
+    """
+    available = {}
+    for line in order_lines:
+        product_id = _text(line.get("product_id"))
+        if not product_id or product_id in available:
+            continue
+        try:
+            available[product_id] = object_stock.total_quantity(
+                product_id, base_dir=base)
+        except Exception:
+            available[product_id] = Decimal(0)
+    return available
 
 
 def POST(request):

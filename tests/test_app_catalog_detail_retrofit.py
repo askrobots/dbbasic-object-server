@@ -30,16 +30,20 @@ def test_manifest_drops_the_bespoke_view_object_and_seeds_the_detail_view():
     # The permalink page object is gone; 0.4.0 joined it with the
     # inventory-adjustments trio (hook/composer/count action). 0.5.0 then
     # deleted the bespoke products/locations list page objects too -- see
-    # tests/test_app_catalog_package.py.
+    # tests/test_app_catalog_package.py. 0.7.0 added the reorder pass and
+    # the two attention providers, none of which is a page.
     assert {obj["id"] for obj in package["objects"]} == {
         "site_stock",
         "hook_stock_moves", "system_stock_books", "action_apply_count",
+        "system_reorder_check", "system_reorder_attention",
+        "system_backorder_attention",
     }
     # The detail view + its route are seeded (into app-views'/site-routing's
     # own shared collections), alongside the existing products/locations/
-    # stock_moves seeds.
+    # stock_moves seeds and 0.7.0's backorders/reorder_suggestions.
     assert {entry["collection"] for entry in package["seed"]} == {
         "products", "locations", "stock_moves", "views", "site_routes",
+        "backorders", "reorder_suggestions",
     }
 
 

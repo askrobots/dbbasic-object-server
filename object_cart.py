@@ -175,9 +175,13 @@ def shipping_cents(subtotal_cents: Any, flat_cents: Any,
 def checkout_totals(items: list[dict], *, tax_rate_bps: Any = 0,
                     tax_shipping: bool = False,
                     shipping_flat_cents: Any = 0,
-                    free_over_cents: Any = 0) -> dict:
+                    free_over_cents: Any = 0,
+                    discount_cents: Any = 0,
+                    discount_on: str = "goods",
+                    credit_cents: Any = 0) -> dict:
     """The whole bill: {"lines", "subtotal_cents", "shipping_cents",
-    "tax_cents", "total_cents", "shipping_free", "count"}.
+    "tax_cents", "discount_cents", "total_cents", "credit_applied_cents",
+    "amount_due_cents", "shipping_free", "count"}.
 
     ONE function, so the arithmetic of a sale exists in exactly one
     place. The order, the invoice, the basket page and the preview all
@@ -201,20 +205,63 @@ def checkout_totals(items: list[dict], *, tax_rate_bps: Any = 0,
     happens to be zero. The page needs to tell somebody they earned free
     delivery, and a bare 0 cannot distinguish "you saved the postage"
     from "this shop does not post things".
+
+    **A DISCOUNT COMES OFF THE TAXABLE BASE BEFORE TAX IS COMPUTED.** That
+    is not a preference; it is what every jurisdiction that levies a sales
+    or value-added tax actually requires. Tax is owed on the CONSIDERATION
+    -- what the buyer actually gives up -- and a seller's own price
+    reduction reduces it. Charging tax on the pre-discount price collects
+    money from the customer that the shop then either remits on revenue it
+    never earned or keeps, and both of those are the kind of small
+    systematic error an audit finds by multiplying one rate by one column.
+    So the discount is subtracted here, before tax_cents is called, and
+    never afterwards.
+
+    `discount_on` says which half of the bill the reduction comes off --
+    "goods" (a percentage or a fixed amount) or "shipping" (a free-postage
+    promotion) -- because where a jurisdiction taxes delivery, free
+    postage must remove that tax too. The discount is CLAMPED to the base
+    it comes off, so no combination of arguments can produce a negative
+    total: a shop does not owe money to somebody for shopping.
+
+    `credit_cents` is TENDER, not a price reduction -- a gift card or
+    store credit -- and it therefore lands AFTER tax and changes no
+    taxable base at all. A gift card is money the customer already gave
+    the shop; treating it as a discount would let a shop sell $100 of
+    goods and remit tax on $60, which is fraud with a rounding error's
+    face. So `total_cents` stays the value of the SALE (what the order is
+    worth, what the books see) and `amount_due_cents` is what is left to
+    pay after the credit is applied. Where no credit is used the two are
+    identical, which is every existing caller.
     """
     summary = totals(items)
     subtotal = summary["subtotal_cents"]
     postage = shipping_cents(subtotal, shipping_flat_cents, free_over_cents)
-    taxable = subtotal + (postage if tax_shipping else 0)
+
+    wanted = max(0, _int(discount_cents))
+    on_shipping = _text(discount_on).lower() == "shipping"
+    goods_off = 0 if on_shipping else min(wanted, subtotal)
+    postage_off = min(wanted, postage) if on_shipping else 0
+    discount = goods_off + postage_off
+
+    taxable = (subtotal - goods_off) + ((postage - postage_off)
+                                        if tax_shipping else 0)
     tax = tax_cents(taxable, tax_rate_bps)
+    total = subtotal + postage - discount + tax
+    credit = min(max(0, _int(credit_cents)), total)
     return {
         "lines": summary["lines"],
         "count": summary["count"],
         "subtotal_cents": subtotal,
         "shipping_cents": postage,
         "shipping_free": bool(_int(shipping_flat_cents) > 0 and postage == 0),
+        "discount_cents": discount,
+        "discount_on": "shipping" if on_shipping else "goods",
+        "taxable_cents": taxable,
         "tax_cents": tax,
-        "total_cents": subtotal + postage + tax,
+        "total_cents": total,
+        "credit_applied_cents": credit,
+        "amount_due_cents": total - credit,
     }
 
 
@@ -276,15 +323,57 @@ def availability(items: list[dict], on_hand: dict[str, Any],
     return short
 
 
+BACKORDER_POLICIES = ("refuse", "allow", "notify")
+
+
+def backorder_policy(product: dict | None) -> str:
+    """What this product's seller has said about selling it when the shelf
+    is empty: "refuse" (the default and today's behaviour), "allow" or
+    "notify".
+
+    Absent, blank or unreadable means REFUSE. That is the whole safety of
+    this feature: a catalogue written before the column existed, a product
+    somebody imported, or a policy typed wrong all behave exactly as the
+    shop behaved yesterday, and nothing starts selling stock it does not
+    have because a field was missing.
+    """
+    if not product:
+        return "refuse"
+    policy = _text(product.get("backorder_policy")).lower()
+    return policy if policy in BACKORDER_POLICIES else "refuse"
+
+
 def checkout_blockers(items: list[dict], products: dict[str, dict],
                       on_hand: dict[str, Any],
                       *, tracked: set[str] | None = None) -> dict:
     """Everything standing between this basket and an order.
 
     Returns {"empty", "price_changes", "unavailable", "inactive",
-    "can_checkout"}. Gathered in one pass and ALL reported together:
-    telling a shopper about one problem, letting them fix it, then
-    revealing the next is how a checkout gets abandoned.
+    "backordered", "notify", "can_checkout"}. Gathered in one pass and ALL
+    reported together: telling a shopper about one problem, letting them
+    fix it, then revealing the next is how a checkout gets abandoned.
+
+    **Out of stock is three answers, not one.** Real shops sell the
+    incoming shipment, and a hard refusal on every empty shelf is a shop
+    turning away money it could take. The seller decides per product
+    (products.backorder_policy):
+
+      refuse  the line blocks the checkout, exactly as it always has.
+              The default, so a catalogue that has never heard of this
+              field behaves identically.
+      allow   the line is ACCEPTED and lands in `backordered`. The order
+              is placed, the customer is told, and the goods ship when
+              stock exists -- never before.
+      notify  the line still blocks, and lands in `notify` as well, so
+              the shop can record the interest and tell somebody when it
+              is back. Refusing while remembering beats refusing and
+              forgetting, which is the current behaviour and loses the
+              customer twice.
+
+    `backordered` does NOT stop the checkout; `notify` and `unavailable`
+    do. A notify line appears in both lists on purpose: it is a blocker
+    that also happens to be worth writing down, and a caller that only
+    read `unavailable` still refuses correctly.
     """
     inactive = []
     for item in items:
@@ -300,10 +389,24 @@ def checkout_blockers(items: list[dict], products: dict[str, dict],
     changes = price_changes(items, products)
     short = availability(items, on_hand, tracked=tracked)
     empty = not [i for i in items if _num(i.get("quantity")) > 0]
+
+    refused, backordered, notify = [], [], []
+    for line in short:
+        policy = backorder_policy(products.get(line["product_id"]))
+        stamped = {**line, "backorder_policy": policy}
+        if policy == "allow":
+            backordered.append(stamped)
+            continue
+        refused.append(stamped)
+        if policy == "notify":
+            notify.append(stamped)
+
     return {
         "empty": empty,
         "price_changes": changes,
-        "unavailable": short,
+        "unavailable": refused,
         "inactive": inactive,
-        "can_checkout": not (empty or changes or short or inactive),
+        "backordered": backordered,
+        "notify": notify,
+        "can_checkout": not (empty or changes or refused or inactive),
     }

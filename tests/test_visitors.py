@@ -12,6 +12,7 @@ import pathlib
 
 from conftest import stage_collection
 
+import object_analytics
 import object_execution
 import object_records
 import object_visitors
@@ -68,6 +69,20 @@ def test_a_second_page_is_enough_on_its_own():
 def test_a_session_cookie_is_enough_on_its_own():
     rows = [dict(view("10.0.0.9", "/"), session_id="abc123")]
     assert object_visitors.classify(rows) == {"10.0.0.9": object_visitors.VISITOR}
+
+
+def test_the_visitor_cookie_is_what_makes_a_lone_front_page_hit_a_person():
+    """The classifier's "carried a session" signal is now fed by something
+    real. A browser that accepts the visitor cookie has done a thing a
+    prober does not, so a single hit on `/` -- which proves nothing on its
+    own, since `/` answers 200 to everyone -- becomes a visitor once the
+    cookie comes back. Scanners do not keep cookies, which is exactly why
+    this is a signal and not a formality."""
+    scanner = [view("10.0.0.20", "/")]
+    person = [dict(view("10.0.0.21", "/"),
+                   session_id=object_analytics.new_visitor_token())]
+    assert object_visitors.classify(scanner)["10.0.0.20"] == object_visitors.BOT
+    assert object_visitors.classify(person)["10.0.0.21"] == object_visitors.VISITOR
 
 
 def test_an_attack_payload_in_a_header_is_never_a_visitor():

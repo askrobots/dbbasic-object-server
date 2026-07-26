@@ -174,6 +174,65 @@ function, and a checkout that reached across for it would refuse orders
 on a box where the pickup app is installed but its objects are not on
 this root. Both read the same setting (`pickup.lead_minutes`) so the
 picker and the gate cannot disagree about what "too soon" means.
+
+**A DISCOUNT IS A PRICE. A GIFT CARD IS TENDER.** Two arguments arrive
+here that both make a bill smaller, and everything about how they are
+recorded follows from the fact that they are not the same kind of thing.
+
+`promo_code` reduces what the goods COST. It therefore goes through
+object_cart.checkout_totals like every other number on this sale, and it
+comes off the taxable base BEFORE tax is computed -- which is not a
+preference but what every jurisdiction levying a sales or value-added tax
+requires, because tax is owed on the consideration and a seller's own
+price reduction reduces it. On the invoice it is a LINE, negative, so the
+invoice total stays the sum of its own lines and the customer can see
+what came off instead of finding it welded into a number they cannot
+check. The terms are STAMPED on the redemption row at the moment of use
+(doctrine #1), so a promotion edited next month never restates what
+somebody already got, and the arithmetic and the refusals both live in
+object_promotions -- pure, tested without a data directory, the same
+posture object_rates keeps for rate cards.
+
+`gift_card_code` reduces what is OWED. A gift card is money the customer
+already gave this shop, so it changes no price and no taxable base: the
+order's total_cents stays the value of the sale, and the card is applied
+after tax as `amount_due_cents`. Treating it as a discount would let a
+shop sell $100 of goods and remit tax on $60. The debit is written
+against the wallet through the EXISTING hook_wallet_entries gate, ASKED
+IN PROCESS -- a trusted server-side write bypasses hooks by design, which
+is exactly why the gate has to be consulted explicitly rather than
+assumed -- so a card cannot overdraw, and the refusal a customer sees is
+the same sentence that gate gives everybody else. The matching payment is
+an ordinary payments row, because tender is a payment and this shop
+already knows what one of those is.
+
+**A preview writes NOTHING.** No redemption, no wallet debit, no payment,
+no backorder. That is stated here because it is the one property of this
+whole block that a refactor could quietly break: a preview exists so
+somebody can see what they would owe, and a preview that burned a
+single-use code or drained a gift card would be the shop charging people
+for looking. The writes all live below the `preview` return, and the
+`preview` return is above every one of them.
+
+**Out of stock is now three answers, not one** -- see
+object_cart.checkout_blockers. `refuse` (the default, and every product
+that has never heard of the field) blocks exactly as it always has;
+`allow` accepts the line, records a backorders row and marks the order
+line so the warehouse does not send goods that are not there; `notify`
+still refuses but writes down who wanted it. The default is what makes
+this safe: a shop that has configured nothing behaves byte-for-byte as it
+did before.
+
+KNOWN GAP, stated rather than hidden: marking the ORDER LINE backordered
+needs an order_lines column that app-orders does not declare yet, and
+keeping a backordered line out of a shipment needs a condition in
+app-shipping's action_create_shipment / system_order_fulfillment. Neither
+package is this slice's to change. The stamp here is schema-aware (it
+writes the field the day it exists and nothing before), the backorders
+ROW carries the fact in the meantime, and tests/test_reorder.py holds
+both halves as strict xfails -- the same thing tests/test_dropship.py did
+for its two conditions, and for the same reason: a green test over a
+shelf that silently ships is worse than a red one.
 """
 
 import os
@@ -181,10 +240,13 @@ import secrets
 from datetime import date, datetime, timedelta
 
 import object_cart
+import object_execution
 import object_ids
+import object_promotions
 import object_records
 import object_schemas
 import object_stock
+import python_object_runtime
 
 ACTOR = "action_checkout"
 
@@ -504,6 +566,338 @@ def _pickup_gate(base, request):
             "next_free": free}
 
 
+# --- the money gates ---------------------------------------------------------
+#
+# Both are inert unless the request names a code, for the same reason
+# _pickup_gate is inert for a shipping order: a shop that runs no
+# promotions and sells no gift cards must not pay a collection scan per
+# checkout, and must not be able to acquire a refusal by accident.
+
+
+def _rows(base, collection):
+    try:
+        return object_records.read_collection_records(collection, base_dir=base)
+    except Exception:
+        return None
+
+
+def _call(object_id, payload, *, method="POST"):
+    """Run another installed object in process -- the same mechanism
+    system_shop_fulfillment uses to reach app-shipping, and
+    action_resolve_dispute uses to reach hook_refunds.
+
+    Returns (result, error). A missing object (the app is simply not
+    installed) is an error string, never an exception.
+    """
+    try:
+        runtime = python_object_runtime.PythonObjectRuntime()
+        outcome = object_execution.execute_object(
+            runtime,
+            object_execution.ObjectExecutionRequest(
+                object_id, method=method, payload=payload))
+    except Exception as exc:
+        return None, str(exc)[:200]
+    if not outcome.ok:
+        message = getattr(outcome.error, "message", "") if outcome.error else ""
+        return None, _text(message)[:200] or f"{object_id} failed"
+    return outcome.result, ""
+
+
+def _promotion_gate(base, request, subtotal_cents, postage_cents, today):
+    """Everything a discount code can be wrong about, gathered at once.
+
+    Returns {code, promo, problems, discount_cents, applies_to}. `problems`
+    is a LIST, from object_promotions.blockers, and it is folded in with
+    the price, stock and collection-time problems below rather than
+    returned on its own -- a shopper told their code expired, who fixes
+    that and is then told the basket is too small, has left.
+
+    No code returns immediately having read nothing.
+    """
+    empty = {"code": "", "promo": None, "problems": [], "discount_cents": 0,
+             "applies_to": "goods"}
+    code = object_promotions.normalize_code(request.get("promo_code"))
+    if not code:
+        return empty
+
+    promotions = _rows(base, "promotions")
+    if promotions is None:
+        # No promotions app on this box. An honest refusal beats silently
+        # ignoring a code the shopper believes they are getting.
+        return {**empty, "code": code,
+                "problems": [f"There is no promotion with the code '{code}'."]}
+    redemptions = _rows(base, "promotion_redemptions")
+    if redemptions is None:
+        # The limits cannot be counted, and a limit that cannot be counted
+        # has not been met. Refusing is the safe direction: a code honoured
+        # once too often is money, a code refused once is an email.
+        return {**empty, "code": code,
+                "problems": ["That code cannot be checked right now (the "
+                             "redemption log is unreadable)."]}
+
+    promo = object_promotions.resolve(code, promotions, on_date=today)
+    problems = object_promotions.blockers(
+        promo, subtotal_cents, _text(request.get("customer_email")),
+        redemptions, on_date=today, code=code)
+    if problems:
+        return {**empty, "code": code, "promo": promo, "problems": problems}
+    return {"code": code, "promo": promo, "problems": [],
+            "discount_cents": object_promotions.discount_for(
+                subtotal_cents, postage_cents, promo),
+            "applies_to": object_promotions.applies_to(promo)}
+
+
+def _gift_card_gate(base, request):
+    """The card, its balance, and every reason it cannot be spent.
+
+    Returns {code, wallet, problems, available_cents}. The balance is
+    SUMMED FROM THE ENTRIES rather than read off wallets.balance_minor,
+    for the reason hook_wallet_entries states about its own gate: that
+    number is a rollup, and a decision that leans on a derived value it
+    could recompute is a decision that authorises a debit against money
+    which does not exist the moment the rollup goes stale.
+
+    This only decides how much to OFFER. The authoritative refusal comes
+    from hook_wallet_entries at the moment of the debit, which is asked
+    in process below -- there is exactly one gate on this ledger and it
+    is not this function.
+    """
+    empty = {"code": "", "wallet": None, "problems": [], "available_cents": 0}
+    code = _text(request.get("gift_card_code")).upper()
+    if not code:
+        return empty
+
+    wallets = _rows(base, "wallets")
+    if wallets is None:
+        return {**empty, "code": code,
+                "problems": [f"There is no gift card with the code '{code}' "
+                             f"(this shop has no wallets)."]}
+    wallet = next((row for row in wallets
+                   if _text(row.get("code")).upper() == code), None)
+    if wallet is None:
+        return {**empty, "code": code,
+                "problems": [f"There is no gift card with the code '{code}'."]}
+
+    problems = []
+    if not _truthy(wallet.get("is_active") or "true"):
+        problems.append(f"The gift card {code} is not active.")
+
+    entries = _rows(base, "wallet_entries")
+    if entries is None:
+        return {**empty, "code": code, "wallet": wallet,
+                "problems": problems + [
+                    f"The balance of gift card {code} cannot be read, so it "
+                    f"cannot be spent right now."]}
+    balance = sum(_int(row.get("amount_minor"))
+                  for row in entries
+                  if _text(row.get("wallet_id")) == _text(wallet.get("id")))
+    if balance <= 0:
+        problems.append(f"The gift card {code} has nothing left on it.")
+
+    return {"code": code, "wallet": wallet, "problems": problems,
+            "available_cents": max(0, balance)}
+
+
+def _spend_the_card(base, wallet, amount_cents, *, order_id, invoice_id,
+                    today, owner_id):
+    """Debit the wallet and record the tender. Returns (applied, error).
+
+    **THE GATE IS ASKED, NOT ASSUMED.** hook_wallet_entries is the one
+    authority on whether a wallet can afford a debit -- it sums the
+    entries rather than trusting the balance rollup, and it documents its
+    own check-then-append race honestly. A trusted server-side write like
+    this one BYPASSES hooks by design, so the only way to be under that
+    gate is to ask it in process and surface its refusal verbatim, which
+    is exactly what action_resolve_dispute does with hook_refunds. A
+    second opinion written here would be a second ceiling to get wrong,
+    and would quote a customer a different answer depending on which door
+    their spend came through.
+
+    Fails CLOSED: a gate that cannot be consulted has not said yes.
+
+    **The order of the two writes, and the compensation.** The debit is
+    taken first and the payment recorded second, because a payment
+    against an untouched card is the shop giving away goods. If the
+    payment cannot be written the debit is REVERSED by a compensating
+    credit -- the ledger's own correction mechanism, never an edit or a
+    delete, exactly as refunds correct payments and reversing journals
+    correct postings. The customer's balance ends where it started and
+    the checkout says what happened.
+    """
+    wallet_id = _text(wallet.get("id"))
+    entry = {
+        "id": object_ids.new_uuid4(),
+        "wallet_id": wallet_id,
+        # Negative: money leaving. The sign convention is the ledger's.
+        "amount_minor": str(-int(amount_cents)),
+        "kind": "debit",
+        "description": f"Spent at checkout on order {order_id[:8].upper()}",
+        "reference": f"orders/{order_id}",
+        # Provenance, so a replayed checkout finds its own marker instead
+        # of charging the card twice (docs/logic-decisions.md #7).
+        "generated_from": f"checkout/{order_id}",
+        "owner_id": _text(wallet.get("owner_id")) or owner_id,
+    }
+
+    verdict, error = _call("hook_wallet_entries",
+                           {"action": "create", "collection": "wallet_entries",
+                            "record": entry},
+                           method="BEFORE_WRITE")
+    if error:
+        return 0, (f"the wallet gate could not be consulted ({error}), so the "
+                   f"gift card was not charged")
+    if isinstance(verdict, dict) and verdict.get("error"):
+        return 0, _text(verdict.get("error"))
+
+    try:
+        object_records.create_collection_record(
+            "wallet_entries", entry, base_dir=base, actor=ACTOR)
+    except Exception as exc:
+        return 0, f"the gift card could not be charged: {str(exc)[:120]}"
+
+    try:
+        object_records.create_collection_record(
+            "payments",
+            {
+                "id": object_ids.new_uuid4(),
+                "invoice_id": invoice_id,
+                "amount_cents": str(int(amount_cents)),
+                # `other` because payments.method has no wallet entry and
+                # app-payments' enum is not this slice's to widen. The
+                # reference names the wallet, so what this was is findable
+                # rather than merely labelled.
+                "method": "other",
+                "received_on": today,
+                "reference": f"wallets/{wallet_id}",
+                "status": "received",
+                "notes": (f"Gift card {_text(wallet.get('code'))} redeemed by "
+                          f"{ACTOR} [orders/{order_id}]"),
+                "owner_id": owner_id,
+            },
+            base_dir=base, actor=ACTOR)
+    except Exception as exc:
+        # Put the money back. A compensating entry, never an edit: the
+        # ledger is append-only and a mistaken charge is corrected by a
+        # record that says so.
+        try:
+            object_records.create_collection_record(
+                "wallet_entries",
+                {"id": object_ids.new_uuid4(),
+                 "wallet_id": wallet_id,
+                 "amount_minor": str(int(amount_cents)),
+                 "kind": "adjustment",
+                 "description": ("Reversed: the payment against this order "
+                                 "could not be recorded"),
+                 "reference": f"orders/{order_id}",
+                 "generated_from": f"checkout_reversal/{order_id}",
+                 "owner_id": _text(wallet.get("owner_id")) or owner_id},
+                base_dir=base, actor=ACTOR)
+        except Exception:
+            return int(amount_cents), (
+                f"the gift card was charged but the payment could not be "
+                f"recorded ({str(exc)[:100]}) AND the charge could not be "
+                f"reversed -- this wallet is short and needs a human")
+        return 0, (f"the payment could not be recorded "
+                   f"({str(exc)[:120]}); the gift card was charged and the "
+                   f"charge has been reversed")
+
+    return int(amount_cents), ""
+
+
+def _record_backorders(base, lines, order_id, line_ids, email, today, cart):
+    """A row per line the shop agreed to owe. Returns what it wrote.
+
+    Best-effort by construction: the sale has already happened by the time
+    this runs, and a backorders collection that is absent (a shop still on
+    app-catalog 0.6) must cost the warehouse a queue entry rather than
+    cost the shopper their order.
+    """
+    if not lines:
+        return []
+    written = []
+    for line in lines:
+        row_id = object_ids.new_uuid4()
+        try:
+            object_records.create_collection_record(
+                "backorders",
+                {"id": row_id,
+                 "product_id": line["product_id"],
+                 "kind": "backorder",
+                 "order_id": order_id,
+                 "order_line_id": line_ids.get(line["cart_item_id"], ""),
+                 # What was SHORT, not what was ordered: the rest of the
+                 # line is ordinary stock that goes out today.
+                 "quantity": _text(line.get("short_by")),
+                 "customer_email": email,
+                 "status": "open",
+                 "requested_on": today,
+                 "owner_id": _text(cart.get("owner_id"))},
+                base_dir=base, actor=ACTOR)
+        except Exception:
+            continue
+        written.append({"backorder_id": row_id,
+                        "product_id": line["product_id"],
+                        "description": _text(line.get("description")),
+                        "short_by": _text(line.get("short_by"))})
+    return written
+
+
+def _record_notify_interest(base, lines, products, email, today, cart):
+    """Who wanted what the shop just refused to sell them.
+
+    Written on the REFUSAL path, which is the only moment this fact
+    exists. Refusing while remembering beats refusing and forgetting,
+    which is what the shop did before and what loses the same customer
+    twice.
+
+    Needs an address: a record of interest with no way to reach the
+    interested party is a record of nothing, so a checkout with no email
+    writes none and the response says so by simply not listing any.
+
+    Idempotent on (product, email) while a row is still open, so a shopper
+    who presses the button five times is one person waiting, not five.
+    """
+    if not lines or not email:
+        return []
+    existing = _rows(base, "backorders")
+    if existing is None:
+        return []
+    already = {(_text(row.get("product_id")),
+                _text(row.get("customer_email")).lower())
+               for row in existing
+               if _text(row.get("kind")) == "notify"
+               and _text(row.get("status")) == "open"}
+
+    written = []
+    for line in lines:
+        key = (line["product_id"], email.lower())
+        if key in already:
+            continue
+        already.add(key)
+        row_id = object_ids.new_uuid4()
+        try:
+            object_records.create_collection_record(
+                "backorders",
+                {"id": row_id,
+                 "product_id": line["product_id"],
+                 "kind": "notify",
+                 # No order: nothing was sold, which is the whole
+                 # distinction between this row and a backorder.
+                 "order_id": "",
+                 "quantity": _text(line.get("short_by")),
+                 "customer_email": email,
+                 "status": "open",
+                 "requested_on": today,
+                 "owner_id": _text(cart.get("owner_id"))},
+                base_dir=base, actor=ACTOR)
+        except Exception:
+            continue
+        written.append({"backorder_id": row_id,
+                        "product_id": line["product_id"],
+                        "description": _text(line.get("description"))})
+    return written
+
+
 def _slot_refusal(pickup):
     """The pickup half of a 409, shaped so a storefront can render the next
     free time as a button rather than parsing it back out of a sentence."""
@@ -579,57 +973,127 @@ def POST(request):
                         "the shopper has agreed to the current ones.",
                 **(_slot_refusal(pickup) if pickup["problems"] else {})}
 
-    if blockers["inactive"] or blockers["unavailable"] or pickup["problems"]:
+    # Prices confirmed: adopt the live ones so the order records what the
+    # shopper actually agreed to, not the number they first saw. Moved
+    # ABOVE the remaining refusals because the money gates below have to
+    # judge a discount code's minimum spend against the basket the shopper
+    # is actually agreeing to -- a code checked against a stale subtotal is
+    # a code that passes here and fails on the invoice.
+    if blockers["price_changes"] and _truthy(request.get("confirm_prices")):
+        for item in items:
+            product = products.get(_text(item.get("product_id")))
+            if product:
+                item["unit_price_cents"] = str(product.get("price_cents") or 0)
+
+    today = _text(request.get("today")) or date.today().isoformat()
+    charges = _tax_and_shipping_settings(base)
+    email = _text(request.get("customer_email"))
+    # The sale before any code or card touches it. The promotion's minimum
+    # spend is judged on GOODS -- the number a shopper can see on the
+    # basket page and check for themselves -- and the free-postage
+    # threshold on the same pre-discount subtotal, so "free over $50" means
+    # what the banner says rather than what a code left behind.
+    quoted = object_cart.checkout_totals(items, **charges)
+    promo = _promotion_gate(base, request, quoted["subtotal_cents"],
+                            quoted["shipping_cents"], today)
+    card = _gift_card_gate(base, request)
+    money_problems = promo["problems"] + card["problems"]
+
+    if (blockers["inactive"] or blockers["unavailable"] or pickup["problems"]
+            or money_problems):
         # One 409 carrying everything wrong with this checkout. The
         # sentence changes depending on what is actually broken, because
         # "some items cannot be ordered right now" over a perfectly good
         # basket whose only problem is a full 6pm slot is a message that
         # sends the shopper looking in the wrong place.
+        #
+        # The code and the card are refused HERE, beside the stock and the
+        # slot, and never on their own: a shopper told their code expired,
+        # who finds another and is then told an item is out of stock, is a
+        # shopper who has left.
         items_wrong = bool(blockers["inactive"] or blockers["unavailable"])
         if items_wrong and pickup["problems"]:
             error = ("Some items cannot be ordered right now, and the "
                      "collection time is no longer available.")
         elif items_wrong:
             error = "Some items cannot be ordered right now."
-        else:
+        elif pickup["problems"]:
             error = " ".join(pickup["problems"])
-        return {"status": 409,
-                "error": error,
-                "unavailable": blockers["unavailable"],
-                "inactive": blockers["inactive"],
-                **(_slot_refusal(pickup) if pickup["problems"] else {})}
+        else:
+            error = " ".join(money_problems)
+        refusal = {"status": 409,
+                   "error": error,
+                   "unavailable": blockers["unavailable"],
+                   "inactive": blockers["inactive"],
+                   **(_slot_refusal(pickup) if pickup["problems"] else {})}
+        if money_problems:
+            # Both lists, separately, so a storefront can put each sentence
+            # under the box it belongs to instead of next to the basket.
+            refusal["money_problems"] = money_problems
+            if promo["problems"]:
+                refusal["promo_problems"] = promo["problems"]
+            if card["problems"]:
+                refusal["gift_card_problems"] = card["problems"]
+        # Somebody wanted something the shop refused to sell them, and the
+        # seller asked to be told about it (products.backorder_policy =
+        # notify). Written on the REFUSAL path deliberately: this is the
+        # only moment the interest exists, and forgetting it is how the
+        # same customer is lost twice.
+        #
+        # Not on a PREVIEW, though. A preview is a look, and the rule that
+        # a preview writes nothing has to hold on the refusal path too or
+        # it does not hold at all -- a storefront that quotes the basket
+        # before submitting it would otherwise file a waiting list entry
+        # for everybody who glanced at an empty shelf.
+        if not _truthy(request.get("preview")):
+            recorded = _record_notify_interest(base, blockers["notify"],
+                                               products, email, today, cart)
+            if recorded:
+                refusal["interest_recorded"] = recorded
+        return refusal
 
-    # Prices confirmed: adopt the live ones so the order records what the
-    # shopper actually agreed to, not the number they first saw.
-    if blockers["price_changes"]:
-        for item in items:
-            product = products.get(_text(item.get("product_id")))
-            if product:
-                item["unit_price_cents"] = str(product.get("price_cents") or 0)
-
-    charges = _tax_and_shipping_settings(base)
-    summary = object_cart.checkout_totals(items, **charges)
-    email = _text(request.get("customer_email"))
+    summary = object_cart.checkout_totals(
+        items, **charges,
+        # A price reduction: off the taxable base, before tax.
+        discount_cents=promo["discount_cents"],
+        discount_on=promo["applies_to"],
+        # Tender: after tax, changing no price and no taxable base.
+        credit_cents=card["available_cents"])
 
     if _truthy(request.get("preview")):
         # The whole breakdown, because a preview exists so somebody can
         # see what they are about to owe -- a subtotal alone would hide
         # exactly the two numbers this preview was extended to show.
-        return {"ok": True, "preview": True, "cart_id": cart["id"],
-                "subtotal_cents": summary["subtotal_cents"],
-                "shipping_cents": summary["shipping_cents"],
-                "shipping_free": summary["shipping_free"],
-                "tax_cents": summary["tax_cents"],
-                "total_cents": summary["total_cents"],
-                "lines": summary["lines"],
-                "price_changes": blockers["price_changes"]}
+        #
+        # AND IT WRITES NOTHING. No redemption row, no wallet debit, no
+        # payment, no backorder. A preview that burned a single-use code
+        # or drained a gift card would be a shop charging people for
+        # looking, and every write in this object is below this return
+        # precisely so that stays true.
+        quote = {"ok": True, "preview": True, "cart_id": cart["id"],
+                 "subtotal_cents": summary["subtotal_cents"],
+                 "shipping_cents": summary["shipping_cents"],
+                 "shipping_free": summary["shipping_free"],
+                 "discount_cents": summary["discount_cents"],
+                 "tax_cents": summary["tax_cents"],
+                 "total_cents": summary["total_cents"],
+                 "credit_applied_cents": summary["credit_applied_cents"],
+                 "amount_due_cents": summary["amount_due_cents"],
+                 "lines": summary["lines"],
+                 "price_changes": blockers["price_changes"]}
+        if promo["code"]:
+            quote["promo_code"] = promo["code"]
+        if card["code"]:
+            quote["gift_card_code"] = card["code"]
+        if blockers["backordered"]:
+            quote["backordered"] = blockers["backordered"]
+        return quote
 
     if not email:
         return {"status": 400,
                 "error": "An email address is needed to send the receipt to."}
 
     order_id = object_ids.new_uuid4()
-    today = _text(request.get("today")) or date.today().isoformat()
     # The order's own capability token, minted HERE and not left to
     # system_order_portal_link, for exactly the reason the invoice's token
     # below is minted here: that handler is a reaction -- post-commit and
@@ -732,6 +1196,18 @@ def POST(request):
     # note, a rejected write would cost the shopper the order.
     line_extras = [field for field in ("line_note", "modifier_cents")
                    if _has_field(base, "order_lines", field)]
+    # Which lines the shop agreed to owe rather than to hand over today.
+    # The MARK belongs on the order line, because the picker and the packer
+    # read the order and a fact that lives only on a basket is a fact the
+    # warehouse never sees -- but order_lines does not declare the column
+    # yet (app-orders is not this slice's to change), so the same
+    # schema-aware posture every other field here uses applies: it is
+    # written the day it exists, and until then the backorders ROW below
+    # carries it. See the module docstring's KNOWN GAP.
+    backordered_items = {row["cart_item_id"]: row
+                         for row in blockers["backordered"]}
+    marks_backorders = _has_field(base, "order_lines", "backordered")
+    line_ids = {}
     for line in summary["lines"]:
         order_line = {
             "id": object_ids.new_uuid4(),
@@ -747,8 +1223,54 @@ def POST(request):
             order_line["line_note"] = _text(line.get("line_note"))
         if "modifier_cents" in line_extras:
             order_line["modifier_cents"] = str(line.get("modifier_cents") or 0)
+        if marks_backorders and line["cart_item_id"] in backordered_items:
+            order_line["backordered"] = "true"
         object_records.create_collection_record(
             "order_lines", order_line, base_dir=base, actor=ACTOR)
+        line_ids[line["cart_item_id"]] = order_line["id"]
+
+    # The backorders themselves, once the order exists to point at. Written
+    # here rather than beside the blockers because a row naming an order id
+    # that was never created would be a queue full of ghosts.
+    backordered = _record_backorders(base, blockers["backordered"], order_id,
+                                     line_ids, email, today, cart)
+
+    # The redemption, with the TERMS STAMPED ON IT. Written once the order
+    # exists, because a redemption naming an order that was never created
+    # is a used-up code against nothing. Wrapped, because a code that
+    # cannot be recorded must not cost the shopper the order they just
+    # placed -- the discount is already in the totals above, and a missing
+    # redemption row is visible (and its absence undercounts, which is the
+    # forgiving direction) where a lost order is not.
+    redemption_id = ""
+    redemption_error = ""
+    if promo["promo"] and summary["discount_cents"]:
+        redemption_id = object_ids.new_uuid4()
+        try:
+            object_records.create_collection_record(
+                "promotion_redemptions",
+                {
+                    "id": redemption_id,
+                    # Everything object_promotions.terms() hands back is
+                    # the promotion AS IT WAS: kind, value, minimum and
+                    # stacking. Editing the promotion next month therefore
+                    # changes what the next shopper gets and restates
+                    # nothing anybody has already been given (doctrine #1).
+                    **object_promotions.terms(promo["promo"]),
+                    "order_id": order_id,
+                    "customer_email": email,
+                    # The money that actually came off, recorded rather
+                    # than rederivable: a number recomputed later from
+                    # terms that have since moved is exactly the drift the
+                    # stamp exists to prevent.
+                    "discount_cents": str(summary["discount_cents"]),
+                    "redeemed_at": datetime.now().isoformat(timespec="seconds"),
+                    "owner_id": _text(cart.get("owner_id")),
+                },
+                base_dir=base, actor=ACTOR)
+        except Exception as exc:
+            redemption_id = ""
+            redemption_error = str(exc)[:200]
 
     # Stamp the cart BEFORE anything else can retry: the stamp is what
     # makes a second click a no-op rather than a second order.
@@ -822,7 +1344,8 @@ def POST(request):
                 # describes, so invoice_totals restating it one day finds
                 # the same numbers rather than an argument.
                 "subtotal_cents": str(summary["subtotal_cents"]
-                                      + summary["shipping_cents"]),
+                                      + summary["shipping_cents"]
+                                      - summary["discount_cents"]),
                 "tax_cents": str(summary["tax_cents"]),
                 "total_cents": str(summary["total_cents"]),
                 # Provenance in notes, the house pattern: invoices carry no
@@ -887,6 +1410,33 @@ def POST(request):
             object_records.create_collection_record(
                 "invoice_lines", shipping_line, base_dir=base, actor=ACTOR)
 
+        if summary["discount_cents"]:
+            # THE DISCOUNT IS A LINE, and it is negative. Not a field
+            # beside the total, and not silently baked into the goods
+            # prices: the invoice's subtotal stays the sum of its own
+            # lines, so anybody -- a customer, an accountant,
+            # invoice_totals recomputing it one day -- adds the rows up
+            # and gets the number printed at the bottom. Baking it into
+            # the unit prices instead would leave a bill nobody can
+            # reconcile against the code the shopper was given, and a
+            # field beside the total would be money with two homes.
+            #
+            # It names the CODE, because "Discount -6.00" invites the
+            # phone call that "Discount (SPRING20) -6.00" answers.
+            object_records.create_collection_record(
+                "invoice_lines",
+                {
+                    "id": object_ids.new_uuid4(),
+                    "invoice_id": invoice_id,
+                    "description": (f"Discount ({promo['code']})"
+                                    if promo["code"] else "Discount"),
+                    "quantity": "1",
+                    "unit_price_cents": str(-summary["discount_cents"]),
+                    "line_total_cents": str(-summary["discount_cents"]),
+                    "owner_id": _text(cart.get("owner_id")),
+                },
+                base_dir=base, actor=ACTOR)
+
         # The stamp is the join system_shop_fulfillment walks backwards:
         # a payment knows its invoice, and this is the only thing that says
         # which order that invoice was for.
@@ -897,6 +1447,26 @@ def POST(request):
     except Exception as exc:
         invoice_error = str(exc)[:200]
 
+    # The card is spent LAST, and only against a bill that exists. Tender
+    # applied to nothing is money taken off a customer for an invoice
+    # nobody raised, so an invoicing failure above means the balance stays
+    # where it is and the shopper is told why.
+    card_applied = 0
+    card_error = ""
+    if card["wallet"] and summary["credit_applied_cents"] and invoice_id:
+        card_applied, card_error = _spend_the_card(
+            base, card["wallet"], summary["credit_applied_cents"],
+            order_id=order_id, invoice_id=invoice_id, today=today,
+            owner_id=_text(cart.get("owner_id")))
+    if card["wallet"] and summary["credit_applied_cents"] and not invoice_id:
+        card_error = ("the invoice could not be raised, so the gift card was "
+                      "not charged; its balance is untouched")
+    if card_error and not card_applied:
+        # The card did not pay, so the customer owes the whole bill. Say so
+        # in the totals rather than only in a warning nobody parses.
+        summary = {**summary, "credit_applied_cents": 0,
+                   "amount_due_cents": summary["total_cents"]}
+
     # total_cents is the GRAND total: what the payer owes, including
     # postage and tax. A response whose "total" was the goods subtotal
     # would be the number a payment gets built from, and the shop would
@@ -905,12 +1475,37 @@ def POST(request):
               "subtotal_cents": summary["subtotal_cents"],
               "shipping_cents": summary["shipping_cents"],
               "shipping_free": summary["shipping_free"],
+              "discount_cents": summary["discount_cents"],
               "tax_cents": summary["tax_cents"],
               "total_cents": summary["total_cents"],
+              "credit_applied_cents": summary["credit_applied_cents"],
+              "amount_due_cents": summary["amount_due_cents"],
               "lines": len(summary["lines"]),
               "status_of_order": "draft",
               "note": "order raised; stock moves and the order confirms when "
                       "payment arrives"}
+    if promo["code"]:
+        result["promo_code"] = promo["code"]
+        if redemption_id:
+            result["redemption_id"] = redemption_id
+        if redemption_error:
+            # Reported, never swallowed: the discount was given and the
+            # count of it did not land, so a limit is now one use looser
+            # than the shop thinks and somebody has to know.
+            result["redemption_error"] = redemption_error
+    if card["code"]:
+        result["gift_card_code"] = card["code"]
+        result["gift_card_applied_cents"] = card_applied
+        if card_error:
+            result["gift_card_error"] = card_error
+    if backordered:
+        # Named in the response because the shopper has just bought
+        # something that is not in the building, and a confirmation that
+        # did not say so is how a parcel becomes a complaint.
+        result["backordered"] = backordered
+        result["note"] = ("order raised; some lines are backordered and ship "
+                          "when stock arrives. Stock moves and the order "
+                          "confirms when payment arrives")
     if pickup["method"]:
         # Only on an order that actually chose a method. A shipping
         # checkout's response is exactly the dict it was before pickup

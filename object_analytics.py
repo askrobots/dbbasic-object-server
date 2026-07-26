@@ -20,14 +20,19 @@ Two deliberate design notes:
 * **off by default.** Capturing a row per request is an operator choice, gated
   by `DBBASIC_ANALYTICS` (env), so a deploy never silently starts writing.
 
-This module is the pure/testable half: config, the skip-path rule, and building
-the record. The daemon owns retention; object_server owns the capture hook.
+This module is the pure/testable half: config, the skip-path rule, the visitor
+cookie decision, and building the record. The daemon owns retention;
+object_server owns the capture hook and the one line that puts the cookie on a
+response.
 """
 
 from __future__ import annotations
 
 import os
+import secrets
 from typing import Any, Mapping
+
+import object_visitors
 
 PAGE_VIEWS_COLLECTION = "page_views"
 
@@ -54,6 +59,37 @@ SKIP_PREFIXES = (
     "/metrics", "/healthz", "/health", "/ping",
     "/realtime", "/ws", "/__",
 )
+
+# --- the visitor cookie ------------------------------------------------------
+#
+# The one thing this server asks a browser to remember. Named like the
+# identity cookie's sibling (`dbbasic_session`) because that is what it is:
+# same first-party, same-site, HttpOnly posture, and deliberately NOT the
+# same string. See docs/analytics.md "The visitor cookie" for the five
+# rules; every one of them is enforced below rather than merely written
+# down, because rule 4 in particular is one line of code away from being
+# broken at all times.
+VISITOR_COOKIE_NAME = "dbbasic_visitor"
+
+# What `build_page_view` read before this cookie existed: a cookie literally
+# named `session_id`, which nothing in this repo has ever set. Kept as a
+# READ-ONLY fallback so a box that acquired one from somewhere still folds,
+# and never written -- a second name being set would be two populations of
+# visitors that cannot be compared.
+LEGACY_VISITOR_COOKIE_NAME = "session_id"
+
+VISITOR_DAYS_ENV = "DBBASIC_ANALYTICS_VISITOR_DAYS"
+# Six months: long enough to see a return visit, short enough to lapse
+# rather than follow somebody for years. "Indefinite" is how a session
+# identifier quietly becomes a permanent one.
+DEFAULT_VISITOR_DAYS = 180
+
+# Refusals this server honours. Both mean the same thing in different
+# vocabularies, and both mean NO COOKIE -- not a shorter one, not an
+# anonymised one. Those visitors are still counted by the IP rule; they
+# simply appear new on every visit, which is the correct consequence of
+# having asked not to be remembered.
+DO_NOT_TRACK_HEADERS = ("dnt", "sec-gpc")
 
 _TRUE = {"1", "true", "yes", "on"}
 _MAX_UA = 500
@@ -102,6 +138,21 @@ def should_capture(path: str) -> bool:
     return not p.startswith(SKIP_PREFIXES)
 
 
+def visitor_days(env: Mapping[str, str] | None = None) -> int:
+    """How long the visitor cookie lives, in days (DBBASIC_ANALYTICS_VISITOR_DAYS).
+
+    A stated expiry is rule 3, so this cannot return "forever": a junk or
+    non-positive value falls back to the default rather than being treated
+    as unbounded.
+    """
+    env = os.environ if env is None else env
+    try:
+        value = int(str(env.get(VISITOR_DAYS_ENV, "")).strip())
+    except (TypeError, ValueError):
+        return DEFAULT_VISITOR_DAYS
+    return value if value > 0 else DEFAULT_VISITOR_DAYS
+
+
 def _cookie_value(cookie_header: str, name: str) -> str:
     for part in (cookie_header or "").split(";"):
         key, _, value = part.strip().partition("=")
@@ -110,13 +161,132 @@ def _cookie_value(cookie_header: str, name: str) -> str:
     return ""
 
 
+def refuses_tracking(headers: Mapping[str, str]) -> bool:
+    """True when this request asked not to be remembered.
+
+    `DNT: 1` and `Sec-GPC: 1` are the two ways a browser says it, and the
+    answer here is the same for both: no cookie is set, ever. Only the
+    exact value "1" counts -- `DNT: 0` is a positive statement of consent
+    and an absent header is no statement at all, and reading either as a
+    refusal would mean this server never remembered anybody.
+    """
+    for name in DO_NOT_TRACK_HEADERS:
+        if str(headers.get(name) or "").strip() == "1":
+            return True
+    return False
+
+
+def visitor_token(headers: Mapping[str, str]) -> str:
+    """The visitor token this request already carries, or "".
+
+    Reads the current name first and the legacy `session_id` cookie second,
+    so a box that has one of the old ones keeps its thread instead of being
+    counted as a stranger on the day this shipped.
+    """
+    cookie_header = headers.get("cookie") or ""
+    return (_cookie_value(cookie_header, VISITOR_COOKIE_NAME)
+            or _cookie_value(cookie_header, LEGACY_VISITOR_COOKIE_NAME))
+
+
+def new_visitor_token() -> str:
+    """An opaque token. It says *this browser has been here before* and
+    nothing else: no name, no email, no account, no meaning outside this
+    site's own logs, and nothing derived from the request that could be
+    reversed into one (rule 2). A fingerprint hashed from IP + user agent
+    would be a stable cross-visit identifier nobody could clear, which is
+    the thing this deliberately is not."""
+    return secrets.token_urlsafe(16)
+
+
+def should_set_visitor_cookie(
+    path: str, headers: Mapping[str, str], *,
+    env: Mapping[str, str] | None = None,
+) -> bool:
+    """Whether THIS response should mint a visitor cookie.
+
+    Every clause is one of the rules, in the order they can refuse:
+
+    * analytics is off -- nothing is being recorded, so a cookie would be
+      an identifier collected for no purpose at all, which is the worst
+      possible trade.
+    * the request refused (DNT / Sec-GPC).
+    * it already has one; a second would reset the thread on every page.
+    * it is not a page. `should_capture` drops assets and health checks,
+      `object_visitors.is_page_path` drops the API and collection surfaces
+      a script talks to. An API client is not a browser and cannot be a
+      returning visitor; handing it a cookie only writes an identifier
+      into somebody's automation.
+
+    No status gate on purpose: a 404 is a real page to the person who
+    typed the URL, and it is quite often the FIRST thing a visitor sees.
+    Refusing to thread that visit would lose exactly the journey worth
+    knowing about.
+    """
+    if not analytics_enabled(env):
+        return False
+    if refuses_tracking(headers):
+        return False
+    if visitor_token(headers):
+        return False
+    return should_capture(path) and object_visitors.is_page_path(path)
+
+
+def visitor_cookie_header(
+    token: str, *, days: int | None = None, secure: bool = True,
+) -> str:
+    """The `set-cookie` value for a minted visitor token.
+
+    First-party, same-site, HttpOnly, path-wide, with a stated Max-Age --
+    rules 1 and 3 written as attributes. HttpOnly matters more here than
+    it looks: nothing on the page needs to read this, so anything that
+    CAN read it is either an XSS payload or a third-party script, and both
+    would turn a first-party counter into somebody else's identifier.
+    """
+    days = visitor_days() if days is None else days
+    attributes = [
+        f"{VISITOR_COOKIE_NAME}={token}",
+        "Path=/",
+        "HttpOnly",
+        "SameSite=Lax",
+        f"Max-Age={int(days) * 86400}",
+    ]
+    if secure:
+        attributes.append("Secure")
+    return "; ".join(attributes)
+
+
 def build_page_view(
     *, path: str, method: str, status: int, ip: str,
     headers: Mapping[str, str], owners: frozenset[str],
     user_id: str = "", is_operator: bool = False,
+    minted_visitor_token: str = "",
 ) -> dict[str, str]:
     """The page_views record one request implies. Pure -- created_at is stamped
     by the record layer on write.
+
+    ## The visitor token and `user_id` are NEVER both written
+
+    Read this before adding the join, because the join is one line and it
+    will look reasonable. `session_id` here is the anonymous visitor
+    cookie: an opaque token that means "this browser has been here
+    before". `user_id` is an account. A row carrying BOTH is the join --
+    it de-anonymises every earlier row with that token, retroactively,
+    for a person who was never asked. That is the exact move that turns
+    analytics into surveillance (docs/analytics.md, cookie rule 4), and
+    the reason it is enforced here rather than left to judgement is that
+    the enforcement has to survive somebody who has not read the doc.
+
+    So: when a row carries a visitor token, `user_id` is dropped. A
+    signed-in member's traffic is still counted -- it is still a row, with
+    a path, a status and a token -- it simply is not labelled with who
+    they are. Where there is no token (a visitor who sent DNT, an API
+    call, a browser that refuses cookies) `user_id` is written as before,
+    because there is nothing for it to be correlated WITH.
+
+    `minted_visitor_token` is the cookie this very response is setting:
+    the browser has not sent it back yet, so without it the first page of
+    every visit would be threadless and every funnel would start one step
+    late.
 
     `is_owner` marks traffic that is the SITE'S OWN rather than a visitor's,
     so reports can exclude it (every analytics rollup filters on it). Two
@@ -140,7 +310,7 @@ def build_page_view(
     """
     ua = (headers.get("user-agent") or "")[:_MAX_UA]
     referrer = (headers.get("referer") or headers.get("referrer") or "")[:_MAX_REFERRER]
-    session_id = _cookie_value(headers.get("cookie") or "", "session_id")
+    session_id = minted_visitor_token or visitor_token(headers)
     return {
         # Which site was asked. One process here serves both a marketing
         # domain and the app, and without this their visitors are one
@@ -154,6 +324,9 @@ def build_page_view(
         "user_agent": ua,
         "referrer": referrer,
         "session_id": session_id,
-        "user_id": user_id or "",
+        # Rule 4, enforced rather than documented: never both. See the
+        # docstring above -- the two columns exist, and a row holding both
+        # is the join that de-anonymises everything the token ever did.
+        "user_id": "" if session_id else (user_id or ""),
         "is_owner": "true" if (is_operator or ip in owners) else "false",
     }

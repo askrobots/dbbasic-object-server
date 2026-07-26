@@ -1,8 +1,8 @@
 {
   "name": "products",
   "title": "Products",
-  "version": 4,
-  "description": "Sellable items: physical goods, digital downloads, services, subscriptions, and depreciable assets share this one schema via product_type. Locations and stock_moves (derived stock levels) now live alongside this schema in the same package -- see schemas/locations.json, schemas/stock_moves.json, and object_stock.py. Orders and order lines are a separate package (app-orders); this schema's product_id is what their order_lines optionally relate to. price_cents/cost_cents/salvage_value_cents are integer cents, never a float or currency type. v4 is merchandising, and its one load-bearing decision is that A VARIANT IS A PRODUCT: a size/colour configuration gets its own row here -- own SKU, own price, own stock level -- with parent_product_id naming the row it displays under and options saying what it is. Stock moves, pricing, checkout, fulfillment and the books all key on product_id TODAY, so variants-as-products means every one of those keeps working with ZERO changes, and 'how many medium navy totes are left?' is the same question as any other stock question, answered by the same fold. The alternative -- a variants table hanging under one product -- is the model that gives every integration a products-vs-variants split personality, two ids for one sellable thing, and a stock report that cannot answer the question anybody actually asks. category is one flat text field and deliberately not a taxonomy tree; image_file_id is a POINTER into the owner's files (served by the existing /api/files/{id} endpoint), never bytes in the catalogue.",
+  "version": 5,
+  "description": "Sellable items: physical goods, digital downloads, services, subscriptions, and depreciable assets share this one schema via product_type. Locations and stock_moves (derived stock levels) now live alongside this schema in the same package -- see schemas/locations.json, schemas/stock_moves.json, and object_stock.py. Orders and order lines are a separate package (app-orders); this schema's product_id is what their order_lines optionally relate to. price_cents/cost_cents/salvage_value_cents are integer cents, never a float or currency type. v4 is merchandising, and its one load-bearing decision is that A VARIANT IS A PRODUCT: a size/colour configuration gets its own row here -- own SKU, own price, own stock level -- with parent_product_id naming the row it displays under and options saying what it is. Stock moves, pricing, checkout, fulfillment and the books all key on product_id TODAY, so variants-as-products means every one of those keeps working with ZERO changes, and 'how many medium navy totes are left?' is the same question as any other stock question, answered by the same fold. The alternative -- a variants table hanging under one product -- is the model that gives every integration a products-vs-variants split personality, two ids for one sellable thing, and a stock report that cannot answer the question anybody actually asks. category is one flat text field and deliberately not a taxonomy tree; image_file_id is a POINTER into the owner's files (served by the existing /api/files/{id} endpoint), never bytes in the catalogue. v5 is the commerce money layer's half of the catalogue, and it is four fields and no new machinery. is_gift_card marks a product that sells STORED VALUE rather than a thing -- an ordinary sale whose fulfilment credits a wallet (app-billing) instead of putting something in a box. backorder_policy decides what checkout does when the shelf is empty, defaulting to refuse, which is exactly today's behaviour: a catalogue that has never heard of the field behaves identically, and nothing starts selling stock it does not have because a column was missing. reorder_point and reorder_quantity feed a nightly fold that writes a SUGGESTION, never a purchase order -- a machine that raises POs on its own is how a business orders forty pallets of the wrong thing.",
   "fields": [
     {
       "name": "id"
@@ -38,6 +38,13 @@
         "asset"
       ],
       "help": "Matches the predecessor system's Product model type choices (reconciled against a private source audit, not part of this repo). asset carries the depreciation fields below; behavior (a monthly depreciation schedule) is not built here, only the fields."
+    },
+    {
+      "name": "is_gift_card",
+      "type": "boolean",
+      "default": "false",
+      "label": "Gift Card",
+      "help": "This product SELLS STORED VALUE rather than a thing. It is an ordinary sale in every other respect -- it has a price, it goes in a basket, it is invoiced and paid for -- and its fulfilment is app-billing's system_gift_card_issue opening a wallet with a bearer code and crediting it with the line total, instead of a picker putting something in a box. Deliberately a flag rather than a sixth product_type: a gift card can be physical (a card in an envelope) or digital (a code in an email), and folding it into the type enum would make every place that asks 'does this sit on a shelf?' -- checkout's stock gate, the pick list, the books -- learn a new answer. The face value is the LINE TOTAL, so three at $25 is three $25 cards; a shop wanting 'pay $45, get $50' needs a face-value field this deliberately does not invent."
     },
     {
       "name": "description",
@@ -110,6 +117,32 @@
       "type": "boolean",
       "default": "true",
       "label": "Active"
+    },
+    {
+      "name": "backorder_policy",
+      "type": "enum",
+      "default": "refuse",
+      "label": "When Out Of Stock",
+      "enum": [
+        "refuse",
+        "allow",
+        "notify"
+      ],
+      "help": "What checkout does when the shelf is empty. refuse is the DEFAULT and is exactly today's behaviour, which is the whole safety of this field: a catalogue written before it existed, or a value typed wrong, or a product somebody imported all behave as the shop behaved yesterday, and nothing starts selling stock it does not have because a column was missing. allow takes the order anyway and marks the line backordered -- real stores sell the incoming shipment, and a hard refusal on every empty shelf is a shop turning away money it could take -- and the goods ship when stock exists, never before. notify still refuses, but RECORDS THE INTEREST (a backorders row) so somebody can be told when it is back: refusing while remembering beats refusing and forgetting, which loses the customer twice."
+    },
+    {
+      "name": "reorder_point",
+      "type": "integer",
+      "default": "0",
+      "label": "Reorder At",
+      "help": "The level at or below which somebody should think about buying more. 0 means off, and off is the default: a reorder point nobody chose is a number that makes a queue lie. system_reorder_check folds stock levels nightly and writes a SUGGESTION when on-hand reaches this -- at or below, not merely below, because 'reorder at 5' means five is already the moment, and a shop that has to hit four has been told the wrong number."
+    },
+    {
+      "name": "reorder_quantity",
+      "type": "integer",
+      "default": "0",
+      "label": "Reorder Quantity",
+      "help": "How many to suggest buying. 0 means the suggestion carries no quantity and simply says the shelf is low, which is honest: how much to buy depends on lead time, case size and what the supplier will sell, and a machine that guessed would be guessing about somebody's money."
     },
     {
       "name": "income_account",
@@ -212,13 +245,17 @@
         "name",
         "sku",
         "product_type",
+        "is_gift_card",
         "category",
         "description",
         "price_cents",
         "cost_cents",
         "currency",
         "unit",
-        "is_active"
+        "is_active",
+        "backorder_policy",
+        "reorder_point",
+        "reorder_quantity"
       ]
     }
   },

@@ -40,10 +40,16 @@ front page.
 
 "Unique" means distinct IP, and that is an approximation worth stating
 out loud rather than dressing up: an office behind one NAT is one
-visitor, a phone moving between wifi and cellular is two. It is the
-honest unit available to a server that sets no tracking cookie and
-fingerprints nobody, and the alternative -- a cross-site identifier -- is
-a thing this system deliberately does not have.
+visitor, a phone moving between wifi and cellular is two. It stays the
+unit HERE even though there is now a first-party visitor cookie
+(object_analytics), and that is a deliberate split rather than an
+oversight: this fold classifies BEHAVIOUR, and behaviour belongs to an
+address -- a scanner does not accept cookies, so classifying by token
+would put every bot in one bucket called "no token" and make the
+visitor/bot line unanswerable. The cookie answers a different question,
+new versus returning, and object_conversions owns that fold. The
+alternative to both -- a cross-site identifier, or a fingerprint -- is a
+thing this system deliberately does not have.
 """
 
 from __future__ import annotations

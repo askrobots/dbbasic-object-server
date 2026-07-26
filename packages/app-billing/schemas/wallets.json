@@ -1,12 +1,19 @@
 {
   "name": "wallets",
   "title": "Wallets",
-  "version": 1,
-  "description": "Prepaid balance for pay-as-you-go usage. The design decision that matters is in one field: balance_minor is a ROLLUP over wallet_entries, never a stored number anyone writes. The predecessor kept a mutable Wallet.balance column beside a Transaction table -- two truths that drift, and when they drift the customer is right and you cannot prove otherwise. Here the entries ARE the balance; the number on this record is a materialized view of them that the engine recomputes on every entry write (docs/logic-decisions.md #3: money moves, it does not mutate). Amounts are integers of the denomination's smallest unit (object_money.py), so a wallet can hold dollars, satoshis, or a gift-card unit without special cases. Card rails charge a fixed fee per transaction, which is why prepaid exists at all: sub-dollar charges are individually nonviable, so the provider sees occasional top-ups and the micro-debits stay internal. Auto-replenishment carries a MONTHLY CAP for a reason worth naming -- autopay plus one runaway metering bug is how a customer wakes up to a four-figure surprise; the cap turns that into a bounded annoyance someone notices.",
+  "version": 2,
+  "hooks": {"before_write": "hook_wallets"},
+  "description": "Prepaid balance for pay-as-you-go usage. The design decision that matters is in one field: balance_minor is a ROLLUP over wallet_entries, never a stored number anyone writes. The predecessor kept a mutable Wallet.balance column beside a Transaction table -- two truths that drift, and when they drift the customer is right and you cannot prove otherwise. Here the entries ARE the balance; the number on this record is a materialized view of them that the engine recomputes on every entry write (docs/logic-decisions.md #3: money moves, it does not mutate). Amounts are integers of the denomination's smallest unit (object_money.py), so a wallet can hold dollars, satoshis, or a gift-card unit without special cases. Card rails charge a fixed fee per transaction, which is why prepaid exists at all: sub-dollar charges are individually nonviable, so the provider sees occasional top-ups and the micro-debits stay internal. Auto-replenishment carries a MONTHLY CAP for a reason worth naming -- autopay plus one runaway metering bug is how a customer wakes up to a four-figure surprise; the cap turns that into a bounded annoyance someone notices. v2 says out loud what this container already was: A GIFT CARD IS A WALLET, and so is store credit. Both are prepaid money the customer can spend here, both need a movement log rather than a mutable number, and both need a gate that refuses to let somebody spend what is not there -- which is precisely what this collection and hook_wallet_entries already are. Inventing a gift_cards table with its own balance column and its own spend check would be building the predecessor's drift bug a second time, in a corner nobody watches, for money that arrives as a bearer instrument. So v2 adds exactly two fields and no new machinery: `kind` says which of the three this wallet is, and `code` is the bearer token a gift card is redeemed by. The distinction between them is WHO CAN SPEND IT: a balance and store credit belong to owner_id and are spent by that person, while a gift card belongs to whoever holds the code -- which is the whole point of a gift card and the reason redemption keys on the code rather than on an account the recipient does not have.",
   "fields": [
     {"name": "id"},
     {"name": "owner_id", "type": "text", "required": true, "label": "Owner",
-     "help": "One wallet per owner per denomination."},
+     "help": "One wallet per owner per denomination. For a GIFT CARD this is the shop, not the recipient: a gift card is a bearer instrument redeemed by its code, and a guest who was handed one has no account to own it with."},
+    {"name": "kind", "type": "enum", "default": "balance", "label": "Kind",
+     "enum": ["balance", "gift_card", "store_credit"],
+     "help": "balance: the ordinary prepaid wallet a customer tops up to pay for usage. gift_card: money somebody bought for somebody else, spent by whoever holds `code`. store_credit: money the shop gave back -- a refund taken as credit, or a dispute resolved that way (action_resolve_dispute writes into exactly this collection). All three are the same container with the same ledger and the same gate; the field says which conversation you are in, not which rules apply."},
+    {"name": "code", "type": "text", "label": "Code",
+     "validation": {"max_length": 40},
+     "help": "The bearer token a gift card is redeemed by, blank for an ordinary wallet. UNIQUE WHEN PRESENT and compared upper-cased -- hook_wallets enforces both, because schemas here carry no uniqueness constraint and two cards sharing a code would let one person spend the other's money with no way to tell which balance was meant. Given to a store_credit wallet as well when the shop wants it redeemable at a guest checkout, which is the only way credit reaches somebody who has no account."},
     {"name": "denomination_id", "label": "Denomination",
      "relation": {"collection": "denominations", "display_field": "code"},
      "help": "What this wallet holds. Blank means the server default (USD)."},
@@ -33,10 +40,13 @@
      "relation": {"collection": "entities", "display_field": "name"}},
     {"name": "created_at", "type": "datetime", "read_only": true, "label": "Created"}
   ],
-  "forms": {"default": {"fields": ["denomination_id", "auto_replenish_enabled",
+  "forms": {"default": {"fields": ["kind", "code", "denomination_id",
+                                    "auto_replenish_enabled",
                                     "auto_replenish_threshold_minor",
                                     "auto_replenish_amount_minor",
                                     "auto_replenish_monthly_cap_minor", "is_active"]}},
   "views": {"list_mode": "table",
-            "list_fields": ["owner_id", "balance_minor", "auto_replenish_enabled", "is_active"]}
+            "list_fields": ["owner_id", "kind", "balance_minor",
+                            "auto_replenish_enabled", "is_active"],
+            "filter_fields": ["kind"]}
 }
