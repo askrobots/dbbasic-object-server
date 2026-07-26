@@ -1,4 +1,4 @@
-"""action_checkout -- a basket becomes an order, and nothing else yet.
+"""action_checkout -- a basket becomes an order AND the bill for it.
 
 POST {session_token, customer_email, customer_name?, confirm_prices?,
       preview?}
@@ -32,10 +32,24 @@ this scale -- it surfaces at the stock move, which is visible and
 refundable -- rather than paid for with a reservation ledger nobody has
 needed yet. The same honest posture as hook_wallet_entries' documented
 check-then-append race.
+
+**The invoice is raised here too, already issued.** An order with no
+invoice gives the buyer nothing to pay: the money is owed and there is no
+document saying so and no door to walk through. The invoice is created
+"sent" rather than "draft" because checkout IS the issuing act -- the
+shopper has committed, and a draft would mean somebody in the back office
+must press a button before the person standing at the counter can hand
+over money. The response carries the pay link for the same reason.
+
+If the invoice cannot be raised, the ORDER STILL STANDS. Losing a sale to
+an invoicing hiccup is the expensive failure; an order without an invoice
+is visible, and the period biller or an operator can raise one. So only
+the invoice block is wrapped -- never the order.
 """
 
 import os
-from datetime import date
+import secrets
+from datetime import date, timedelta
 
 import object_cart
 import object_ids
@@ -43,6 +57,8 @@ import object_records
 import object_stock
 
 ACTOR = "action_checkout"
+
+DEFAULT_DUE_DAYS = 14
 
 
 def _base_dir():
@@ -55,6 +71,44 @@ def _text(value):
 
 def _truthy(value):
     return _text(value).lower() in ("true", "1", "yes", "on")
+
+
+def _setting(base, key, default):
+    try:
+        for row in object_records.read_collection_records("app_settings", base_dir=base):
+            if row.get("key") == key and _text(row.get("value")):
+                return _text(row["value"])
+    except Exception:
+        pass
+    return default
+
+
+def _int(value, default=0):
+    try:
+        return int(_text(value) or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _pay_path_for_order(base, order_id):
+    """The pay link an already-checked-out order was given, if it has one.
+
+    Everything here is best-effort on purpose: a retry must hand back the
+    SAME door rather than mint a second invoice, but an order whose invoice
+    or token cannot be found is still a perfectly good order. The caller
+    gets no link instead of an error.
+    """
+    try:
+        order = object_records.get_collection_record("orders", order_id, base_dir=base)
+        invoice_id = _text(order.get("invoice_id"))
+        if not invoice_id:
+            return ""
+        invoice = object_records.get_collection_record("invoices", invoice_id,
+                                                       base_dir=base)
+        token = _text(invoice.get("portal_token"))
+    except Exception:
+        return ""
+    return f"/pay/{token}" if token else ""
 
 
 def _products(base, product_ids):
@@ -111,10 +165,16 @@ def POST(request):
                         if _text(c.get("session_token")) == token
                         and _text(c.get("checked_out_order_id"))), None)
         if settled:
-            # One cart, one order, however many times a browser retries.
-            return {"ok": True, "duplicate": True,
-                    "order_id": _text(settled["checked_out_order_id"]),
-                    "note": "this basket has already been checked out"}
+            # One cart, one order, however many times a browser retries --
+            # and the same pay link back each time, because a shopper who
+            # double-clicked still needs the door, not a second bill.
+            order_id = _text(settled["checked_out_order_id"])
+            duplicate = {"ok": True, "duplicate": True, "order_id": order_id,
+                         "note": "this basket has already been checked out"}
+            pay_path = _pay_path_for_order(base, order_id)
+            if pay_path:
+                duplicate["pay_path"] = pay_path
+            return duplicate
         return {"status": 404, "error": "No open basket for this session."}
 
     try:
@@ -208,8 +268,92 @@ def POST(request):
          "customer_name": _text(request.get("customer_name"))},
         base_dir=base, actor=ACTOR)
 
-    return {"ok": True, "order_id": order_id, "cart_id": cart["id"],
-            "total_cents": summary["subtotal_cents"], "lines": len(summary["lines"]),
-            "status_of_order": "draft",
-            "note": "order raised; stock moves and the order confirms when "
-                    "payment arrives"}
+    # From here on the sale is already made. Everything below is wrapped so
+    # that an invoicing problem costs the shopper a pay link, not the order
+    # they just placed -- see the module docstring.
+    invoice_id = ""
+    pay_path = ""
+    invoice_error = ""
+    try:
+        invoice_id = object_ids.new_uuid4()
+        due_days = _int(_setting(base, "billing.invoice_due_days", DEFAULT_DUE_DAYS),
+                        DEFAULT_DUE_DAYS)
+        # The token is minted HERE rather than left to
+        # system_invoice_portal_link. That handler is a reaction --
+        # post-commit and best-effort -- which is right for an invoice that
+        # will be emailed, and useless to a shopper standing at the counter
+        # now: THIS response is what has to carry the door. The handler only
+        # mints when a token is absent, so a token that already exists is
+        # something it tolerates rather than fights over.
+        token = secrets.token_urlsafe(24)
+        object_records.create_collection_record(
+            "invoices",
+            {
+                "id": invoice_id,
+                # Same number as the order: one human reference for the
+                # whole sale, so "WEB-1A2B3C4D" means one thing to the
+                # shopper, the packer and the bookkeeper alike.
+                "number": f"WEB-{order_id[:8].upper()}",
+                "customer_name": _text(request.get("customer_name")) or email,
+                "customer_email": email,
+                "currency": _text(cart.get("currency")) or "USD",
+                "status": "sent",
+                "issue_date": today,
+                "due_date": (date.fromisoformat(today)
+                             + timedelta(days=due_days)).isoformat(),
+                "subtotal_cents": str(summary["subtotal_cents"]),
+                "total_cents": str(summary["subtotal_cents"]),
+                # Provenance in notes, the house pattern: invoices carry no
+                # generated_from column, so the marker goes where it can be
+                # found again by anyone asking where this bill came from.
+                "notes": f"Generated by {ACTOR} [orders/{order_id}]",
+                "source_order_id": order_id,
+                "portal_token": token,
+                "owner_id": _text(cart.get("owner_id")),
+            },
+            # portal_token is schema read_only so no client can choose its
+            # own; a server-side writer passes preserve_read_only, which is
+            # exactly the narrow escape hatch that flag exists for.
+            base_dir=base, actor=ACTOR, preserve_read_only=True)
+
+        for line in summary["lines"]:
+            object_records.create_collection_record(
+                "invoice_lines",
+                {
+                    "id": object_ids.new_uuid4(),
+                    "invoice_id": invoice_id,
+                    "description": line["description"],
+                    "quantity": line["quantity"],
+                    "unit_price_cents": str(line["unit_price_cents"]),
+                    "line_total_cents": str(line["line_total_cents"]),
+                    "owner_id": _text(cart.get("owner_id")),
+                },
+                base_dir=base, actor=ACTOR)
+
+        # The stamp is the join system_shop_fulfillment walks backwards:
+        # a payment knows its invoice, and this is the only thing that says
+        # which order that invoice was for.
+        object_records.update_collection_record(
+            "orders", order_id, {"invoice_id": invoice_id},
+            base_dir=base, actor=ACTOR)
+        pay_path = f"/pay/{token}"
+    except Exception as exc:
+        invoice_error = str(exc)[:200]
+
+    result = {"ok": True, "order_id": order_id, "cart_id": cart["id"],
+              "total_cents": summary["subtotal_cents"], "lines": len(summary["lines"]),
+              "status_of_order": "draft",
+              "note": "order raised; stock moves and the order confirms when "
+                      "payment arrives"}
+    if invoice_error:
+        # Say what went wrong rather than returning a cheerful ok: somebody
+        # has to raise this bill, and they can only do that if the failure
+        # was reported instead of swallowed.
+        result["invoice_error"] = invoice_error
+        result["note"] = ("order raised, but the invoice could not be: "
+                          f"{invoice_error}. The order stands and the invoice "
+                          "can be raised again.")
+    else:
+        result["invoice_id"] = invoice_id
+        result["pay_path"] = pay_path
+    return result

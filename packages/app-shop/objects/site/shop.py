@@ -158,9 +158,17 @@ def _notice(result):
     if not isinstance(result, dict):
         return ""
     if result.get("order_id") and not result.get("error"):
+        # The pay link is the most useful thing on the page at this moment,
+        # so it gets its own line rather than being buried in a sentence: a
+        # shopper who has just committed should not have to wait for an
+        # email to find out how to pay.
+        pay = ""
+        if result.get("pay_path"):
+            pay = (f'<p><strong><a href="{_esc(result["pay_path"])}">Pay now'
+                   f'</a></strong></p>')
         return (f'<div class="notice ok"><strong>Order placed.</strong> '
                 f'Reference {_esc(str(result["order_id"])[:8].upper())}. '
-                f'A receipt is on its way to you.</div>')
+                f'A receipt is on its way to you.{pay}</div>')
     error = result.get("error")
     if not error:
         return ""

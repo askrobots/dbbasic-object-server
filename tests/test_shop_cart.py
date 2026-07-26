@@ -30,7 +30,8 @@ def setup_env(tmp_path, monkeypatch, *, settings=()):
                       ("app-catalog", "products"), ("app-catalog", "locations"),
                       ("app-catalog", "stock_moves"),
                       ("app-orders", "orders"), ("app-orders", "order_lines"),
-                      ("app-invoices", "invoices"), ("app-payments", "payments")):
+                      ("app-invoices", "invoices"), ("app-invoices", "invoice_lines"),
+                      ("app-payments", "payments")):
         stage_collection(data_dir, pkg, name)
     rows = "".join(f"s{i}\t{k}\t{v}\t\n" for i, (k, v) in enumerate(settings))
     stage_collection(data_dir, "app-settings", "app_settings", rows=rows)
@@ -96,6 +97,14 @@ def orders(data_dir):
 
 def moves(data_dir):
     return object_records.read_collection_records("stock_moves", base_dir=data_dir)
+
+
+def invoices(data_dir):
+    return object_records.read_collection_records("invoices", base_dir=data_dir)
+
+
+def invoice_lines(data_dir):
+    return object_records.read_collection_records("invoice_lines", base_dir=data_dir)
 
 
 # --- the arithmetic ----------------------------------------------------------
@@ -216,7 +225,78 @@ def test_checkout_raises_a_draft_order_and_closes_the_basket(
     assert len(moves(data_dir)) == 1                # still nothing moved
 
 
+def test_checkout_raises_the_invoice_that_the_buyer_pays(tmp_path, monkeypatch):
+    """An order with no invoice gives the buyer nothing to pay: the money is
+    owed and there is no document saying so and no door to walk through.
+
+    It is issued ("sent"), not a draft -- a draft would mean somebody in the
+    back office has to press a button before the shopper standing at the
+    counter can hand over money.
+    """
+    data_dir = setup_env(tmp_path, monkeypatch)
+    product(data_dir, "p1", "Mug", 1200, product_type="service")
+    cart("add", product_id="p1", quantity="2")
+
+    result = checkout(customer_email="buyer@example.test", customer_name="Ada")
+    invoice = invoices(data_dir)[0]
+    assert invoice["status"] == "sent"
+    assert invoice["total_cents"] == "2400" == orders(data_dir)[0]["total_cents"]
+    assert invoice["customer_email"] == "buyer@example.test"
+    assert invoice["number"] == orders(data_dir)[0]["number"]
+
+    # The join system_shop_fulfillment walks backwards from a payment.
+    assert orders(data_dir)[0]["invoice_id"] == invoice["id"]
+    assert result["invoice_id"] == invoice["id"]
+
+    # The response has to carry the door: the shopper is here NOW, and the
+    # portal-link handler mints post-commit and best-effort.
+    assert invoice["portal_token"]
+    assert result["pay_path"] == f"/pay/{invoice['portal_token']}"
+
+
+def test_the_invoice_lines_say_what_was_bought(tmp_path, monkeypatch):
+    """A single opaque total is a bill a customer can only dispute, not
+    check."""
+    data_dir = setup_env(tmp_path, monkeypatch)
+    product(data_dir, "p1", "Enamel Mug", 1200, product_type="service")
+    product(data_dir, "p2", "Setup", 2500, product_type="service")
+    cart("add", product_id="p1", quantity="2")
+    cart("add", product_id="p2")
+    checkout(customer_email="buyer@example.test")
+
+    lines = sorted(invoice_lines(data_dir), key=lambda row: row["description"])
+    assert [line["description"] for line in lines] == ["Enamel Mug", "Setup"]
+    assert [line["line_total_cents"] for line in lines] == ["2400", "2500"]
+    assert lines[0]["quantity"] == "2"
+    assert lines[0]["unit_price_cents"] == "1200"
+    assert {line["invoice_id"] for line in lines} == {invoices(data_dir)[0]["id"]}
+
+
+def test_the_invoice_records_the_order_it_came_from(tmp_path, monkeypatch):
+    """Provenance in notes, the house pattern: invoices carry no
+    generated_from column, so the marker goes where anyone asking where this
+    bill came from can find it."""
+    data_dir = setup_env(tmp_path, monkeypatch)
+    product(data_dir, "p1", "Mug", 1000, product_type="service")
+    cart("add", product_id="p1")
+    order_id = checkout(customer_email="buyer@example.test")["order_id"]
+    assert f"orders/{order_id}" in invoices(data_dir)[0]["notes"]
+
+
+def test_the_due_date_follows_the_billing_setting(tmp_path, monkeypatch):
+    data_dir = setup_env(tmp_path, monkeypatch,
+                         settings=(("billing.invoice_due_days", "30"),))
+    product(data_dir, "p1", "Mug", 1000, product_type="service")
+    cart("add", product_id="p1")
+    checkout(customer_email="buyer@example.test", today="2026-06-15")
+    invoice = invoices(data_dir)[0]
+    assert invoice["issue_date"] == "2026-06-15"
+    assert invoice["due_date"] == "2026-07-15"
+
+
 def test_checking_out_twice_makes_one_order(tmp_path, monkeypatch):
+    """And one invoice, with the SAME door handed back -- a shopper who
+    double-clicked needs the link again, not a second bill."""
     data_dir = setup_env(tmp_path, monkeypatch)
     product(data_dir, "p1", "Download", 500, product_type="service")
     cart("add", product_id="p1")
@@ -224,7 +304,9 @@ def test_checking_out_twice_makes_one_order(tmp_path, monkeypatch):
     again = checkout(customer_email="buyer@example.test")
     assert again["duplicate"] is True
     assert again["order_id"] == first["order_id"]
+    assert again["pay_path"] == first["pay_path"]
     assert len(orders(data_dir)) == 1
+    assert len(invoices(data_dir)) == 1
 
 
 def test_a_price_change_stops_checkout_and_shows_both_numbers(
@@ -302,23 +384,20 @@ def test_preview_prices_the_basket_without_ordering(tmp_path, monkeypatch):
 # --- money arrives, the sale becomes real -----------------------------------------
 
 def paid_order(data_dir, *, quantity="2"):
-    """Take an order all the way to a received payment."""
+    """Take an order all the way to a received payment.
+
+    The invoice is the one checkout raised, not a hand-made stand-in: paying
+    against a fake invoice would let the order/invoice join rot without a
+    single test noticing.
+    """
     location(data_dir, "loc-shelf", "Shelf")
     location(data_dir, "loc-customer", "Customers", kind="customer")
     product(data_dir, "p1", "Mug", 1200)
     stock_in(data_dir, "p1", 10)
     cart("add", product_id="p1", quantity=quantity)
-    order_id = checkout(customer_email="buyer@example.test")["order_id"]
+    placed = checkout(customer_email="buyer@example.test", customer_name="Ada")
+    order_id, invoice_id = placed["order_id"], placed["invoice_id"]
 
-    invoice_id = object_ids.new_uuid4()
-    object_records.create_collection_record(
-        "invoices",
-        {"id": invoice_id, "number": "INV-1", "customer_name": "Ada",
-         "status": "sent", "issue_date": "2026-06-15", "due_date": "2026-06-29",
-         "subtotal_cents": "2400", "total_cents": "2400", "owner_id": "shop"},
-        base_dir=data_dir)
-    object_records.update_collection_record(
-        "orders", order_id, {"invoice_id": invoice_id}, base_dir=data_dir, actor="shop")
     payment = object_records.create_collection_record(
         "payments",
         {"id": object_ids.new_uuid4(), "invoice_id": invoice_id,
