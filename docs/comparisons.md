@@ -22,6 +22,7 @@ repository's own history.
 | SaaS suites (Basecamp, Notion, Airtable) | Monthly rent, their servers, their data model, their API limits | Self-hosted; your disk, your TSVs, greppable | You are the operator: backups and TLS are your (automated) chores |
 | No-code platforms | A ceiling: when the builder can't express it, you're stuck | Schemas generate the easy 90%; real Python objects catch the rest | Objects are code; someone (or some AI) still writes them |
 | Metered AI platforms | Per-seat AI pricing, vendor lock, their tools only | Bring your own key, pick any model, hand it your tools, audited as you | You pay your provider directly; no bundled "free" AI |
+| Hosted analytics (GA & friends) | A tag in every page, a vendor's complete copy of your traffic, and a sampled summary back | The server counts what it answered; raw rows are a TSV on your disk ([analytics.md](analytics.md)) | No cross-device identity, no demographics, no client-side interaction data; "unique" means a distinct IP |
 
 ## Against the ceremony, specifically
 

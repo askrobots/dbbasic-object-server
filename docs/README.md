@@ -25,6 +25,10 @@ flowchart TB
   domain, and a first app in ~30 minutes with `scripts/install.sh`.
 - [comparisons.md](comparisons.md) — what DBBASIC deletes vs Django/Rails,
   enterprise stacks, JS meta-frameworks, and no-code — and the cost of each.
+- [analytics.md](analytics.md) — first-party, server-side traffic: why a tag
+  can only see requests that ran JavaScript, how visitors are told apart from
+  bots and from your own operations, and what an honest IP-based count cannot
+  tell you.
 
 ## Concepts
 
