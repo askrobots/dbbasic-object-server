@@ -64,6 +64,7 @@ import urllib.error
 import urllib.request
 
 import object_ledger_head
+import object_notary
 import object_records
 import object_schemas
 
@@ -73,6 +74,14 @@ SETTINGS_COLLECTION = "app_settings"
 
 COLLECTIONS_KEY = "ledger.anchored_collections"
 ENDPOINTS_KEY = "notary.endpoints"
+BASE_URL_KEY = "portal.base_url"
+
+# Tests and local development only -- see
+# object_notary.is_self_endpoint. An ENV VAR rather than a
+# setting so that nobody can switch off the self-anchoring check
+# from a settings page, which is exactly where somebody about to
+# fool themselves would be looking.
+ALLOW_LOOPBACK_ENV = "DBBASIC_NOTARY_ALLOW_LOOPBACK"
 
 TIMEOUT_SECONDS = 10
 MAX_RESPONSE_BYTES = 64 * 1024
@@ -149,8 +158,15 @@ def _newest_anchor(anchors, collection):
     return newest
 
 
-def _lodge(endpoint, digest, label):
+def _lodge(endpoint, digest, label, *, own_base_url=""):
     """Submit one digest to one notary. Returns (ok, detail).
+
+    Refuses an endpoint that is this server before making any request.
+    Lodging with yourself always succeeds and proves nothing, and the cost
+    of letting it through is not a wasted request -- it is
+    site_ledger_integrity swapping "anchored, but only here" for
+    "verified, and held elsewhere" on the strength of it, which turns an
+    honest missing claim into a specific false one.
 
     Deliberately narrow: a POST to a known object with a known body, no
     redirects followed, a timeout, and a bounded read. Every failure mode
@@ -159,6 +175,15 @@ def _lodge(endpoint, digest, label):
     stop the pass from lodging with the others or from recording the
     anchor locally.
     """
+    allow_loopback = os.environ.get(ALLOW_LOOPBACK_ENV, "").strip().lower() in (
+        "1", "true", "yes", "on")
+    if object_notary.is_self_endpoint(endpoint, own_base_url,
+                                      allow_loopback=allow_loopback):
+        return False, (f"{endpoint} is this server. An anchor a server holds "
+                       f"about itself is not independent, so it is not "
+                       f"counted -- point this at a notary somebody else "
+                       f"runs.")
+
     url = endpoint.rstrip("/") + "/objects/action_notarize"
     body = json.dumps({"digest": digest, "algorithm": object_ledger_head.ALGORITHM,
                        "label": label}).encode("utf-8")
@@ -188,7 +213,7 @@ def _lodge(endpoint, digest, label):
     return False, f"{endpoint} refused: {_text(answer.get('error'))[:120]}"
 
 
-def _anchor_one(base, collection, endpoints, anchors):
+def _anchor_one(base, collection, endpoints, anchors, *, own_base_url=""):
     fields = _schema_fields(base, collection)
     if not fields:
         return {"collection": collection, "status": "skipped",
@@ -211,7 +236,8 @@ def _anchor_one(base, collection, endpoints, anchors):
     label = f"{collection} head @ {folded['row_count']} rows"
     lodged, notes = [], []
     for endpoint in endpoints:
-        ok, detail = _lodge(endpoint, folded["digest"], label)
+        ok, detail = _lodge(endpoint, folded["digest"], label,
+                            own_base_url=own_base_url)
         if ok:
             lodged.append(endpoint)
         notes.append(f"{endpoint}: {detail}")
@@ -268,7 +294,9 @@ def EVENT(request):
     except Exception:
         anchors = []
 
-    results = [_anchor_one(base, collection, endpoints, anchors)
+    own_base_url = settings.get(BASE_URL_KEY, "")
+    results = [_anchor_one(base, collection, endpoints, anchors,
+                           own_base_url=own_base_url)
                for collection in requested]
 
     written = [r for r in results

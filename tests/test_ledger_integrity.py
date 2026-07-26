@@ -184,6 +184,9 @@ def data_dir(tmp_path, monkeypatch):
     stage_collection(base, "app-billing", "wallet_entries")
     stage_collection(base, "app-billing", "wallets")
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(base))
+    # A notary on 127.0.0.1 is the only notary a test has. In
+    # production this is refused -- see the self-anchoring tests below.
+    monkeypatch.setenv("DBBASIC_NOTARY_ALLOW_LOOPBACK", "1")
     return base
 
 
@@ -499,3 +502,69 @@ def _relodge_first(data_dir, url):
     ok, detail = module._lodge(url, first["digest"], "re-lodge")
     assert detail == "already held", detail
     return ok
+
+
+# --- self-anchoring, which would undo the whole honesty design ----------------
+
+def test_a_notary_that_is_this_server_is_not_independent():
+    """The hole worth closing before anyone finds it: point
+    notary.endpoints at your own box, every lodgement succeeds, and the
+    page swaps "anchored, but only here" for "verified, and held
+    elsewhere" -- a specific false claim, which is worse than the honest
+    missing one it replaced."""
+    import object_notary
+
+    assert object_notary.is_self_endpoint("http://localhost:8000") is True
+    assert object_notary.is_self_endpoint("http://127.0.0.1:9000") is True
+    assert object_notary.is_self_endpoint("https://127.53.1.9") is True
+    assert object_notary.is_self_endpoint(
+        "https://object.dbbasic.com", "https://object.dbbasic.com") is True
+    # Same host, different scheme and path -- still the same server.
+    assert object_notary.is_self_endpoint(
+        "http://object.dbbasic.com/notary", "https://object.dbbasic.com/") is True
+
+    # And a genuinely different party is not caught.
+    assert object_notary.is_self_endpoint(
+        "https://notary.example.org", "https://object.dbbasic.com") is False
+    assert object_notary.is_self_endpoint("https://notary.example.org") is False
+
+
+def test_pointing_the_pass_at_itself_records_zero_independent_copies(data_dir,
+                                                                     monkeypatch):
+    """End to end: the pass must not count it, must say why in the note,
+    and the page must keep hedging."""
+    monkeypatch.delenv("DBBASIC_NOTARY_ALLOW_LOOPBACK", raising=False)
+    setting(data_dir, "ledger.anchored_collections", "wallet_entries")
+    setting(data_dir, "portal.base_url", "https://books.example.com")
+    setting(data_dir, "notary.endpoints", "https://books.example.com")
+    wallet_entry(data_dir, 1000)
+
+    result = run("system_publish_head")
+    assert result["results"][0]["status"] == "failed"
+    assert result["independent_lodgements"] == 0
+
+    anchor = object_records.read_collection_records("anchors",
+                                                    base_dir=data_dir)[0]
+    assert anchor["notary_count"] == "0"
+    assert "is this server" in anchor["note"]
+    assert "somebody else" in anchor["note"]
+
+    body = " ".join(integrity_page()["body"].split())
+    assert "Anchored, but only here" in body
+    assert "Verified, and held elsewhere" not in body
+
+
+def test_the_loopback_escape_is_an_env_var_and_not_a_setting(data_dir,
+                                                             monkeypatch):
+    """A settings page is exactly where somebody about to fool themselves
+    would go looking for the switch, so the switch is not there."""
+    monkeypatch.delenv("DBBASIC_NOTARY_ALLOW_LOOPBACK", raising=False)
+    setting(data_dir, "ledger.anchored_collections", "wallet_entries")
+    setting(data_dir, "notary.endpoints", "http://127.0.0.1:9")
+    setting(data_dir, "notary.allow_loopback", "true")     # ignored, on purpose
+    wallet_entry(data_dir, 1000)
+
+    refused = run("system_publish_head")
+    assert refused["results"][0]["status"] == "failed"
+    assert "is this server" in object_records.read_collection_records(
+        "anchors", base_dir=data_dir)[0]["note"]

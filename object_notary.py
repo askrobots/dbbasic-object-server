@@ -73,6 +73,64 @@ is the right answer at volume and pure overhead below it.
 """
 
 import hashlib
+import urllib.parse
+
+# Hosts that are always this machine, whatever anybody configured.
+LOOPBACK_HOSTS = frozenset({
+    "localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]", "ip6-localhost",
+})
+
+
+def is_self_endpoint(endpoint, own_base_url="", *, allow_loopback=False):
+    """Is this "independent" notary actually the same server?
+
+    The hole this closes is small to describe and would undo the whole
+    honesty design: an operator can point `notary.endpoints` at their own
+    box, every lodgement succeeds, and the integrity page swaps "anchored,
+    but only here" for "verified, and held elsewhere" -- a reassuring
+    sentence about a digest that is still held by exactly one party, the
+    one with the motive. The banner would then be worse than no banner,
+    because it would be a specific false claim rather than a missing one.
+
+    Detection is BEST EFFORT and cannot be otherwise: a determined
+    operator can put their own server behind another hostname, and no
+    check from inside the process can see through that. What it does catch
+    is the two cases that happen by accident and by well-meaning
+    misunderstanding -- a loopback address, and the server's own
+    configured public URL. Those are the ways somebody self-anchors while
+    believing they have done the right thing, which is the population this
+    guard exists for.
+
+    `allow_loopback` exists for tests and local development, where a
+    notary on 127.0.0.1 is the only notary there is. Callers gate it on an
+    ENVIRONMENT VARIABLE rather than a setting, deliberately: an operator
+    clicking through a settings page must not be able to switch off the
+    check that stops them lying to themselves, while somebody running the
+    process for a test obviously can. Note that a second process on the
+    same machine is not independent in any sense that matters -- same
+    disk, same root, same backup -- so this really is a development
+    affordance and not a supported deployment.
+    """
+    host = _host_of(endpoint)
+    if not host:
+        return False
+    if host in LOOPBACK_HOSTS or host.startswith("127."):
+        return not allow_loopback
+    own = _host_of(own_base_url)
+    return bool(own) and host == own
+
+
+def _host_of(url):
+    text = str(url if url is not None else "").strip().lower()
+    if not text:
+        return ""
+    if "//" not in text:
+        text = "//" + text
+    try:
+        return (urllib.parse.urlsplit(text).hostname or "").strip()
+    except ValueError:
+        return ""
+
 
 # Digest algorithms this notary will accept, and the hex length each one
 # produces. Restricted rather than open: accepting an arbitrary algorithm
