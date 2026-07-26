@@ -582,8 +582,19 @@ def create_collection_record(
     actor: str | None = None,
     preserve_read_only: bool = False,
     allow_computed_submission: bool = False,
+    record_changes: bool = True,
 ) -> dict[str, str]:
     """Append one record to a collection TSV and return the stored row.
+
+    `record_changes=False` skips the change-log entry, and exists for
+    exactly one caller shape: a full recompute writing DERIVED rows. A
+    rollup target's history is not "who did what" -- it is the source
+    collection plus the definition, both of which are still there, so the
+    log adds nothing anyone could audit while costing one entry per row
+    per pass, forever. One such log reached 944MB describing a collection
+    of 1818 rows, and the activity feed that reads every log stopped
+    finishing. Do NOT reach for this to make an ordinary write quieter:
+    a write nobody can trace is the thing the log exists to prevent.
 
     Every successful write is durably attributed here (universal
     attribution -- every mutation, on every path, emits a record change).
@@ -699,16 +710,17 @@ def create_collection_record(
             delta_id=record_id,
         )
         result = _surface_extra(_project_record(clean, merged_fields), extra_names=extra_names)
-        object_record_changes.append_record_change(
-            collection=collection,
-            record_id=record_id,
-            action="create",
-            before=None,
-            after=result,
-            actor=actor or "unattributed",
-            correlation_id=object_correlation.current_correlation_id(),
-            base_dir=base_dir,
-        )
+        if record_changes:
+            object_record_changes.append_record_change(
+                collection=collection,
+                record_id=record_id,
+                action="create",
+                before=None,
+                after=result,
+                actor=actor or "unattributed",
+                correlation_id=object_correlation.current_correlation_id(),
+                base_dir=base_dir,
+            )
         _recompute_rollups_for_source(collection, [result], base_dir=base_dir, roots=roots)
         return result
 
@@ -725,6 +737,7 @@ def update_collection_record(
     preserve_read_only: bool = False,
     allow_computed_submission: bool = False,
     expected_rev: str | None = None,
+    record_changes: bool = True,
 ) -> dict[str, str]:
     """Update one existing record by id and return the stored row.
 
@@ -853,16 +866,17 @@ def update_collection_record(
             delta_id=record_id,
         )
         result = _surface_extra(_project_record(updated, merged_fields), extra_names=extra_names)
-        object_record_changes.append_record_change(
-            collection=collection,
-            record_id=record_id,
-            action="update",
-            before=existing,
-            after=result,
-            actor=actor or "unattributed",
-            correlation_id=object_correlation.current_correlation_id(),
-            base_dir=base_dir,
-        )
+        if record_changes:
+            object_record_changes.append_record_change(
+                collection=collection,
+                record_id=record_id,
+                action="update",
+                before=existing,
+                after=result,
+                actor=actor or "unattributed",
+                correlation_id=object_correlation.current_correlation_id(),
+                base_dir=base_dir,
+            )
         _recompute_rollups_for_source(
             collection, [existing, result], base_dir=base_dir, roots=roots
         )
@@ -876,6 +890,7 @@ def delete_collection_record(
     base_dir: Path | str = DEFAULT_DATA_DIR,
     roots: Iterable[Path] | None = None,
     actor: str | None = None,
+    record_changes: bool = True,
 ) -> dict[str, str]:
     """Delete one existing record by id and return the removed row.
 
@@ -925,16 +940,17 @@ def delete_collection_record(
             delta_id=record_id,
         )
         result = _project_record(removed, fields)
-        object_record_changes.append_record_change(
-            collection=collection,
-            record_id=record_id,
-            action="delete",
-            before=result,
-            after=None,
-            actor=actor or "unattributed",
-            correlation_id=object_correlation.current_correlation_id(),
-            base_dir=base_dir,
-        )
+        if record_changes:
+            object_record_changes.append_record_change(
+                collection=collection,
+                record_id=record_id,
+                action="delete",
+                before=result,
+                after=None,
+                actor=actor or "unattributed",
+                correlation_id=object_correlation.current_correlation_id(),
+                base_dir=base_dir,
+            )
         _recompute_rollups_for_source(collection, [result], base_dir=base_dir, roots=roots)
         return result
 

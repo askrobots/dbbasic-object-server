@@ -730,6 +730,16 @@ def _reconcile_target_rows(
     values are unchanged since the last pass: ``computed_at`` always
     advances, honestly reflecting "just reconfirmed as of now" rather
     than silently reusing a stale timestamp because nothing else moved.
+
+    None of these writes append to the change log (``record_changes=False``),
+    and that follows directly from the paragraph above. A recompute rewrites
+    every row every pass by design, so logging it produces one audit entry
+    per row per pass forever -- describing nothing a person did, and nothing
+    that could not be recomputed from the source collection and the
+    definition, both of which are still on disk. Left on, it produced a
+    944MB change log for a collection holding 1818 rows, and the activity
+    feed, which reads every collection's log, stopped finishing. The log is
+    for who did what; a derived value has no who.
     """
     existing_ids: set[str] = set()
     if object_records.collection_has_records(collection, base_dir=base_dir):
@@ -747,6 +757,8 @@ def _reconcile_target_rows(
                 collection, row["id"], row,
                 base_dir=base_dir, roots=roots,
                 actor=ROLLUP_ACTOR, allow_computed_submission=True,
+                # A recompute is not history. See below.
+                record_changes=False,
             )
             updated += 1
         else:
@@ -754,13 +766,15 @@ def _reconcile_target_rows(
                 collection, row,
                 base_dir=base_dir, roots=roots,
                 actor=ROLLUP_ACTOR, allow_computed_submission=True,
+                record_changes=False,
             )
             created += 1
 
     deleted = 0
     for stale_id in existing_ids - seen_ids:
         object_records.delete_collection_record(
-            collection, stale_id, base_dir=base_dir, roots=roots, actor=ROLLUP_ACTOR,
+            collection, stale_id, base_dir=base_dir, roots=roots,
+            actor=ROLLUP_ACTOR, record_changes=False,
         )
         deleted += 1
 

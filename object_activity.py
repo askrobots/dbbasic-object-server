@@ -31,6 +31,18 @@ from object_versions import DEFAULT_DATA_DIR
 EXCLUDED_COLLECTIONS = frozenset({
     "shell_commands",
     "ai_usage",
+    # Derived collections. A rollup rewriting its own output is not
+    # something a person did, and a feed of "what happened" that is 99%
+    # machine churn is a feed nobody can read. These are also, by a wide
+    # margin, the largest change logs on a busy server -- one of them
+    # reached 944MB while the collection it describes held 1818 rows --
+    # because a rewrite appends an entry per row, every pass, forever.
+    "analytics_top_paths",
+    "analytics_top_ips",
+    "analytics_status",
+    "analytics_daily",
+    "page_views",
+    "attention_counts",
 })
 
 # First present of these fields on the change's snapshot becomes the feed
@@ -93,6 +105,11 @@ def recent_activity(
             collection,
             base_dir=base_dir,
             limit=object_record_changes.MAX_CHANGE_LIMIT,
+            # Tail-read: a feed wants the newest entries, and this loop
+            # visits EVERY collection's log. Parsing each in full made the
+            # page cost the whole history of the server -- a gigabyte of
+            # JSON on one core, and a page that never finished loading.
+            tail_only=True,
         )
         for change in payload["changes"]:
             if actor is not None and change.get("actor") != actor:

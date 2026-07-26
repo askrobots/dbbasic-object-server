@@ -8,10 +8,11 @@ this file records what actually changed.
 from __future__ import annotations
 
 import json
+import os
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import object_collections
 import object_ids
@@ -87,14 +88,25 @@ def list_record_changes(
     base_dir: Path | str = DEFAULT_DATA_DIR,
     limit: int = DEFAULT_CHANGE_LIMIT,
     offset: int = 0,
+    tail_only: bool = False,
 ) -> dict[str, Any]:
-    """Return newest-first record changes for one collection or record."""
+    """Return newest-first record changes for one collection or record.
+
+    `tail_only` reads just enough of the end of the log to satisfy
+    limit+offset instead of parsing the whole file. It is opt-in because
+    it makes `total` a count of what was READ rather than of what exists,
+    and a caller that shows "1 of 4,312" must not be handed "1 of 100"
+    without asking. A feed does not care; an audit page does.
+    """
     path = record_changes_file(collection, base_dir=base_dir)
     if record_id is not None and not object_records.validate_record_id(record_id):
         raise object_records.InvalidRecordIdError(f"Invalid record id: {record_id}")
     _validate_page(limit=limit, offset=offset)
 
-    changes = _read_changes(path, record_id=record_id)
+    changes = _read_changes(
+        path, record_id=record_id,
+        tail=(limit + offset if tail_only else None),
+    )
     total = len(changes)
     window = changes[offset:offset + limit]
     payload: dict[str, Any] = {
@@ -133,13 +145,71 @@ def record_changes_file(collection: str, base_dir: Path | str = DEFAULT_DATA_DIR
     return path
 
 
-def _read_changes(path: Path, *, record_id: str | None) -> list[dict[str, Any]]:
+# Reading a change log tail-first, in blocks, instead of parsing the whole
+# file. A change log only ever grows, and the newest entries are the ones
+# anybody asks for, so paying for the whole history to answer "what
+# happened lately" is a cost that rises forever while the answer stays the
+# same size.
+#
+# This was not theoretical. One collection's log reached 944MB -- a rollup
+# rewriting 1818 derived rows every five minutes, each rewrite appending a
+# row per record -- and the activity feed, which reads EVERY collection's
+# log, sat parsing a gigabyte of JSON on a single core while the page said
+# "loading..." forever. The function's own docstring had predicted it:
+# "fine at current scale... future work if/when logs grow large."
+_TAIL_BLOCK = 256 * 1024
+
+
+def _tail_lines(path: Path, wanted: int) -> list[str]:
+    """The last `wanted` non-empty lines, read backwards in blocks.
+
+    Falls back to a whole-file read only for a file smaller than one
+    block, where seeking would be more code than it saves.
+    """
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return []
+    if size <= _TAIL_BLOCK:
+        return path.read_text(encoding="utf-8").splitlines()
+
+    chunks: list[bytes] = []
+    newlines = 0
+    with path.open("rb") as handle:
+        position = size
+        while position > 0 and newlines <= wanted:
+            step = min(_TAIL_BLOCK, position)
+            position -= step
+            handle.seek(position)
+            block = handle.read(step)
+            chunks.append(block)
+            newlines += block.count(b"\n")
+    text = b"".join(reversed(chunks)).decode("utf-8", "replace")
+    # The first line of the first block read is probably a fragment of a
+    # longer line; dropping it is why we read one block past `wanted`.
+    lines = text.splitlines()
+    return lines[1:] if position > 0 else lines
+
+
+def _read_changes(
+    path: Path, *, record_id: str | None, tail: int | None = None
+) -> list[dict[str, Any]]:
     if not path.exists():
         return []
 
+    if tail is not None and record_id is None:
+        source = _tail_lines(path, tail)
+    else:
+        # A record-scoped query still scans: the entries for one record can
+        # be anywhere in the file, and answering "show me this invoice's
+        # history" with only the recent tail would quietly lose the half
+        # that matters.
+        source = None
+
     changes: list[dict[str, Any]] = []
     with _file_lock(path):
-        for line in path.read_text(encoding="utf-8").splitlines():
+        for line in (source if source is not None
+                     else path.read_text(encoding="utf-8").splitlines()):
             if not line.strip():
                 continue
             try:
@@ -218,3 +288,151 @@ def _file_lock(path: Path) -> threading.Lock:
             lock = threading.Lock()
             _LOCKS[key] = lock
         return lock
+
+
+# --- retention -----------------------------------------------------------------
+#
+# The third unbounded log this server has grown, after page_views and the
+# package restore points, and the pattern is now unmistakable: a log
+# nobody tells how big it may get is a log that fails on the worst day
+# rather than an ordinary one.
+#
+# A change log is audit evidence, so pruning it is a genuinely different
+# act from pruning analytics. Two consequences, both deliberate:
+#
+#   * Retention is OFF unless an operator turns it on. Deleting audit
+#     history by default is not a performance optimisation, it is a
+#     decision about accountability, and it is not this module's to make
+#     quietly.
+#   * The bound is stated in BOTH dimensions, because age alone does not
+#     bound anything: a retention window says how far back to keep and
+#     nothing at all about how much can arrive inside it.
+#
+# The rollup churn that motivated this is fixed at the source instead
+# (object_rollups writes derived rows with record_changes=False) -- which
+# is the better fix, because a log entry never written costs nothing to
+# store, nothing to read past, and nothing to decide about later.
+
+RETENTION_DAYS_ENV = "DBBASIC_CHANGE_LOG_RETENTION_DAYS"
+MAX_ENTRIES_ENV = "DBBASIC_CHANGE_LOG_MAX_ENTRIES"
+
+
+def retention_policy(env: Mapping[str, str] | None = None) -> dict[str, int]:
+    """{"days", "max_entries"} -- 0 for either means "no bound".
+
+    Absent configuration is no bound at all, not a default window: an
+    operator who has never thought about audit retention has not thereby
+    consented to losing audit history.
+    """
+    source = os.environ if env is None else env
+
+    def _int(name: str) -> int:
+        try:
+            value = int(str(source.get(name, "")).strip())
+        except (TypeError, ValueError):
+            return 0
+        return value if value > 0 else 0
+
+    return {"days": _int(RETENTION_DAYS_ENV),
+            "max_entries": _int(MAX_ENTRIES_ENV)}
+
+
+def prune_record_changes(
+    collection: str,
+    *,
+    keep_newer_than: str | None = None,
+    keep_last: int | None = None,
+    base_dir: Path | str = DEFAULT_DATA_DIR,
+) -> dict[str, Any]:
+    """Trim one collection's change log to a time window and/or a count.
+
+    Rewrites the file in one pass under the same lock every other reader
+    and writer takes, keeping entries newer than ``keep_newer_than``
+    (ISO-8601) and then the newest ``keep_last`` of whatever survives. An
+    entry with a missing or unparseable timestamp is KEPT -- never delete
+    evidence we cannot date.
+
+    Returns {"entries_before", "entries_after", "removed", "pruned"}.
+    Both bounds absent is an honest no-op rather than an error, so a
+    caller can pass an unconfigured policy straight through.
+    """
+    path = record_changes_file(collection, base_dir=base_dir)
+    if not path.exists():
+        return {"entries_before": 0, "entries_after": 0, "removed": 0, "pruned": False}
+    if not keep_newer_than and not keep_last:
+        return {"entries_before": 0, "entries_after": 0, "removed": 0, "pruned": False}
+
+    with _file_lock(path):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        kept: list[str] = []
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                kept.append(line)      # unreadable is not the same as expired
+                continue
+            stamp = str(entry.get("timestamp") or "")
+            if keep_newer_than and stamp and stamp < str(keep_newer_than):
+                continue
+            kept.append(line)
+
+        if keep_last and len(kept) > keep_last:
+            # The log is append-ordered, so the tail is the newest.
+            kept = kept[len(kept) - keep_last:]
+
+        before = len([line for line in lines if line.strip()])
+        removed = before - len(kept)
+        if removed <= 0:
+            return {"entries_before": before, "entries_after": before,
+                    "removed": 0, "pruned": False}
+
+        temp_path = path.with_name(f".{path.name}.tmp")
+        temp_path.write_text(
+            "".join(f"{line}\n" for line in kept), encoding="utf-8")
+        temp_path.replace(path)
+        return {"entries_before": before, "entries_after": len(kept),
+                "removed": removed, "pruned": True}
+
+
+def prune_all_record_changes(
+    *,
+    base_dir: Path | str = DEFAULT_DATA_DIR,
+    days: int = 0,
+    max_entries: int = 0,
+) -> dict[str, Any]:
+    """Apply one retention policy across every collection's change log.
+
+    One bad or unreadable log never stops the sweep: this runs unattended
+    on a timer, and a single corrupt file must not mean every other log
+    grows forever.
+    """
+    if not days and not max_entries:
+        return {"collections": 0, "removed": 0, "pruned": [], "skipped": "no policy set"}
+
+    cutoff = None
+    if days:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)
+                  ).isoformat().replace("+00:00", "Z")
+
+    root = Path(base_dir) / RECORD_CHANGES_DIR
+    if not root.is_dir():
+        return {"collections": 0, "removed": 0, "pruned": []}
+
+    removed = 0
+    pruned: list[dict[str, Any]] = []
+    for entry in sorted(root.iterdir()):
+        if not entry.is_dir():
+            continue
+        try:
+            result = prune_record_changes(
+                entry.name, keep_newer_than=cutoff,
+                keep_last=(max_entries or None), base_dir=base_dir,
+            )
+        except Exception:  # noqa: BLE001 -- one bad log must not stop the sweep
+            continue
+        if result.get("pruned"):
+            removed += result["removed"]
+            pruned.append({"collection": entry.name, **result})
+    return {"collections": len(pruned), "removed": removed, "pruned": pruned}
