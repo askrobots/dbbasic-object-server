@@ -37,6 +37,11 @@ def test_manifest_drops_bespoke_order_view_page_and_seeds_the_detail_view():
         "system_order_totals",
         # 0.4.0: the pick queue as a number, for the attention band.
         "system_order_attention",
+        # 0.5.0: the store-voice slice -- token minting, the public
+        # /orders/track/{token} page, and the three customer emails.
+        "system_order_portal_link",
+        "system_order_email",
+        "site_order_status",
     }
     assert {entry["collection"] for entry in package["seed"]} == {
         "orders", "order_lines", "views", "site_routes",

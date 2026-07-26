@@ -772,10 +772,17 @@ def test_the_return_form_surfaces_the_actions_refusal_with_its_numbers(
     assert rmas(data_dir) == []
 
 
-def test_the_return_form_asks_a_stranger_to_sign_in(tmp_path, monkeypatch):
+def test_the_return_form_turns_away_a_stranger_with_no_credential(
+        tmp_path, monkeypatch):
+    """A visitor with neither a session nor the order's token is offered
+    the two real ways in -- the tracking link from their confirmation
+    email, or sign-in -- and is shown nothing about the order itself.
+    Guests reaching this page WITH a token are tests/test_store_voice.py's
+    subject; this is the case where there is no key at all."""
     _, objects_root = shop_with_a_return(tmp_path, monkeypatch)
     body = form(objects_root, user_id="")["body"]
-    assert "Sign in" in body
+    assert "tracking link" in body
+    assert "sign in" in body
     assert "Enamel Mug" not in body
 
 

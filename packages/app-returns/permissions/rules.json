@@ -31,10 +31,10 @@
     },
     {
       "effect": "allow",
-      "principal": "registered",
+      "principal": "public",
       "actions": ["execute"],
       "object_id": "site_return_form",
-      "reason": "deliberately NOT public: the page is addressed by an internal order id, and an order id is not a secret good enough to protect a customer's name, address and purchase history from whoever guesses one. The customer's own door is a capability token like the invoice portal's, which needs a token field on orders and therefore a later slice; until then a stranger gets a sign-in prompt rather than an error, and the shop raises returns the way it already raises everything else"
+      "reason": "public since 0.4.0, and it had to become so: this shop's default sale is a guest checkout, so a returns flow that requires an account is a returns flow nobody can use. The order id in the URL is still not a secret and is still not treated as one -- the page admits a visitor only on a signed-in session OR on orders.portal_token (schema v5) matched against THAT order with hmac.compare_digest, and everything else, including a wrong token and an order that does not exist, gets the identical 'open your tracking link or sign in' page so a guessed id never confirms itself. Public EXECUTE on the page object only; the orders and return_authorizations collections stay owner-scoped, the same split app-invoices uses for site_invoice_portal"
     }
   ]
 }

@@ -51,6 +51,11 @@ def test_get_package_normalizes_app_orders_manifest():
         # 0.4.0: committed orders with goods still owed -- the pick
         # queue, counted for the home page's attention band.
         "system_order_attention",
+        # 0.5.0, the store-voice slice: the customer's own door and the
+        # shop's own voice. Behavior lives in tests/test_store_voice.py.
+        "system_order_portal_link",
+        "system_order_email",
+        "site_order_status",
     }
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
     assert {entry["collection"] for entry in package["seed"]} == {
@@ -108,7 +113,10 @@ def test_schema_json_files_are_valid_and_versioned():
     # orders v4: customer_note + gift_message, so the packing slip prints
     # what the shopper typed at checkout (v3 added `received` for the PO
     # side, v2 added `partial`).
-    expected_versions = {"orders": 4, "order_lines": 1}
+    # orders v5: portal_token, the customer's capability URL. A guest
+    # checkout leaves no account to sign into, so without it a buyer could
+    # neither track an order nor start a return.
+    expected_versions = {"orders": 5, "order_lines": 1}
     for name in ("orders", "order_lines"):
         payload = json.loads((APP_ORDERS_DIR / "schemas" / f"{name}.json").read_text())
         assert payload["name"] == name

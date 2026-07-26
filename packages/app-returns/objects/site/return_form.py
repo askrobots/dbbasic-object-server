@@ -1,23 +1,32 @@
 """site_return_form -- the page where a return starts. GET/POST
-/returns/{order_id}.
+/returns/{order_id}, with `?token=` for the customer who has no account.
 
-**Signed in, deliberately, and this is the honest half-measure.** The
-customer-facing door this page eventually wants is the invoice portal's
-shape: a capability URL, an unguessable bearer token on the record, no
-account and no sign-up wall between a willing customer and the thing they
-are trying to do. That posture needs a token FIELD, and the only sensible
-place for it is on the order -- which belongs to app-orders, not to this
-slice. Minting one here would mean either editing another package's schema
-or inventing a parallel token collection whose only purpose is to avoid
-doing so. Both are worse than waiting: the tokened customer order-status
-page is already named in plan/fulfillment-logistics-spec.md's build order
-(item 7, "Store voice"), and this page is written so that when the token
-lands the only change is how the identity check at the top is satisfied.
-Until then a stranger gets a sign-in prompt, not an error, and the shop
-raises returns on the phone the way it already raises everything else. An
-order id is not a secret good enough to protect a customer's name and
-address, and pretending otherwise would be worse than asking somebody to
-log in.
+**Two ways in, one of them new.** This page used to demand a signed-in
+session, and said so as an honest half-measure: the customer-facing door
+it wanted was the invoice portal's shape -- a capability URL, an
+unguessable bearer token on the record, no sign-up wall between a willing
+customer and the thing they are trying to do -- and that needed a token
+FIELD on the order, which belongs to app-orders and not to this package.
+The wait is over: orders.portal_token exists (schema v5, minted by
+app-shop's action_checkout and by system_order_portal_link) and this page
+now accepts it as `?token=`, matched against THIS order with
+hmac.compare_digest.
+
+That is not a nicety, it is the difference between having a returns flow
+and not having one. A guest checkout is the default sale in this shop, so
+every buyer who ever wanted to send something back was being shown a
+sign-in prompt for an account they were never offered. site_order_status
+puts the link in front of them, already carrying the token.
+
+The signed-in path is untouched and still works: staff raise returns on
+the phone the way they always have, and an order's owner never needs a
+token to see their own order. What is refused is what was always refused
+-- a bare order id with neither. An order id is not a secret good enough
+to protect a customer's name and address, and the token check is
+constant-time for the same reason the invoice portal's is: a plain `==`
+on attacker-controlled input leaks how many leading characters matched.
+A wrong token gets the same sign-in prompt as no token at all, never a
+"that token is wrong" that tells somebody probing they are close.
 
 A READ, not a table. What can be returned is folded live -- shipped
 quantities minus what is already claimed by an inbound shipment -- so the
@@ -42,6 +51,7 @@ rather than showing a button that does nothing. A dead button costs
 somebody a click, then their trust in every other button on the page.
 """
 
+import hmac
 import html
 import os
 from decimal import Decimal, InvalidOperation
@@ -265,7 +275,25 @@ def _returns_html(returns):
     return "<h2>Returns on this order</h2>" + "".join(blocks)
 
 
-def _render(base, order, notice=""):
+def _token_matches(order, token):
+    """Does this token open THIS order?
+
+    Constant-time, and scoped to the one order the URL already named --
+    there is deliberately no scan across orders here. site_order_status
+    resolves a bare token to an order because that is its whole job; this
+    page was handed an order id by its route, so the only question worth
+    asking is whether the bearer holds that order's token. A blank stored
+    token matches nothing, or an order that never had a link minted would
+    be an open door to anybody submitting `?token=`.
+    """
+    token = _text(token)
+    stored = _text(order.get("portal_token"))
+    if not token or not stored:
+        return False
+    return hmac.compare_digest(stored, token)
+
+
+def _render(base, order, notice="", token=""):
     order_id = order["id"]
     try:
         order_lines = [row for row in object_records.read_collection_records(
@@ -289,8 +317,15 @@ def _render(base, order, notice=""):
         form = ('<p class="hint">Everything that shipped on this order is '
                 'already covered by a return. Nothing left to send back.</p>')
     else:
+        # The token rides along in a hidden field so the POST is
+        # authenticated the same way the GET was. Without it a guest could
+        # read the form and then be bounced by their own submit button --
+        # the most infuriating shape a web form can take.
+        carry = (f'<input type="hidden" name="token" value="{_esc(token)}">'
+                 if token else "")
         form = f"""
 <form method="post" action="/returns/{_esc(order_id)}">
+{carry}
 {table}
 {_reasons_html()}
 <p><button type="submit" name="do" value="request">Request a return</button></p>
@@ -344,41 +379,72 @@ def _order_for(base, order_id):
         return None
 
 
-def _signed_out(order_id):
+def _no_way_in(order_id):
+    """One page for every way of not being allowed in: no session and no
+    token, a wrong token, a token for a different order, or an order that
+    does not exist at all. Distinguishing them would tell somebody probing
+    with a guessed order id that they had guessed a real one -- which is
+    precisely the leak the token exists to close.
+    """
     return _page(
         '<div class="pagehead"><h1>Returns</h1></div>'
-        f'<p class="hint"><a href="/login?next=/returns/{_esc(order_id)}">'
-        'Sign in</a> to start a return. A customer-facing link with its own '
-        'token is a later slice; an order id on its own is not a secret good '
-        "enough to show somebody's name and address to whoever guesses it."
-        '</p>',
+        '<p class="hint">To start a return, open the tracking link from your '
+        'order confirmation email and follow "Start a return" -- it carries '
+        'the key to this page. If you have an account with the shop, you can '
+        f'<a href="/login?next=/returns/{_esc(order_id)}">sign in</a> '
+        'instead.</p>',
         title="Returns")
 
 
-def GET(request):
-    identity = request.get("_identity") or {}
+def _way_in(base, request):
+    """Resolve (order, token, refusal) for whoever is asking.
+
+    Two accepted credentials, checked in this order because the cheap one
+    is free: a signed-in session (staff raising a return at the counter,
+    an owner looking at their own order), or the order's own portal_token
+    (the guest who was never offered an account and holds the link the
+    confirmation email gave them).
+
+    The two refusals differ ON PURPOSE. A signed-in operator who mistypes
+    an order id is told plainly that no such order exists, because they
+    are already inside and a vague page would just waste their afternoon.
+    An anonymous visitor is told nothing that distinguishes a wrong token
+    from a wrong order id -- otherwise the 404 itself becomes an oracle
+    confirming which guessed ids are real orders, and the token would be
+    guarding a door with a window next to it.
+    """
     order_id = _text(request.get("order_id"))
-    if not _text(identity.get("user_id")):
-        return _signed_out(order_id)
-    if not order_id:
-        return _not_found("No order was named in that link.")
+    identity = request.get("_identity") or {}
+    signed_in = bool(_text(identity.get("user_id")))
+    order = _order_for(base, order_id) if order_id else None
+
+    if signed_in:
+        if order is None:
+            return None, "", _not_found(
+                "There is no order with that id. It may have been mistyped.")
+        return order, "", None
+
+    token = _text(request.get("token"))
+    if order is not None and _token_matches(order, token):
+        return order, token, None
+    return None, "", _no_way_in(order_id)
+
+
+def GET(request):
     base = _base_dir()
-    order = _order_for(base, order_id)
-    if not order:
-        return _not_found("There is no order with that id. It may have been "
-                          "mistyped.")
-    return _render(base, order)
+    order, token, refusal = _way_in(base, request)
+    if refusal is not None:
+        return refusal
+    return _render(base, order, token=token)
 
 
 def POST(request):
-    identity = request.get("_identity") or {}
-    order_id = _text(request.get("order_id"))
-    if not _text(identity.get("user_id")):
-        return _signed_out(order_id)
     base = _base_dir()
-    order = _order_for(base, order_id)
-    if not order:
-        return _not_found("There is no order with that id.")
+    order, token, refusal = _way_in(base, request)
+    if refusal is not None:
+        return refusal
+    order_id = order["id"]
+    identity = request.get("_identity") or {}
 
     form = request.get("_form") or request
     lines = []
@@ -396,4 +462,4 @@ def POST(request):
         "reason": form.get("reason"),
         "reason_note": form.get("reason_note"),
         "_identity": identity})
-    return _render(base, order, notice=_notice(result))
+    return _render(base, order, notice=_notice(result), token=token)

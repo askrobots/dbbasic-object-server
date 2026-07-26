@@ -41,6 +41,15 @@ shopper has committed, and a draft would mean somebody in the back office
 must press a button before the person standing at the counter can hand
 over money. The response carries the pay link for the same reason.
 
+**The order's own tracking token is minted here too.** This shop's
+default sale is a guest checkout -- an email address and no account -- so
+this response and the confirmation email are the only two places the
+buyer will ever be handed a way back to their own order. Waiting for
+system_order_portal_link (a post-commit reaction) would mean returning a
+checkout response with no `track_path` in it, which is the one moment the
+link is most obviously wanted. The handler tolerates a token that already
+exists, so minting it early costs nothing and races with nothing.
+
 If the invoice cannot be raised, the ORDER STILL STANDS. Losing a sale to
 an invoicing hiccup is the expensive failure; an order without an invoice
 is visible, and the period biller or an operator can raise one. So only
@@ -208,6 +217,21 @@ def _pay_path_for_order(base, order_id):
     return f"/pay/{token}" if token else ""
 
 
+def _track_path_for_order(base, order_id):
+    """The tracking link an already-checked-out order was given.
+
+    Same best-effort posture as _pay_path_for_order, and for the same
+    reason: a shopper who double-clicked must get the SAME door back, and
+    an order whose token cannot be read is still an order.
+    """
+    try:
+        order = object_records.get_collection_record("orders", order_id, base_dir=base)
+        token = _text(order.get("portal_token"))
+    except Exception:
+        return ""
+    return f"/orders/track/{token}" if token else ""
+
+
 def _products(base, product_ids):
     out = {}
     for product_id in product_ids:
@@ -271,6 +295,9 @@ def POST(request):
             pay_path = _pay_path_for_order(base, order_id)
             if pay_path:
                 duplicate["pay_path"] = pay_path
+            track_path = _track_path_for_order(base, order_id)
+            if track_path:
+                duplicate["track_path"] = track_path
             return duplicate
         return {"status": 404, "error": "No open basket for this session."}
 
@@ -331,6 +358,16 @@ def POST(request):
 
     order_id = object_ids.new_uuid4()
     today = _text(request.get("today")) or date.today().isoformat()
+    # The order's own capability token, minted HERE and not left to
+    # system_order_portal_link, for exactly the reason the invoice's token
+    # below is minted here: that handler is a reaction -- post-commit and
+    # best-effort -- which is right for an order somebody will email about
+    # later and useless to the shopper standing at the counter now. THIS
+    # response is what has to carry the door, and the confirmation email
+    # composed off the very next write needs a token that already exists.
+    # The handler only mints when a token is absent, so one that already
+    # exists is something it skips rather than fights over.
+    track_token = secrets.token_urlsafe(32)
     order_row = {
         "id": order_id,
         "doc_type": "sale",
@@ -353,6 +390,14 @@ def POST(request):
     if summary["shipping_cents"] and _has_field(base, "orders", "shipping_cents"):
         order_row["shipping_cents"] = str(summary["shipping_cents"])
 
+    # Same schema-aware posture: a shop still on orders v4 has no
+    # portal_token column, and writing one would be rejected -- which
+    # would cost the shopper the ORDER, not just the link. On such a shop
+    # the response simply carries no track_path, which is honest.
+    tracks = _has_field(base, "orders", "portal_token")
+    if tracks:
+        order_row["portal_token"] = track_token
+
     # The two merchandising fields, on the order the moment orders declares
     # them -- see the module docstring. Same schema-aware posture as
     # shipping_cents above: a missing column costs the packer a note (which
@@ -369,8 +414,13 @@ def POST(request):
         else:
             carried_on_cart.append(field)
 
+    # portal_token is schema read_only so no client can choose its own; a
+    # server-side writer passes preserve_read_only, which is exactly the
+    # narrow escape hatch that flag exists for -- the same call the
+    # invoice create below already makes.
     object_records.create_collection_record(
-        "orders", order_row, base_dir=base, actor=ACTOR)
+        "orders", order_row, base_dir=base, actor=ACTOR,
+        preserve_read_only=True)
 
     for line in summary["lines"]:
         object_records.create_collection_record(
@@ -516,6 +566,12 @@ def POST(request):
               "status_of_order": "draft",
               "note": "order raised; stock moves and the order confirms when "
                       "payment arrives"}
+    if tracks:
+        # The customer's own door, alongside the pay link and for the same
+        # reason: this shop sells to guests, so the response and the
+        # confirmation email are the only two places the buyer will ever
+        # be handed a way back to their own order.
+        result["track_path"] = f"/orders/track/{track_token}"
     if carried_on_cart:
         # Reported, not swallowed. Somebody has to know that what the
         # shopper typed did not reach the order the packer will read.

@@ -1,8 +1,8 @@
 {
   "name": "orders",
   "title": "Orders",
-  "version": 4,
-  "description": "Sales and purchase orders (doc_type on one shared schema, mirroring app-invoices' doc_type split). Lines live in order_lines; subtotal/tax/total are stamped by the order_totals handler, never typed by hand. Reconciled against a private predecessor-system audit, not part of this repo (its Order+Lines note: 'SO/PO; convert_to_invoice'). v4 carries the two fields a shopper types at checkout -- customer_note and gift_message -- because the packing slip is printed from the ORDER, not from the basket somebody abandoned on the way to it.",
+  "version": 5,
+  "description": "Sales and purchase orders (doc_type on one shared schema, mirroring app-invoices' doc_type split). Lines live in order_lines; subtotal/tax/total are stamped by the order_totals handler, never typed by hand. Reconciled against a private predecessor-system audit, not part of this repo (its Order+Lines note: 'SO/PO; convert_to_invoice'). v4 carries the two fields a shopper types at checkout -- customer_note and gift_message -- because the packing slip is printed from the ORDER, not from the basket somebody abandoned on the way to it. v5 adds portal_token, the customer's own door: the shop sells to guests, so a buyer has no account to sign into and no way to ask 'where is my order?' without one. It is the same capability-URL shape invoices already use for /pay/{token}, and it is what finally lets a guest start a return.",
   "fields": [
     {
       "name": "id"
@@ -216,6 +216,13 @@
       "type": "text",
       "label": "Converted Invoice",
       "help": "Provenance link recorded once this order has been converted to an invoice (real predecessor's convert_to_invoice). The conversion ACTION itself is deferred -- not built in this slice -- but the field is kept now so a future convert-to-invoice flow has somewhere to write without a backfill."
+    },
+    {
+      "name": "portal_token",
+      "type": "text",
+      "label": "Tracking Token",
+      "read_only": true,
+      "help": "The customer's capability URL for this one order: /orders/track/{token}, rendered by site_order_status. Unguessable (secrets.token_urlsafe), minted by action_checkout while the shopper is still standing there and by system_order_portal_link for every other non-draft order, and looked up BY TOKEN ONLY with a constant-time compare so a guessed order id opens nothing. read_only exactly as invoices.portal_token is: a capability URL a client can choose is not a capability, so only a server-side writer passing preserve_read_only may set it. Kept out of forms.default, list_fields and search for the same reason -- a bearer token that turns up in a list response has already leaked."
     },
     {
       "name": "customer_note",

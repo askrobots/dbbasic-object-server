@@ -22,6 +22,13 @@
       "actions": ["execute"],
       "object_id": "site_orders",
       "reason": "the orders page is public; it shows a sign-in prompt to visitors"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_order_status",
+      "reason": "the /orders/track/{token} page is public by design -- this shop's default sale is a guest checkout, so the buyer has no account to sign into and no other way to ask where their order is. The object resolves the order by portal_token with a constant-time compare, never by id, so there is no enumeration path from a guessed order id, and an unknown or blank token gets the same friendly 404 as one that never existed. Public EXECUTE on the page object only -- the orders collection itself stays owner-scoped, exactly the split app-invoices uses for site_invoice_portal"
     }
   ]
 }
