@@ -1391,3 +1391,123 @@ def test_upgrade_fast_forwards_base_copy_without_conflict_when_overridden(tmp_pa
     object_artifact = next(a for a in status["artifacts"] if a["kind"] == "object")
     assert object_artifact["state"] == "pristine"
     assert object_artifact["overridden"] is True
+
+
+# --- where an install actually writes -----------------------------------------
+#
+# The bug this guards was not a crash. install_package defaulted base_dir to
+# the literal "data" and ignored DBBASIC_DATA_DIR, so an install run with the
+# environment set to somewhere else reported "status": "written" for every
+# schema and seed -- into a freshly created ./data beside the checkout that
+# nothing reads. Nothing failed, nothing warned, and the package was simply
+# absent from the running server. Hit twice in one afternoon on a box whose
+# layout was well understood, which is why the default changed rather than
+# somebody remembering harder.
+
+def test_an_install_writes_where_the_environment_says(tmp_path, monkeypatch):
+    packages_root = tmp_path / "packages"
+    object_root = tmp_path / "objects"
+    live = tmp_path / "live-data"
+    decoy = tmp_path / "cwd"
+    decoy.mkdir()
+
+    write_package(
+        packages_root,
+        "hello-world",
+        {
+            "id": "hello-world",
+            "name": "Hello World",
+            "version": "0.1.0",
+            "objects": [{"id": "hello_world", "path": "objects/hello/world.py"}],
+            "schemas": [{"collection": "widgets", "path": "schemas/widgets.json"}],
+        },
+        files=(
+            ("objects/hello/world.py", "def GET(request): return {'ok': True}\n"),
+            ("schemas/widgets.json",
+             '{"name": "widgets", "fields": [{"name": "id"}, {"name": "title"}]}\n'),
+        ),
+    )
+
+    monkeypatch.chdir(decoy)
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(live))
+
+    result = object_packages.install_package(
+        "hello-world", root=packages_root, object_roots=[object_root])
+
+    assert (live / "schemas" / "widgets.json").is_file()
+    # And nothing was created in the working directory, which is where the
+    # old default would have put it.
+    assert not (decoy / "data").exists()
+
+    # The result says WHERE, so "written" is a claim a caller can check.
+    assert result["data_dir"] == str(live.resolve())
+
+
+def test_an_explicit_base_dir_still_wins_over_the_environment(tmp_path, monkeypatch):
+    """Every real caller passes one -- the server always does -- and the
+    environment must not quietly override somebody who was specific."""
+    packages_root = tmp_path / "packages"
+    object_root = tmp_path / "objects"
+    chosen = tmp_path / "chosen"
+
+    write_package(
+        packages_root,
+        "hello-world",
+        {
+            "id": "hello-world",
+            "name": "Hello World",
+            "version": "0.1.0",
+            "objects": [{"id": "hello_world", "path": "objects/hello/world.py"}],
+            "schemas": [{"collection": "widgets", "path": "schemas/widgets.json"}],
+        },
+        files=(
+            ("objects/hello/world.py", "def GET(request): return {'ok': True}\n"),
+            ("schemas/widgets.json",
+             '{"name": "widgets", "fields": [{"name": "id"}, {"name": "title"}]}\n'),
+        ),
+    )
+
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(tmp_path / "ignored"))
+    result = object_packages.install_package(
+        "hello-world", root=packages_root, base_dir=chosen,
+        object_roots=[object_root])
+
+    assert (chosen / "schemas" / "widgets.json").is_file()
+    assert not (tmp_path / "ignored").exists()
+    assert result["data_dir"] == str(chosen.resolve())
+
+
+def test_resolve_base_dir_prefers_explicit_then_environment_then_data(monkeypatch):
+    monkeypatch.delenv("DBBASIC_DATA_DIR", raising=False)
+    assert object_packages.resolve_base_dir() == Path("data")
+    assert object_packages.resolve_base_dir("/tmp/x") == Path("/tmp/x")
+
+    monkeypatch.setenv("DBBASIC_DATA_DIR", "/srv/live")
+    assert object_packages.resolve_base_dir() == Path("/srv/live")
+    assert object_packages.resolve_base_dir("/tmp/x") == Path("/tmp/x")
+
+
+def test_a_dry_run_reports_the_same_data_dir_it_would_install_into(tmp_path,
+                                                                   monkeypatch):
+    """A plan that does not say where it would write is a plan nobody can
+    check before running it."""
+    packages_root = tmp_path / "packages"
+    object_root = tmp_path / "objects"
+    live = tmp_path / "live-data"
+
+    write_package(
+        packages_root,
+        "hello-world",
+        {
+            "id": "hello-world",
+            "name": "Hello World",
+            "version": "0.1.0",
+            "objects": [{"id": "hello_world", "path": "objects/hello/world.py"}],
+        },
+        files=(("objects/hello/world.py", "def GET(request): return {'ok': True}\n"),),
+    )
+
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(live))
+    plan = object_packages.dry_run_package(
+        "hello-world", root=packages_root, object_roots=[object_root])
+    assert plan["data_dir"] == str(live.resolve())

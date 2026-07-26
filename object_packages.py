@@ -157,17 +157,46 @@ def get_package(
     return _load_package(package_id, package_dir)
 
 
+DATA_DIR_ENV = "DBBASIC_DATA_DIR"
+
+
+def resolve_base_dir(base_dir: Path | str | None = None) -> Path:
+    """The data directory an install should write to.
+
+    An explicit `base_dir` always wins. Otherwise the ENVIRONMENT decides,
+    because `DBBASIC_DATA_DIR` is the one authoritative statement of where
+    this server's data lives -- it is what the server itself reads, what
+    every package object reads, and what the systemd unit sets.
+
+    This used to fall straight through to the literal "data", ignoring the
+    environment even when it was set to somewhere else entirely. The result
+    was the worst shape a bug can take: an install that reported
+    `"status": "written"` for every schema and seed, having written them
+    into a freshly created `./data` beside the checkout that nothing reads.
+    Nothing failed, nothing warned, and the package was simply absent from
+    the running server. Hit twice in one afternoon on a box whose layout was
+    well understood, which is the argument for fixing the default rather
+    than remembering harder.
+
+    Callers that genuinely want a relative "data" can still ask for it by
+    name; what they can no longer do is get it by accident.
+    """
+    if base_dir is not None:
+        return Path(base_dir)
+    return Path(os.environ.get(DATA_DIR_ENV) or DEFAULT_DATA_DIR)
+
+
 def dry_run_package(
     package_id: str,
     *,
     root: Path | str = PACKAGES_DIR,
-    base_dir: Path | str = DEFAULT_DATA_DIR,
+    base_dir: Path | str | None = None,
     object_roots: Iterable[Path] | None = None,
 ) -> dict[str, Any]:
     """Return a non-mutating package install plan."""
     package_dir = _package_dir(package_id, root)
     package = _load_package(package_id, package_dir)
-    base = Path(base_dir)
+    base = resolve_base_dir(base_dir)
 
     warnings: list[str] = []
     objects = [
@@ -248,6 +277,12 @@ def dry_run_package(
         "mode": "dry_run",
         "install_enabled": False,
         "safe_to_install": not warnings,
+        # WHERE, resolved and absolute. Every entry below reports a
+        # `destination` relative to this, and a status of "written" means
+        # nothing at all without knowing which tree it was written into --
+        # an install can succeed completely into a directory the running
+        # server does not read.
+        "data_dir": str(base.resolve()),
         "objects": objects,
         "schemas": schemas,
         "permissions": permissions,
@@ -264,7 +299,7 @@ def install_package(
     package_id: str,
     *,
     root: Path | str = PACKAGES_DIR,
-    base_dir: Path | str = DEFAULT_DATA_DIR,
+    base_dir: Path | str | None = None,
     object_roots: Iterable[Path] | None = None,
     allow_replace: bool = False,
     force: bool = False,
@@ -290,7 +325,7 @@ def install_package(
 
     package_dir = _package_dir(package_id, root)
     package = _load_package(package_id, package_dir)
-    base = Path(base_dir)
+    base = resolve_base_dir(base_dir)
     plan = dry_run_package(package_id, root=root, base_dir=base, object_roots=roots)
 
     blockers = _install_blockers(plan, package=package, allow_replace=allow_replace)
@@ -595,6 +630,10 @@ def install_package(
         "install_enabled": True,
         "allow_replace": allow_replace,
         "safe_to_install": True,
+        # The resolved data directory everything below landed in. Reported
+        # because "written" is not a claim anybody can check without it --
+        # see resolve_base_dir for the afternoon that made this necessary.
+        "data_dir": plan["data_dir"],
         "objects": installed_objects,
         "schemas": installed_schemas,
         "permissions": installed_permissions,
