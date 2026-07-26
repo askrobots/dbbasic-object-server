@@ -1027,3 +1027,103 @@ def test_a_product_with_no_category_and_no_variants_renders_as_it_always_did(
     assert '<h2 class="shop-category">' not in body
     assert '<div class="shop-image placeholder"></div>' in body
     assert cart("add", product_id="p1", quantity="2")["subtotal_cents"] == 2400
+
+
+# --- money bugs found by walking the live shop -------------------------------
+#
+# Neither of these was caught by the suite, and the reason is worth
+# recording: the tests exercised objects directly, while the live server
+# runs them through the event dispatcher. The gap between "the object is
+# right" and "the system is right" is exactly where both of these lived.
+
+def test_a_totals_recompute_never_zeroes_tax_it_cannot_see(tmp_path, monkeypatch):
+    """The live failure: a customer was quoted 2116 at checkout, and by the
+    time the invoice lines had been written the totals handler had restated
+    the invoice to 2000 with tax 0 -- because tax is computed once over the
+    whole sale and stamped on the DOCUMENT, and that pass only reads lines.
+    A fold must not replace a value it cannot reproduce."""
+    data_dir = setup_env(tmp_path, monkeypatch,
+                         settings=(("shop.tax_rate_bps", "825"),
+                                   ("shop.shipping_flat_cents", "600")))
+    product(data_dir, "p1", "Mug", 1400, product_type="service")
+    cart("add", product_id="p1")
+    quoted = checkout(customer_email="grace@example.test")
+
+    invoice = object_records.get_collection_record(
+        "invoices", quoted["invoice_id"], base_dir=data_dir)
+    assert int(invoice["total_cents"]) == quoted["total_cents"]
+
+    # Now run the recompute the live server runs on every line write.
+    object_execution.execute_object(
+        RUNTIME,
+        object_execution.ObjectExecutionRequest(
+            "system_invoice_totals", method="EVENT",
+            payload={"collection": "invoice_lines", "action": "created",
+                     "record_id": ""}),
+        roots=[PACKAGES / "app-invoices" / "objects"])
+
+    after = object_records.get_collection_record(
+        "invoices", quoted["invoice_id"], base_dir=data_dir)
+    assert int(after["total_cents"]) == quoted["total_cents"], (
+        "the recompute silently dropped the tax the customer agreed to")
+    assert int(after["tax_cents"]) > 0
+
+
+def test_a_part_payment_does_not_ship_the_goods(tmp_path, monkeypatch):
+    """Goods leave when the BILL is settled, not when money merely
+    arrives. Paying 14.00 against a 20.00 invoice used to fulfil the order
+    in full while the invoice sat at `partial` saying otherwise."""
+    data_dir = setup_env(tmp_path, monkeypatch,
+                         settings=(("shop.stock_location", "loc-shelf"),
+                                   ("shop.customer_location", "loc-customer")))
+    order_id, _ = paid_order(data_dir)          # pays in full
+    order = object_records.get_collection_record("orders", order_id,
+                                                 base_dir=data_dir)
+    invoice_id = order["invoice_id"]
+
+    # A second order, deliberately underpaid.
+    cart("add", product_id="p1", quantity="2")
+    second = checkout(customer_email="short@example.test")
+    part = object_records.create_collection_record(
+        "payments",
+        {"id": object_ids.new_uuid4(), "invoice_id": second["invoice_id"],
+         "amount_cents": "1", "method": "card", "received_on": "2026-07-26",
+         "status": "received", "owner_id": "shop"},
+        base_dir=data_dir)
+
+    result = fulfil(part)
+    assert "not settled" in result["skipped"]
+    assert object_records.get_collection_record(
+        "orders", second["order_id"], base_dir=data_dir)["status"] == "draft"
+    assert invoice_id       # the fully paid one is untouched by this test
+
+
+def test_paying_the_balance_later_does_ship(tmp_path, monkeypatch):
+    """A deposit followed by the balance must work: the payment that tips
+    the invoice to settled is the one that ships."""
+    data_dir = setup_env(tmp_path, monkeypatch,
+                         settings=(("shop.stock_location", "loc-shelf"),
+                                   ("shop.customer_location", "loc-customer")))
+    location(data_dir, "loc-shelf", "Shelf")
+    location(data_dir, "loc-customer", "Customers", kind="customer")
+    product(data_dir, "p1", "Mug", 1200)
+    stock_in(data_dir, "p1", 10)
+    cart("add", product_id="p1", quantity="1")
+    order = checkout(customer_email="deposit@example.test")
+    total = order["total_cents"]
+
+    half = object_records.create_collection_record(
+        "payments",
+        {"id": object_ids.new_uuid4(), "invoice_id": order["invoice_id"],
+         "amount_cents": str(total // 2), "method": "card",
+         "received_on": "2026-07-26", "status": "received", "owner_id": "shop"},
+        base_dir=data_dir)
+    assert "not settled" in fulfil(half)["skipped"]
+
+    rest = object_records.create_collection_record(
+        "payments",
+        {"id": object_ids.new_uuid4(), "invoice_id": order["invoice_id"],
+         "amount_cents": str(total - total // 2), "method": "card",
+         "received_on": "2026-07-26", "status": "received", "owner_id": "shop"},
+        base_dir=data_dir)
+    assert fulfil(rest)["confirmed"] is True

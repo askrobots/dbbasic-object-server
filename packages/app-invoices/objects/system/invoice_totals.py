@@ -184,13 +184,38 @@ def _recompute_invoice(invoice_id: str, base_dir: str) -> bool:
     lines = object_records.read_collection_records("invoice_lines", base_dir=base_dir)
 
     subtotal_cents = 0
-    tax_cents = 0
+    line_tax_cents_total = 0
+    any_line_states_a_rate = False
     for line in lines:
         if line.get("invoice_id") != invoice_id:
             continue
         line_total_cents, line_tax_cents = _line_amounts(line)
         subtotal_cents += line_total_cents
-        tax_cents += line_tax_cents
+        line_tax_cents_total += line_tax_cents
+        if _to_int(line.get("tax_rate_bps")):
+            any_line_states_a_rate = True
+
+    # A fold must not replace a value it cannot reproduce.
+    #
+    # Tax can legitimately live in either of two places: on the LINES (a
+    # rate per line, summed here) or on the DOCUMENT (computed once over
+    # the whole taxable sale, which is how action_checkout does it, so that
+    # four fifty-cent lines at 5% owe 10c rather than the 12c four
+    # separately-rounded lines come to). This handler can only see the
+    # first. When no line states a rate, a recomputed tax of zero is not a
+    # finding -- it is this object looking in the wrong place -- and
+    # writing it destroys real money.
+    #
+    # It did. On the live shop a customer was quoted 2116 at checkout
+    # (1400 goods + 600 postage + 116 tax), and by the time the invoice
+    # lines had been written this pass had restated the invoice to 2000
+    # with tax 0. The tests did not catch it because they never ran with
+    # event handlers enabled; the shop did, and the invoice disagreed with
+    # the price the customer had already agreed to.
+    if any_line_states_a_rate:
+        tax_cents = line_tax_cents_total
+    else:
+        tax_cents = _to_int(invoice.get("tax_cents"))
 
     total_cents = subtotal_cents + tax_cents
     # balance_due_cents / amount_paid_cents are formula fields now (invoices

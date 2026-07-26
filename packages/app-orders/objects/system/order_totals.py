@@ -175,14 +175,35 @@ def _recompute_order(order_id: str, base_dir: str) -> bool:
     lines = object_records.read_collection_records("order_lines", base_dir=base_dir)
 
     subtotal_cents = 0
-    tax_cents = 0
+    line_tax_cents_total = 0
+    any_line_states_a_rate = False
     for line in lines:
         if line.get("order_id") != order_id:
             continue
         line_total_cents, line_tax_cents = _line_amounts(line)
         subtotal_cents += line_total_cents
-        tax_cents += line_tax_cents
+        line_tax_cents_total += line_tax_cents
+        if _to_int(line.get("tax_rate_bps")):
+            any_line_states_a_rate = True
 
+    # A fold must not replace a value it cannot reproduce -- the same rule,
+    # and the same live bug, as invoice_totals. Tax may be computed once
+    # over the whole sale and stamped on the DOCUMENT (action_checkout) or
+    # stated per line; this pass can only see the second. A recomputed zero
+    # when no line states a rate means this object looked in the wrong
+    # place, not that no tax is owed.
+    if any_line_states_a_rate:
+        tax_cents = line_tax_cents_total
+    else:
+        tax_cents = _to_int(order.get("tax_cents"))
+
+    # The order's total is what its OWN lines come to. Postage lives on the
+    # invoice, because the invoice is the document the customer pays and
+    # carriage is a cost of delivering the order rather than part of what
+    # was ordered. So an order and its invoice can legitimately differ by
+    # the postage, and that is not a discrepancy to paper over here -- a
+    # first attempt at this refused to let a recompute ever shrink a total,
+    # which duly broke the perfectly ordinary case of deleting a line.
     total_cents = subtotal_cents + tax_cents
 
     changes = {}

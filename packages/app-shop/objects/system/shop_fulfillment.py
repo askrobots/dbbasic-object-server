@@ -103,6 +103,64 @@ def _payment_for(request, base):
         return None
 
 
+def _invoice_is_settled(base, invoice_id):
+    """(True, "") when the bill is fully paid, else (False, why).
+
+    Trusts the invoice's own status where it is decisive, and falls back
+    to comparing what has been paid against the total -- because a shop
+    with app-payments' status handler absent would otherwise never ship
+    anything, and "your money arrived and nothing happened" is a worse
+    failure than shipping a shade early.
+    """
+    if not invoice_id:
+        return True, ""          # nothing to settle; not a web order's bill
+    try:
+        invoice = object_records.get_collection_record(
+            "invoices", invoice_id, base_dir=base)
+    except Exception:
+        # Cannot read the bill: do not hold the goods hostage to a lookup
+        # failure. The stock move is idempotent and visible either way.
+        return True, ""
+    if _text(invoice.get("status")) in ("paid", "void"):
+        return True, ""
+    total = _int(invoice.get("total_cents"))
+    if not total:
+        return True, ""
+
+    # Sum the payments HERE rather than trusting invoice.amount_paid_cents.
+    # That field is derived by a rollup, and this handler runs ON the write
+    # that just created the payment -- so at this instant the invoice has
+    # not been told about the money that triggered us. Reading it would
+    # mean the first payment never ships anything and the SECOND one ships
+    # everything, which is a bug that only appears for customers who pay
+    # in instalments.
+    paid = 0
+    try:
+        for row in object_records.read_collection_records("payments", base_dir=base):
+            if (_text(row.get("invoice_id")) == invoice_id
+                    and _text(row.get("status")) == "received"):
+                paid += _int(row.get("amount_cents"))
+    except Exception:
+        return True, ""          # cannot tell; do not hold the goods
+    try:
+        for row in object_records.read_collection_records("refunds", base_dir=base):
+            if _text(row.get("invoice_id")) == invoice_id:
+                paid -= _int(row.get("amount_cents"))
+    except Exception:
+        pass                     # no refunds app installed is not a refund
+
+    if paid >= total:
+        return True, ""
+    return False, f"invoice not settled: {paid} of {total} paid"
+
+
+def _int(value):
+    try:
+        return int(_text(value) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _order_for_invoice(base, invoice_id):
     if not invoice_id:
         return None
@@ -212,6 +270,23 @@ def EVENT(request):
         # Most payments are not for web orders. Saying so plainly beats a
         # silent return that looks identical to a bug.
         return {"ok": True, "skipped": "no web order for this payment"}
+
+    # Goods leave when the BILL is settled, not when money merely arrives.
+    #
+    # This checked only that a payment existed and was received, so any
+    # amount shipped the order: a 14.00 payment against a 20.00 invoice
+    # fulfilled it in full, and the invoice was left sitting at `partial`
+    # saying so. Found by paying the wrong amount by hand on the live shop.
+    #
+    # The invoice already knows the answer -- system_invoice_status folds
+    # payments and refunds and flips it to paid or partial -- so this asks
+    # the document rather than doing its own arithmetic on one payment,
+    # which is also what makes a deposit followed by a balance work: the
+    # second payment is what tips it to paid, and that is the event that
+    # ships.
+    settled, reason = _invoice_is_settled(base, _text(payment.get("invoice_id")))
+    if not settled:
+        return {"ok": True, "skipped": reason, "order_id": order["id"]}
     if _text(order.get("status")) not in ("draft", "confirmed"):
         return {"ok": True, "skipped": f"order already {_text(order.get('status'))}"}
 
