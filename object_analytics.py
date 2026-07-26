@@ -59,6 +59,7 @@ _TRUE = {"1", "true", "yes", "on"}
 _MAX_UA = 500
 _MAX_REFERRER = 255
 _MAX_PATH = 500
+_MAX_HOST = 253      # the longest a DNS name can legally be
 
 
 def analytics_enabled(env: Mapping[str, str] | None = None) -> bool:
@@ -141,6 +142,11 @@ def build_page_view(
     referrer = (headers.get("referer") or headers.get("referrer") or "")[:_MAX_REFERRER]
     session_id = _cookie_value(headers.get("cookie") or "", "session_id")
     return {
+        # Which site was asked. One process here serves both a marketing
+        # domain and the app, and without this their visitors are one
+        # number that answers neither question. Port stripped so
+        # example.com and example.com:443 are one host rather than two.
+        "host": (headers.get("host") or "").split(":")[0].lower()[:_MAX_HOST],
         "path": (path or "/")[:_MAX_PATH],
         "method": (method or "GET").upper(),
         "status": str(int(status)),

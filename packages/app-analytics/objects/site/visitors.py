@@ -112,7 +112,8 @@ def GET(request):
     except (TypeError, ValueError):
         days = 7
 
-    summary = object_visitors.summarize(rows, days=days)
+    host = str(request.get("host") or "").strip().lower()
+    summary = object_visitors.summarize(rows, days=days, host=host)
     totals = summary["totals"]
     retention = object_analytics.retention_days()
 
@@ -138,18 +139,34 @@ def GET(request):
         for row in summary["landing"]
     ) or '<tr><td colspan="2" class="hint">No pages loaded by a visitor yet.</td></tr>'
 
+    hosts = "".join(
+        f'<tr><td><a href="/visitors?days={days}&host={_esc(row["host"])}">'
+        f'{_esc(row["host"])}</a></td>'
+        f'<td class="num">{row["visitors"]}</td></tr>'
+        for row in summary["hosts"]
+    ) or '<tr><td colspan="2" class="hint">No visitors yet in this window.</td></tr>'
+
     head = ('<thead><tr><th>When</th><th class="num">Visitors</th><th></th>'
             '<th class="num">Views</th><th class="num">Bots</th>'
             '<th class="num">Yours</th></tr></thead>')
 
     body = f"""
 <div class="breadcrumb"><a href="/">Home</a> / Visitors</div>
-<div class="pagehead"><h1>Visitors</h1>
+<div class="pagehead"><h1>Visitors{" &middot; " + _esc(host) if host else ""}</h1>
   <span class="muted">last {days} days &middot;
   <a href="/visitors?days=1">1</a> &middot; <a href="/visitors?days=7">7</a> &middot;
   <a href="/visitors?days=30">30</a></span></div>
 
 <div class="vis-grid">{cards}</div>
+
+{'<p class="hint"><a href="/visitors?days=' + str(days) + '">&larr; all sites</a></p>' if host else ''}
+<h2 style="font-size:1rem">Which site</h2>
+<p class="hint" style="margin-top:0">One process answers for more than one
+hostname here, so a combined figure answers neither "did anyone read the
+pitch" nor "did anyone try the product".</p>
+<table class="vis-table">
+<thead><tr><th>Host</th><th class="num">Visitors</th></tr></thead>
+<tbody>{hosts}</tbody></table>
 
 <h2 style="font-size:1rem">Today, by hour (UTC)</h2>
 <table class="vis-table">{head}<tbody>
@@ -171,10 +188,13 @@ def GET(request):
 <thead><tr><th>Page</th><th class="num">Visitors</th></tr></thead>
 <tbody>{landing}</tbody></table>
 
-<p class="hint">A <strong>visitor</strong> is an address that successfully
-loaded a real page and did not announce itself as a crawler. A
-<strong>bot</strong> is one that never did — mostly scanners walking a list
-of URLs that do not exist here. <strong>Yours</strong> is traffic from an
+<p class="hint">A <strong>visitor</strong> is an address that loaded a real
+page <em>and</em> did one thing a prober does not — opened a second page,
+arrived from a referrer, or carried a session. A lone hit on
+<code>/</code> is not counted, because <code>/</code> answers 200 to
+everyone. A <strong>bot</strong> is everything else: scanners walking a
+list of URLs that do not exist here, declared crawlers, and anything
+sending an attack payload in a header. <strong>Yours</strong> is traffic from an
 owner address or carrying the admin token, shown rather than hidden so you
 can check the page is recording at all.</p>
 <p class="hint">Unique means distinct IP address, which is an
