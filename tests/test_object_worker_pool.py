@@ -265,15 +265,54 @@ def test_pool_execute_worker_crash_self_heals(tmp_path):
 
 # ---------------------------------------------------------------------------
 # Concurrency: loop must not serialize concurrent executions
+#
+# These measure OVERLAP directly rather than inferring it from wall clock.
+# The earlier version asserted a total elapsed time 0.02s below the
+# fully-serialized floor, which is not a test of concurrency so much as a
+# test of how busy the machine is: one real run took 1.09s -- longer than
+# serialized execution would have needed -- purely from scheduling
+# pressure, and failed while the pool was working perfectly. Each
+# execution now records when it started and stopped, and the assertion is
+# the actual claim: two of them were running at the same moment.
 # ---------------------------------------------------------------------------
 
+_OVERLAP_OBJECT = """
+import os
+import time
 
-def test_pool_size_two_runs_two_requests_concurrently(tmp_path):
+
+def GET(request):
+    started = time.time()
+    time.sleep(0.3)
+    with open(os.environ["DBBASIC_OVERLAP_LOG"], "a") as handle:
+        handle.write(f"{started},{time.time()}\\n")
+    return {"ok": True}
+"""
+
+
+def _max_concurrent(log_path):
+    """The most executions that were in flight at once, from their own
+    recorded intervals. Deterministic: no clock budget to blow."""
+    spans = []
+    for line in log_path.read_text().splitlines():
+        if not line.strip():
+            continue
+        start, end = (float(part) for part in line.split(","))
+        spans.append((start, 1))
+        spans.append((end, -1))
+    spans.sort()
+    running = peak = 0
+    for _stamp, delta in spans:
+        running += delta
+        peak = max(peak, running)
+    return peak
+
+
+def test_pool_size_two_runs_two_requests_concurrently(tmp_path, monkeypatch):
     root = tmp_path / "objects"
-    write_object(
-        root / "basics" / "sleepy.py",
-        "import time\n\ndef GET(request):\n    time.sleep(0.3)\n    return {'ok': True}\n",
-    )
+    log_path = tmp_path / "overlap.csv"
+    monkeypatch.setenv("DBBASIC_OVERLAP_LOG", str(log_path))
+    write_object(root / "basics" / "sleepy.py", _OVERLAP_OBJECT)
 
     async def scenario():
         pool = object_worker_pool.WorkerPool(size=2)
@@ -296,20 +335,17 @@ def test_pool_size_two_runs_two_requests_concurrently(tmp_path):
         finally:
             await pool.shutdown()
 
-    results, elapsed = asyncio.run(scenario())
+    results, _elapsed = asyncio.run(scenario())
 
     assert all(r.ok for r in results)
-    # Serialized execution would take >= 0.6s; concurrent execution on a
-    # 2-worker pool should land close to a single 0.3s sleep.
-    assert elapsed < 0.58, f"expected overlap (serialized floor is ~0.6s), took {elapsed:.3f}s"
+    assert _max_concurrent(log_path) == 2, "the two requests never overlapped"
 
 
-def test_pool_three_requests_through_size_two_pool_all_complete(tmp_path):
+def test_pool_three_requests_through_size_two_pool_all_complete(tmp_path, monkeypatch):
     root = tmp_path / "objects"
-    write_object(
-        root / "basics" / "sleepy.py",
-        "import time\n\ndef GET(request):\n    time.sleep(0.3)\n    return {'ok': True}\n",
-    )
+    log_path = tmp_path / "overlap.csv"
+    monkeypatch.setenv("DBBASIC_OVERLAP_LOG", str(log_path))
+    write_object(root / "basics" / "sleepy.py", _OVERLAP_OBJECT)
 
     async def scenario():
         pool = object_worker_pool.WorkerPool(size=2)
@@ -330,13 +366,14 @@ def test_pool_three_requests_through_size_two_pool_all_complete(tmp_path):
         finally:
             await pool.shutdown()
 
-    results, elapsed = asyncio.run(scenario())
+    results, _elapsed = asyncio.run(scenario())
 
     assert all(r.ok for r in results)
-    # Two run concurrently (~0.3s), the third queues for a free worker
-    # (~another 0.3s): expect ~0.3-0.5s total, well under fully serialized
-    # (3 * 0.3s = 0.9s).
-    assert elapsed < 0.88, f"expected queueing not full serialization (floor ~0.9s), took {elapsed:.3f}s"
+    assert len(results) == 3
+    # Two at a time, never three: the pool is size two, so the third has to
+    # wait for a worker. Both halves of that are the claim, and both are
+    # now measured rather than timed.
+    assert _max_concurrent(log_path) == 2
 
 
 # ---------------------------------------------------------------------------
