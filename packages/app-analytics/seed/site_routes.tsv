@@ -1,2 +1,3 @@
 id	pattern	object_id	priority
 route_analytics	/analytics	site_view_render	10
+route_visitors	/visitors	site_visitors	10

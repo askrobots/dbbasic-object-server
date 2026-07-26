@@ -3,16 +3,29 @@
     {
       "effect": "allow",
       "principal": "role:admin",
-      "actions": ["read"],
+      "actions": [
+        "read"
+      ],
       "collection": "page_views",
       "reason": "traffic analytics is an admin inspection surface; capture is server-side, never a public write"
     },
     {
       "effect": "allow",
       "principal": "role:admin",
-      "actions": ["read"],
+      "actions": [
+        "read"
+      ],
       "collection": "conversions",
       "reason": "conversion events are an admin analytics surface; recorded server-side, never a public write"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": [
+        "execute"
+      ],
+      "object_id": "site_visitors",
+      "reason": "traffic numbers are operator information, and the page itself refuses an anonymous caller; this grant is what lets a signed-in operator reach it at all"
     }
   ]
 }
