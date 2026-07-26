@@ -132,6 +132,16 @@ def POST(request):
                           "against this order, not a receipt against a "
                           "purchase order.")}
 
+    if _text(order.get("fulfillment_source")) == "dropship":
+        return {"status": 409,
+                "error": ("This purchase order is drop-shipped -- the vendor "
+                          "sends it straight to the customer, so it never "
+                          "arrives at a dock of ours to be checked in. "
+                          "Receiving it would shelve stock nobody here has "
+                          "ever seen, and every count from then on would "
+                          "disagree with the room. Track it on the linked "
+                          "sales order instead.")}
+
     order_status = _text(order.get("status"))
     if order_status in ("draft", "cancelled"):
         return {"status": 409,

@@ -1,1 +1,1 @@
-id	doc_type	number	customer_id	customer_name	customer_email	currency	status	order_date	expected_date	subtotal_cents	tax_cents	total_cents	invoice_id	portal_token	customer_note	gift_message	notes	owner_id	created_at
+id	doc_type	number	customer_id	customer_name	customer_email	currency	status	order_date	expected_date	subtotal_cents	tax_cents	total_cents	invoice_id	portal_token	fulfillment_source	linked_order_id	vendor_id	ship_to_name	ship_to_address	customer_note	gift_message	notes	owner_id	created_at

@@ -29,6 +29,20 @@
       "actions": ["execute"],
       "object_id": "site_order_status",
       "reason": "the /orders/track/{token} page is public by design -- this shop's default sale is a guest checkout, so the buyer has no account to sign into and no other way to ask where their order is. The object resolves the order by portal_token with a constant-time compare, never by id, so there is no enumeration path from a guessed order id, and an unknown or blank token gets the same friendly 404 as one that never existed. Public EXECUTE on the page object only -- the orders collection itself stays owner-scoped, exactly the split app-invoices uses for site_invoice_portal"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "action_dropship_order",
+      "reason": "choosing to have a vendor ship an order is ordinary commercial work, not owner-only work: anybody signed in can raise the purchase order, and what they can raise it against is bounded by the action's own gates -- a sale order only, never one already linked, and never one whose goods have already come off our shelf"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "site_dropship_margin",
+      "reason": "registered rather than public, unlike the tracking page beside it: what a shop paid a vendor and what it charged the customer is the most commercially sensitive pair of numbers in this package, and the page is addressed by an internal order id -- public execute would make it an enumeration oracle for the whole margin book. The page shows a sign-in prompt rather than an error to anyone who is not"
     }
   ]
 }

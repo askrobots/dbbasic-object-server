@@ -1,0 +1,19 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update"],
+      "collection": "disputes",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "a dispute is the operator's own record of an argument about their own goods and their own money; no delete, because a claim that was made cannot be made not to have been made -- a mistake is a withdrawn dispute or one resolved as no_action with a reason, never a vanished row, and 'we told her no on the 3rd' is the answer to the chargeback that arrives on the 20th"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "action_resolve_dispute",
+      "reason": "settling a claim is counter work, not owner-only work: the person on the phone to the customer is the person who can end the call, and everything they can give away is bounded by gates they do not control -- hook_refunds caps a refund at what the payment can give back, and hook_disputes refuses any close that does not name a real compensating record, whoever is asking. hook_disputes itself needs no rule of its own, the same way hook_receipt_lines and hook_shipment_lines have none: a pre-write gate runs inside the write it is guarding, on behalf of whoever was already allowed to make it"
+    }
+  ]
+}

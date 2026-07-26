@@ -56,6 +56,12 @@ def test_get_package_normalizes_app_orders_manifest():
         "system_order_portal_link",
         "system_order_email",
         "site_order_status",
+        # 0.6.0, the drop-ship slice: the action that raises the vendor's
+        # purchase order from a sale order, and the two-row read that
+        # proves margin needed no stored field. Behavior lives in
+        # tests/test_dropship.py.
+        "action_dropship_order",
+        "site_dropship_margin",
     }
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
     assert {entry["collection"] for entry in package["seed"]} == {
@@ -116,7 +122,12 @@ def test_schema_json_files_are_valid_and_versioned():
     # orders v5: portal_token, the customer's capability URL. A guest
     # checkout leaves no account to sign into, so without it a buyer could
     # neither track an order nor start a return.
-    expected_versions = {"orders": 5, "order_lines": 1}
+    # orders v6: drop-shipping -- fulfillment_source, linked_order_id,
+    # vendor_id and the ship_to pair. No new collection, because the v1
+    # shared SO/PO schema had already modelled "the vendor ships straight
+    # to my customer" as two rows pointing at each other; see
+    # tests/test_dropship.py.
+    expected_versions = {"orders": 6, "order_lines": 1}
     for name in ("orders", "order_lines"):
         payload = json.loads((APP_ORDERS_DIR / "schemas" / f"{name}.json").read_text())
         assert payload["name"] == name

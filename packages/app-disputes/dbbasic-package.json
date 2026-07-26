@@ -1,0 +1,76 @@
+{
+  "id": "app-disputes",
+  "name": "Disputes",
+  "version": "0.1.0",
+  "description": "A customer says something went wrong. This package is one small collection and one gate, and the gate is the whole point. Every shop already has disputes -- they live in an inbox, a notebook and somebody's memory -- and what they lack is not a place to write them down but an ENDING that can be checked: plan/fulfillment-logistics-spec.md asks for 'an outcome that is always a LINKED compensating record (refund, replacement shipment, credit), never an edit to history', and the difference between that sentence and a convention is hook_disputes. A dispute may not reach `resolved` unless it names a resolution, and for refund/replacement/credit the name has to RESOLVE -- the right collection for the kind, and a row that actually exists. `no_action` is a legitimate ending, because plenty of claims are genuinely not ours to compensate, but it carries a reason or it is not a decision, it is a queue somebody cleared. The failure all of that prevents is exactly one sentence long: a customer told 'it's sorted' when nothing happened, which is invisible from the inside forever -- the row looks finished, the badge goes down, and the only person who knows is the one still waiting. kind (shipment | delivery | payment | product | other) is five words that each route to different people and different evidence: a carrier argument, a signature-and-photo argument, a processor argument with a chargeback clock on it, an argument for whoever buys the stock, and an honest bucket so nobody has to lie. All three references -- order, shipment, payment -- are OPTIONAL, because the moment a dispute most needs recording is the moment somebody emails about 'my order' before anybody has worked out which parcel or which payment they mean. action_resolve_dispute is the ONE door where a dispute and its compensating record are written together, the same argument app-returns' action_disposition_return makes about returns and refunds: separating them is how a shop ends up with a resolved queue and no refunds against it. It defers the refund ceiling to app-payments' hook_refunds and surfaces that gate's refusal verbatim, so a customer is quoted the same number whichever door their claim arrived through, and it defers the resolution rule to hook_disputes by asking the hook in process rather than restating it. A credit is a wallet entry and wallets are app-billing's, which is deliberately NOT a dependency: a shop that does not sell credit should not have to install a billing engine to record an argument, so the action refuses honestly and names the missing app rather than closing a dispute as though credit had been issued. A replacement is a real sale order, raised CONFIRMED (a draft is not a commitment, and a resolution pointing at a document that promises nothing is the failure this package exists to prevent) with its lines copied at zero price, because the customer already paid on the order being argued about. Resolving twice refunds once: the terminal status is the primary guard and a provenance marker on the refund, the replacement order and the wallet entry is the belt behind it. What is deliberately NOT here, named so it reads as a decision rather than an omission: a carrier claim workflow (a connector boundary, like labels), chargeback representment, a customer-facing dispute form (it needs the same tokened door site_return_form got, and the door is the interesting half -- a later slice), and a REVIEW FREEZE. A disputed order's review window ought to be frozen while the argument is open, and this collection is where that read would come from; there is no reviews system on this server, so the field would be a column of blanks and the doctrine is written into the schema description instead of guessed at in code. Ships an attention provider for disputes at `open` -- claims nobody has picked up -- and a bench at /disputes showing the whole ladder, because the person standing at it needs to see what is in flight as well as what is untouched. The count deliberately excludes `investigating`: a badge that also counts work in progress can never reach zero, which is how a number stops meaning anything. Severity is `warning` rather than `urgent`: a waiting customer is the most human queue on this box, but tests/test_package_attention.py holds a calibration this package does not get to overrule -- `urgent` is reserved for the server reporting that it has stopped doing its own work, and a scale everything claims the top of is not a scale.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": [
+    "app-orders",
+    "app-payments",
+    "app-shipping",
+    "app-views"
+  ],
+  "objects": [
+    {
+      "id": "hook_disputes",
+      "path": "objects/hook/disputes.py"
+    },
+    {
+      "id": "action_resolve_dispute",
+      "path": "objects/action/resolve_dispute.py"
+    },
+    {
+      "id": "system_dispute_attention",
+      "path": "objects/system/dispute_attention.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "disputes",
+      "path": "schemas/disputes.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "disputes",
+      "path": "seed/disputes.tsv"
+    },
+    {
+      "collection": "site_routes",
+      "path": "seed/site_routes.tsv"
+    },
+    {
+      "collection": "views",
+      "path": "seed/views.tsv"
+    }
+  ],
+  "migrations": [],
+  "nav": [
+    {
+      "id": "disputes",
+      "label": "Disputes",
+      "path": "/disputes",
+      "blurb": "Claims customers have made, and what we actually did about each one",
+      "surface": "operator",
+      "group": "Commerce",
+      "order": 430
+    }
+  ],
+  "attention": [
+    {
+      "id": "disputes_open",
+      "object_id": "system_dispute_attention",
+      "label": "Disputes to answer",
+      "path": "/disputes",
+      "group": "Commerce",
+      "severity": "warning"
+    }
+  ]
+}

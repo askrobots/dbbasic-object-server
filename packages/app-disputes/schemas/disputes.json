@@ -1,0 +1,163 @@
+{
+  "name": "disputes",
+  "title": "Disputes",
+  "version": 1,
+  "description": "A customer saying something went wrong, and what we did about it. The whole reason this collection exists rather than a `notes` field on the order is the OUTCOME: a dispute's ending is always a linked compensating record -- a refund, a replacement order, a wallet credit -- never an edit to the history it is arguing with (docs/logic-decisions.md #3). The parcel that left on the 3rd still left on the 3rd even when the customer says it never arrived; what changes is that a new document now says we gave the money back. kind tells the five arguments apart because they route to different people and different evidence: a shipment argument is with a carrier, a delivery argument is about a parcel the tracking says arrived, a payment argument is with a processor and has a chargeback clock on it, a product argument is with whoever bought the stock, and `other` is the honest bucket rather than a taxonomy nobody fills in truthfully. order_id/shipment_id/payment_id are all OPTIONAL relations on purpose -- a dispute references whichever thing it is about, and requiring all three would make the common case (a customer emails about an order before anybody has found the parcel) unrecordable, which is exactly when it needs recording. The load-bearing rule is enforced by hook_disputes, not by convention: a dispute may not reach `resolved` unless it NAMES its resolution, and for refund/replacement/credit that name has to resolve to a real record in the collection the kind implies. `no_action` is a legitimate ending -- some claims are simply not ours to compensate -- but it has to carry a reason in resolution_note, because a closed dispute with nothing behind it and nothing said is how a customer gets told 'it's sorted' when nothing happened, which is the failure this whole collection exists to make impossible. Deliberately NOT here, named so it reads as a decision: a review-freeze flag. plan/fulfillment-logistics-spec.md's merchandising notes never called for reviews and no reviews system exists on this server, so the field would be a column of blanks; when reviews land, a disputed order's review window should be frozen while the argument is open, and this collection is where that read comes from.",
+  "hooks": {
+    "before_write": "hook_disputes"
+  },
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "kind",
+      "type": "enum",
+      "required": true,
+      "label": "Kind",
+      "enum": ["shipment", "delivery", "payment", "product", "other"],
+      "help": "What the argument is ABOUT, in five words that each change who picks it up. `shipment` is a parcel that went wrong in transit -- damaged, short, opened -- and the counterparty is a carrier. `delivery` is the parcel the tracking says arrived and the customer says did not, which is a different investigation with different evidence (a signature, a photo, a neighbour). `payment` is money: a charge the cardholder does not recognise, a double charge, a chargeback that has a clock on it nobody else's queue does. `product` is the goods themselves -- not as described, wrong item, faulty -- and it is the one the person who BUYS the stock needs to see. `other` is deliberately kept so nobody has to lie about a claim that fits none of the four; a longer enum would be a survey, and a survey nobody acts on is a field people stop filling in honestly."
+    },
+    {
+      "name": "order_id",
+      "type": "relation",
+      "relation": {
+        "collection": "orders",
+        "display_field": "number"
+      },
+      "label": "Order",
+      "help": "Optional, like all three references. A dispute points at whichever thing it is about, and the common case -- a customer emails about 'my order' before anybody has worked out which parcel or which payment they mean -- has an order and nothing else. Requiring more would make the moment a dispute most needs recording the moment it cannot be."
+    },
+    {
+      "name": "shipment_id",
+      "type": "relation",
+      "relation": {
+        "collection": "shipments",
+        "display_field": "tracking_number"
+      },
+      "label": "Shipment",
+      "help": "The parcel being argued about, when there is one. Set for shipment and delivery disputes; blank for a payment argument, which is about money that never had a box."
+    },
+    {
+      "name": "payment_id",
+      "type": "relation",
+      "relation": {
+        "collection": "payments",
+        "display_field": "reference"
+      },
+      "label": "Payment",
+      "help": "The money being argued about, when the argument is about money. Also what a refund resolution refunds AGAINST: money can only go back the way it came, so a payment dispute that names its payment lets action_resolve_dispute ask app-payments' ceiling directly instead of guessing which of several payments on an invoice the customer means."
+    },
+    {
+      "name": "opened_by",
+      "type": "text",
+      "label": "Opened By",
+      "help": "Who raised it -- a staff member taking the call, or blank when it arrived through a path that could not name one. Not the customer: the customer is customer_email, and conflating 'who typed this' with 'who is complaining' is how a dispute list stops being able to answer either question."
+    },
+    {
+      "name": "customer_email",
+      "type": "text",
+      "label": "Customer",
+      "validation": {
+        "max_length": 254
+      },
+      "help": "Stamped from the order when there is one, never re-read (docs/logic-decisions.md #1). The customer of THIS dispute is whoever was arguing at the time, and an order record edited next month must not silently redirect an old argument's correspondence."
+    },
+    {
+      "name": "summary",
+      "type": "text",
+      "required": true,
+      "label": "Summary",
+      "validation": {
+        "min_length": 1,
+        "max_length": 300
+      },
+      "help": "One line somebody can scan a queue by. Required because a dispute row with no summary is indistinguishable from a mis-click, and a queue of those teaches people to ignore the queue."
+    },
+    {
+      "name": "detail",
+      "type": "textarea",
+      "label": "Detail",
+      "help": "The customer's own words and everything found since, kept long-form next to the one-line summary. The summary is what a list shows; this is what the person picking it up actually reads."
+    },
+    {
+      "name": "status",
+      "type": "enum",
+      "required": true,
+      "label": "Status",
+      "default": "open",
+      "enum": ["open", "investigating", "resolved", "withdrawn"],
+      "transitions": {
+        "open": [
+          {"to": "investigating", "when": {"owner_id": "$user_id"}},
+          {"to": "resolved", "when": {"owner_id": "$user_id"}},
+          {"to": "withdrawn", "when": {"owner_id": "$user_id"}}
+        ],
+        "investigating": [
+          {"to": "resolved", "when": {"owner_id": "$user_id"}},
+          {"to": "withdrawn", "when": {"owner_id": "$user_id"}}
+        ]
+      },
+      "help": "open is a claim nobody has picked up -- the state the attention count exists to drain. investigating means a human has it and is finding out. resolved means we DID something, and what we did is named in resolution_kind and resolution_ref; hook_disputes refuses this move unless it is, because a dispute closed with nothing behind it is how a customer gets told it is sorted when nothing happened. withdrawn is the customer dropping it, which is a real and common ending and deliberately NOT the same as resolved -- filing it under resolved would salt every 'what did we pay out' report with claims that cost nothing. open -> resolved skips investigating on purpose: an obvious refund on a two-pound item should not need a bookkeeping hop nobody performs. resolved and withdrawn are terminal, for the same reason a refund is a new record and not an edited payment -- a second argument is a second dispute, never a reopened one."
+    },
+    {
+      "name": "resolution_kind",
+      "type": "enum",
+      "label": "Resolution",
+      "enum": ["refund", "replacement", "credit", "no_action"],
+      "help": "How it ended, and the field that decides which collection resolution_ref must point INTO: refund -> refunds, replacement -> orders, credit -> wallet_entries. Blank while the dispute is open, which is why this is not required at the schema level -- the requirement is conditional on status, and a schema cannot say that. hook_disputes says it instead. no_action is a first-class ending (a claim outside the return window, a carrier delay nobody owes for, a customer who found the parcel behind the bins) and needs no ref, but it does need a reason in resolution_note."
+    },
+    {
+      "name": "resolution_ref",
+      "type": "text",
+      "label": "Resolution Record",
+      "validation": {
+        "max_length": 200
+      },
+      "help": "'refunds/{id}' | 'orders/{id}' | 'wallet_entries/{id}' -- a pointer at the compensating record, never an amount. Two copies of one number is a disagreement waiting to be found by the customer, and the amount already lives on the record this points at. hook_disputes RESOLVES this: the collection has to match the resolution_kind and the id has to name a row that exists, because a plausible-looking reference to nothing is worse than a blank one -- a blank field is visibly unfinished, and 'refunds/abc123' reads as done."
+    },
+    {
+      "name": "resolution_note",
+      "type": "textarea",
+      "label": "Resolution Note",
+      "help": "Why it ended the way it did. Optional for a refund or a replacement, where the linked record already says what happened -- REQUIRED for no_action, because 'we are not compensating this' is a decision somebody will be asked to justify weeks later, usually by the customer and occasionally by a card processor, and a bare no_action with no sentence behind it is indistinguishable from a queue somebody cleared to make the number go down."
+    },
+    {
+      "name": "resolved_by",
+      "type": "text",
+      "label": "Resolved By",
+      "help": "Which human decided. The same second-person shape returns and expenses use: a resolution usually costs the shop money, so the record says who agreed to spend it."
+    },
+    {
+      "name": "resolved_at",
+      "type": "datetime",
+      "label": "Resolved"
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Raised",
+      "read_only": true
+    }
+  ],
+  "forms": {
+    "default": {
+      "fields": ["kind", "order_id", "shipment_id", "payment_id", "opened_by",
+                 "customer_email", "summary", "detail", "status",
+                 "resolution_kind", "resolution_ref", "resolution_note"]
+    }
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["created_at", "kind", "status", "summary", "resolution_kind"],
+    "filter_fields": ["status", "kind", "resolution_kind"]
+  },
+  "search": {
+    "fields": ["summary", "detail", "customer_email"]
+  }
+}

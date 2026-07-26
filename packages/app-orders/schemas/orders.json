@@ -1,8 +1,8 @@
 {
   "name": "orders",
   "title": "Orders",
-  "version": 5,
-  "description": "Sales and purchase orders (doc_type on one shared schema, mirroring app-invoices' doc_type split). Lines live in order_lines; subtotal/tax/total are stamped by the order_totals handler, never typed by hand. Reconciled against a private predecessor-system audit, not part of this repo (its Order+Lines note: 'SO/PO; convert_to_invoice'). v4 carries the two fields a shopper types at checkout -- customer_note and gift_message -- because the packing slip is printed from the ORDER, not from the basket somebody abandoned on the way to it. v5 adds portal_token, the customer's own door: the shop sells to guests, so a buyer has no account to sign into and no way to ask 'where is my order?' without one. It is the same capability-URL shape invoices already use for /pay/{token}, and it is what finally lets a guest start a return.",
+  "version": 6,
+  "description": "Sales and purchase orders (doc_type on one shared schema, mirroring app-invoices' doc_type split). Lines live in order_lines; subtotal/tax/total are stamped by the order_totals handler, never typed by hand. Reconciled against a private predecessor-system audit, not part of this repo (its Order+Lines note: 'SO/PO; convert_to_invoice'). v4 carries the two fields a shopper types at checkout -- customer_note and gift_message -- because the packing slip is printed from the ORDER, not from the basket somebody abandoned on the way to it. v5 adds portal_token, the customer's own door: the shop sells to guests, so a buyer has no account to sign into and no way to ask 'where is my order?' without one. It is the same capability-URL shape invoices already use for /pay/{token}, and it is what finally lets a guest start a return. v6 is drop-shipping, and it is five fields rather than a new collection precisely because the shared SO/PO schema was the right call in v1: 'the vendor ships straight to my customer' is a SALE order and a PURCHASE order pointing at each other, which this collection could already almost express. fulfillment_source (stock | dropship, defaulting to stock so nothing existing changes meaning) is the fact every other package needs to know; linked_order_id is the counterpart, written both ways so either end answers on its own; vendor_id is who actually ships it; and ship_to_name/ship_to_address exist for the one case in this whole repo where the counterparty on a document and the destination of its goods are different people -- a drop-ship PO addressed to a vendor whose parcel goes to our customer. Margin needs no field at all, because both orders already carry money.",
   "fields": [
     {
       "name": "id"
@@ -225,6 +225,50 @@
       "help": "The customer's capability URL for this one order: /orders/track/{token}, rendered by site_order_status. Unguessable (secrets.token_urlsafe), minted by action_checkout while the shopper is still standing there and by system_order_portal_link for every other non-draft order, and looked up BY TOKEN ONLY with a constant-time compare so a guessed order id opens nothing. read_only exactly as invoices.portal_token is: a capability URL a client can choose is not a capability, so only a server-side writer passing preserve_read_only may set it. Kept out of forms.default, list_fields and search for the same reason -- a bearer token that turns up in a list response has already leaked."
     },
     {
+      "name": "fulfillment_source",
+      "type": "enum",
+      "label": "Fulfilled From",
+      "default": "stock",
+      "enum": [
+        "stock",
+        "dropship"
+      ],
+      "help": "Where the goods for this order physically come from. `stock` is the default and means our own shelf -- so nothing that existed before v6 changes meaning by gaining this field, the same argument billing_mode and fulfillment_method make in their own packages. `dropship` says the vendor ships straight to the customer: the goods never touch our shelf, receiving is skipped because there is nothing to receive, and OUR STOCK MUST NEVER MOVE against this order. That last sentence is the whole reason this is a stored field on the order rather than a fact derived from the existence of a linked purchase order -- a derived answer would be computed differently by every handler that needed it, and the one that got it wrong would quietly decrement a shelf that never held the goods. It is set by action_dropship_order on BOTH orders (the sale order and the purchase order it spawns), so either document answers the question on its own without walking the link. NOTE, because it is the honest half: system_order_fulfillment (app-shipping) does not read this field yet, so a shipment raised against a drop-ship sale order still composes a `sale` stock move. The data is here for it to read; the read is a required follow-up in a package the disputes/drop-ship slice does not own, and tests/test_dropship.py holds it as a strict xfail so it cannot be forgotten."
+    },
+    {
+      "name": "linked_order_id",
+      "type": "text",
+      "label": "Linked Order",
+      "validation": {
+        "max_length": 64
+      },
+      "help": "The counterpart document: on a drop-ship SALE order, the purchase order it spawned; on that purchase order, the sale order it serves. Linked both ways at creation so either end answers 'what is the other half of this?' without a scan, and so margin is a read over two rows rather than a join nobody maintains. Deliberately ONE meaning: it is tempting to reuse this for a replacement order, an amended order or a converted quote, and every one of those would make the field unreadable by a gate -- app-disputes raises its replacement orders with provenance in `notes` instead, precisely so this field keeps meaning exactly one thing. Plain text rather than a relation to `orders` for the same reason invoice_id is: a self-referential relation on the collection that seeds itself is a chicken-and-egg the loader does not need to solve to make this link work."
+    },
+    {
+      "name": "vendor_id",
+      "type": "text",
+      "label": "Vendor",
+      "validation": {
+        "max_length": 64
+      },
+      "help": "Who ships it, on a drop-ship pair -- carried on both orders so the sale order can answer 'who is actually sending this?' without opening the PO. Plain text and NOT a relation, which is a deliberate choice rather than laziness: a vendor in this repo may be a contact, an organization, or neither (a supplier somebody bought from once and never filed), and a relation to any one of those three collections would refuse the other two. The PO's own customer_name still carries the vendor's name the way every purchase order here already does, so nothing downstream has to learn a new field to print a document."
+    },
+    {
+      "name": "ship_to_name",
+      "type": "text",
+      "label": "Ship To",
+      "validation": {
+        "max_length": 200
+      },
+      "help": "Where this order's goods are going, when that is NOT the counterparty named on it. On an ordinary sale order it is blank and every surface reads customer_name, which is the same person -- the field would be a duplicate with a chance to disagree. The one place they genuinely differ is a drop-ship purchase order, where the counterparty is the vendor and the destination is somebody else's customer entirely, and a PO that cannot say that is a PO the vendor cannot fulfill. That is the whole reason the field exists, and it is why it is optional and blank almost everywhere."
+    },
+    {
+      "name": "ship_to_address",
+      "type": "textarea",
+      "label": "Ship To Address",
+      "help": "The delivery address, for the same reason and in the same one case. app-shipping's action_create_shipment already reads orders.ship_to_address when stamping a shipment (it has looked for this field since the shipments slice, against the day the storefront collects an address), so filling it in here needs no change there. ship_to_name is the half app-shipping does not read yet -- it stamps a shipment's ship_to_name from customer_name -- which is a small, named follow-up in a package this slice does not own, not a reason to leave the address homeless."
+    },
+    {
       "name": "customer_note",
       "type": "textarea",
       "label": "Special Instructions",
@@ -277,6 +321,11 @@
       "status",
       "total_cents",
       "expected_date"
+    ],
+    "filter_fields": [
+      "status",
+      "doc_type",
+      "fulfillment_source"
     ]
   },
   "search": {

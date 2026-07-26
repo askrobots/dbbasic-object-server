@@ -1,0 +1,2 @@
+id	title	route	layout	blocks	owner_id	is_public	pinned	created_at
+view_disputes_bench	Disputes	/disputes	single	"[{""kind"": ""list"", ""collection"": ""disputes"", ""search"": true, ""sort"": true, ""add"": true, ""owner_scoped"": true, ""title_field"": ""summary"", ""add_label"": ""+ Raise Dispute""}]"		true	false	2026-01-01T00:00:00

@@ -173,6 +173,20 @@ def _move_stock(base, shipment, order, moves):
     if moves is None:
         return 0, "stock not installed; nothing to move"
 
+    # Drop-shipped goods never sat on our shelf. The vendor posted them
+    # straight to the customer, and the parcel is recorded here so the
+    # customer can be told and the order can complete -- but decrementing
+    # our own stock for it would invent a movement that never happened,
+    # and every count from then on would disagree with the room.
+    #
+    # `fulfillment_source` is read off the ORDER rather than the shipment
+    # because it is a property of how the sale is being met, not of one
+    # parcel: a part-drop-shipped order would still be answered honestly
+    # by splitting it into two orders, which is what the linked-order
+    # model already does.
+    if _text(order.get("fulfillment_source")) == "dropship":
+        return 0, "drop-shipped: the goods never touched our shelf"
+
     from_location = _setting(base, "shop.stock_location")
     to_location = _setting(base, "shop.customer_location")
     existing = [_text(move.get("reference")) for move in moves]

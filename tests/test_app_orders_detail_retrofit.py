@@ -42,6 +42,11 @@ def test_manifest_drops_bespoke_order_view_page_and_seeds_the_detail_view():
         "system_order_portal_link",
         "system_order_email",
         "site_order_status",
+        # 0.6.0: the drop-ship slice -- the action that raises the
+        # vendor's purchase order from a sale order, and the two-row
+        # margin read that proved margin needed no stored field.
+        "action_dropship_order",
+        "site_dropship_margin",
     }
     assert {entry["collection"] for entry in package["seed"]} == {
         "orders", "order_lines", "views", "site_routes",
