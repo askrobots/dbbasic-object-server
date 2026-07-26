@@ -45,6 +45,51 @@ If the invoice cannot be raised, the ORDER STILL STANDS. Losing a sale to
 an invoicing hiccup is the expensive failure; an order without an invoice
 is visible, and the period biller or an operator can raise one. So only
 the invoice block is wrapped -- never the order.
+
+**Tax and postage are charged here, or the shop is losing money and
+breaking the law.** Four settings say how (all absent = a shop that
+charges neither, which is exactly what it did before):
+
+  shop.tax_rate_bps            basis points, 1500 = 15%; 0 = no tax
+  shop.tax_shipping            is the postage part of the taxable base?
+  shop.shipping_flat_cents     one flat charge; 0 = shipping disabled
+  shop.shipping_free_over_cents  free over this basket size; 0 = never
+
+The arithmetic itself is object_cart.checkout_totals and nothing here
+recomputes any part of it -- this file only writes down what that fold
+said. Retrofitting tax later would mean restating invoices that have
+already been sent, which is why a flat honest rate now beats a clever
+one afterwards.
+
+**Postage is an invoice LINE, tax is an invoice TOTAL.** The line is
+because a customer must be able to see what the delivery cost instead of
+finding it welded into a number they cannot check, and because it keeps
+the invoice's subtotal the sum of its own lines. The tax is a total
+because invoices already carry a tax_cents field that means exactly
+this, and inventing a "Sales tax" pseudo-line beside a real field would
+give the same money two homes.
+
+One seam is left open rather than papered over. invoice_totals, if an
+operator ever turns DBBASIC_ENABLE_EVENT_HANDLERS on AND somebody edits
+a line of one of these invoices through the API, restates tax as the sum
+of the lines' own line_tax_cents -- and only the postage line carries
+one, so such a restatement would drop the tax on the goods. Nothing
+this file writes triggers that today (checkout writes through
+object_records directly, which never reaches the dispatcher), and the
+flag is off everywhere. The honest fixes are a decision for whoever owns
+invoice_totals -- either it learns to leave an invoice-level tax alone,
+or every taxable line carries its own rate -- and the second one costs a
+cent of per-line rounding drift, which is exactly the error the single
+rounding above exists to avoid. Written down here so the next person
+finds it before a customer does.
+
+The ORDER records tax_cents and a total_cents that includes both, but
+its subtotal stays goods-only -- so postage on an order is currently
+implied by total - subtotal - tax rather than stated. That is a known
+gap: orders has no shipping_cents column yet. The moment one exists this
+file stamps it (it checks the schema rather than assuming), and until
+then the itemisation lives where a customer actually reads it, on the
+invoice.
 """
 
 import os
@@ -54,6 +99,7 @@ from datetime import date, timedelta
 import object_cart
 import object_ids
 import object_records
+import object_schemas
 import object_stock
 
 ACTOR = "action_checkout"
@@ -88,6 +134,39 @@ def _int(value, default=0):
         return int(_text(value) or default)
     except (TypeError, ValueError):
         return default
+
+
+def _has_field(base, collection, field):
+    """Does this collection's schema declare `field` yet?
+
+    Asked rather than assumed because orders is due to gain a
+    shipping_cents column and this file wants to fill it the day it
+    appears, without a migration and without writing a field that does
+    not exist into a shop that has not upgraded. Any failure to read the
+    schema answers "no": a missing column costs an itemisation, a
+    rejected write would cost the order.
+    """
+    try:
+        schema = object_schemas.get_schema(collection, base_dir=base)
+    except Exception:
+        return False
+    return any(f.get("name") == field for f in schema.get("fields") or [])
+
+
+def _tax_and_shipping_settings(base):
+    """The four numbers that decide what this sale costs beyond the goods.
+
+    All default to 0/off, so a shop that has configured nothing charges
+    nothing extra and its invoices look exactly as they did yesterday --
+    absent configuration must read as "this shop does not do that", never
+    as a broken tax line.
+    """
+    return {
+        "tax_rate_bps": _int(_setting(base, "shop.tax_rate_bps", 0)),
+        "tax_shipping": _truthy(_setting(base, "shop.tax_shipping", "")),
+        "shipping_flat_cents": _int(_setting(base, "shop.shipping_flat_cents", 0)),
+        "free_over_cents": _int(_setting(base, "shop.shipping_free_over_cents", 0)),
+    }
 
 
 def _pay_path_for_order(base, order_id):
@@ -211,12 +290,20 @@ def POST(request):
             if product:
                 item["unit_price_cents"] = str(product.get("price_cents") or 0)
 
-    summary = object_cart.totals(items)
+    charges = _tax_and_shipping_settings(base)
+    summary = object_cart.checkout_totals(items, **charges)
     email = _text(request.get("customer_email"))
 
     if _truthy(request.get("preview")):
+        # The whole breakdown, because a preview exists so somebody can
+        # see what they are about to owe -- a subtotal alone would hide
+        # exactly the two numbers this preview was extended to show.
         return {"ok": True, "preview": True, "cart_id": cart["id"],
                 "subtotal_cents": summary["subtotal_cents"],
+                "shipping_cents": summary["shipping_cents"],
+                "shipping_free": summary["shipping_free"],
+                "tax_cents": summary["tax_cents"],
+                "total_cents": summary["total_cents"],
                 "lines": summary["lines"],
                 "price_changes": blockers["price_changes"]}
 
@@ -226,23 +313,29 @@ def POST(request):
 
     order_id = object_ids.new_uuid4()
     today = _text(request.get("today")) or date.today().isoformat()
+    order_row = {
+        "id": order_id,
+        "doc_type": "sale",
+        "number": f"WEB-{order_id[:8].upper()}",
+        "customer_name": _text(request.get("customer_name")) or email,
+        "customer_email": email,
+        "currency": _text(cart.get("currency")) or "USD",
+        "status": "draft",
+        "order_date": today,
+        # Subtotal is goods, per the schema's own definition (the sum of
+        # the order's lines). Postage is not a line of this order, so it
+        # cannot be in its subtotal -- it is in the total, which is what
+        # the buyer owes.
+        "subtotal_cents": str(summary["subtotal_cents"]),
+        "tax_cents": str(summary["tax_cents"]),
+        "total_cents": str(summary["total_cents"]),
+        "notes": f"Web checkout [carts/{cart['id']}]",
+        "owner_id": _text(cart.get("owner_id")),
+    }
+    if summary["shipping_cents"] and _has_field(base, "orders", "shipping_cents"):
+        order_row["shipping_cents"] = str(summary["shipping_cents"])
     object_records.create_collection_record(
-        "orders",
-        {
-            "id": order_id,
-            "doc_type": "sale",
-            "number": f"WEB-{order_id[:8].upper()}",
-            "customer_name": _text(request.get("customer_name")) or email,
-            "customer_email": email,
-            "currency": _text(cart.get("currency")) or "USD",
-            "status": "draft",
-            "order_date": today,
-            "subtotal_cents": str(summary["subtotal_cents"]),
-            "total_cents": str(summary["subtotal_cents"]),
-            "notes": f"Web checkout [carts/{cart['id']}]",
-            "owner_id": _text(cart.get("owner_id")),
-        },
-        base_dir=base, actor=ACTOR)
+        "orders", order_row, base_dir=base, actor=ACTOR)
 
     for line in summary["lines"]:
         object_records.create_collection_record(
@@ -301,8 +394,15 @@ def POST(request):
                 "issue_date": today,
                 "due_date": (date.fromisoformat(today)
                              + timedelta(days=due_days)).isoformat(),
-                "subtotal_cents": str(summary["subtotal_cents"]),
-                "total_cents": str(summary["subtotal_cents"]),
+                # The invoice's subtotal IS the sum of its own lines --
+                # goods plus the postage line below -- and its total is
+                # that plus tax. Exactly the arithmetic the schema
+                # describes, so invoice_totals restating it one day finds
+                # the same numbers rather than an argument.
+                "subtotal_cents": str(summary["subtotal_cents"]
+                                      + summary["shipping_cents"]),
+                "tax_cents": str(summary["tax_cents"]),
+                "total_cents": str(summary["total_cents"]),
                 # Provenance in notes, the house pattern: invoices carry no
                 # generated_from column, so the marker goes where it can be
                 # found again by anyone asking where this bill came from.
@@ -330,6 +430,30 @@ def POST(request):
                 },
                 base_dir=base, actor=ACTOR)
 
+        if summary["shipping_cents"]:
+            # Postage as its own line, only when there is postage to
+            # charge: a shop that does not post things must not grow a
+            # "Shipping 0.00" row on every bill.
+            shipping_line = {
+                "id": object_ids.new_uuid4(),
+                "invoice_id": invoice_id,
+                "description": "Shipping",
+                "quantity": "1",
+                "unit_price_cents": str(summary["shipping_cents"]),
+                "line_total_cents": str(summary["shipping_cents"]),
+                "owner_id": _text(cart.get("owner_id")),
+            }
+            if charges["tax_shipping"] and charges["tax_rate_bps"]:
+                # Where postage is taxable, the line says so and carries
+                # its own share -- somebody auditing "was delivery taxed?"
+                # should find the answer on the line, not have to
+                # reverse-engineer it out of the invoice total.
+                shipping_line["tax_rate_bps"] = str(charges["tax_rate_bps"])
+                shipping_line["line_tax_cents"] = str(object_cart.tax_cents(
+                    summary["shipping_cents"], charges["tax_rate_bps"]))
+            object_records.create_collection_record(
+                "invoice_lines", shipping_line, base_dir=base, actor=ACTOR)
+
         # The stamp is the join system_shop_fulfillment walks backwards:
         # a payment knows its invoice, and this is the only thing that says
         # which order that invoice was for.
@@ -340,8 +464,17 @@ def POST(request):
     except Exception as exc:
         invoice_error = str(exc)[:200]
 
+    # total_cents is the GRAND total: what the payer owes, including
+    # postage and tax. A response whose "total" was the goods subtotal
+    # would be the number a payment gets built from, and the shop would
+    # quietly collect the wrong amount.
     result = {"ok": True, "order_id": order_id, "cart_id": cart["id"],
-              "total_cents": summary["subtotal_cents"], "lines": len(summary["lines"]),
+              "subtotal_cents": summary["subtotal_cents"],
+              "shipping_cents": summary["shipping_cents"],
+              "shipping_free": summary["shipping_free"],
+              "tax_cents": summary["tax_cents"],
+              "total_cents": summary["total_cents"],
+              "lines": len(summary["lines"]),
               "status_of_order": "draft",
               "note": "order raised; stock moves and the order confirms when "
                       "payment arrives"}

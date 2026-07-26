@@ -1,31 +1,60 @@
-"""system_shop_fulfillment -- money arrived, so the sale is real.
+"""system_shop_fulfillment -- money arrived, so the sale is real and the
+box goes out.
 
-HANDLES payment writes. When a payment lands against an invoice raised
-for a web order, this confirms the order and moves the stock out.
+HANDLES payment writes. When a payment lands against an invoice raised for
+a web order, this confirms the order and -- unless the shop has taken over
+its own packing bench -- ships it.
 
-The ordering is the whole point. Checkout decrements nothing: an order
-that is never paid for must not have consumed stock, or every abandoned
-card leaves a phantom sale behind and the shop shows "sold out" for goods
-that are sitting on the shelf. Stock moves when money moves.
+The ordering is still the whole point. Checkout decrements nothing: an
+order that is never paid for must not have consumed stock, or every
+abandoned card leaves a phantom sale behind and the shop shows "sold out"
+for goods sitting on the shelf. Stock moves when money moves.
 
-Placement follows docs/logic-decisions.md #6 -- this is a REACTION
-(post-commit, best-effort, never blocks the payment), so it lives in an
-event handler. A shop that cannot record a stock move must still be able
-to take the money; the discrepancy is visible and fixable, whereas a
-refused payment is a lost sale nobody can recover.
+**What changed, and why this object got smaller.** It used to write the
+stock moves itself, one per order line, at payment. That was right while
+an order could only be fulfilled all at once; it became wrong the moment
+shipments existed, because "the goods left" is a fact about a BOX, not
+about a payment, and two objects claiming the same fact is how a system
+learns to disagree with itself. So the old behavior now travels through
+the shipment noun: this handler creates a shipment for everything
+unshipped and marks it packed, then shipped, and app-shipping's
+system_order_fulfillment does what it always does when a shipment leaves
+-- one sale move per line, idempotent per line, order status derived.
+Nothing about the zero-touch shop's experience changes; there is simply a
+document now saying what went out, and a packing slip to put in the box.
 
-Idempotency by provenance (#7): each stock move is stamped
-"orders/{id}:fulfil" in its reference, and a move already carrying that
-stamp means a replayed payment event moves nothing. The books entry is
-already handled by app-payments' system_books, unchanged -- this object
-deliberately does not post anything itself.
+**shop.auto_fulfill (default TRUE)** is the seam. A shop with no warehouse
+wants payment to mean shipped and never wants to see a pick list; a shop
+that picks and packs sets it false, and this handler then confirms the
+order and stops, leaving the shipment to action_create_shipment and a
+human with a trolley. Defaulting true is what keeps the proven chain
+working for every existing installation without anybody configuring
+anything.
+
+Placement follows docs/logic-decisions.md #6 -- a REACTION (post-commit,
+best-effort, never blocks the payment). A shop that cannot record a
+shipment must still be able to take the money; the discrepancy is visible
+and fixable, whereas a refused payment is a lost sale nobody can recover.
+Every failure below therefore lands in the RESULT, not in an exception:
+no shipping app installed, no stock app installed, no configured
+locations -- the order still confirms and the response says what did not
+happen.
+
+Idempotency by provenance (#7): the shipment carries "orders/{id}" in its
+notes and, more usefully, the remaining-quantity arithmetic in
+action_create_shipment means a replayed payment finds nothing left to ship
+and returns ok with a note rather than raising a second empty parcel. The
+stock moves are stamped per shipment line by system_order_fulfillment, so
+a replay moves nothing twice there either. The books entry is handled by
+app-payments' system_books, unchanged -- this object deliberately does not
+post anything itself.
 """
 
 import os
-from datetime import date
 
-import object_ids
+import object_execution
 import object_records
+import python_object_runtime
 
 HANDLES = [
     "payments.record.created",
@@ -41,6 +70,13 @@ def _base_dir():
 
 def _text(value):
     return str(value if value is not None else "").strip()
+
+
+def _truthy(value, default):
+    text = _text(value).lower()
+    if not text:
+        return default
+    return text in ("true", "1", "yes", "on")
 
 
 def _setting(base, key, default=""):
@@ -80,6 +116,89 @@ def _order_for_invoice(base, invoice_id):
     return None
 
 
+def _call(object_id, payload, *, method="POST"):
+    """Run another installed object in process, the same way site_shop calls
+    its siblings: this package owns the payment-to-order join and nothing
+    about boxes, so it asks the object that does.
+
+    Returns (result, error). A missing object -- app-shipping simply not
+    installed -- is an error string, never an exception: see the module
+    docstring's posture about what a failure here is allowed to cost.
+    """
+    try:
+        runtime = python_object_runtime.PythonObjectRuntime()
+        outcome = object_execution.execute_object(
+            runtime,
+            object_execution.ObjectExecutionRequest(
+                object_id, method=method, payload=payload))
+    except Exception as exc:
+        return None, str(exc)[:200]
+    if not outcome.ok:
+        message = getattr(outcome.error, "message", "") if outcome.error else ""
+        return None, _text(message)[:200] or f"{object_id} failed"
+    return outcome.result, ""
+
+
+def _ship_everything(base, order):
+    """Create a shipment for everything still unshipped and send it.
+
+    packed then shipped as two separate updates, deliberately: the schema's
+    transition ladder is open -> packed -> shipped, and a handler that
+    jumped straight to shipped would either be refused or would force the
+    ladder to be loosened for everybody, which would let a real packing
+    bench skip the step that means "somebody actually put this in a box".
+    """
+    created, error = _call("action_create_shipment", {"order_id": order["id"]})
+    if error:
+        return {"shipped": False, "warning":
+                f"no shipment was created ({error}); the order still stands"}
+    if not isinstance(created, dict) or not created.get("ok"):
+        detail = _text((created or {}).get("error")) or "unknown reason"
+        return {"shipped": False,
+                "warning": f"no shipment was created ({detail}); the order still stands"}
+
+    shipment_id = _text(created.get("shipment_id"))
+    if not shipment_id:
+        # Nothing left to ship: a replayed payment, or an order somebody
+        # already packed by hand. Idempotent, and not a failure.
+        return {"shipped": False, "note": _text(created.get("note"))}
+
+    for status in ("packed", "shipped"):
+        try:
+            object_records.update_collection_record(
+                "shipments", shipment_id, {"status": status},
+                base_dir=base, actor=ACTOR)
+        except Exception as exc:
+            return {"shipped": False, "shipment_id": shipment_id,
+                    "warning": (f"shipment {shipment_id} could not move to "
+                                f"{status}: {str(exc)[:120]}")}
+
+    # Fire the fulfillment handler in process rather than waiting for the
+    # change-log dispatcher: this write came from a handler, not from an
+    # HTTP request, so nothing dispatched it, and the stock move has to
+    # happen now for exactly the reason it always did -- the goods have
+    # gone. The handler is idempotent per line, so the dispatcher's later
+    # at-least-once redelivery moves nothing twice.
+    result, error = _call("system_order_fulfillment",
+                          {"collection": "shipments", "record_id": shipment_id},
+                          method="EVENT")
+    out = {"shipped": True, "shipment_id": shipment_id,
+           "lines": created.get("lines", 0),
+           "slip_path": created.get("slip_path", "")}
+    if error:
+        out["warning"] = (f"the shipment went out but its stock move did not "
+                          f"({error}); the goods left the shelf without the "
+                          f"ledger saying so")
+        return out
+    if isinstance(result, dict):
+        out["moved"] = result.get("moved", 0)
+        if result.get("warning"):
+            out["warning"] = result["warning"]
+        if result.get("order_status"):
+            out["order_status"] = result["order_status"]
+    return out
+
+
 def EVENT(request):
     base = _base_dir()
     payment = _payment_for(request, base)
@@ -96,67 +215,22 @@ def EVENT(request):
     if _text(order.get("status")) not in ("draft", "confirmed"):
         return {"ok": True, "skipped": f"order already {_text(order.get('status'))}"}
 
-    marker = f"orders/{order['id']}:fulfil"
-    try:
-        moves = object_records.read_collection_records("stock_moves", base_dir=base)
-    except Exception:
-        moves = None
-    if moves is None:
-        # No stock app installed: confirm the order anyway. A shop selling
-        # services or downloads has nothing to move.
+    if _text(order.get("status")) == "draft":
         object_records.update_collection_record(
             "orders", order["id"], {"status": "confirmed"},
             base_dir=base, actor=ACTOR)
-        return {"ok": True, "order_id": order["id"], "confirmed": True,
-                "moved": 0, "note": "stock not installed; nothing to move"}
 
-    if any(marker in _text(move.get("reference")) for move in moves):
-        return {"ok": True, "skipped": f"already fulfilled: {marker}",
-                "order_id": order["id"]}
+    result = {"ok": True, "order_id": order["id"], "confirmed": True}
 
-    from_location = _setting(base, "shop.stock_location")
-    to_location = _setting(base, "shop.customer_location")
-    try:
-        lines = object_records.read_collection_records("order_lines", base_dir=base)
-    except Exception:
-        lines = []
-    mine = [line for line in lines if _text(line.get("order_id")) == order["id"]]
+    if not _truthy(_setting(base, "shop.auto_fulfill"), True):
+        # A shop with a packing bench: the order is confirmed and appears on
+        # the pick list, and a human decides what goes in which box.
+        result["note"] = ("shop.auto_fulfill is off; this order is confirmed "
+                          "and waiting on the pick list")
+        result["shipped"] = False
+        return result
 
-    moved = 0
-    skipped = []
-    today = _text(request.get("today")) or date.today().isoformat()
-    for line in mine:
-        product_id = _text(line.get("product_id"))
-        if not product_id:
-            continue
-        if not from_location:
-            skipped.append("shop.stock_location is not configured")
-            break
-        object_records.create_collection_record(
-            "stock_moves",
-            {
-                "id": object_ids.new_uuid4(),
-                "product_id": product_id,
-                "from_location_id": from_location,
-                "to_location_id": to_location,
-                "quantity": _text(line.get("quantity")) or "1",
-                "reason": "sale",
-                "reference": f"{marker} {_text(order.get('number'))}",
-                "occurred_at": today,
-                "owner_id": _text(order.get("owner_id")),
-            },
-            base_dir=base, actor=ACTOR)
-        moved += 1
-
-    object_records.update_collection_record(
-        "orders", order["id"], {"status": "confirmed"},
-        base_dir=base, actor=ACTOR)
-
-    result = {"ok": True, "order_id": order["id"], "confirmed": True, "moved": moved}
-    if skipped:
-        # The sale stands and the gap is visible, which is the right way
-        # round: a missing setting must not cost somebody a paid order.
-        result["warning"] = skipped[0]
+    result.update(_ship_everything(base, order))
     return result
 
 

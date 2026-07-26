@@ -1,0 +1,3 @@
+id	pattern	object_id	priority
+route_packing_slip	/shipments/{shipment_id}/slip	site_packing_slip	10
+route_pick_list	/pick-list	site_pick_list	10

@@ -99,10 +99,13 @@ def test_install_app_orders_package_loads_schemas(tmp_path):
 
 
 def test_schema_json_files_are_valid_and_versioned():
+    # orders is at v2: the fulfillment slice added the machine-derived
+    # `partial` status (see the transitions test below).
+    expected_versions = {"orders": 2, "order_lines": 1}
     for name in ("orders", "order_lines"):
         payload = json.loads((APP_ORDERS_DIR / "schemas" / f"{name}.json").read_text())
         assert payload["name"] == name
-        assert payload["version"] == 1
+        assert payload["version"] == expected_versions[name]
         assert payload["views"]["list_mode"] == "table"
 
 
@@ -172,7 +175,8 @@ def test_stamped_totals_fields_are_not_schema_read_only():
 def test_orders_guarded_status_transitions_match_the_real_lifecycle():
     status_field = next(f for f in _orders_schema()["fields"] if f["name"] == "status")
     assert status_field["enum"] == [
-        "draft", "confirmed", "processing", "shipped", "delivered", "cancelled",
+        "draft", "confirmed", "processing", "partial", "shipped", "delivered",
+        "cancelled",
     ]
     assert status_field["default"] == "draft"
 
@@ -182,11 +186,20 @@ def test_orders_guarded_status_transitions_match_the_real_lifecycle():
     draft_targets = {entry["to"]: entry["when"] for entry in transitions["draft"]}
     assert draft_targets == {"confirmed": owner_guard, "cancelled": owner_guard}
 
+    # partial/shipped are reachable straight from confirmed because they are
+    # DERIVED by system_order_fulfillment from shipment lines, and the
+    # zero-touch shop (app-shop's auto_fulfill) ships a paid order without
+    # ever passing through processing.
     confirmed_targets = {entry["to"]: entry["when"] for entry in transitions["confirmed"]}
-    assert confirmed_targets == {"processing": owner_guard, "cancelled": owner_guard}
+    assert confirmed_targets == {"processing": owner_guard, "partial": owner_guard,
+                                 "shipped": owner_guard, "cancelled": owner_guard}
 
     processing_targets = {entry["to"]: entry["when"] for entry in transitions["processing"]}
-    assert processing_targets == {"shipped": owner_guard, "cancelled": owner_guard}
+    assert processing_targets == {"partial": owner_guard, "shipped": owner_guard,
+                                  "cancelled": owner_guard}
+
+    partial_targets = {entry["to"]: entry["when"] for entry in transitions["partial"]}
+    assert partial_targets == {"shipped": owner_guard, "cancelled": owner_guard}
 
     shipped_targets = {entry["to"]: entry["when"] for entry in transitions["shipped"]}
     assert shipped_targets == {"delivered": owner_guard}

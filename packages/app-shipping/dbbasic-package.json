@@ -1,0 +1,62 @@
+{
+  "id": "app-shipping",
+  "name": "Shipping",
+  "version": "0.1.0",
+  "description": "One missing noun, and most of a warehouse falls out of it. An order says what is OWED; a shipment says what physically moved -- when, in which box, with which tracking number -- and every system that tries to hold both facts in one status field ends up lying about at least one of them. The immediate payoff is partial fulfillment, which stops being a flag somebody has to remember and becomes a COUNT: two of the three mugs went today, the third goes on Friday, and orders.status derives itself (partial -> shipped -> delivered) from what is on shipment lines rather than from anybody's memory. The gate that makes the derivation trustworthy is one hook -- cumulative shipped quantity per order line may never exceed what was ordered, refused with all three numbers so the packer knows which shipment is the wrong one -- and the goods leave the shelf when the box does: one sale stock move per line at the moment a shipment reaches shipped, idempotent by a per-line provenance marker, because a replayed event must move nothing twice. The other two objects here are READS, not tables, and deliberately so: a packing slip is one shipment printed (with no prices, ever -- a slip is not an invoice, and pricelessness by construction is what makes every parcel gift-safe without a flag anybody can forget to tick), and a pick list is ordered-minus-shipped folded live and grouped by product so a picker walks each shelf once, the same doctrine that keeps stock levels out of a table. app-shop keeps its zero-touch path: shop.auto_fulfill defaults true, so a payment still ships the whole order and still moves the stock -- it now travels through the shipment noun instead of writing moves directly, which is what lets a pick/pack shop set auto_fulfill=false and take over the packing bench without either shop reimplementing the other's behavior. What is deliberately NOT here, named so it reads as a decision rather than an omission: carrier labels and tracking polls (a connector boundary, manual-first until credentials exist), inbound returns and their disposition (the direction field carries the shape; the authorization ladder and the restock-or-waste choice are their own slice), PO receiving, and disputes.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": ["app-orders"],
+  "objects": [
+    {
+      "id": "hook_shipment_lines",
+      "path": "objects/hook/shipment_lines.py"
+    },
+    {
+      "id": "action_create_shipment",
+      "path": "objects/action/create_shipment.py"
+    },
+    {
+      "id": "system_order_fulfillment",
+      "path": "objects/system/order_fulfillment.py"
+    },
+    {
+      "id": "site_packing_slip",
+      "path": "objects/site/packing_slip.py"
+    },
+    {
+      "id": "site_pick_list",
+      "path": "objects/site/pick_list.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "shipments",
+      "path": "schemas/shipments.json"
+    },
+    {
+      "collection": "shipment_lines",
+      "path": "schemas/shipment_lines.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "shipments",
+      "path": "seed/shipments.tsv"
+    },
+    {
+      "collection": "shipment_lines",
+      "path": "seed/shipment_lines.tsv"
+    },
+    {
+      "collection": "site_routes",
+      "path": "seed/site_routes.tsv"
+    }
+  ],
+  "migrations": []
+}

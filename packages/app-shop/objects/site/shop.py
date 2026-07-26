@@ -186,7 +186,63 @@ def _availability(base, product):
     return f'<p class="stock">{state}</p>'
 
 
-def _cart_table(cart, token):
+def _preview(token):
+    """What this basket would actually cost, asked of action_checkout.
+
+    The page owns no arithmetic: postage and tax are decided by the same
+    object that will charge them, so the footer a shopper reads and the
+    invoice they get cannot disagree. A preview writes nothing.
+
+    None when the preview cannot be had -- an empty basket, a price that
+    moved, something out of stock. Those all have their own notice
+    already, and a basket that still shows its plain total is a better
+    answer than one whose totals vanish.
+    """
+    result = _call("action_checkout", {"session_token": token, "preview": "true"})
+    if isinstance(result, dict) and result.get("preview"):
+        return result
+    return None
+
+
+def _totals_rows(cart, preview):
+    """The footer under the basket: today's one Total, or the breakdown.
+
+    A shop charging neither tax nor postage sees EXACTLY what it saw
+    before -- one Total row. Zero-rows are not neutral: "Shipping 0.00"
+    and "Tax 0.00" read as a broken shop, not a shop that does not do
+    those things.
+    """
+    if preview is None:
+        return (f'<tr><th colspan="3">Total</th>'
+                f'<th class="num">{_money(cart.get("subtotal_cents"))}</th></tr>')
+
+    shipping = int(preview.get("shipping_cents") or 0)
+    free = bool(preview.get("shipping_free"))
+    tax = int(preview.get("tax_cents") or 0)
+    if not shipping and not free and not tax:
+        return (f'<tr><th colspan="3">Total</th>'
+                f'<th class="num">{_money(preview.get("subtotal_cents"))}</th></tr>')
+
+    rows = [f'<tr><td colspan="3">Subtotal</td>'
+            f'<td class="num">{_money(preview.get("subtotal_cents"))}</td></tr>']
+    if shipping or free:
+        # Say it. Earning free delivery is the one moment in a basket
+        # that a shopper is pleased about, and a silent 0.00 throws it
+        # away -- it reads as a shop that forgot to charge rather than
+        # one that gave them something.
+        amount = ('<strong>Free shipping</strong>' if free
+                  else _money(shipping))
+        rows.append(f'<tr><td colspan="3">Shipping</td>'
+                    f'<td class="num">{amount}</td></tr>')
+    if tax:
+        rows.append(f'<tr><td colspan="3">Tax</td>'
+                    f'<td class="num">{_money(tax)}</td></tr>')
+    rows.append(f'<tr><th colspan="3">Total</th>'
+                f'<th class="num">{_money(preview.get("total_cents"))}</th></tr>')
+    return "".join(rows)
+
+
+def _cart_table(cart, token, preview=None):
     lines = cart.get("lines") or []
     if not lines:
         return '<p class="hint">Your basket is empty.</p>'
@@ -211,7 +267,7 @@ def _cart_table(cart, token):
 <table class="cart-table">
 <thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Each</th><th class="num">Total</th></tr></thead>
 <tbody>{''.join(rows)}</tbody>
-<tfoot><tr><th colspan="3">Total</th><th class="num">{_money(cart.get('subtotal_cents'))}</th></tr></tfoot>
+<tfoot>{_totals_rows(cart, preview)}</tfoot>
 </table>"""
 
 
@@ -298,14 +354,14 @@ def _response(title, body, token, fresh, status=200):
     return response
 
 
-def _render(token, cart, products, notice, fresh):
+def _render(token, cart, products, notice, fresh, preview=None):
     body = f"""
 <div class="breadcrumb"><a href="/">Home</a> / Shop</div>
 <div class="pagehead"><h1>Shop</h1></div>
 {notice}
 {_product_cards(products, token)}
 <h2 style="font-size:1rem">Your basket</h2>
-{_cart_table(cart, token)}
+{_cart_table(cart, token, preview)}
 {_checkout_form(token) if (cart.get('lines') or []) else ''}
 <p class="hint">Prices are confirmed when you order. Nothing is reserved until
 payment arrives.</p>"""
@@ -375,8 +431,11 @@ def _handle(request):
             token, fresh = secrets.token_urlsafe(18), True   # a fresh basket
 
     cart = _call("action_cart", {"session_token": token, "action": "get"})
-    return _render(token, cart if isinstance(cart, dict) else {}, _products(base),
-                   notice, fresh)
+    cart = cart if isinstance(cart, dict) else {}
+    # Only ask what it costs when there is something to cost. A preview
+    # of an empty basket is a 404 the page would only throw away.
+    preview = _preview(token) if (cart.get("lines") or []) else None
+    return _render(token, cart, _products(base), notice, fresh, preview)
 
 
 def GET(request):

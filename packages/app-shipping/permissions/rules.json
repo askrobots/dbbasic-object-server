@@ -1,0 +1,41 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update"],
+      "collection": "shipments",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "a shipment is the operator's own paperwork about their own goods; no delete, because a parcel that went out cannot be made not to have gone out -- a mistake is a lost/returned status or an inbound shipment, never a vanished row"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update"],
+      "collection": "shipment_lines",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "the lines are the shipment; same scope and the same no-delete posture, and the over-shipping gate in hook_shipment_lines runs on this path whoever the caller is"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "action_create_shipment",
+      "reason": "packing is warehouse work, not owner-only work: anybody signed in can raise a shipment, and everything they can put in it is bounded by what the order already committed to"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "site_packing_slip",
+      "reason": "operator-facing, deliberately NOT public: the slip is addressed by an internal shipment id, so a public page here would be an enumeration oracle for every parcel in the shop. The customer's door is the payment portal's capability token, which is unguessable and revocable; a slip is printed by the person holding the box"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "site_pick_list",
+      "reason": "the picker has to be signed in for the page to know whose warehouse to fold; the page itself shows a sign-in prompt rather than an error to anyone who is not"
+    }
+  ]
+}

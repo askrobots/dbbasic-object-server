@@ -1,7 +1,7 @@
 {
   "name": "orders",
   "title": "Orders",
-  "version": 1,
+  "version": 2,
   "description": "Sales and purchase orders (doc_type on one shared schema, mirroring app-invoices' doc_type split). Lines live in order_lines; subtotal/tax/total are stamped by the order_totals handler, never typed by hand. Reconciled against a private predecessor-system audit, not part of this repo (its Order+Lines note: 'SO/PO; convert_to_invoice').",
   "fields": [
     {
@@ -53,7 +53,7 @@
       "type": "enum",
       "label": "Status",
       "default": "draft",
-      "enum": ["draft", "confirmed", "processing", "shipped", "delivered", "cancelled"],
+      "enum": ["draft", "confirmed", "processing", "partial", "shipped", "delivered", "cancelled"],
       "transitions": {
         "draft": [
           {"to": "confirmed", "when": {"owner_id": "$user_id"}},
@@ -61,9 +61,16 @@
         ],
         "confirmed": [
           {"to": "processing", "when": {"owner_id": "$user_id"}},
+          {"to": "partial", "when": {"owner_id": "$user_id"}},
+          {"to": "shipped", "when": {"owner_id": "$user_id"}},
           {"to": "cancelled", "when": {"owner_id": "$user_id"}}
         ],
         "processing": [
+          {"to": "partial", "when": {"owner_id": "$user_id"}},
+          {"to": "shipped", "when": {"owner_id": "$user_id"}},
+          {"to": "cancelled", "when": {"owner_id": "$user_id"}}
+        ],
+        "partial": [
           {"to": "shipped", "when": {"owner_id": "$user_id"}},
           {"to": "cancelled", "when": {"owner_id": "$user_id"}}
         ],
@@ -71,7 +78,7 @@
           {"to": "delivered", "when": {"owner_id": "$user_id"}}
         ]
       },
-      "help": "delivered and cancelled are terminal. Every other move requires the order owner. Matches the real order lifecycle (reconciled against a private predecessor-system audit, not part of this repo): draft->confirmed/cancelled, confirmed->processing/cancelled, processing->shipped/cancelled, shipped->delivered."
+      "help": "delivered and cancelled are terminal. Every other move requires the order owner. Matches the real order lifecycle (reconciled against a private predecessor-system audit, not part of this repo): draft->confirmed/cancelled, confirmed->processing/cancelled, processing->shipped/cancelled, shipped->delivered. v2 adds `partial`, and it is MACHINE-DERIVED: system_order_fulfillment (app-shipping) folds shipment lines against ordered quantities and stamps partial when some but not all of what was ordered is on a shipment that has left, shipped when all of it is, delivered when every one of those shipments arrived. Never hand-set -- typing partial into this field claims a fact about boxes that no box supports, and the next derivation pass will disagree with you. confirmed->shipped is allowed alongside confirmed->partial for the same reason: the zero-touch shop (app-shop's auto_fulfill) ships a whole order the moment it is paid for and never passes through processing, and forcing a bookkeeping hop nobody performed would leave paid, shipped orders sitting at confirmed forever."
     },
     {
       "name": "order_date",

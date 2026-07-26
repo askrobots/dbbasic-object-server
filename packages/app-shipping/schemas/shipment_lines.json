@@ -1,0 +1,73 @@
+{
+  "name": "shipment_lines",
+  "title": "Shipment Lines",
+  "version": 1,
+  "hooks": {"before_write": "hook_shipment_lines"},
+  "description": "What was actually in the box. This is the collection partial fulfillment is derived FROM: cumulative shipped quantity per order line is a fold over these rows, and orders.status (partial/shipped/delivered) is a read of that fold, never a hand-maintained flag. The gate that makes the fold trustworthy lives in hook_shipment_lines: cumulative quantity across every shipment of one order line may never exceed the quantity ordered, refused with all three numbers rather than a shrug. description is STAMPED from the order line at creation so a packing slip printed next year still says what the packer put in the box, even if the product has since been renamed (docs/logic-decisions.md #1).",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "shipment_id",
+      "type": "relation",
+      "required": true,
+      "relation": {
+        "collection": "shipments",
+        "display_field": "id"
+      },
+      "label": "Shipment",
+      "help": "Set once at creation and not intended to change after -- not schema read_only for the same reason order_lines.order_id is not: a required, client-submitted-at-creation field cannot also be read_only on this platform."
+    },
+    {
+      "name": "order_line_id",
+      "type": "text",
+      "required": true,
+      "label": "Order Line",
+      "help": "Which order line this quantity satisfies. Required, and not merely a cross-reference: without it the over-shipping gate has nothing to count against, and 'we shipped three of something' is not an answer to 'did the customer get what they ordered?'. Plain text rather than a declared relation, so this package can be installed alongside an app-orders that is not there yet -- the hook does the real check and says so in words."
+    },
+    {
+      "name": "product_id",
+      "label": "Product",
+      "relation": {
+        "collection": "products",
+        "display_field": "name"
+      },
+      "help": "Optional cross-reference to app-catalog's products, mirroring order_lines.product_id. It is what the sale stock move is composed against; a line with no product moves no stock, which is correct for a service or a free-text line that never sat on a shelf."
+    },
+    {
+      "name": "description",
+      "type": "text",
+      "label": "Description",
+      "validation": {"max_length": 300},
+      "help": "Stamped from the order line at creation. The packing slip prints THIS, not a live product lookup: a parcel's paperwork must keep saying what was in it."
+    },
+    {
+      "name": "quantity",
+      "type": "number",
+      "default": "1",
+      "label": "Quantity",
+      "help": "A count/measure, not money -- may be fractional, same deliberate exception order_lines.quantity documents. Read with Decimal everywhere (hook_shipment_lines, action_create_shipment, system_order_fulfillment), never a bare float."
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    }
+  ],
+  "forms": {
+    "default": {
+      "fields": ["shipment_id", "order_line_id", "product_id", "description", "quantity"]
+    }
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["description", "quantity", "shipment_id"]
+  }
+}

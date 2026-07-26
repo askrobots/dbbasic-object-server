@@ -398,6 +398,38 @@ def test_preview_prices_the_basket_without_ordering(tmp_path, monkeypatch):
 
 # --- money arrives, the sale becomes real -----------------------------------------
 
+SHIPPING_OBJECTS = PACKAGES / "app-shipping" / "objects"
+
+
+def with_shipping(tmp_path, monkeypatch, data_dir):
+    """Install app-shipping alongside the shop, the way a real box has it.
+
+    Payment no longer writes stock moves itself: it raises a SHIPMENT and
+    lets app-shipping's system_order_fulfillment move the goods (see
+    objects/system/shop_fulfillment.py's docstring). Two consequences for a
+    test: the two shipping collections have to exist, and both packages'
+    objects have to live under ONE object root, because that is what an
+    installed server looks like and the only way a sibling call by object id
+    resolves the way it will in production.
+
+    shutil is imported here rather than at the top of the file to keep this
+    change contained to the fulfillment tests.
+    """
+    import shutil
+
+    for name in ("shipments", "shipment_lines"):
+        stage_collection(data_dir, "app-shipping", name)
+    objects_root = tmp_path / "objects"
+    for source in (SHOP_OBJECTS, SHIPPING_OBJECTS):
+        shutil.copytree(source, objects_root, dirs_exist_ok=True)
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(objects_root))
+    return objects_root
+
+
+def shipments(data_dir):
+    return object_records.read_collection_records("shipments", base_dir=data_dir)
+
+
 def paid_order(data_dir, *, quantity="2"):
     """Take an order all the way to a received payment.
 
@@ -426,6 +458,7 @@ def test_stock_leaves_the_shelf_when_the_money_arrives(tmp_path, monkeypatch):
     data_dir = setup_env(tmp_path, monkeypatch,
                          settings=(("shop.stock_location", "loc-shelf"),
                                    ("shop.customer_location", "loc-customer")))
+    with_shipping(tmp_path, monkeypatch, data_dir)
     order_id, payment = paid_order(data_dir)
     result = fulfil(payment)
     assert result["confirmed"] and result["moved"] == 1
@@ -433,20 +466,28 @@ def test_stock_leaves_the_shelf_when_the_money_arrives(tmp_path, monkeypatch):
     sale = [m for m in moves(data_dir) if m["reason"] == "sale"][0]
     assert sale["quantity"] == "2"
     assert sale["from_location_id"] == "loc-shelf"
-    assert f"orders/{order_id}:fulfil" in sale["reference"]
+
+    # The same chain, now travelling through the shipment noun: there is a
+    # document saying what went out, and the move is stamped with the line
+    # it came from rather than with the whole order.
+    shipment = shipments(data_dir)[0]
+    assert shipment["order_id"] == order_id and shipment["status"] == "shipped"
+    assert f"shipments/{shipment['id']}:line/" in sale["reference"]
     assert object_records.get_collection_record(
-        "orders", order_id, base_dir=data_dir)["status"] == "confirmed"
+        "orders", order_id, base_dir=data_dir)["status"] == "shipped"
 
 
 def test_a_replayed_payment_moves_nothing_twice(tmp_path, monkeypatch):
     data_dir = setup_env(tmp_path, monkeypatch,
                          settings=(("shop.stock_location", "loc-shelf"),
                                    ("shop.customer_location", "loc-customer")))
+    with_shipping(tmp_path, monkeypatch, data_dir)
     _, payment = paid_order(data_dir)
     fulfil(payment)
     again = fulfil(payment)
-    assert "already fulfilled" in again["skipped"]
+    assert again["skipped"] == "order already shipped"
     assert len([m for m in moves(data_dir) if m["reason"] == "sale"]) == 1
+    assert len(shipments(data_dir)) == 1        # and no second parcel
 
 
 def test_a_payment_for_something_else_is_left_alone(tmp_path, monkeypatch):
@@ -481,14 +522,18 @@ def test_a_bounced_payment_fulfils_nothing(tmp_path, monkeypatch):
 
 
 def test_an_unconfigured_location_still_lets_the_sale_stand(tmp_path, monkeypatch):
-    """A missing setting must not cost somebody a paid order."""
+    """A missing setting must not cost somebody a paid order -- and now it
+    must not cost them the parcel either: the box still goes out, and the
+    gap in the ledger is reported rather than swallowed."""
     data_dir = setup_env(tmp_path, monkeypatch)
+    with_shipping(tmp_path, monkeypatch, data_dir)
     order_id, payment = paid_order(data_dir)
     result = fulfil(payment)
     assert result["confirmed"] and result["moved"] == 0
     assert "stock_location" in result["warning"]
+    assert shipments(data_dir)[0]["status"] == "shipped"
     assert object_records.get_collection_record(
-        "orders", order_id, base_dir=data_dir)["status"] == "confirmed"
+        "orders", order_id, base_dir=data_dir)["status"] == "shipped"
 
 
 # --- the page a shopper actually looks at ------------------------------------
@@ -588,3 +633,285 @@ def test_a_shopper_with_no_cookie_is_given_one(tmp_path, monkeypatch):
     assert "SameSite=Lax" in cookie and "Max-Age=1209600" in cookie
     # The old key is gone: the server accepts `set_cookie` and nothing else.
     assert "headers" not in result
+
+
+# =============================================================================
+# TAX AND POSTAGE
+#
+# The shop charged neither, which was a compliance problem and a straight
+# money leak: every parcel went out with the delivery paid by the seller.
+# What is worth testing here is not that a percentage can be multiplied --
+# it is that the percentage is applied ONCE to the whole sale, that postage
+# is a line a customer can read rather than a number welded into a total,
+# and that a shop which has configured none of it bills exactly as it did
+# before. Absent configuration must look like today, never like a broken
+# tax line.
+# =============================================================================
+
+# --- the arithmetic, with no data directory in sight -------------------------
+
+def test_tax_rounds_half_up_once_over_the_whole_sale():
+    """Four fifty-cent lines at 5% are 10c of tax, not 12c.
+
+    Rounded per line, 2.5c becomes 3c four times over and the shop
+    overcharges by 2c that no customer can reconcile against the rate
+    printed on the bill. Tax is owed on a sale, not on each row of it.
+    """
+    items = [{"id": f"i{n}", "quantity": "1", "unit_price_cents": "50"}
+             for n in range(4)]
+    folded = object_cart.checkout_totals(items, tax_rate_bps=500)
+    assert folded["subtotal_cents"] == 200
+    assert folded["tax_cents"] == 10                    # 10.0, not 4 x 3
+    assert sum(object_cart.tax_cents(50, 500) for _ in range(4)) == 12
+    assert folded["total_cents"] == 210
+
+
+def test_a_rate_of_zero_is_a_real_answer_not_a_missing_setting():
+    """Plenty of small sellers owe none, and must be able to say so."""
+    assert object_cart.tax_cents(10_000, 0) == 0
+    assert object_cart.tax_cents(0, 1500) == 0
+    assert object_cart.tax_cents(10_000, 1500) == 1500        # 1500bps = 15%
+    assert object_cart.tax_cents(1099, 825) == 91             # 90.6675 -> 91
+
+
+def test_postage_is_flat_until_the_basket_earns_its_way_past_the_threshold():
+    """The boundary is AT the threshold, not past it: a shop advertising
+    'free over $50' and then charging on a $50 basket has lied on its own
+    banner."""
+    assert object_cart.shipping_cents(4999, 500, 5000) == 500
+    assert object_cart.shipping_cents(5000, 500, 5000) == 0     # exactly
+    assert object_cart.shipping_cents(5001, 500, 5000) == 0
+    # No threshold configured: postage is always charged.
+    assert object_cart.shipping_cents(1_000_000, 500, 0) == 500
+
+
+def test_a_flat_rate_of_zero_disables_shipping_entirely():
+    """A digital-only shop charges no postage and must not be made to show
+    a zero line for it."""
+    assert object_cart.shipping_cents(10_000, 0, 0) == 0
+    folded = object_cart.checkout_totals(
+        [{"id": "a", "quantity": "1", "unit_price_cents": "1000"}],
+        shipping_flat_cents=0)
+    assert folded["shipping_cents"] == 0
+    assert folded["shipping_free"] is False     # not free -- simply not sold
+    assert folded["total_cents"] == 1000
+
+
+def test_the_flag_decides_whether_the_postage_itself_is_taxed():
+    """Jurisdictions genuinely disagree about this, so the seller chooses."""
+    items = [{"id": "a", "quantity": "1", "unit_price_cents": "1000"}]
+    goods_only = object_cart.checkout_totals(
+        items, tax_rate_bps=1000, shipping_flat_cents=500, tax_shipping=False)
+    assert goods_only["tax_cents"] == 100                # 10% of 1000
+    assert goods_only["total_cents"] == 1600
+
+    with_postage = object_cart.checkout_totals(
+        items, tax_rate_bps=1000, shipping_flat_cents=500, tax_shipping=True)
+    assert with_postage["tax_cents"] == 150              # 10% of 1500
+    assert with_postage["total_cents"] == 1650
+
+
+def test_free_shipping_is_distinguishable_from_no_shipping():
+    """A bare 0 cannot tell 'you saved the postage' from 'this shop does
+    not post things', and only one of those is worth saying out loud."""
+    items = [{"id": "a", "quantity": "1", "unit_price_cents": "5000"}]
+    earned = object_cart.checkout_totals(
+        items, shipping_flat_cents=500, free_over_cents=5000)
+    assert earned["shipping_cents"] == 0 and earned["shipping_free"] is True
+    never = object_cart.checkout_totals(items, shipping_flat_cents=0)
+    assert never["shipping_cents"] == 0 and never["shipping_free"] is False
+
+
+# --- what checkout writes down ------------------------------------------------
+
+TAXED_AND_POSTED = (("shop.tax_rate_bps", "1000"),
+                    ("shop.shipping_flat_cents", "500"))
+
+
+def sold(data_dir, *, cents=1000, quantity="1", products=1):
+    """Put something untracked in the basket -- the money is the subject
+    here, not the shelf."""
+    for n in range(products):
+        product(data_dir, f"p{n}", f"Thing {n}", cents, product_type="service")
+        cart("add", product_id=f"p{n}", quantity=quantity)
+
+
+def test_checkout_charges_postage_as_a_line_and_tax_as_a_total(
+        tmp_path, monkeypatch):
+    """The bill a customer can actually check: every line adds up to the
+    subtotal, the tax is stated, and the three come to the total."""
+    data_dir = setup_env(tmp_path, monkeypatch, settings=TAXED_AND_POSTED)
+    sold(data_dir, cents=1000)
+    result = checkout(customer_email="buyer@example.test")
+
+    assert result["subtotal_cents"] == 1000
+    assert result["shipping_cents"] == 500
+    assert result["tax_cents"] == 100           # 10% of goods; postage untaxed
+    assert result["total_cents"] == 1600        # what the payer owes
+
+    lines = sorted(invoice_lines(data_dir), key=lambda row: row["description"])
+    assert [line["description"] for line in lines] == ["Shipping", "Thing 0"]
+    shipping_line = lines[0]
+    assert shipping_line["quantity"] == "1"
+    assert shipping_line["unit_price_cents"] == "500"
+    assert shipping_line["line_total_cents"] == "500"
+    # Postage is not taxable here, so the line says nothing about tax.
+    assert not shipping_line["tax_rate_bps"]
+
+    invoice = invoices(data_dir)[0]
+    assert invoice["subtotal_cents"] == "1500"          # goods + postage
+    assert invoice["tax_cents"] == "100"
+    assert invoice["total_cents"] == "1600"
+    # The property that makes a bill checkable rather than disputable.
+    assert (sum(int(line["line_total_cents"]) for line in lines)
+            + int(invoice["tax_cents"])) == int(invoice["total_cents"])
+
+
+def test_the_order_records_the_tax_and_the_grand_total(tmp_path, monkeypatch):
+    """Subtotal stays goods -- it is defined as the sum of the order's own
+    lines, and postage is not one of them. Postage on an order is implied
+    by total - subtotal - tax until orders grows a shipping_cents column;
+    the itemisation lives on the invoice, where a customer reads it."""
+    data_dir = setup_env(tmp_path, monkeypatch, settings=TAXED_AND_POSTED)
+    sold(data_dir, cents=1000)
+    checkout(customer_email="buyer@example.test")
+
+    order = orders(data_dir)[0]
+    assert order["subtotal_cents"] == "1000"
+    assert order["tax_cents"] == "100"
+    assert order["total_cents"] == "1600"
+    assert (int(order["total_cents"]) - int(order["subtotal_cents"])
+            - int(order["tax_cents"])) == 500
+
+
+def test_taxable_postage_says_so_on_its_own_line(tmp_path, monkeypatch):
+    """Somebody auditing 'was delivery taxed?' should find the answer on
+    the line, not reverse-engineer it out of a total."""
+    data_dir = setup_env(tmp_path, monkeypatch, settings=(
+        ("shop.tax_rate_bps", "1000"), ("shop.tax_shipping", "true"),
+        ("shop.shipping_flat_cents", "500")))
+    sold(data_dir, cents=1000)
+    result = checkout(customer_email="buyer@example.test")
+
+    assert result["tax_cents"] == 150               # 10% of 1000 + 500
+    assert result["total_cents"] == 1650
+    shipping_line = [l for l in invoice_lines(data_dir)
+                     if l["description"] == "Shipping"][0]
+    assert shipping_line["tax_rate_bps"] == "1000"
+    assert shipping_line["line_tax_cents"] == "50"
+
+
+def test_a_basket_over_the_threshold_ships_free_and_is_billed_that_way(
+        tmp_path, monkeypatch):
+    data_dir = setup_env(tmp_path, monkeypatch, settings=(
+        ("shop.shipping_flat_cents", "500"),
+        ("shop.shipping_free_over_cents", "2000")))
+    sold(data_dir, cents=2000)                      # exactly the threshold
+    result = checkout(customer_email="buyer@example.test")
+
+    assert result["shipping_cents"] == 0 and result["shipping_free"] is True
+    assert result["total_cents"] == 2000
+    # No postage charged means no postage line: a free-shipping invoice
+    # with a "Shipping 0.00" row on it invites a question that has no
+    # answer.
+    assert [l["description"] for l in invoice_lines(data_dir)] == ["Thing 0"]
+
+
+def test_rounding_once_survives_the_whole_checkout(tmp_path, monkeypatch):
+    """The same 10c-not-12c case, driven end to end -- because the fold
+    being right is worth nothing if checkout re-derives tax per line on
+    its way to the invoice."""
+    data_dir = setup_env(tmp_path, monkeypatch,
+                         settings=(("shop.tax_rate_bps", "500"),))
+    sold(data_dir, cents=50, products=4)
+    result = checkout(customer_email="buyer@example.test")
+    assert result["subtotal_cents"] == 200
+    assert result["tax_cents"] == 10
+    assert result["total_cents"] == 210
+    assert invoices(data_dir)[0]["tax_cents"] == "10"
+
+
+def test_a_shop_that_configures_nothing_bills_exactly_as_it_did(
+        tmp_path, monkeypatch):
+    """The regression that matters most: absent configuration must be
+    invisible. No postage line, no tax, and an invoice line carrying the
+    same populated fields it carried before any of this existed."""
+    data_dir = setup_env(tmp_path, monkeypatch)         # no settings at all
+    sold(data_dir, cents=1200, quantity="2")
+    result = checkout(customer_email="buyer@example.test")
+
+    assert result["total_cents"] == 2400 == result["subtotal_cents"]
+    assert result["shipping_cents"] == 0 and result["tax_cents"] == 0
+
+    lines = invoice_lines(data_dir)
+    assert len(lines) == 1                              # no Shipping row
+    populated = {k for k, v in lines[0].items() if str(v or "").strip()}
+    # line_tax_cents is the schema's own default of "0" and was there
+    # before any of this; tax_rate_bps has no default and stays empty,
+    # which is what "this line was never taxed" looks like on disk.
+    assert populated == {"id", "invoice_id", "description", "quantity",
+                         "unit_price_cents", "line_total_cents", "owner_id",
+                         "created_at", "line_tax_cents"}
+    assert lines[0]["line_tax_cents"] == "0"
+    assert lines[0]["tax_rate_bps"] == ""
+    invoice = invoices(data_dir)[0]
+    assert invoice["subtotal_cents"] == "2400" == invoice["total_cents"]
+    assert invoice["tax_cents"] == "0"
+    assert orders(data_dir)[0]["total_cents"] == "2400"
+
+
+def test_preview_shows_the_whole_breakdown_before_anybody_commits(
+        tmp_path, monkeypatch):
+    """A preview exists so somebody can see what they are about to owe; a
+    subtotal alone hides the two numbers they most want to check."""
+    data_dir = setup_env(tmp_path, monkeypatch, settings=TAXED_AND_POSTED)
+    sold(data_dir, cents=1000)
+    result = checkout(preview="true")
+    assert result["subtotal_cents"] == 1000
+    assert result["shipping_cents"] == 500
+    assert result["tax_cents"] == 100
+    assert result["total_cents"] == 1600
+    assert orders(data_dir) == [] and invoices(data_dir) == []
+
+
+# --- what the shopper sees before deciding -------------------------------------
+
+def test_the_basket_page_breaks_the_total_down(tmp_path, monkeypatch):
+    """A shopper who meets a surprise at the last step abandons the
+    basket. The footer is where postage and tax stop being a surprise."""
+    data_dir = setup_env(tmp_path, monkeypatch, settings=TAXED_AND_POSTED,
+                         page=True)
+    product(data_dir, "p1", "Mug", 1000, product_type="service")
+    cart("add", product_id="p1")
+    body = page()["body"]
+    assert "Subtotal" in body and "10.00" in body
+    assert "Shipping" in body and "5.00" in body
+    assert "Tax" in body and "1.00" in body
+    assert "16.00" in body                              # the total
+
+
+def test_the_basket_page_says_free_shipping_when_it_is_earned(
+        tmp_path, monkeypatch):
+    """The one delighter in a basket. A silent 0.00 reads as a shop that
+    forgot to charge, not one that gave the shopper something."""
+    data_dir = setup_env(tmp_path, monkeypatch, page=True, settings=(
+        ("shop.shipping_flat_cents", "500"),
+        ("shop.shipping_free_over_cents", "2000")))
+    product(data_dir, "p1", "Mug", 2000, product_type="service")
+    cart("add", product_id="p1")
+    body = page()["body"]
+    assert "Free shipping" in body
+    assert "Subtotal" in body
+
+
+def test_the_basket_page_is_untouched_when_nothing_is_configured(
+        tmp_path, monkeypatch):
+    """Zero-rows are not neutral: 'Shipping 0.00' and 'Tax 0.00' read as a
+    broken shop rather than one that does not do those things."""
+    data_dir = setup_env(tmp_path, monkeypatch, page=True)
+    product(data_dir, "p1", "Mug", 1200, product_type="service")
+    cart("add", product_id="p1", quantity="2")
+    body = page()["body"]
+    assert "Shipping" not in body and "Subtotal" not in body
+    assert "24.00" in body
+    assert '<tfoot><tr><th colspan="3">Total</th>' in body

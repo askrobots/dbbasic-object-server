@@ -1,0 +1,158 @@
+{
+  "name": "shipments",
+  "title": "Shipments",
+  "version": 1,
+  "description": "What physically moved. An order says what is OWED; a shipment says what left the building -- when, in which box, with which tracking number -- and the two are different facts that small systems collapse into one status field and then cannot uncollapse. Partial fulfillment is the proof: it is not a flag on the order, it is a COUNT of shipments, and the order's status is DERIVED from shipment lines by system_order_fulfillment (docs/logic-decisions.md #1: the quantities are the facts, the order status is the read). Everything else the warehouse asks for falls out of this noun as a view -- a packing slip is one shipment printed, a manifest is today's shipments folded by carrier, a pick list is what is not on a shipment yet. ship_to_name/ship_to_address are STAMPED from the order at creation and never re-read: an address is what it was when the box left, and a customer who moves house next month must not silently rewrite where last month's parcel went. direction carries the return case (plan/fulfillment-logistics-spec.md): an RMA is this same document with the sign reversed, which is why there is no separate returns collection -- the authorized status and the disposition flow are a later slice, deliberately absent here rather than half-present.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "order_id",
+      "type": "relation",
+      "required": true,
+      "relation": {
+        "collection": "orders",
+        "display_field": "number"
+      },
+      "label": "Order",
+      "help": "The order this shipment is against, and the provenance link every derived status walks back along. Set once at creation and not intended to change after -- not schema read_only for the same reason order_lines.order_id is not: a required, client-submitted-at-creation field cannot also be read_only on this platform."
+    },
+    {
+      "name": "direction",
+      "type": "enum",
+      "label": "Direction",
+      "default": "outbound",
+      "enum": ["outbound", "inbound"],
+      "help": "outbound is goods leaving us; inbound is a customer return coming back (an RMA IS a shipment with the sign reversed, which is why there is no separate returns collection). Only outbound moves stock today -- system_order_fulfillment skips inbound entirely, because a return that has not been dispositioned yet has not decided whether it is restock or waste, and guessing would put damaged goods back on the shelf."
+    },
+    {
+      "name": "status",
+      "type": "enum",
+      "label": "Status",
+      "default": "open",
+      "enum": ["open", "packed", "shipped", "in_transit", "delivered", "returned_to_sender", "lost"],
+      "transitions": {
+        "open": [
+          {"to": "packed", "when": {"owner_id": "$user_id"}}
+        ],
+        "packed": [
+          {"to": "shipped", "when": {"owner_id": "$user_id"}},
+          {"to": "open", "when": {"owner_id": "$user_id"}}
+        ],
+        "shipped": [
+          {"to": "in_transit", "when": {"owner_id": "$user_id"}},
+          {"to": "delivered", "when": {"owner_id": "$user_id"}},
+          {"to": "returned_to_sender", "when": {"owner_id": "$user_id"}},
+          {"to": "lost", "when": {"owner_id": "$user_id"}}
+        ],
+        "in_transit": [
+          {"to": "delivered", "when": {"owner_id": "$user_id"}},
+          {"to": "returned_to_sender", "when": {"owner_id": "$user_id"}},
+          {"to": "lost", "when": {"owner_id": "$user_id"}}
+        ]
+      },
+      "help": "open -> packed -> shipped -> in_transit -> delivered is the full ladder, and shipped -> delivered directly is deliberately allowed as well: a shop that hands parcels to a driver and never touches a tracking API would otherwise have to fake an in_transit it never observed, and fake precision is worse than a short ladder. packed -> open is the repacking move (the box was opened again before it left; nothing has physically happened yet, so nothing needs compensating). Nothing moves BACK from shipped: once it has left the dock the correction is a new document -- a return is an inbound shipment referencing this one, never an edit to this row (docs/logic-decisions.md #3). delivered, returned_to_sender and lost are terminal. Stock moves are composed when this reaches shipped, once per line, idempotent by provenance marker."
+    },
+    {
+      "name": "carrier",
+      "type": "text",
+      "label": "Carrier",
+      "validation": {"max_length": 100},
+      "help": "Free text on purpose. A carrier list is a connector's job (plan/fulfillment-logistics-spec.md's label boundary), and until credentials exist the honest field is the one the packer can type 'my brother-in-law's van' into."
+    },
+    {
+      "name": "service",
+      "type": "enum",
+      "label": "Service",
+      "default": "ground",
+      "enum": ["ground", "express", "freight", "pickup", "digital", "other"],
+      "help": "The carrier service level -- 'shipment types' in the warehouse's own words. pickup and digital are here because they are real fulfillment methods that never touch a carrier, and a shipment noun that could not express them would push those sales back into the untracked hand-wave the whole package exists to replace."
+    },
+    {
+      "name": "tracking_number",
+      "type": "text",
+      "label": "Tracking Number",
+      "validation": {"max_length": 120},
+      "help": "Typed by hand today; written by the label connector when one is configured. Manual-first is the point: the flow works fully without carrier credentials."
+    },
+    {
+      "name": "tracking_status",
+      "type": "text",
+      "label": "Tracking Status",
+      "validation": {"max_length": 200},
+      "help": "The carrier's own last words about this parcel, kept as text rather than folded into status: their vocabulary is theirs and changes without asking us, and mapping it into our enum is a decision the tracking poll makes explicitly (a later slice) rather than a coincidence of string equality."
+    },
+    {
+      "name": "label_file_id",
+      "type": "text",
+      "label": "Label File",
+      "help": "The label PDF, stored as a file the same way a scanned receipt is: evidence posture (docs/logic-decisions.md #8). Blank on every manual shipment, which is most of them."
+    },
+    {
+      "name": "ship_to_name",
+      "type": "text",
+      "label": "Ship To",
+      "validation": {"max_length": 200},
+      "help": "STAMPED from the order at creation, never re-read from the customer record. An address is what it was when the box left; re-deriving it would let somebody moving house rewrite where last month's parcel went (docs/logic-decisions.md #1)."
+    },
+    {
+      "name": "ship_to_address",
+      "type": "textarea",
+      "label": "Ship To Address",
+      "help": "Stamped, for the same reason as ship_to_name. Blank when the order carried no address field at all -- the storefront does not collect one yet, and a shipment that says nothing is honest where a shipment that invents a plausible address is not."
+    },
+    {
+      "name": "shipped_on",
+      "type": "date",
+      "label": "Shipped"
+    },
+    {
+      "name": "delivered_on",
+      "type": "date",
+      "label": "Delivered"
+    },
+    {
+      "name": "notes",
+      "type": "textarea",
+      "label": "Notes",
+      "help": "Also where the provenance marker lands ('Generated by action_create_shipment [orders/{id}]'), the same house pattern app-shop's checkout uses for the invoices it raises."
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "entity_id",
+      "type": "text",
+      "label": "Entity",
+      "relation": {
+        "collection": "entities",
+        "display_field": "name"
+      },
+      "help": "The set of books this belongs to (65 multi-entity). Optional during rollout, same posture as stock_moves.entity_id."
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    }
+  ],
+  "forms": {
+    "default": {
+      "fields": ["order_id", "direction", "status", "carrier", "service",
+                 "tracking_number", "ship_to_name", "ship_to_address",
+                 "shipped_on", "delivered_on", "notes"]
+    }
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["order_id", "status", "carrier", "tracking_number", "shipped_on"],
+    "filter_fields": ["status", "direction", "service"]
+  },
+  "search": {
+    "fields": ["tracking_number", "ship_to_name", "carrier"]
+  }
+}
