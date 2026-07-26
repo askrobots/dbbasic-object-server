@@ -1,0 +1,44 @@
+{
+  "id": "app-kitchen",
+  "name": "Kitchen",
+  "version": "0.1.0",
+  "description": "The room where the promise is kept. A food business is a scheduling business that happens to sell food, and every piece of the money was already built here -- basket, checkout, order, invoice, payment, stock, books -- while nothing on this server could answer the only question a cook has: what do I make next, and when did we say it would be ready? This package is that answer, and it is deliberately three small objects rather than a subsystem, because the queue it shows is NOT a table and must never become one. site_kitchen is site_pick_list wearing a different hat: a live fold over the orders that are confirmed or preparing with fulfillment_method=pickup, exactly the way stock levels are folded from stock_moves and the pick list is folded from ordered-minus-shipped. Storing the queue would mean two answers to 'what is cooking' that can disagree, and the stored one is always the one somebody trusts at the wrong moment -- here, at the moment a customer is standing at the counter. What it changes from its sibling is the SORT, and the sort is the whole difference between a warehouse and a kitchen: a picker walks the room once, so a pick list groups by product and saves the walk; a cook is racing a clock somebody else already promised, so the only order that matters is which promise comes due next, and grouping by product would batch six burgers across four orders into one row and lose the one fact the cook is measured on. Late is the loudest thing on the page -- an order past its promised time is not 'due in -4 minutes', it is LATE in the biggest type on the screen, because sorting alone puts it at the top of a column of rows that all look identical and get read at the same speed whether or not somebody is waiting. Big type and print CSS for the same reason the packing slip has both: a cook reads this from a metre away with their hands full, and plenty of kitchens print the queue at the start of a rush rather than keep a screen in the splash zone. Auto-refresh is a plain meta refresh, deliberately: there is no realtime-subscribe precedent on any page in this box (site_pick_list and site_stock, the two nearest siblings, both re-read on load and nothing else), so a live subscription here would be this package inventing a pattern for itself on the one screen where a half-working one is most expensive -- thirty seconds is well inside the resolution of a minute-grained promise, costs one small fold per tick, and keeps working on a tablet whose JavaScript has been asleep in a pocket. The second object is the ticket, /kitchen/{order_id}/ticket, and its rule is the packing slip's rule: NO PRICES, ever, not hidden behind a flag. A ticket is not an invoice -- it exists so the cook makes the right thing, and what it cost is a conversation that already happened with somebody who may not even be the person cooking. It prints line_note per line, under the line it is true of, which is where a cook actually reads it; the packing slip already prints customer_note for the packer, and the two notes are addressed to different people doing different jobs. There is deliberately NO attention provider here, and that is the interesting omission: app-pickup already ships system_pickup_attention, counting orders past their promised time and not yet ready, and a second count of the same fact under a second label is worse than no count -- two badges that disagree by one row teach a reader to trust neither, and they will disagree the first time either definition is tightened. The queue this package draws IS the page that count opens onto; the count itself belongs to the package that owns promised_at. This package owns no collections at all and ships no schemas: fulfillment_method, promised_at and the pickup status ladder belong to the orders record, line_note belongs to the order line, and a kitchen that invented its own copies of either would be a second place for the same facts to be wrong. Every one of those fields is read with .get, so the package installs and behaves honestly beside an app-orders that has not gained them yet -- on such a box no order claims to be a pickup, the queue is empty, and the page says which field is missing rather than looking broken. What is deliberately NOT here, named so it reads as a decision: bump screens and course firing (restaurant POS territory, not pickup), ingredient depletion (a burger depleting buns and patties is the parked bundles/BOM item, and many small places genuinely do not track ingredients), and any write at all -- nothing on these pages changes an order, because a queue you can edit from the screen it is displayed on is a queue two people change at once during a rush.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": ["app-orders"],
+  "objects": [
+    {
+      "id": "site_kitchen",
+      "path": "objects/site/kitchen.py"
+    },
+    {
+      "id": "site_kitchen_ticket",
+      "path": "objects/site/kitchen_ticket.py"
+    }
+  ],
+  "schemas": [],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "site_routes",
+      "path": "seed/site_routes.tsv"
+    }
+  ],
+  "migrations": [],
+  "nav": [
+    {
+      "id": "kitchen",
+      "label": "Kitchen",
+      "path": "/kitchen",
+      "blurb": "Pickup orders being made, soonest promise first",
+      "surface": "member",
+      "group": "Warehouse",
+      "order": 530
+    }
+  ]
+}

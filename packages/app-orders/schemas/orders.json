@@ -1,8 +1,8 @@
 {
   "name": "orders",
   "title": "Orders",
-  "version": 6,
-  "description": "Sales and purchase orders (doc_type on one shared schema, mirroring app-invoices' doc_type split). Lines live in order_lines; subtotal/tax/total are stamped by the order_totals handler, never typed by hand. Reconciled against a private predecessor-system audit, not part of this repo (its Order+Lines note: 'SO/PO; convert_to_invoice'). v4 carries the two fields a shopper types at checkout -- customer_note and gift_message -- because the packing slip is printed from the ORDER, not from the basket somebody abandoned on the way to it. v5 adds portal_token, the customer's own door: the shop sells to guests, so a buyer has no account to sign into and no way to ask 'where is my order?' without one. It is the same capability-URL shape invoices already use for /pay/{token}, and it is what finally lets a guest start a return. v6 is drop-shipping, and it is five fields rather than a new collection precisely because the shared SO/PO schema was the right call in v1: 'the vendor ships straight to my customer' is a SALE order and a PURCHASE order pointing at each other, which this collection could already almost express. fulfillment_source (stock | dropship, defaulting to stock so nothing existing changes meaning) is the fact every other package needs to know; linked_order_id is the counterpart, written both ways so either end answers on its own; vendor_id is who actually ships it; and ship_to_name/ship_to_address exist for the one case in this whole repo where the counterparty on a document and the destination of its goods are different people -- a drop-ship PO addressed to a vendor whose parcel goes to our customer. Margin needs no field at all, because both orders already carry money.",
+  "version": 7,
+  "description": "Sales and purchase orders (doc_type on one shared schema, mirroring app-invoices' doc_type split). Lines live in order_lines; subtotal/tax/total are stamped by the order_totals handler, never typed by hand. Reconciled against a private predecessor-system audit, not part of this repo (its Order+Lines note: 'SO/PO; convert_to_invoice'). v4 carries the two fields a shopper types at checkout -- customer_note and gift_message -- because the packing slip is printed from the ORDER, not from the basket somebody abandoned on the way to it. v5 adds portal_token, the customer's own door: the shop sells to guests, so a buyer has no account to sign into and no way to ask 'where is my order?' without one. It is the same capability-URL shape invoices already use for /pay/{token}, and it is what finally lets a guest start a return. v6 is drop-shipping, and it is five fields rather than a new collection precisely because the shared SO/PO schema was the right call in v1: 'the vendor ships straight to my customer' is a SALE order and a PURCHASE order pointing at each other, which this collection could already almost express. fulfillment_source (stock | dropship, defaulting to stock so nothing existing changes meaning) is the fact every other package needs to know; linked_order_id is the counterpart, written both ways so either end answers on its own; vendor_id is who actually ships it; and ship_to_name/ship_to_address exist for the one case in this whole repo where the counterparty on a document and the destination of its goods are different people -- a drop-ship PO addressed to a vendor whose parcel goes to our customer. Margin needs no field at all, because both orders already carry money. v7 is TIME, and it is the whole of what a food business needed that a parcel business did not (plan/pickup-and-counter-service-spec.md): everything about the MONEY was already built and almost nothing about the time was, so this collection could say `shipped` and `delivered` and had no way at all to say 'ready at 6:15'. fulfillment_method (shipping | pickup | delivery | counter, defaulting to shipping so nothing existing changes meaning) is the field every downstream behaviour keys off. requested_at and promised_at are deliberately TWO fields -- what the customer asked for and what the business committed to -- because collapsing them hides every capacity failure the shop ever had. ready_at and collected_at are stamped as they happen and never predicted. The status enum grows preparing/ready/collected rather than reusing shipped/delivered, because a status a customer sees must use the customer's word and 'your order has shipped' about a sandwich is the kind of detail that makes software look borrowed; which subset of the ladder applies is decided by fulfillment_method IN THE OBJECTS, because an enum cannot condition on another field -- the same note shipments already carries for its inbound and outbound ladders.",
   "fields": [
     {
       "name": "id"
@@ -74,6 +74,9 @@
         "shipped",
         "delivered",
         "received",
+        "preparing",
+        "ready",
+        "collected",
         "cancelled"
       ],
       "transitions": {
@@ -112,6 +115,18 @@
           },
           {
             "to": "received",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          },
+          {
+            "to": "preparing",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          },
+          {
+            "to": "ready",
             "when": {
               "owner_id": "$user_id"
             }
@@ -176,9 +191,37 @@
               "owner_id": "$user_id"
             }
           }
+        ],
+        "preparing": [
+          {
+            "to": "ready",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          },
+          {
+            "to": "cancelled",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          }
+        ],
+        "ready": [
+          {
+            "to": "collected",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          },
+          {
+            "to": "cancelled",
+            "when": {
+              "owner_id": "$user_id"
+            }
+          }
         ]
       },
-      "help": "delivered, received and cancelled are terminal. Every other move requires the order owner. Matches the real order lifecycle (reconciled against a private predecessor-system audit, not part of this repo): draft->confirmed/cancelled, confirmed->processing/cancelled, processing->shipped/cancelled, shipped->delivered. v2 adds `partial`, and it is MACHINE-DERIVED: system_order_fulfillment (app-shipping) folds shipment lines against ordered quantities and stamps partial when some but not all of what was ordered is on a shipment that has left, shipped when all of it is, delivered when every one of those shipments arrived. Never hand-set -- typing partial into this field claims a fact about boxes that no box supports, and the next derivation pass will disagree with you. confirmed->shipped is allowed alongside confirmed->partial for the same reason: the zero-touch shop (app-shop's auto_fulfill) ships a whole order the moment it is paid for and never passes through processing, and forcing a bookkeeping hop nobody performed would leave paid, shipped orders sitting at confirmed forever. v3 adds `received`, the PURCHASE side's terminal state, also machine-derived: system_receipt_posting (app-receiving) folds receipt lines against ordered quantities and stamps partial when some of what was ordered has turned up on the dock and received when all of it has. It is a new value rather than a reuse of `delivered` because this enum is shared by SO and PO (doc_type), and `delivered` on a purchase order reads as a claim about something WE sent -- in a status-filtered list, where doc_type is two columns away, that is actively misleading. `received` can only ever mean one thing in either direction: the goods turned up HERE. `partial` is therefore shared by both sides and means the same thing on both -- some of what this document promised has physically moved -- which is the point of one shared lifecycle rather than two."
+      "help": "delivered, received and cancelled are terminal. Every other move requires the order owner. Matches the real order lifecycle (reconciled against a private predecessor-system audit, not part of this repo): draft->confirmed/cancelled, confirmed->processing/cancelled, processing->shipped/cancelled, shipped->delivered. v2 adds `partial`, and it is MACHINE-DERIVED: system_order_fulfillment (app-shipping) folds shipment lines against ordered quantities and stamps partial when some but not all of what was ordered is on a shipment that has left, shipped when all of it is, delivered when every one of those shipments arrived. Never hand-set -- typing partial into this field claims a fact about boxes that no box supports, and the next derivation pass will disagree with you. confirmed->shipped is allowed alongside confirmed->partial for the same reason: the zero-touch shop (app-shop's auto_fulfill) ships a whole order the moment it is paid for and never passes through processing, and forcing a bookkeeping hop nobody performed would leave paid, shipped orders sitting at confirmed forever. v3 adds `received`, the PURCHASE side's terminal state, also machine-derived: system_receipt_posting (app-receiving) folds receipt lines against ordered quantities and stamps partial when some of what was ordered has turned up on the dock and received when all of it has. It is a new value rather than a reuse of `delivered` because this enum is shared by SO and PO (doc_type), and `delivered` on a purchase order reads as a claim about something WE sent -- in a status-filtered list, where doc_type is two columns away, that is actively misleading. `received` can only ever mean one thing in either direction: the goods turned up HERE. `partial` is therefore shared by both sides and means the same thing on both -- some of what this document promised has physically moved -- which is the point of one shared lifecycle rather than two. v7 adds `preparing`, `ready` and `collected`: the PICKUP ladder, confirmed -> preparing -> ready -> collected, with confirmed -> ready allowed directly for the same reason confirmed -> shipped is (a counter that makes the coffee while the customer is standing there never passes through a `preparing` anybody observed, and fake precision is worse than a short ladder), and preparing/ready -> cancelled for the customer who calls back or never turns up. `collected` is terminal, like `delivered` and `received`. WHICH SUBSET OF THIS ENUM BELONGS TO AN ORDER IS DECIDED BY fulfillment_method, IN THE OBJECTS, NOT HERE: shipping and dropship orders use draft/confirmed/processing/partial/shipped/delivered, purchase orders use draft/confirmed/processing/partial/received, and pickup, delivery and counter orders use draft/confirmed/preparing/ready/collected. The enum holds all of them because an enum cannot condition on another field -- exactly the note `shipments` already carries about its own inbound and outbound ladders sharing one status column. They are NEW values rather than a reuse of shipped/delivered because a status a customer reads must use the customer's word: 'your order has shipped' about a sandwich waiting on a counter is the kind of detail that makes software look borrowed, and site_order_status translates each of these into 'Being prepared' / 'Ready for collection' / 'Collected'."
     },
     {
       "name": "order_date",
@@ -269,6 +312,43 @@
       "help": "The delivery address, for the same reason and in the same one case. app-shipping's action_create_shipment already reads orders.ship_to_address when stamping a shipment (it has looked for this field since the shipments slice, against the day the storefront collects an address), so filling it in here needs no change there. ship_to_name is the half app-shipping does not read yet -- it stamps a shipment's ship_to_name from customer_name -- which is a small, named follow-up in a package this slice does not own, not a reason to leave the address homeless."
     },
     {
+      "name": "fulfillment_method",
+      "type": "enum",
+      "label": "Fulfilment Method",
+      "default": "shipping",
+      "enum": [
+        "shipping",
+        "pickup",
+        "delivery",
+        "counter"
+      ],
+      "help": "How this order reaches the customer. `shipping` is the default and means a carrier takes it, so NOTHING THAT EXISTED BEFORE v7 CHANGES MEANING by gaining this field -- the same argument billing_mode and fulfillment_source already make in their own packages, and the reason a food slice could be added to a parcel system without restating a single old row. `pickup` is the customer collecting it themselves at a promised time; `delivery` is us driving it (no dispatch layer, and deliberately none -- drivers, routes and live tracking are a different product); `counter` is an order taken and completed at once, face to face. Every downstream behaviour keys off this, which is exactly why it is a STATED field rather than one inferred from whether a shipment or a slot exists: a derived answer would be computed differently by every handler that needed it, and the one that got it wrong would apply a pickup rule to somebody's parcel. It is also what decides WHICH SUBSET of the status enum an order may climb -- see status's own help -- because an enum cannot condition on another field, so the objects do it instead."
+    },
+    {
+      "name": "requested_at",
+      "type": "datetime",
+      "label": "Requested For",
+      "help": "When the CUSTOMER asked to have it. Kept apart from promised_at, always, because the two differ and the difference is the business's problem: 'you wanted 6:00, we said 6:20' is a fact worth keeping, and one field holding whichever of them was written last hides every capacity failure the shop has ever had. A shop that cannot see it turned twenty people away from a 6pm slot has no way to learn it needs a bigger 6pm. Blank on a shipping order, where nobody asked for a time."
+    },
+    {
+      "name": "promised_at",
+      "type": "datetime",
+      "label": "Promised For",
+      "help": "When the BUSINESS committed to have it ready. Stamped at checkout from the slot the shopper chose (app-shop's action_checkout writes the slot's start, because the start is the moment the customer will turn up), and it is the clock every pickup surface reads: the kitchen queue sorts by it, and app-pickup's attention provider counts the orders that are past it and not ready. Never derived from requested_at and never quietly equal to it -- see requested_at."
+    },
+    {
+      "name": "ready_at",
+      "type": "datetime",
+      "label": "Ready At",
+      "help": "When it actually became ready, stamped as it happens and NEVER predicted. promised_at is the commitment; this is the observation, and the gap between them is the only honest measure of whether the promise was any good. A predicted ready_at would make that measurement always read zero."
+    },
+    {
+      "name": "collected_at",
+      "type": "datetime",
+      "label": "Collected At",
+      "help": "When the customer actually took it away. Same posture as ready_at: an observation, stamped when it happens. Together the four times say what was asked for, what was promised, what happened, and when it ended -- which is the whole of what a scheduling business needs and none of what a parcel business ever had a field for."
+    },
+    {
       "name": "customer_note",
       "type": "textarea",
       "label": "Special Instructions",
@@ -309,6 +389,7 @@
         "order_date",
         "expected_date",
         "status",
+        "fulfillment_method",
         "notes"
       ]
     }
@@ -325,7 +406,8 @@
     "filter_fields": [
       "status",
       "doc_type",
-      "fulfillment_source"
+      "fulfillment_source",
+      "fulfillment_method"
     ]
   },
   "search": {

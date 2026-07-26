@@ -1,0 +1,99 @@
+{
+  "name": "pickup_slots",
+  "title": "Pickup Slots",
+  "version": 1,
+  "hooks": {
+    "before_write": "hook_pickup_slots"
+  },
+  "description": "A window of time a shop will hand things over in, and how many orders it can hand over in that window. This is the noun a parcel business never needs and a counter business cannot open without: an order says what is owed and a shipment says what moved, but neither can say 'we can make four of these between six and half past', which is the only fact that decides whether a promised time is a promise or a guess. CAPACITY IS COUNTED IN ORDERS, NOT ITEMS, and that is the load-bearing decision in this schema. A kitchen's real constraint is hands and handovers -- somebody has to make each ticket, bag it and give it to a person who is standing there -- and a fifteen-minute window that can serve four customers can serve them whether they ordered one coffee or three. Counting items would refuse a family's order while accepting four singles that cost the same fifteen minutes, which is the wrong refusal in both directions; it would also make capacity un-typeable, because no owner knows how many 'items' their Friday holds while every owner knows how many customers they can look after at once. The shops for which that is genuinely wrong -- a bakery where one wedding cake IS the afternoon -- are served by giving that product its own smaller slot or by closing the neighbours, not by making every shop count in a unit only a spreadsheet understands. orders_taken is maintained by the checkout gate (app-shop's action_checkout) and is a COUNT, not a list: which orders took the slot is answered by the orders themselves, whose promised_at points back at this window, and a second copy of that link here would be one more thing that can disagree. Slots are created by system_slot_generator on a schedule rather than by hand, because a shop that has to type tomorrow's slots will one day forget and take no orders at all. Times are naive local wall-clock, the shop's own clock, matching order_date and shipped_on everywhere else in this repo.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "starts_at",
+      "type": "datetime",
+      "required": true,
+      "label": "Starts",
+      "help": "When the window opens -- and the half of the identity that makes the generator idempotent: a slot is (starts_at, location_id), so re-running the pass over a day it has already built creates nothing. It is also the time stamped onto an order's promised_at at checkout, because the start is the moment the customer will actually turn up."
+    },
+    {
+      "name": "ends_at",
+      "type": "datetime",
+      "label": "Ends",
+      "help": "When the window closes. Stored rather than derived from a slot-length setting, because the setting is what the shop uses TODAY and this row is a record of what it offered on the day somebody booked it -- the same never-look-forward posture rate_cards and stamped prices take everywhere else here."
+    },
+    {
+      "name": "capacity",
+      "type": "integer",
+      "default": "1",
+      "label": "Capacity (orders)",
+      "help": "How many ORDERS this window can take -- see the collection description for why orders and not items. Defaults to 1 rather than 0 so a slot somebody types by hand and leaves alone is bookable once instead of silently bookable never; 0 is still a perfectly legal value and means 'this window exists and is full', which is a different and useful statement from is_open=false ('we are not open then'). Negative is refused by hook_pickup_slots: a window that can take minus one order is not a fact anybody can act on."
+    },
+    {
+      "name": "orders_taken",
+      "type": "integer",
+      "default": "0",
+      "label": "Orders Taken",
+      "help": "How many orders have booked this window, incremented by the checkout gate as each one commits. A stored counter rather than a fold over orders.promised_at, deliberately: the gate has to answer 'is there room?' on the checkout path with a card reader waiting, and folding every order in the shop to answer it would make the busiest moment the slowest one. THE HONEST HALF, and it is the same honesty the stock check carries: two shoppers can both pass the gate for the last place in a window, and this counter can therefore come to exceed capacity. That is not a bug hidden behind a reservation ledger nobody has needed yet -- it is the oversell made VISIBLE, in one number, on the row it happened to, where a shop can see it and ring somebody. hook_pickup_slots refuses a hand-typed orders_taken above capacity because a typo is not a fact; the checkout path is a trusted server-side write and bypasses hooks by design, which is exactly what lets the real race land here rather than being swallowed."
+    },
+    {
+      "name": "is_open",
+      "type": "boolean",
+      "default": "true",
+      "label": "Open",
+      "help": "Whether the shop will take bookings for this window at all. Separate from capacity because 'we are closed on Monday' and 'Monday lunch is full' are different sentences a customer deserves to be told apart, and because closing a window must not lose the number of orders already in it -- a slot closed after two people booked it still owes those two people their lunch."
+    },
+    {
+      "name": "location_id",
+      "type": "text",
+      "label": "Location",
+      "validation": {
+        "max_length": 64
+      },
+      "help": "Which counter this window belongs to, when a shop has more than one. Plain text and NOT a relation, the same deliberate choice orders.vendor_id makes: a pickup point may be an app-catalog `locations` row, or a second branch nobody has filed, or nothing at all in a shop that never installed the catalogue app -- and a relation would refuse the last two while this package declares no dependency on app-catalog. Blank is a valid location and means 'the shop', which is what most shops are."
+    },
+    {
+      "name": "notes",
+      "type": "textarea",
+      "label": "Notes",
+      "help": "Also where the generator's provenance marker lands ('Generated by system_slot_generator'), the same house pattern app-shop's checkout and app-billing's runner use for the documents they raise."
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    }
+  ],
+  "forms": {
+    "default": {
+      "fields": [
+        "starts_at",
+        "ends_at",
+        "capacity",
+        "is_open",
+        "location_id",
+        "notes"
+      ]
+    }
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": [
+      "starts_at",
+      "ends_at",
+      "capacity",
+      "orders_taken",
+      "is_open"
+    ],
+    "filter_fields": [
+      "is_open"
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update"],
+      "collection": "pickup_slots",
+      "reason": "the board of collection windows is shop-wide furniture, not one person's paperwork: it is read by every storefront render and edited by whoever is on shift, so it is deliberately NOT row-filtered to an owner the way orders and shipments are -- a slot owned by whoever happened to be signed in when the generator last ran would be invisible to the person actually standing at the counter. No delete, for the same reason a shipment has none: a window somebody has already booked into cannot be made not to have existed, and the way to stop taking orders for it is is_open=false, which keeps the orders that are already in it"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "action_pickup_slots",
+      "reason": "PUBLIC on the action object only, never on the collection: this shop's default sale is a guest checkout, so the person choosing a collection time has no account and this is the read their time picker is built from. What it hands back is bounded to exactly what a shop puts on a sign in its window -- the times it is open and whether each is full -- with no owner, no notes and no order behind them, and it can write nothing at all. The collection itself stays registered-only, which is the same split app-invoices uses for site_invoice_portal and app-orders for site_order_status"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "system_slot_generator",
+      "reason": "the scheduler runs this nightly, and an operator who has just changed their opening hours should be able to poke it without an admin token: it only ever ADDS windows that its own settings describe, never edits or deletes one somebody made, so the worst a signed-in person can do with it is create tomorrow twice -- which its (starts_at, location) idempotency makes a no-op"
+    }
+  ]
+}

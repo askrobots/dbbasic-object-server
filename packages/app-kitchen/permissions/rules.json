@@ -1,0 +1,25 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "site_kitchen",
+      "reason": "the cook has to be signed in for the page to know whose kitchen to fold; the page itself shows a sign-in prompt rather than an error to anybody who is not, exactly as site_pick_list does. Deliberately not public: the queue names every waiting customer and what they ordered, which is a list of who will be standing at that counter in ten minutes"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "site_kitchen_ticket",
+      "reason": "operator-facing, deliberately NOT public, and for the same reason as the packing slip: the ticket is addressed by an internal order id, so a public page here would be an enumeration oracle for every order in the shop. The customer's own door is the order's capability token, which is unguessable; a ticket is printed by the person making the food"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "system_kitchen_attention",
+      "reason": "the attention band runs this for whoever is looking at it, and it can do nothing else: it reads orders and returns a number, writing nothing anywhere"
+    }
+  ]
+}

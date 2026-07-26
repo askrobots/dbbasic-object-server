@@ -32,6 +32,16 @@ collapses children under one card, and the product page renders a picker
 whose radios post the CHILD's product_id into the same add form every
 other card uses.
 
+**A note belongs to a LINE, so the box is on the add form.** "No onions"
+is true of one burger, not of an order, and a single box at the bottom of
+the checkout cannot say which line it meant -- that is what
+`customer_note` already is, and it is addressed to the packer. A line
+note is addressed to the cook. Two adds of one product with different
+notes come back as two basket lines, because they are two things to make,
+and the basket prints the note and any price delta under the line so the
+shopper can check both before they commit. The page renders no input for
+the delta itself: see _add_form.
+
 Categories are one flat text field, grouped into <h2> headings in
 alphabetical order, with the uncategorised last under "Everything else".
 Never hidden: a product nobody got round to filing must still be
@@ -99,6 +109,9 @@ _STYLE = """
 .notice.ok { border-left-color: #6a6; }
 .shop-form { display: inline; }
 .qty { width: 4rem; }
+.note { width: 11rem; max-width: 100%; }
+.line-note { display: block; font-size: 0.85rem; opacity: 0.75; font-style: italic; }
+.line-modifier { display: block; font-size: 0.85rem; opacity: 0.75; }
 .shop-detail .price { font-size: 1.4rem; font-weight: 600; margin: 0.4rem 0; }
 .shop-detail .description { white-space: pre-wrap; margin: 1rem 0; max-width: 42rem; }
 .shop-detail .stock { font-size: 0.9rem; opacity: 0.7; }
@@ -273,6 +286,18 @@ def _add_form(product, token):
 
     The detail page uses this form too, so a product page is a different
     VIEW of the shop and not a second checkout path to keep in step.
+
+    The note box is here rather than at checkout because it belongs to a
+    LINE: "no onions" is true of one burger, and a single box at the
+    bottom of the order cannot say which. action_cart makes a differing
+    note its own line, so two burgers ordered differently stay two things
+    to make.
+
+    There is deliberately NO price-delta input. This page is public and
+    action_cart is a public object, so an input that sets money is a
+    shopper pricing their own lunch; the delta arrives from an API caller
+    today, and the day a modifier picker exists it must price itself from
+    the server's own list rather than from the form.
     """
     return f"""
 <form method="post" action="/shop" class="shop-form">
@@ -280,6 +305,8 @@ def _add_form(product, token):
   <input type="hidden" name="session_token" value="{_esc(token)}">
   <input type="hidden" name="product_id" value="{_esc(product.get('id'))}">
   <input class="qty" type="number" name="quantity" value="1" min="1" step="1">
+  <input class="note" type="text" name="line_note" maxlength="300"
+    placeholder="No onions, extra hot...">
   <button type="submit">Add</button>
 </form>"""
 
@@ -447,20 +474,45 @@ def _totals_rows(cart, preview):
     return "".join(rows)
 
 
+def _line_extras(line):
+    """The instruction under a basket line, and what it cost.
+
+    Both are shown, and shown apart, because they answer different
+    questions: the note is what the shopper asked for and is the thing
+    they will check before ordering, while the delta is why the price is
+    not the one on the card. A delta with no explanation beside it is the
+    small unexplained difference that becomes a phone call.
+    """
+    note = str(line.get("line_note") or "").strip()
+    modifier = int(line.get("modifier_cents") or 0)
+    blocks = ""
+    if note:
+        blocks += f'<span class="line-note">{_esc(note)}</span>'
+    if modifier:
+        blocks += (f'<span class="line-modifier">+{_money(modifier)} each'
+                   f'</span>')
+    return blocks
+
+
 def _cart_table(cart, token, preview=None):
     lines = cart.get("lines") or []
     if not lines:
         return '<p class="hint">Your basket is empty.</p>'
     rows = []
     for line in lines:
+        # cart_item_id, not just product_id: two lines can now share a
+        # product (one burger with no onions, one without), and an Update
+        # button that could only say WHICH PRODUCT would edit whichever
+        # line happened to be first.
         rows.append(f"""
 <tr>
-  <td>{_esc(line['description'])}</td>
+  <td>{_esc(line['description'])}{_line_extras(line)}</td>
   <td class="num">
     <form method="post" action="/shop" class="shop-form">
       <input type="hidden" name="do" value="set">
       <input type="hidden" name="session_token" value="{_esc(token)}">
       <input type="hidden" name="product_id" value="{_esc(line['product_id'])}">
+      <input type="hidden" name="cart_item_id" value="{_esc(line.get('cart_item_id'))}">
       <input class="qty" type="number" name="quantity" value="{_esc(line['quantity'])}" min="0" step="any">
       <button type="submit">Update</button>
     </form>
@@ -629,6 +681,8 @@ def _picker(base, product, children, token):
   {"".join(rows)}
   </fieldset>
   <input class="qty" type="number" name="quantity" value="1" min="1" step="1">
+  <input class="note" type="text" name="line_note" maxlength="300"
+    placeholder="No onions, extra hot...">
   <button type="submit">Add</button>
 </form>"""
 
@@ -715,10 +769,17 @@ def _handle(request):
     notice = ""
 
     if do in ("add", "set", "remove", "clear"):
-        result = _call("action_cart", {
-            "session_token": token, "action": do,
-            "product_id": form.get("product_id"),
-            "quantity": form.get("quantity")})
+        payload = {"session_token": token, "action": do,
+                   "product_id": form.get("product_id"),
+                   "quantity": form.get("quantity")}
+        if do == "add":
+            # Only on add. Passing an absent note on `set` would tell
+            # action_cart to blank a note the shopper typed, which is
+            # what "stated" versus "omitted" means over there.
+            payload["line_note"] = form.get("line_note")
+        if form.get("cart_item_id"):
+            payload["cart_item_id"] = form.get("cart_item_id")
+        result = _call("action_cart", payload)
         notice = _notice(result)
     elif do == "checkout":
         result = _call("action_checkout", {

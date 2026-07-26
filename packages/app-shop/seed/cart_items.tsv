@@ -1,1 +1,1 @@
-id	cart_id	product_id	description	quantity	unit_price_cents	owner_id	created_at
+id	cart_id	product_id	description	quantity	unit_price_cents	line_note	modifier_cents	owner_id	created_at

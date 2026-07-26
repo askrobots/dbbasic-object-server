@@ -1,0 +1,93 @@
+{
+  "id": "app-pickup",
+  "name": "Pickup",
+  "version": "0.1.0",
+  "description": "The missing noun is TIME. Everything about the money was already built here -- browse, basket, guest checkout, order, invoice, pay link, payment, books, stock, tax, the receipt trail -- and a cafe still could not open on it, because a food business is a scheduling business that happens to sell food and this server had no way to say 'ready at 6:15'. plan/pickup-and-counter-service-spec.md is the argument; app-orders v7 is the half that lives on the order (fulfillment_method, requested_at/promised_at, ready_at/collected_at, and the preparing/ready/collected ladder), and this package is the half that decides whether a promised time is a promise or a guess. pickup_slots is a window and a number: starts_at, ends_at, and a CAPACITY COUNTED IN ORDERS RATHER THAN ITEMS, because a kitchen's real constraint is hands and handovers -- a fifteen-minute window that can look after four customers can look after them whether each ordered one coffee or three -- and because no owner alive knows how many 'items' their Friday holds while every owner knows how many people they can serve at once. system_slot_generator builds the next N days from five settings (open_time, close_time, slot_minutes, capacity_per_slot, days_ahead) on a nightly schedule, idempotent by the row's own natural key (starts_at, location_id) so re-running creates nothing twice and an operator's hand-typed 6pm slot is adopted rather than duplicated. It is a SCHEDULED PASS and not a page for one reason: a shop that has to create tomorrow's slots by hand will one day forget and take no orders at all, and that failure is silent -- an empty picker is indistinguishable from a fully-booked shop, and nothing logs an error. It only ever adds; a slot somebody edited is a decision, and a nightly pass that restated it would overwrite the operator every night. action_pickup_slots is what a storefront asks before it draws a time picker, and its answer is deliberately narrow -- open, in the future, past the lead time (pickup.lead_minutes), not at capacity -- because 'can I have a pizza at 3am' must be answered by not offering 3am, never by a refusal after the customer has typed their card in. hook_pickup_slots refuses a negative capacity and an orders_taken above capacity WITH BOTH NUMBERS, and is careful about what it does not claim: the real oversell race (two shoppers, one last place) lands through action_checkout's trusted server-side write, which bypasses hooks by design, and that is the point -- the oversell becomes a visible number on the row it happened to instead of being swallowed by a reservation ledger nobody has needed yet. What this hook refuses is a number somebody TYPED, because a typo is not a fact. The checkout gate itself lives in app-shop's action_checkout, alongside the price and stock checks and reported in the same response as them, never returned early on its own, with the next free slot named in the refusal so the shopper who lost the race is told before they pay rather than after. The attention count is orders past their promised time and not yet ready, severity warning because nobody chose to put them there and the clock is running in front of a customer; it keys on promised_at rather than on fulfillment_method, which is why a shipping order can never appear in it by construction rather than by a filter somebody has to remember. Two doors: the slot board an operator manages, and the pickup order list the count opens. Deliberately NOT here, named so each reads as a decision rather than an omission: per-line modifiers and the kitchen queue (the next slice -- the queue is the pick list with a different sort), the ready notification (an event on the transition into ready, not a button somebody forgets on a busy Friday), tax classes for prepared food, tips as a liability line, the counter sales page and its cash drawer, and any form of reservation or hold on a slot.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": ["app-orders", "app-views"],
+  "objects": [
+    {
+      "id": "system_slot_generator",
+      "path": "objects/system/slot_generator.py"
+    },
+    {
+      "id": "action_pickup_slots",
+      "path": "objects/action/pickup_slots.py"
+    },
+    {
+      "id": "hook_pickup_slots",
+      "path": "objects/hook/pickup_slots.py"
+    },
+    {
+      "id": "system_pickup_attention",
+      "path": "objects/system/pickup_attention.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "pickup_slots",
+      "path": "schemas/pickup_slots.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "pickup_slots",
+      "path": "seed/pickup_slots.tsv"
+    },
+    {
+      "collection": "views",
+      "path": "seed/views.tsv"
+    },
+    {
+      "collection": "site_routes",
+      "path": "seed/site_routes.tsv"
+    }
+  ],
+  "migrations": [],
+  "schedules": [
+    {
+      "id": "pickup_slot_generator_daily",
+      "object_id": "system_slot_generator",
+      "schedule": "50 3 * * *",
+      "description": "Build the next N days of collection windows from the shop's opening hours. Before dawn on purpose: the board must be complete before the first customer opens the storefront, and a pass that ran at nine would leave the morning's slots to whoever remembered. Costs almost nothing when it has nothing to do -- the (starts_at, location) key makes every window it has already built a skip. This is the pass that exists because a shop which has to type tomorrow's slots by hand will one day forget and take no orders at all, and nothing about that failure looks like a failure: the picker is simply empty."
+    }
+  ],
+  "nav": [
+    {
+      "id": "pickup_orders",
+      "label": "Pickup Orders",
+      "path": "/pickup",
+      "blurb": "Orders being collected, and when each one was promised",
+      "surface": "member",
+      "group": "Commerce",
+      "order": 425
+    },
+    {
+      "id": "pickup_slots",
+      "label": "Pickup Slots",
+      "path": "/pickup-slots",
+      "blurb": "The collection windows the shop offers and how many orders each holds",
+      "surface": "member",
+      "group": "Commerce",
+      "order": 430
+    }
+  ],
+  "attention": [
+    {
+      "id": "pickup_orders_overdue",
+      "object_id": "system_pickup_attention",
+      "label": "Orders past their promised time",
+      "path": "/pickup",
+      "nav_id": "pickup_orders",
+      "group": "Commerce",
+      "severity": "warning"
+    }
+  ]
+}

@@ -83,15 +83,27 @@ def _to_int(value):
 def _line_amounts(line: dict) -> tuple[int, int]:
     """Return (line_total_cents, line_tax_cents) for one order_lines row.
 
-    line_total_cents = floor(quantity * unit_price_cents), Decimal
-    multiplication (never float) so a fractional quantity cannot
-    introduce rounding error before the floor.
+    line_total_cents = floor(quantity * (unit_price_cents +
+    modifier_cents)), Decimal multiplication (never float) so a
+    fractional quantity cannot introduce rounding error before the floor.
     line_tax_cents = line_total_cents * tax_rate_bps // 10000, plain
     integer floor division on two already-integer values.
+
+    modifier_cents is the line's own price delta -- "oat milk +60c" --
+    and it is added to the UNIT price because two oat lattes are two lots
+    of oat milk. It is in here rather than left out of the fold for the
+    reason this whole file exists: a fold that cannot reproduce the
+    number it is restating quietly replaces a correct total with a
+    smaller one, and the shop is short 60c per cup with nothing to point
+    at. Read with .get and defaulting to zero, so every line written
+    before the column existed folds exactly as it always did.
     """
     quantity = Decimal(str(line.get("quantity") or "0").strip() or "0")
     unit_price_cents = Decimal(str(line.get("unit_price_cents") or "0").strip() or "0")
-    line_total_cents = int((quantity * unit_price_cents).to_integral_value(rounding=ROUND_FLOOR))
+    modifier_cents = Decimal(str(line.get("modifier_cents") or "0").strip() or "0")
+    line_total_cents = int(
+        (quantity * (unit_price_cents + modifier_cents)).to_integral_value(
+            rounding=ROUND_FLOOR))
     tax_rate_bps = _to_int(line.get("tax_rate_bps"))
     line_tax_cents = (line_total_cents * tax_rate_bps) // 10000
     return line_total_cents, line_tax_cents

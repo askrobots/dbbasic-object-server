@@ -3,13 +3,14 @@
 Until this handler existed a customer paid and heard silence. Every piece
 of the machinery was already here -- object_email.enqueue writes a row,
 the daemon's process_email_outbox pass drains it -- and nothing in the
-whole server ever composed a message to a buyer. This composes three, and
+whole server ever composed a message to a buyer. This composes four, and
 each one is sent by a TRANSITION rather than a button:
 
   order confirmed -- what they bought, the total, the tracking link, and
       the pay link if the bill is still open
   shipped         -- the carrier and tracking number if the parcel has
       them, and the tracking link
+  ready           -- a PICKUP order is made and waiting to be collected
   refunded        -- how much went back, and which order it came off
 
 A button would be a fourth thing somebody has to remember on a busy
@@ -40,6 +41,7 @@ carries a marker in its outbox row's source_object_id:
 
     system_order_email:orders/{order_id}:confirmed
     system_order_email:orders/{order_id}:shipped
+    system_order_email:orders/{order_id}:ready
     system_order_email:orders/{order_id}:refunded/{refund_id}
 
 and the handler refuses to compose one whose marker it can already find.
@@ -61,6 +63,46 @@ outbox rows would let a replay re-send. Nothing prunes the outbox today
 something does, its retention window is the thing to argue about -- which
 is a better place for the argument than a stamped boolean nobody can
 audit.
+
+**"Your order is ready" is the one of the four that is not a courtesy.**
+A confirmation is reassurance and a shipping note is a convenience: in
+both cases the customer is at home and can wait. A pickup customer cannot.
+Without this message they stand at a counter guessing, or they turn up
+twenty minutes early and hover, or they do not turn up at all and the food
+goes cold on a shelf -- and the whole promise of ordering ahead is that
+you do not have to stand there. That is why it is a TRANSITION and not a
+button: on a busy Friday the button is the first thing that gets forgotten,
+and the fact that causes the message IS the message's trigger.
+
+It fires only for a PICKUP order. `fulfillment_method` decides -- read
+with .get, so a box whose orders schema predates the pickup slice simply
+never sends it -- because "ready for collection" is a lie to somebody
+whose parcel is going in a van, and there is nowhere for a shipping
+customer to come and get it.
+
+**SMS is the honest channel, and it is a CONNECTOR boundary, not an
+adapter written here.** A person walking back from the car park reads a
+text; they do not check email. So the channel is named in a setting,
+`notify.sms_provider`, defaulting to `none`, and it degrades EXACTLY the
+way the carrier work degrades: with nothing configured the message still
+goes -- by email -- the result says which channel carried it, and nothing
+pretends to have sent a text. `manual` means the counter phones them, and
+says so. Any other value names a provider that is not installed on this
+box, which is reported rather than silently ignored: an operator who
+pasted a provider name in and got silence would reasonably conclude the
+system was texting people.
+
+What is deliberately NOT written here is a Twilio-shaped adapter. Nothing
+in this repo can test one, an untested integration against a paid API is
+the worst kind of confident wrong answer, and the second half of the
+argument is bigger than the first: orders carries no customer_phone at
+all, so even a perfect adapter would have no number to send to. Adding
+that column is the pickup slice's business, not this handler's. What an
+SMS connector must provide when it exists is one function shaped like
+app-shipping's carrier interface -- send(to, text, *, base_dir) answering
+in the connector vocabulary ({"ok": True} / {"skip": True, "reason"} /
+{"ok": False, "error", "permanent"}) -- and the choice of channel stays
+here while the credentials stay over there.
 
 **Degrading honestly.** No customer_email on the order: skipped, with the
 reason in the result, never a crash and never a message sent to "". No
@@ -97,13 +139,39 @@ ACTOR = "system_order_email"
 # by the time this handler first sees it -- and a buyer who never got a
 # confirmation because their order moved too fast is exactly the silence
 # this slice exists to end. The marker makes the wider net safe.
+# The pickup rungs are in the set for the same reason and not by
+# accident: `preparing`, `ready` and `collected` are all past `confirmed`,
+# and a counter shop that takes an order and starts making it in one burst
+# of writes would otherwise never send a confirmation at all.
 CONFIRMED_ONWARD = {"confirmed", "processing", "partial", "shipped",
-                    "delivered"}
+                    "delivered", "preparing", "ready", "collected"}
 
 # Same reasoning for the shipping note: `delivered` is downstream of
 # `shipped`, and an order that jumped straight to it still needs the
 # "it is on its way" mail somebody may be waiting for.
 SHIPPED_ONWARD = {"shipped", "delivered"}
+
+# And the same wider net for the pickup note. `collected` is downstream of
+# `ready`, so an order that jumped straight to it never got told -- which
+# on the counter path is usually a walk-in the shop served in one motion,
+# and the mail then reads as a receipt for a collection that happened
+# rather than a summons. Harmless where it is redundant; the failure the
+# other way round is somebody never told their food was waiting, which is
+# the entire reason this message exists. Same net as CONFIRMED_ONWARD, and
+# the marker makes the wider net safe.
+READY_ONWARD = {"ready", "collected"}
+
+# The one fulfilment method a "come and get it" message is true of. A
+# shipping order has a van; a `counter` sale was handed over as it was
+# made. Absent (an app-orders that predates the pickup slice) is not
+# pickup, so nothing is sent and nothing breaks.
+PICKUP_METHOD = "pickup"
+
+# The channel setting and the two values that mean "no adapter here". See
+# the module docstring: absent must degrade to email, never to silence.
+SMS_PROVIDER_SETTING = "notify.sms_provider"
+SMS_NOT_CONFIGURED = ("none", "")
+SMS_MANUAL = "manual"
 
 # An invoice in one of these still wants money, so the confirmation
 # carries the pay door. `void` and `paid` do not.
@@ -111,6 +179,7 @@ UNPAID_INVOICE_STATUSES = {"draft", "sent", "partial", "overdue"}
 
 KIND_CONFIRMED = "confirmed"
 KIND_SHIPPED = "shipped"
+KIND_READY = "ready"
 
 
 def _base_dir():
@@ -319,6 +388,53 @@ def _shipped_body(base, order, shipment):
     return "\n".join(parts)
 
 
+def _ready_body(base, order):
+    """Come and get it -- and say WHERE and BY WHEN if the order knows.
+
+    Short on purpose. This is the message most likely to be read on a
+    phone, one-handed, walking; anything below the first two lines will
+    not be read at all, so the two lines carry the whole fact.
+    """
+    number = _text(order.get("number")) or order["id"]
+    parts = [f"Hello {_text(order.get('customer_name')) or 'there'},", "",
+             f"Your order {number} is ready to collect.", ""]
+    # Both read with .get: they belong to the pickup slice, and this
+    # message must compose on a box whose orders schema has not got them.
+    ready_at = _text(order.get("ready_at"))
+    if ready_at:
+        parts += [f"Ready since: {ready_at}", ""]
+    track = _track_link(base, order)
+    if track:
+        parts += [f"Your order: {track}", ""]
+    parts += ["See you shortly.", ""]
+    return "\n".join(parts)
+
+
+def _sms_channel(base):
+    """(provider, note) -- what would carry a text, and what actually will.
+
+    Never raises and never blocks the mail. The channel is a SETTING here
+    and the credentials are a connector's problem elsewhere, exactly as
+    carrier.provider works: a shop with nothing configured must lose
+    nothing, so the email goes either way and this only decides what the
+    result gets to claim.
+    """
+    provider = _setting(base, SMS_PROVIDER_SETTING, "none").lower()
+    if provider in SMS_NOT_CONFIGURED:
+        return "none", ("no SMS provider configured; the customer was told "
+                        "by email")
+    if provider == SMS_MANUAL:
+        return SMS_MANUAL, ("notify.sms_provider is manual: the email went, "
+                            "and the counter texts or phones by hand")
+    # A provider was named and there is no adapter on this box to answer to
+    # it. Said out loud rather than swallowed: an operator who pasted a
+    # name in and heard nothing would reasonably assume texts were going
+    # out, and the customer would be the one who found out otherwise.
+    return provider, (f"notify.sms_provider names '{provider}', but no SMS "
+                      "connector is installed on this server; the customer "
+                      "was told by email")
+
+
 def _refund_body(base, order, refund):
     number = _text(order.get("number")) or order["id"]
     currency = _text(order.get("currency")) or "USD"
@@ -389,8 +505,33 @@ def _on_order(base, order_id):
             (queued.append(KIND_SHIPPED) if not error
              else errors.setdefault(KIND_SHIPPED, error))
 
+    # The pickup note. Gated on fulfillment_method, not only on status:
+    # "ready for collection" said to somebody whose parcel is on a van is
+    # a customer driving to a shop for nothing. Read with .get, so an
+    # app-orders that predates the pickup slice simply never matches.
+    sms_note = ""
+    if (status in READY_ONWARD
+            and _text(order.get("fulfillment_method")) == PICKUP_METHOD):
+        marker = _marker(order_id, KIND_READY)
+        if marker in sent:
+            skipped.append(KIND_READY)
+        else:
+            _provider, sms_note = _sms_channel(base)
+            error = _queue(
+                base, to=to,
+                subject=f"Your order {number} is ready to collect",
+                body=_ready_body(base, order),
+                marker=marker)
+            (queued.append(KIND_READY) if not error
+             else errors.setdefault(KIND_READY, error))
+
     result = {"ok": True, "order_id": order_id, "queued": queued,
               "skipped_already_sent": skipped}
+    if sms_note:
+        # Reported, not swallowed: which channel actually carried the one
+        # message that a customer is standing somewhere waiting for is
+        # exactly the thing an operator needs to be able to check.
+        result["sms"] = sms_note
     if errors:
         result["errors"] = errors
     return result

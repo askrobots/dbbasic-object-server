@@ -43,6 +43,18 @@ money went missing". So there is one mapping, in one place, from the
 internal word to the customer's word, and an unmapped status falls back to
 a plainly honest "Being prepared" rather than leaking the raw enum.
 
+The same argument is why orders v7's pickup ladder gets its own words
+rather than borrowing the parcel ones: a customer collecting a sandwich
+reads "Order received" / "Being prepared" / "Ready for collection" /
+"Collected", and the only reason those needed new enum values at all is
+that "your order has shipped" about something sitting on a counter is a
+sentence written by somebody else's software. A SHIPPING order's wording
+is untouched by every line of that -- the new statuses can only appear on
+an order whose fulfillment_method says it is being collected, and the one
+place this page reads the method (a two-entry blurb overlay and the
+promised time) falls back to exactly what it said before when the field
+is blank or `shipping`.
+
 No nav, no global search, no site chrome beyond the base stylesheet: this
 page is handed to a stranger's inbox and must never be one click from
 somebody else's order or from the sign-in wall of a system they have no
@@ -54,6 +66,7 @@ from __future__ import annotations
 import hmac
 import html
 import os
+from datetime import datetime
 
 import object_money
 import object_records
@@ -68,12 +81,24 @@ ACTOR = "site_order_status"
 # -- it is being dealt with. `received` is the PURCHASE side's terminal
 # state and can never appear on an order a customer is tracking, so it is
 # deliberately absent rather than mistranslated.
+#
+# preparing/ready/collected are the PICKUP ladder (orders v7). They are
+# separate enum values rather than a reuse of shipped/delivered for
+# exactly the reason this table exists: "your order has shipped" about a
+# sandwich waiting on a counter is a sentence written by somebody else's
+# software. Nothing in this dict changes what a SHIPPING order reads --
+# the three new keys can only ever appear on an order whose
+# fulfillment_method is pickup, delivery or counter, because the objects
+# are what enforce which subset of the enum an order may climb.
 CUSTOMER_STATUS = {
     "confirmed": "Order received",
     "partial": "Being prepared",
     "processing": "Being prepared",
+    "preparing": "Being prepared",
     "shipped": "On its way",
     "delivered": "Delivered",
+    "ready": "Ready for collection",
+    "collected": "Collected",
     "cancelled": "Cancelled",
 }
 
@@ -84,9 +109,32 @@ STATUS_BLURB = {
     "Being prepared": "Your order is being picked and packed.",
     "On its way": "Your order has left us and is with the carrier.",
     "Delivered": "This order has been delivered.",
+    "Ready for collection": "Your order is ready. Come and collect it "
+                            "whenever suits.",
+    "Collected": "You collected this order. Thank you.",
     "Cancelled": "This order was cancelled. If that is a surprise, "
                  "contact the shop.",
 }
+
+# The same words, said the way a person collecting a thing hears them. A
+# pickup order that is "being picked and packed" is being described by a
+# warehouse that is not involved, and a shipping order whose blurb talked
+# about a counter would be the same mistake pointing the other way -- so
+# this is an OVERLAY keyed on fulfillment_method, not an edit to the table
+# above. Only these two lines differ; everything else reads correctly for
+# both, which is why the overlay is two entries rather than a second table.
+PICKUP_BLURB = {
+    "Order received": "We have your order and will have it ready for you.",
+    "Being prepared": "Your order is being made now.",
+}
+
+# Methods where the customer comes to the goods rather than the goods
+# going to the customer. `counter` is in the set because a counter sale
+# collected at once is still collected, not posted. `delivery` is NOT:
+# it is deliberately the thin case in this slice (we drive it, with no
+# dispatch layer), so it reads the shared wording rather than acquiring
+# an overlay nothing has been built to earn yet.
+PICKUP_METHODS = {"pickup", "counter"}
 
 # The customer's word for anything the mapping does not cover -- a draft
 # that somehow acquired a token, or a status added to the enum after this
@@ -274,13 +322,45 @@ def _business_html(base):
     return f'<div class="hint">{_esc(name)}</div>' if name else ""
 
 
+def _when(value):
+    """A datetime rendered the way somebody reads a collection time, or
+    "" if it is blank or unparseable.
+
+    Never a raw ISO string on a customer's screen: "2026-07-27T18:00:00"
+    is a machine talking, and the one number this page exists to show a
+    pickup customer is the time they should turn up.
+    """
+    text = _text(value)
+    if not text:
+        return ""
+    try:
+        moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    return moment.strftime("%a %d %b, %H:%M")
+
+
 def _status_html(order):
     raw = _text(order.get("status"))
     word = CUSTOMER_STATUS.get(raw, FALLBACK_STATUS)
+    # Default is the shipping wording, unchanged for every order that
+    # existed before pickup did -- the overlay only applies when the order
+    # itself says it is being collected.
+    method = _text(order.get("fulfillment_method")) or "shipping"
     blurb = STATUS_BLURB.get(word, "")
-    return (f'<div class="status"><div class="n">{_esc(word)}</div>'
-            + (f'<div class="hint">{_esc(blurb)}</div>' if blurb else "")
-            + "</div>")
+    if method in PICKUP_METHODS:
+        blurb = PICKUP_BLURB.get(word, blurb)
+    lines = [f'<div class="n">{_esc(word)}</div>']
+    if blurb:
+        lines.append(f'<div class="hint">{_esc(blurb)}</div>')
+    if method in PICKUP_METHODS and raw not in ("collected", "cancelled"):
+        # The promised time, on the one kind of order that has one. A
+        # customer who ordered ahead is not asking "what state is my
+        # order in", they are asking "when do I walk over there".
+        promised = _when(order.get("promised_at"))
+        if promised:
+            lines.append(f'<div class="hint">Ready by {_esc(promised)}</div>')
+    return f'<div class="status">{"".join(lines)}</div>'
 
 
 def _lines_html(order, lines, base):

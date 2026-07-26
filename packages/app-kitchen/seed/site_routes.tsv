@@ -1,0 +1,3 @@
+id	pattern	object_id	priority
+route_kitchen	/kitchen	site_kitchen	10
+route_kitchen_ticket	/kitchen/{order_id}/ticket	site_kitchen_ticket	10

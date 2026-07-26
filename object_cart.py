@@ -17,6 +17,17 @@ a stale price either. So both numbers are kept and the disagreement is
 SURFACED rather than resolved in secret -- the same instinct as stamping
 a rate at approval, and refusing to let a later change restate it.
 
+**An instruction is not a product.** A large latte is genuinely its own
+product with its own SKU, price and stock, and variants-as-products
+already handles that. "No onions" is not a product: it has no SKU, it is
+true of one line of one order, and a catalogue row per instruction would
+be thousands of dead products nobody can sell. So a line carries
+`line_note` and `modifier_cents` -- "oat milk +60c" is the same
+instruction with a price delta, which is why the delta lives on the line
+rather than in the price book. The delta is money and goes through the
+same single fold as everything else; the note is not money and moves no
+total anywhere.
+
 **Availability is decided at checkout, never at add.** Reserving stock
 when somebody drops a thing in a basket is how a shop shows "sold out"
 for goods nobody bought.
@@ -52,22 +63,39 @@ def _int(value: Any, default: int = 0) -> int:
         return default
 
 
-def line_total_cents(quantity: Any, unit_price_cents: Any) -> int:
+def line_total_cents(quantity: Any, unit_price_cents: Any,
+                     modifier_cents: Any = 0) -> int:
     """One line's money, rounded half-up once.
 
     Fractional quantities are real (1.5 kg, 2.5 hours of setup), so this
     is a Decimal multiplication rather than an integer one -- and the
     rounding happens here, per line, so the basket total always equals the
     sum of the lines a shopper can see.
+
+    `modifier_cents` is the per-line instruction's price delta -- "oat
+    milk +60c" -- and it is added to the UNIT price rather than to the
+    line: two oat lattes are two lots of oat milk, and a delta applied
+    once to a line of six would be a shop giving away five of them. It is
+    inside this number rather than beside it because every total
+    downstream (basket, checkout preview, order, invoice) is a sum of
+    line totals, and money that reaches one of those and not another is
+    the bug this whole codebase is organised against.
     """
-    total = _num(quantity) * _num(unit_price_cents)
+    total = _num(quantity) * (_num(unit_price_cents) + _num(modifier_cents))
     if total <= 0:
         return 0
     return int(total.to_integral_value(rounding=ROUND_HALF_UP))
 
 
 def totals(items: list[dict]) -> dict:
-    """What the basket comes to: {"lines", "subtotal_cents", "count"}."""
+    """What the basket comes to: {"lines", "subtotal_cents", "count"}.
+
+    Each line carries its instruction (`line_note`) and its delta
+    (`modifier_cents`) through to every caller, because the callers are
+    the order writer, the invoice writer and the page -- and a note that
+    stops here is a note the cook never reads. Both are read with .get:
+    a basket written before those columns existed is still a basket.
+    """
     lines = []
     subtotal = 0
     count = Decimal(0)
@@ -75,13 +103,17 @@ def totals(items: list[dict]) -> dict:
         quantity = _num(item.get("quantity"))
         if quantity <= 0:
             continue
-        amount = line_total_cents(quantity, item.get("unit_price_cents"))
+        modifier = _int(item.get("modifier_cents"))
+        amount = line_total_cents(quantity, item.get("unit_price_cents"),
+                                  modifier)
         lines.append({
             "cart_item_id": _text(item.get("id")),
             "product_id": _text(item.get("product_id")),
             "description": _text(item.get("description")),
             "quantity": str(quantity),
             "unit_price_cents": _int(item.get("unit_price_cents")),
+            "modifier_cents": modifier,
+            "line_note": _text(item.get("line_note")),
             "line_total_cents": amount,
         })
         subtotal += amount

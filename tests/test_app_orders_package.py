@@ -127,7 +127,17 @@ def test_schema_json_files_are_valid_and_versioned():
     # shared SO/PO schema had already modelled "the vendor ships straight
     # to my customer" as two rows pointing at each other; see
     # tests/test_dropship.py.
-    expected_versions = {"orders": 6, "order_lines": 1}
+    # orders v7: TIME -- fulfillment_method plus the four datetimes
+    # (requested_at/promised_at/ready_at/collected_at) and the pickup half
+    # of the status ladder. Five fields and three enum values rather than a
+    # new collection, because everything about the money was already here
+    # and only the time was missing; see tests/test_pickup_slots.py.
+    # order_lines v2: line_note and modifier_cents, the per-line half of
+    # the same slice -- "no onions" is an instruction on one line of one
+    # order and has no SKU, and "oat milk +60c" is that instruction with a
+    # price delta, which is why the delta lives on the line rather than in
+    # the price book. See tests/test_pickup_service.py.
+    expected_versions = {"orders": 7, "order_lines": 2}
     for name in ("orders", "order_lines"):
         payload = json.loads((APP_ORDERS_DIR / "schemas" / f"{name}.json").read_text())
         assert payload["name"] == name
@@ -202,7 +212,7 @@ def test_orders_guarded_status_transitions_match_the_real_lifecycle():
     status_field = next(f for f in _orders_schema()["fields"] if f["name"] == "status")
     assert status_field["enum"] == [
         "draft", "confirmed", "processing", "partial", "shipped", "delivered",
-        "received", "cancelled",
+        "received", "preparing", "ready", "collected", "cancelled",
     ]
     assert status_field["default"] == "draft"
 
@@ -220,9 +230,16 @@ def test_orders_guarded_status_transitions_match_the_real_lifecycle():
     # reason on the PURCHASE side: system_receipt_posting derives it from
     # receipt lines, and a PO that was received in one delivery never passed
     # through partial.
+    # v7: `preparing` and `ready` join the same list, and `ready` is
+    # reachable straight from confirmed for the third time the same
+    # argument has been made here -- a counter that makes the coffee while
+    # the customer stands there never passes through a `preparing` anybody
+    # observed, and a forced bookkeeping hop nobody performed is fake
+    # precision, exactly as it was for the zero-touch shop's shipped.
     confirmed_targets = {entry["to"]: entry["when"] for entry in transitions["confirmed"]}
     assert confirmed_targets == {"processing": owner_guard, "partial": owner_guard,
                                  "shipped": owner_guard, "received": owner_guard,
+                                 "preparing": owner_guard, "ready": owner_guard,
                                  "cancelled": owner_guard}
 
     processing_targets = {entry["to"]: entry["when"] for entry in transitions["processing"]}
@@ -236,20 +253,36 @@ def test_orders_guarded_status_transitions_match_the_real_lifecycle():
     shipped_targets = {entry["to"]: entry["when"] for entry in transitions["shipped"]}
     assert shipped_targets == {"delivered": owner_guard}
 
-    # delivered, received and cancelled are terminal: no entries in the
-    # transitions map at all. received is terminal for the same reason
-    # delivered is -- goods that arrived cannot un-arrive, and a miscount is
-    # an adjustment move, never an edit.
+    # The PICKUP ladder (v7): confirmed -> preparing -> ready -> collected.
+    # cancelled hangs off both middle rungs, for the customer who calls
+    # back while it is being made and the one who never turns up.
+    preparing_targets = {entry["to"]: entry["when"] for entry in transitions["preparing"]}
+    assert preparing_targets == {"ready": owner_guard, "cancelled": owner_guard}
+
+    ready_targets = {entry["to"]: entry["when"] for entry in transitions["ready"]}
+    assert ready_targets == {"collected": owner_guard, "cancelled": owner_guard}
+
+    # delivered, received, collected and cancelled are terminal: no entries
+    # in the transitions map at all. received is terminal for the same
+    # reason delivered is -- goods that arrived cannot un-arrive, and a
+    # miscount is an adjustment move, never an edit. `collected` is
+    # terminal for the third version of that sentence.
     assert "delivered" not in transitions
     assert "received" not in transitions
+    assert "collected" not in transitions
     assert "cancelled" not in transitions
 
 
 def test_orders_forms_and_views_match_the_brief():
     schema = _orders_schema()
+    # fulfillment_method is IN the default form (v7): it is the field every
+    # downstream behaviour keys off, and one only action_checkout could set
+    # would leave an operator raising a counter or pickup order by hand with
+    # no way to say so.
     assert schema["forms"]["default"]["fields"] == [
         "doc_type", "number", "customer_id", "customer_name", "customer_email",
-        "currency", "order_date", "expected_date", "status", "notes",
+        "currency", "order_date", "expected_date", "status", "fulfillment_method",
+        "notes",
     ]
     assert schema["views"]["list_fields"] == [
         "number", "customer_name", "status", "total_cents", "expected_date",
@@ -275,8 +308,13 @@ def test_orders_parity_fields_present():
 def test_order_lines_schema_matches_the_brief():
     schema = _order_lines_schema()
     field_names = [f["name"] for f in schema["fields"]]
+    # v2 puts line_note and modifier_cents next to the unit price they
+    # qualify, and before the line total they are folded into -- reading
+    # order is the argument: the note and the delta belong to the thing
+    # being sold, not to the arithmetic underneath it.
     assert field_names == [
         "id", "order_id", "product_id", "description", "quantity", "unit_price_cents",
+        "line_note", "modifier_cents",
         "line_total_cents", "tax_rate_bps", "line_tax_cents", "owner_id", "created_at",
     ]
     by_name = {f["name"]: f for f in schema["fields"]}

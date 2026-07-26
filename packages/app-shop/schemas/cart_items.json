@@ -1,8 +1,8 @@
 {
   "name": "cart_items",
   "title": "Cart Items",
-  "version": 1,
-  "description": "One product in one basket, with the price it carried when it went in. Stamping the price at add-time is what lets the shop notice later that it moved: a price that changes while somebody is shopping must not silently change what they thought they were agreeing to, and a basket that has sat for three weeks must not hold the seller to a stale price either. Both numbers are kept and the DISAGREEMENT is surfaced at checkout (object_cart.price_changes) rather than resolved in secret in either direction -- the same instinct as stamping a rate at approval and refusing to let a later change restate it (docs/logic-decisions.md #1). No stock is reserved by anything here: availability is decided at checkout, because reserving on add is how a shop shows 'sold out' for goods nobody bought.",
+  "version": 2,
+  "description": "One product in one basket, with the price it carried when it went in. Stamping the price at add-time is what lets the shop notice later that it moved: a price that changes while somebody is shopping must not silently change what they thought they were agreeing to, and a basket that has sat for three weeks must not hold the seller to a stale price either. Both numbers are kept and the DISAGREEMENT is surfaced at checkout (object_cart.price_changes) rather than resolved in secret in either direction -- the same instinct as stamping a rate at approval and refusing to let a later change restate it (docs/logic-decisions.md #1). No stock is reserved by anything here: availability is decided at checkout, because reserving on add is how a shop shows 'sold out' for goods nobody bought. A line also carries an INSTRUCTION and a price delta (line_note, modifier_cents), which is why the same product can appear on two lines of one basket: 'no onions' on the first burger and not the second are two different things to make. A large latte is genuinely its own product with its own SKU, price and stock, and variants-as-products already handles that; 'no onions' is not a product -- it has no SKU, it is an instruction on one line of one order, and modelling it as a product would put thousands of dead rows in the catalogue. 'Oat milk +60c' is the same instruction with a price delta, which is why the delta lives on the line rather than in the price book.",
   "fields": [
     {"name": "id"},
     {"name": "cart_id", "required": true, "label": "Cart",
@@ -15,9 +15,16 @@
      "help": "May be fractional -- 1.5 kg, 2.5 hours of setup -- so line money is Decimal arithmetic rounded once per line."},
     {"name": "unit_price_cents", "type": "integer", "default": "0", "label": "Unit Price",
      "help": "What it cost when it went in the basket, in integer minor units. Compared against the live price at checkout, never quietly replaced by it."},
+    {"name": "line_note", "type": "text", "label": "Line Note",
+     "help": "What the shopper asked for on THIS line -- 'no onions', 'extra hot', 'cut in half'. An instruction, never a product: it has no SKU, it is true of one line of one order, and a catalogue row per instruction would be thousands of dead products. It is also never money: it reaches the kitchen ticket and the order line, and it changes no total anywhere.",
+     "validation": {"max_length": 300}},
+    {"name": "modifier_cents", "type": "integer", "default": "0", "label": "Modifier (cents)",
+     "help": "The price delta this instruction carries -- 'oat milk +60c' -- in integer minor units, PER UNIT, so two oat lattes cost two deltas. It lives on the line rather than in the price book for the same reason the note does: it is a fact about this order, not about the catalogue. Zero is the ordinary case. Never negative: a discount is a pricing decision that belongs in the price book or in a variant, and a shopper who can type their own negative delta can price their own lunch (action_cart refuses one).",
+     "validation": {"min": 0}},
     {"name": "owner_id", "type": "text", "label": "Owner"},
     {"name": "created_at", "type": "datetime", "read_only": true, "label": "Added"}
   ],
   "views": {"list_mode": "table",
-            "list_fields": ["description", "quantity", "unit_price_cents"]}
+            "list_fields": ["description", "quantity", "unit_price_cents",
+                            "modifier_cents", "line_note"]}
 }

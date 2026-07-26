@@ -1,0 +1,3 @@
+id	title	route	layout	blocks	owner_id	is_public	pinned	created_at
+view_pickup_slots	Pickup Slots	/pickup-slots	single	"[{""kind"": ""list"", ""collection"": ""pickup_slots"", ""search"": false, ""sort"": true, ""add"": true, ""owner_scoped"": false, ""title_field"": ""starts_at"", ""add_label"": ""+ New Slot""}]"		true	false	2026-01-01T00:00:00
+view_pickup_orders	Pickup Orders	/pickup	single	"[{""kind"": ""list"", ""collection"": ""orders"", ""where"": {""fulfillment_method"": ""pickup""}, ""search"": true, ""sort"": true, ""owner_scoped"": true, ""title_field"": ""number"", ""link"": true}]"		true	false	2026-01-01T00:00:00

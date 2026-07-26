@@ -113,15 +113,72 @@ into a column that does not exist, and the response says so
 the failure that prevents is a birthday message the shopper typed, the
 shop charged for, and nobody ever printed.
 
+**Per-line instructions travel; per-line deltas travel as MONEY.** A
+basket line may carry `line_note` ("no onions") and `modifier_cents`
+("oat milk +60c"). The note lands on the order line, where the kitchen
+ticket reads it, and touches no total anywhere -- an instruction is not a
+term of the sale. The delta is money, so it is inside every total this
+file writes: object_cart.checkout_totals already folded it into
+line_total_cents, the order line records it alongside the base price, and
+the invoice line carries it in its EFFECTIVE unit price so the bill is
+still an ordinary quantity x price document that multiplies out. Money
+that reaches one total and not another is the failure this whole file is
+arranged to prevent, which is why the delta is never a column sitting
+beside a total that ignores it.
+
 There is deliberately no gift FLAG. The packing slip carries no prices by
 construction (site_packing_slip), so every parcel is already gift-safe,
 and a flag somebody forgets to tick is exactly how a present arrives with
 the amount paid stapled to it. The message is about warmth, not secrecy.
+
+**A collection time is checked here and held by nothing.**
+`fulfillment_method` (shipping | pickup | delivery | counter) and
+`pickup_slot_id` are the two arguments that turn this into a counter
+shop's checkout. When the method is `pickup` the slot must exist, be
+open, be in the future, be past the shop's lead time, and have room --
+and every one of those failures is reported ALONGSIDE the price, stock
+and availability blockers above, in the same response, never returned
+early on its own. That is not a style choice: a shopper told about a
+dead slot, who fixes it, and is then told about a price change is a
+shopper who has abandoned the basket, and this file is arranged the way
+it is precisely to make that impossible.
+
+A SHIPPING ORDER IS UNTOUCHED BY EVERY LINE OF IT. No method, or
+`shipping`, means the gate reads no slots, adds no blockers, and writes
+no new field -- orders.fulfillment_method defaults to `shipping`, so an
+order raised by a shop that has never heard of pickup is byte-for-byte
+the order it was before. That is the regression that matters most here
+and it holds by construction rather than by a condition somebody has to
+remember.
+
+**The race is real and is not pretended away.** Two shoppers can both
+pass this gate for the last place in a 6pm window, exactly as two can
+both pass the stock gate for the last unit, and for the same reason: the
+check is a read, nothing is reserved, and there is no lock. It is
+accepted deliberately at this scale rather than paid for with a
+reservation ledger nobody has needed yet -- the same honest posture
+hook_wallet_entries documents for its own check-then-append. Two things
+make it survivable. The loser finds out BEFORE PAYING, because the gate
+runs before the order and the invoice exist. And the refusal NAMES THE
+NEXT FREE SLOT, because "that time is full" sends somebody away while
+"that time is full, the next one is 18:30" keeps the sale. When the race
+is genuinely lost -- both increments land -- pickup_slots.orders_taken
+comes to exceed capacity, and that is visible on the row it happened to,
+which is what lets a shop ring somebody instead of finding out when they
+turn up.
+
+The bookability rule is duplicated here rather than imported from
+app-pickup's action_pickup_slots, and the duplication is named in both
+files: this package cannot execute another package's object as a
+function, and a checkout that reached across for it would refuse orders
+on a box where the pickup app is installed but its objects are not on
+this root. Both read the same setting (`pickup.lead_minutes`) so the
+picker and the gate cannot disagree about what "too soon" means.
 """
 
 import os
 import secrets
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import object_cart
 import object_ids
@@ -178,6 +235,21 @@ def _has_field(base, collection, field):
     except Exception:
         return False
     return any(f.get("name") == field for f in schema.get("fields") or [])
+
+
+def _invoice_description(line):
+    """The line as the payer should read it.
+
+    A latte at 4.00 billed at 4.60 with nothing saying why is the kind of
+    small unexplained difference that turns into a phone call, so a line
+    carrying a delta says so in its own description. Only when there IS
+    one: every existing invoice line reads exactly as it did.
+    """
+    description = _text(line.get("description"))
+    modifier = int(line.get("modifier_cents") or 0)
+    if not modifier:
+        return description
+    return f"{description} (+{modifier / 100:.2f})"
 
 
 def _tax_and_shipping_settings(base):
@@ -268,6 +340,186 @@ def _on_hand(base, products):
     return levels, tracked
 
 
+# --- the collection-time gate ------------------------------------------------
+#
+# Everything from here to POST is inert for a shipping order: _pickup_gate
+# returns before it reads anything at all unless the request names a
+# method that is not `shipping`.
+
+FULFILLMENT_METHODS = ("shipping", "pickup", "delivery", "counter")
+
+DEFAULT_LEAD_MINUTES = 30
+
+
+def _moment(value):
+    """An ISO datetime as naive local wall-clock, or None.
+
+    Same normalisation app-pickup's own objects perform, and for the same
+    reason: every time in this repo is the shop's own clock, and comparing
+    one aware value against a naive one raises -- which would turn a
+    single oddly-typed slot into a checkout that refuses everybody.
+    """
+    text = _text(value)
+    if not text:
+        return None
+    try:
+        moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if moment.tzinfo is not None:
+        moment = moment.astimezone().replace(tzinfo=None)
+    return moment
+
+
+def _slot_has_room(slot):
+    return _int(slot.get("orders_taken"), 0) < _int(slot.get("capacity"), 0)
+
+
+def _next_free_slot(slots, *, earliest, location, exclude_id=""):
+    """The soonest window somebody could actually be given instead.
+
+    Searched at the SAME location as the one they asked for, because
+    offering a customer a time at the other branch is not an offer. Ties
+    are broken by start time and nothing else -- the next free slot is
+    simply the next one.
+    """
+    candidates = [slot for slot in slots
+                  if _text(slot.get("id")) != exclude_id
+                  and _truthy(slot.get("is_open") or "true")
+                  and _text(slot.get("location_id")) == location
+                  and _slot_has_room(slot)]
+    dated = [(moment, slot) for moment, slot in
+             ((_moment(slot.get("starts_at")), slot) for slot in candidates)
+             if moment is not None and moment >= earliest]
+    if not dated:
+        return None
+    dated.sort(key=lambda pair: pair[0])
+    return dated[0][1]
+
+
+def _and_the_next_one(slot):
+    """The half of a refusal that keeps the sale.
+
+    "That time is full" sends somebody away. "That time is full, the next
+    one is 18:30" is the same fact with somewhere to go, and it costs one
+    sentence.
+    """
+    if slot is None:
+        return (" There is no other free collection time on the board -- "
+                "contact the shop.")
+    return f" The next free collection time is {_text(slot.get('starts_at'))}."
+
+
+def _pickup_gate(base, request):
+    """Everything the collection time can be wrong about, gathered at once.
+
+    Returns {method, slot, problems, next_free}. `problems` is a list of
+    sentences, and it is a LIST rather than a first-failure return for
+    exactly the reason the price/stock checks above are: the caller folds
+    it in with theirs and reports the lot together.
+
+    A blank or `shipping` method returns immediately, having read nothing:
+    a shop that does not do pickup must not pay a collection scan per
+    checkout, and more importantly must not be able to acquire a pickup
+    refusal by accident.
+    """
+    method = _text(request.get("fulfillment_method")).lower()
+    empty = {"method": "", "slot": None, "problems": [], "next_free": None}
+    if not method or method == "shipping":
+        return empty
+
+    if method not in FULFILLMENT_METHODS:
+        return {**empty, "method": method,
+                "problems": [f"'{method}' is not a way this shop can fulfil an "
+                             f"order. Choose one of: "
+                             f"{', '.join(FULFILLMENT_METHODS)}."]}
+
+    if method != "pickup":
+        # delivery and counter are stated facts about how this order is
+        # fulfilled and book nothing: there is no slot board for the van or
+        # the till, and inventing one here would be a rule nobody asked for.
+        return {**empty, "method": method}
+
+    slot_id = _text(request.get("pickup_slot_id"))
+    now = _moment(request.get("now")) or datetime.now()
+    lead = max(0, _int(_setting(base, "pickup.lead_minutes", ""),
+                       DEFAULT_LEAD_MINUTES))
+    earliest = now + timedelta(minutes=lead)
+
+    try:
+        slots = object_records.read_collection_records("pickup_slots",
+                                                       base_dir=base)
+    except Exception:
+        # The pickup app is not installed on this box. Refusing is the only
+        # honest answer -- the shopper asked for a collection time and this
+        # shop has no board of them -- and it is a refusal rather than a
+        # silent downgrade to shipping, because quietly posting somebody
+        # their lunch is worse than telling them no.
+        return {**empty, "method": method,
+                "problems": ["This shop is not taking collection orders "
+                             "(no pickup slots are configured)."]}
+
+    if not slot_id:
+        free = _next_free_slot(slots, earliest=earliest, location="")
+        return {**empty, "method": method, "next_free": free,
+                "problems": ["Choose a collection time." + _and_the_next_one(free)]}
+
+    slot = next((row for row in slots if _text(row.get("id")) == slot_id), None)
+    if slot is None:
+        free = _next_free_slot(slots, earliest=earliest, location="")
+        return {**empty, "method": method, "next_free": free,
+                "problems": ["That collection time is not on the board any "
+                             "more." + _and_the_next_one(free)]}
+
+    location = _text(slot.get("location_id"))
+    problems = []
+    starts = _moment(slot.get("starts_at"))
+
+    if not _truthy(slot.get("is_open") or "true"):
+        problems.append("The shop is not taking orders for that collection "
+                        "time.")
+    if starts is None:
+        problems.append("That collection time cannot be read.")
+    elif starts <= now:
+        problems.append(f"That collection time ({_text(slot.get('starts_at'))}) "
+                        f"has already passed.")
+    elif starts < earliest:
+        # The one refusal that should be impossible to reach through a
+        # picker, and is checked anyway: action_pickup_slots never OFFERS a
+        # slot inside the lead time, so arriving here means the id was
+        # typed, kept from an old page, or guessed.
+        problems.append(f"That collection time is too soon -- this shop needs "
+                        f"{lead} minutes' notice.")
+    if not _slot_has_room(slot):
+        problems.append(f"That collection time is full: it takes "
+                        f"{_int(slot.get('capacity'), 0)} orders and "
+                        f"{_int(slot.get('orders_taken'), 0)} have been taken.")
+
+    free = None
+    if problems:
+        free = _next_free_slot(slots, earliest=earliest, location=location,
+                               exclude_id=slot_id)
+        problems[-1] += _and_the_next_one(free)
+    return {"method": method, "slot": slot, "problems": problems,
+            "next_free": free}
+
+
+def _slot_refusal(pickup):
+    """The pickup half of a 409, shaped so a storefront can render the next
+    free time as a button rather than parsing it back out of a sentence."""
+    payload = {"pickup_problems": pickup["problems"]}
+    free = pickup.get("next_free")
+    if free is not None:
+        payload["next_free_slot"] = {
+            "id": free["id"],
+            "starts_at": _text(free.get("starts_at")),
+            "ends_at": _text(free.get("ends_at")),
+            "places_left": max(0, _int(free.get("capacity"), 0)
+                               - _int(free.get("orders_taken"), 0)),
+        }
+    return payload
+
+
 def POST(request):
     base = _base_dir()
     token = _text(request.get("session_token"))
@@ -310,22 +562,42 @@ def POST(request):
     products = _products(base, {_text(i.get("product_id")) for i in items})
     levels, tracked = _on_hand(base, products)
     blockers = object_cart.checkout_blockers(items, products, levels, tracked=tracked)
+    # Gathered HERE, beside the price and stock checks, and reported with
+    # them below -- never on its own and never first. For a shipping order
+    # this reads nothing and finds nothing; see _pickup_gate.
+    pickup = _pickup_gate(base, request)
 
     if blockers["empty"]:
-        return {"status": 400, "error": "There is nothing in this basket."}
+        return {"status": 400, "error": "There is nothing in this basket.",
+                **(_slot_refusal(pickup) if pickup["problems"] else {})}
 
     if blockers["price_changes"] and not _truthy(request.get("confirm_prices")):
         return {"status": 409,
                 "error": "Some prices changed while this basket was open.",
                 "price_changes": blockers["price_changes"],
                 "note": "Show both numbers and send confirm_prices=true once "
-                        "the shopper has agreed to the current ones."}
+                        "the shopper has agreed to the current ones.",
+                **(_slot_refusal(pickup) if pickup["problems"] else {})}
 
-    if blockers["inactive"] or blockers["unavailable"]:
+    if blockers["inactive"] or blockers["unavailable"] or pickup["problems"]:
+        # One 409 carrying everything wrong with this checkout. The
+        # sentence changes depending on what is actually broken, because
+        # "some items cannot be ordered right now" over a perfectly good
+        # basket whose only problem is a full 6pm slot is a message that
+        # sends the shopper looking in the wrong place.
+        items_wrong = bool(blockers["inactive"] or blockers["unavailable"])
+        if items_wrong and pickup["problems"]:
+            error = ("Some items cannot be ordered right now, and the "
+                     "collection time is no longer available.")
+        elif items_wrong:
+            error = "Some items cannot be ordered right now."
+        else:
+            error = " ".join(pickup["problems"])
         return {"status": 409,
-                "error": "Some items cannot be ordered right now.",
+                "error": error,
                 "unavailable": blockers["unavailable"],
-                "inactive": blockers["inactive"]}
+                "inactive": blockers["inactive"],
+                **(_slot_refusal(pickup) if pickup["problems"] else {})}
 
     # Prices confirmed: adopt the live ones so the order records what the
     # shopper actually agreed to, not the number they first saw.
@@ -414,6 +686,38 @@ def POST(request):
         else:
             carried_on_cart.append(field)
 
+    # How this order reaches the customer, and when we said it would be
+    # ready. Same schema-aware posture as everything above: a shop still on
+    # orders v6 has none of these columns, and writing one would cost the
+    # shopper the ORDER rather than the timestamp.
+    #
+    # requested_at and promised_at are stamped SEPARATELY and deliberately
+    # from different places. The promise is the slot's start -- the moment
+    # the shop committed to, and the moment the customer will walk in. The
+    # request is what they ASKED for, which is the same thing when they
+    # simply picked a slot and is genuinely different when a storefront
+    # passes the time they originally wanted and could not have. Collapsing
+    # them would erase every "you wanted 6:00, we said 6:20", which is the
+    # only evidence a shop ever gets that its 6pm is too small.
+    slot = pickup["slot"]
+    if pickup["method"] and _has_field(base, "orders", "fulfillment_method"):
+        order_row["fulfillment_method"] = pickup["method"]
+    if slot is not None:
+        promised = _text(slot.get("starts_at"))
+        requested = _text(request.get("requested_at")) or promised
+        if _has_field(base, "orders", "promised_at"):
+            order_row["promised_at"] = promised
+        if _has_field(base, "orders", "requested_at"):
+            order_row["requested_at"] = requested
+        # Which window this order took, in the one place this repo puts
+        # provenance that has no column of its own -- the same marker
+        # pattern the invoice below and app-billing's runner both use.
+        # orders needs no pickup_slot_id field for it: promised_at already
+        # answers "when", and a second copy of the link would be one more
+        # thing that can disagree with the slot's own count.
+        order_row["notes"] = (f"{order_row['notes']} "
+                              f"[pickup_slots/{slot['id']}]")
+
     # portal_token is schema read_only so no client can choose its own; a
     # server-side writer passes preserve_read_only, which is exactly the
     # narrow escape hatch that flag exists for -- the same call the
@@ -422,20 +726,29 @@ def POST(request):
         "orders", order_row, base_dir=base, actor=ACTOR,
         preserve_read_only=True)
 
+    # The per-line instruction and its delta, carried straight through --
+    # see the module docstring. Same schema-aware posture as everything
+    # else here: an app-orders that predates the columns costs the cook a
+    # note, a rejected write would cost the shopper the order.
+    line_extras = [field for field in ("line_note", "modifier_cents")
+                   if _has_field(base, "order_lines", field)]
     for line in summary["lines"]:
+        order_line = {
+            "id": object_ids.new_uuid4(),
+            "order_id": order_id,
+            "product_id": line["product_id"],
+            "description": line["description"],
+            "quantity": line["quantity"],
+            "unit_price_cents": str(line["unit_price_cents"]),
+            "line_total_cents": str(line["line_total_cents"]),
+            "owner_id": _text(cart.get("owner_id")),
+        }
+        if "line_note" in line_extras:
+            order_line["line_note"] = _text(line.get("line_note"))
+        if "modifier_cents" in line_extras:
+            order_line["modifier_cents"] = str(line.get("modifier_cents") or 0)
         object_records.create_collection_record(
-            "order_lines",
-            {
-                "id": object_ids.new_uuid4(),
-                "order_id": order_id,
-                "product_id": line["product_id"],
-                "description": line["description"],
-                "quantity": line["quantity"],
-                "unit_price_cents": str(line["unit_price_cents"]),
-                "line_total_cents": str(line["line_total_cents"]),
-                "owner_id": _text(cart.get("owner_id")),
-            },
-            base_dir=base, actor=ACTOR)
+            "order_lines", order_line, base_dir=base, actor=ACTOR)
 
     # Stamp the cart BEFORE anything else can retry: the stamp is what
     # makes a second click a no-op rather than a second order.
@@ -448,6 +761,27 @@ def POST(request):
     stamp.update({field: value for field, value in notes.items() if value})
     object_records.update_collection_record(
         "carts", cart["id"], stamp, base_dir=base, actor=ACTOR)
+
+    # The window's own count, incremented once the order exists. Read,
+    # add one, write -- with no lock, because there is none to take here,
+    # and this is the exact point at which two shoppers racing for the
+    # last place both win: each read 3 of 4 and each writes 4, or worse,
+    # each writes 5. That is the documented, accepted race (see the module
+    # docstring), and the write is deliberately NOT clamped to capacity:
+    # clamping would make an oversell invisible, and the whole reason this
+    # number is stored on the row is so a shop can SEE that it happened
+    # and ring somebody. Wrapped, because a slot that cannot be counted
+    # must never cost a shopper the order they have already placed.
+    if slot is not None:
+        try:
+            current = object_records.get_collection_record(
+                "pickup_slots", slot["id"], base_dir=base)
+            object_records.update_collection_record(
+                "pickup_slots", slot["id"],
+                {"orders_taken": str(_int(current.get("orders_taken"), 0) + 1)},
+                base_dir=base, actor=ACTOR)
+        except Exception:
+            pass
 
     # From here on the sale is already made. Everything below is wrapped so
     # that an invoicing problem costs the shopper a pay link, not the order
@@ -505,14 +839,25 @@ def POST(request):
             base_dir=base, actor=ACTOR, preserve_read_only=True)
 
         for line in summary["lines"]:
+            # The invoice line's unit price is the EFFECTIVE one -- the
+            # catalogue price plus the line's modifier -- so the invoice
+            # stays an ordinary quantity x price document that adds up
+            # when anybody, or invoice_totals, multiplies it out. Carrying
+            # the delta as a separate column here instead would mean the
+            # one restatement this file already documents (invoice_totals
+            # recomputing a line) would quietly drop it, and the customer
+            # would be billed less than the shop is about to make. The
+            # NOTE is not on the invoice at all: it is an instruction to
+            # the kitchen, not a term of the sale.
+            modifier = int(line.get("modifier_cents") or 0)
             object_records.create_collection_record(
                 "invoice_lines",
                 {
                     "id": object_ids.new_uuid4(),
                     "invoice_id": invoice_id,
-                    "description": line["description"],
+                    "description": _invoice_description(line),
                     "quantity": line["quantity"],
-                    "unit_price_cents": str(line["unit_price_cents"]),
+                    "unit_price_cents": str(line["unit_price_cents"] + modifier),
                     "line_total_cents": str(line["line_total_cents"]),
                     "owner_id": _text(cart.get("owner_id")),
                 },
@@ -566,6 +911,16 @@ def POST(request):
               "status_of_order": "draft",
               "note": "order raised; stock moves and the order confirms when "
                       "payment arrives"}
+    if pickup["method"]:
+        # Only on an order that actually chose a method. A shipping
+        # checkout's response is exactly the dict it was before pickup
+        # existed -- no empty "fulfillment_method": "shipping" key, no
+        # blank promised_at -- because a caller that has never sent these
+        # arguments must not have to learn them.
+        result["fulfillment_method"] = pickup["method"]
+        if slot is not None:
+            result["pickup_slot_id"] = slot["id"]
+            result["promised_at"] = _text(slot.get("starts_at"))
     if tracks:
         # The customer's own door, alongside the pay link and for the same
         # reason: this shop sells to guests, so the response and the
