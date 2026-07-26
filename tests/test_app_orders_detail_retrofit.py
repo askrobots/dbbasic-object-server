@@ -35,6 +35,8 @@ def test_manifest_drops_bespoke_order_view_page_and_seeds_the_detail_view():
     # tests/test_app_orders_package.py.
     assert {obj["id"] for obj in package["objects"]} == {
         "system_order_totals",
+        # 0.4.0: the pick queue as a number, for the attention band.
+        "system_order_attention",
     }
     assert {entry["collection"] for entry in package["seed"]} == {
         "orders", "order_lines", "views", "site_routes",

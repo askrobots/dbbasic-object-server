@@ -1,8 +1,8 @@
 {
   "id": "app-timers",
   "name": "Timers",
-  "version": "0.3.0",
-  "description": "Time logs against tasks: server-enforced start/stop (62 \u2014 Timer) over an is_running/duration_seconds pair, at most one running timer per owner. No page object \u2014 generated UIs (Scroll) manage time logs from the schema; start/stop/running are server routes (objects/site/timer_actions.py), not a generator page.",
+  "version": "0.4.0",
+  "description": "Time logs against tasks: server-enforced start/stop (62 — Timer) over an is_running/duration_seconds pair, at most one running timer per owner. No page object — generated UIs (Scroll) manage time logs from the schema; start/stop/running are server routes (objects/site/timer_actions.py), not a generator page. Ships an attention provider for the `submitted` gate: approval is by design somebody other than the person who logged the hours, which makes it the kind of queue that can only be cleared by a person who has no reason to know it exists. The count carries hours in its detail, because nine entries and sixty-two hours are different amounts of afternoon.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
@@ -17,6 +17,10 @@
     {
       "id": "hook_time_logs",
       "path": "objects/hook/time_logs.py"
+    },
+    {
+      "id": "system_time_attention",
+      "path": "objects/system/time_attention.py"
     }
   ],
   "schemas": [
@@ -49,5 +53,15 @@
     }
   ],
   "migrations": [],
-  "nav_optional": true
+  "nav_optional": true,
+  "attention": [
+    {
+      "id": "time_to_approve",
+      "object_id": "system_time_attention",
+      "label": "Time to approve",
+      "path": "/time-logs?status=submitted",
+      "group": "Money",
+      "severity": "normal"
+    }
+  ]
 }

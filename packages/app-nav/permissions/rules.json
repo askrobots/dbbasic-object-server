@@ -27,6 +27,27 @@
       "actions": ["update"],
       "collection": "nav_entries",
       "reason": "an operator flips operator_hidden to take a door off this deployment's menu without editing anybody's package"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["read"],
+      "collection": "attention_sources",
+      "reason": "a signed-in user may read what each app says needs a human; the counts themselves are the interesting part and live next door"
+    },
+    {
+      "effect": "allow",
+      "principal": "role:manager",
+      "actions": ["update"],
+      "collection": "attention_sources",
+      "reason": "an operator flips operator_muted to silence a queue this deployment does not work, without editing anybody's package"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["read"],
+      "collection": "attention_counts",
+      "reason": "the rollup a signed-in user's home page is folded from; the daemon writes it and no human needs to"
     }
   ]
 }

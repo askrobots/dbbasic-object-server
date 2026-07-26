@@ -124,8 +124,16 @@ _JS = r"""
       if (!groups.length) return;                // empty registry: keep the fallback
       appsHtml = groups.map((g) =>
         '<div class="head">' + esc(g.group) + "</div>" +
+        // The count rides along on the entry when a package's attention
+        // provider says that door has a queue. Rendered as text rather
+        // than a styled pill deliberately: the switcher is drawn by this
+        // script and styled by /style, and a class this stylesheet does
+        // not know about would ship as an invisible promise. A zero never
+        // arrives -- action_nav_entries drops empty queues -- so there is
+        // no "0" case to suppress here.
         (g.entries || []).map((e) =>
-          '<a href="' + esc(e.path) + '">' + esc(e.label) + "</a>").join("")
+          '<a href="' + esc(e.path) + '">' + esc(e.label) +
+          (e.count ? " · " + esc(e.count) : "") + "</a>").join("")
       ).join("");
       renderApps();
     } catch (e) { /* registry unreachable -- the fallback list is already drawn */ }

@@ -1,8 +1,8 @@
 {
   "id": "app-theme",
   "name": "Theme",
-  "version": "0.13.0",
-  "description": "The design system as one themeable stylesheet object at /style. Pages link to it; a theme is a set of token values, so switching or installing a theme reskins the whole instance live. Ships the base (warm-dark), paper (light), and terminal themes. The Apps switcher also lists any pinned view record when app-views is installed.",
+  "version": "0.14.0",
+  "description": "The design system as one themeable stylesheet object at /style. Pages link to it; a theme is a set of token values, so switching or installing a theme reskins the whole instance live. Ships the base (warm-dark), paper (light), and terminal themes. The Apps switcher also lists any pinned view record when app-views is installed. The switcher now also shows a door's attention count when one is waiting (Invoices · 5), because the cheapest place to answer \"does anything need me?\" is a list people already open; action_nav_entries drops empty queues before they reach the script, so there is no zero to suppress and no second surface to maintain.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },

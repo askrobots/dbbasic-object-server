@@ -230,6 +230,10 @@ def test_repository_system_dashboard_package_installs_and_executes(tmp_path):
     assert package["objects"] == [
         {"id": "system_dashboard", "path": "objects/system/dashboard.py"},
         {"id": "system_scheduler", "path": "objects/system/scheduler.py"},
+        # 0.8.0: failed scheduled runs, the one `urgent` attention
+        # provider on this server.
+        {"id": "system_scheduler_attention",
+         "path": "objects/system/scheduler_attention.py"},
     ]
     assert plan["safe_to_install"] is True
     assert plan["objects"][0]["action"] == "create"

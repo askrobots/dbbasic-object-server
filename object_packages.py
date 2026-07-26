@@ -78,6 +78,32 @@ _NAV_PACKAGE_FIELDS = ("label", "path", "blurb", "group", "surface", "order")
 # somebody else's deliberate decision is not an install's to revert).
 _NAV_OPERATOR_FIELDS = ("operator_hidden",)
 
+# A package's `attention` entries become rows in the `attention_sources`
+# collection, which is where the daemon's rollup pass reads its list of
+# providers from and how a surface learns that a queue exists at all.
+# Third use of the pattern that fixed cron (`schedules`) and navigation
+# (`nav`), and for the same reason: this server is built out of gates and
+# derived states, every one of which produces a queue of things a machine
+# deliberately refused to decide -- scans `extracted`, time `submitted`,
+# invoices overdue, bank lines unmatched. It has been computing those
+# queues all along and throwing them away at the end of each pass;
+# `system_scan_processor` literally returns a field named
+# `needing_a_human` and nothing reads it. Only the package that owns a
+# domain can honestly say what "needs a human" means in it, so the
+# declaration ships with the app.
+ATTENTION_COLLECTION = "attention_sources"
+_ATTENTION_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_ATTENTION_SEVERITIES = ("normal", "warning", "urgent")
+_ATTENTION_DEFAULT_GROUP = "Apps"
+_ATTENTION_DEFAULT_SEVERITY = "normal"
+# What the package OWNS: reinstalling restates every one of these.
+_ATTENTION_PACKAGE_FIELDS = ("object_id", "label", "path", "nav_id", "group", "severity")
+# What the OPERATOR owns. A deployment that does not care about a queue
+# silences it here rather than by editing somebody else's manifest, and an
+# install never writes this column -- same posture as nav's
+# `operator_hidden` and a paused schedule (doctrine #8).
+_ATTENTION_OPERATOR_FIELDS = ("operator_muted",)
+
 
 class InvalidPackageIdError(ValueError):
     """Raised when a package id is not safe for routes or storage."""
@@ -177,7 +203,7 @@ def dry_run_package(
     existing_tasks = _load_scheduler_tasks(base)
     installable_object_ids = {entry["id"] for entry in package["objects"]}
     roots_for_lookup = list(object_roots) if object_roots is not None else get_object_roots()
-    for entry in package["schedules"]:
+    for entry in package["schedules"] + package["attention"]:
         if entry["object_id"] in installable_object_ids:
             continue
         if resolve_object_id(entry["object_id"], roots_for_lookup) is not None:
@@ -201,6 +227,21 @@ def dry_run_package(
         _nav_change(entry, existing=registered_nav, package_id=package_id, warnings=warnings)
         for entry in package["nav"]
     ]
+    # Attention sources compare the same way nav entries do, and against
+    # the same missing-collection posture: app-nav absent reads as
+    # "nothing declared yet" rather than an error, because a package must
+    # not fail to install because the home screen is not installed.
+    registered_attention = _load_attention_sources(base, roots=object_roots) or {}
+    attention = [
+        _attention_change(
+            entry,
+            existing=registered_attention,
+            package_id=package_id,
+            installable_object_ids=installable_object_ids,
+            warnings=warnings,
+        )
+        for entry in package["attention"]
+    ]
 
     return {
         "package": _package_summary(package),
@@ -214,6 +255,7 @@ def dry_run_package(
         "migrations": migrations,
         "schedules": schedules,
         "nav": nav,
+        "attention": attention,
         "warnings": warnings,
     }
 
@@ -530,6 +572,14 @@ def install_package(
         package["nav"], plan["nav"], package_id=package_id, base_dir=base, roots=roots
     )
 
+    # Attention sources land last of all, for the same reason schedules
+    # do: a counter that names an object is only honest once that object
+    # is on disk, and the row is what the daemon will start executing.
+    installed_attention = _apply_attention(
+        package["attention"], plan["attention"], package_id=package_id,
+        base_dir=base, roots=roots
+    )
+
     object_package_baselines.record_baseline(
         package_id,
         version=package["version"],
@@ -552,6 +602,7 @@ def install_package(
         "migrations": plan["migrations"],
         "schedules": installed_schedules,
         "nav": installed_nav,
+        "attention": installed_attention,
         "reconciles": reconciles,
         "warnings": [],
     }
@@ -691,6 +742,7 @@ def _normalize_manifest(package_id: str, payload: Any) -> dict[str, Any]:
         "connectors": _normalize_connectors(payload.get("connectors", []), package_id=package_id),
         "schedules": _normalize_schedules(payload.get("schedules", []), package_id=package_id),
         "nav": _normalize_nav(payload.get("nav", []), package_id=package_id),
+        "attention": _normalize_attention(payload.get("attention", []), package_id=package_id),
         # The documented opt-out for a package that ships a site_* object
         # which is not a door: a JS widget (site_thread), a fragment
         # (site_materialize_run_button), or a per-record document reached
@@ -717,6 +769,7 @@ def _package_summary(package: Mapping[str, Any]) -> dict[str, Any]:
         "connector_count": len(package.get("connectors", [])),
         "schedule_count": len(package.get("schedules", [])),
         "nav_count": len(package.get("nav", [])),
+        "attention_count": len(package.get("attention", [])),
     }
 
 
@@ -1304,6 +1357,244 @@ def _apply_nav(
 
         applied.append({**plan, "status": status,
                         "destination": f"collections/{NAV_COLLECTION}/{entry['id']}"})
+    return applied
+
+
+def _normalize_attention(payload: Any, *, package_id: str) -> list[dict[str, Any]]:
+    """An `attention` entry declares one queue of things that need a human:
+    `{id, object_id, label, path, nav_id?, group?, severity?}`.
+
+    Every gate and derived state on this server ends in a pile somebody
+    has to look at -- receipts waiting to be confirmed into expenses, time
+    entries waiting for an approver, invoices past their due date, bank
+    lines nothing matched. The system computes those piles constantly and
+    then discards them: `system_scan_processor` returns a field called
+    `needing_a_human` that no surface has ever read. What was missing was
+    not the arithmetic, it was a place to declare that the arithmetic
+    MEANS something -- and the only honest place for that definition is
+    the package that owns the domain, because nobody else knows that
+    `extracted` is a waiting room and `confirmed` is not.
+
+    `object_id` names the provider, an object exposing `COUNT(request) ->
+    {"count": int, "detail"?: str}`. `path` is validated for shape only,
+    exactly as `nav` paths are: whether anything answers it is a routing
+    question this module deliberately does not pretend to answer.
+    `nav_id` is the door this count decorates, so the app list can read
+    "Invoices - 5 overdue" without a second surface to maintain; it is
+    optional because a queue can belong to a package that ships no page
+    at all (app-intake is one).
+    """
+    entries = _list_field(payload, package_id=package_id, section="attention")
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in entries:
+        mapping = _entry_mapping(entry, package_id=package_id, section="attention")
+        attention_id = _required_text(mapping, "id", package_id=package_id)
+        if not _ATTENTION_ID_RE.fullmatch(attention_id):
+            raise InvalidPackageManifestError(
+                f"Invalid package attention id: {attention_id}")
+        if attention_id in seen:
+            raise InvalidPackageManifestError(
+                f"Duplicate package attention id: {attention_id}")
+        seen.add(attention_id)
+
+        object_id = _required_text(mapping, "object_id", package_id=package_id)
+        if not validate_object_id(object_id):
+            raise InvalidPackageManifestError(
+                f"Invalid package attention object_id: {object_id}")
+
+        label = _required_text(mapping, "label", package_id=package_id)
+        path = _required_text(mapping, "path", package_id=package_id)
+        if not path.startswith("/"):
+            raise InvalidPackageManifestError(
+                f"Package attention path must start with '/': {attention_id}"
+            )
+        if any(character.isspace() for character in path):
+            # A count nobody can click is a number on a poster. A path
+            # with a space or a newline in it is both a link that never
+            # resolves and a TSV cell that can break the row it lives in.
+            raise InvalidPackageManifestError(
+                f"Package attention path may not contain whitespace: {attention_id}"
+            )
+
+        nav_id = _optional_text(mapping.get("nav_id")) or ""
+        if nav_id and not _NAV_ID_RE.fullmatch(nav_id):
+            raise InvalidPackageManifestError(
+                f"Invalid package attention nav_id: {attention_id}")
+
+        severity = (_optional_text(mapping.get("severity"))
+                    or _ATTENTION_DEFAULT_SEVERITY).lower()
+        if severity not in _ATTENTION_SEVERITIES:
+            raise InvalidPackageManifestError(
+                f"Package attention severity must be normal|warning|urgent: {attention_id}"
+            )
+
+        normalized.append({
+            "id": attention_id,
+            "object_id": object_id,
+            "label": label,
+            "path": path,
+            "nav_id": nav_id,
+            "group": _optional_text(mapping.get("group")) or _ATTENTION_DEFAULT_GROUP,
+            "severity": severity,
+        })
+    return normalized
+
+
+def _load_attention_sources(
+    base_dir: Path,
+    *,
+    roots: Iterable[Path] | None = None,
+) -> dict[str, dict[str, str]] | None:
+    """Every attention source currently registered, keyed by record id.
+
+    ``None`` means the `attention_sources` collection is not installed at
+    all (app-nav absent). Same posture as `_load_nav_entries`: a package
+    must never fail to install because the home screen is missing, any
+    more than an app should fail because nobody has looked at it yet.
+    """
+    try:
+        rows = object_records.read_collection_records(
+            ATTENTION_COLLECTION, base_dir=base_dir, roots=roots)
+    except (object_collections.CollectionNotFoundError,
+            object_collections.InvalidCollectionNameError):
+        return None
+    except (OSError, ValueError):
+        # A hand-edited row must not make a package uninstallable, the
+        # same posture _load_nav_entries takes.
+        return {}
+    return {str(row.get("id") or ""): dict(row) for row in rows if row.get("id")}
+
+
+def _attention_change(
+    entry: Mapping[str, Any],
+    *,
+    existing: Mapping[str, Mapping[str, str]],
+    package_id: str,
+    installable_object_ids: set[str],
+    warnings: list[str],
+) -> dict[str, Any]:
+    live = existing.get(entry["id"])
+    if live is None:
+        action = "create"
+    elif all(str(live.get(field) or "") == str(entry[field])
+             for field in _ATTENTION_PACKAGE_FIELDS):
+        # Every package-owned field is compared, nav_id and severity
+        # included, so a plan that says "unchanged" is one where nothing
+        # at all is about to be written.
+        action = "unchanged"
+    else:
+        action = "update"
+
+    if entry["object_id"] not in installable_object_ids:
+        # A counter aimed at an object that will not exist reads as zero
+        # forever, and a queue that reads zero forever is indistinguishable
+        # from a queue that is empty. That silent failure is the entire
+        # reason this section exists, so it blocks the install.
+        warnings.append(
+            f"Attention source {entry['id']} targets an object this install "
+            f"will not provide: {entry['object_id']}"
+        )
+
+    # Two packages writing one attention_sources row is two definitions of
+    # what needs a human, where whichever installed last silently wins.
+    # Unlike nav there is no path-collision rule: two queues legitimately
+    # point at one list (an orders page can be both "to pick" and "to
+    # invoice"), and blocking that would be a false blocker.
+    owner = str((live or {}).get("package") or "")
+    if owner and owner != package_id:
+        warnings.append(
+            f"Attention source {entry['id']} is already registered by another "
+            f"package: {owner}"
+        )
+
+    return {
+        "id": entry["id"],
+        "object_id": entry["object_id"],
+        "label": entry["label"],
+        "path": entry["path"],
+        "nav_id": entry["nav_id"],
+        "group": entry["group"],
+        "severity": entry["severity"],
+        "exists": live is not None,
+        "action": action,
+    }
+
+
+def _apply_attention(
+    attention: Iterable[Mapping[str, Any]],
+    planned: Iterable[Mapping[str, Any]],
+    *,
+    package_id: str,
+    base_dir: Path,
+    roots: Iterable[Path] | None = None,
+) -> list[dict[str, Any]]:
+    """Register the package's queues in the `attention_sources` collection.
+
+    Two things are deliberately preserved across an install:
+
+    **The operator's `operator_muted`** -- the one column an install never
+    writes on an existing row. The package declares what a queue MEANS;
+    the operator decides whether this deployment wants to be told about
+    it, and an upgrade that silently un-mutes a counter somebody turned
+    off is the same class of incident as one that restarts a paused
+    nightly pass.
+
+    **Somebody else's row** -- sources this package did not register are
+    not touched and not deleted. Removing an `attention` entry from a
+    manifest leaves the row alone, matching the rest of install:
+    deregistering never destroys. (The rollup pass is what stops feeding
+    a stale row, because it only executes providers it can still resolve.)
+
+    A missing `attention_sources` collection is reported and skipped
+    rather than raised. The home screen is not a dependency of being
+    installable.
+    """
+    entries = list(attention)
+    plans = list(planned)
+    if not entries:
+        return []
+
+    existing = _load_attention_sources(base_dir, roots=roots)
+    if existing is None:
+        return [
+            {**plan, "status": "skipped",
+             "reason": f"{ATTENTION_COLLECTION} collection is not installed"}
+            for plan in plans
+        ]
+
+    applied = []
+    for entry, plan in zip(entries, plans, strict=True):
+        live = existing.get(entry["id"])
+        row = {
+            "package": package_id,
+            "object_id": entry["object_id"],
+            "label": entry["label"],
+            "path": entry["path"],
+            "nav_id": entry["nav_id"],
+            "group": entry["group"],
+            "severity": entry["severity"],
+        }
+        if live is None:
+            object_records.create_collection_record(
+                ATTENTION_COLLECTION,
+                {"id": entry["id"], "operator_muted": "false", **row},
+                base_dir=base_dir, roots=roots, actor=f"package:{package_id}",
+            )
+            status = "written"
+        elif all(str(live.get(field) or "") == row[field] for field in row):
+            status = "unchanged"
+        else:
+            # `row` carries no operator_muted key at all, so the update
+            # cannot reach that column even by accident.
+            object_records.update_collection_record(
+                ATTENTION_COLLECTION, entry["id"], row,
+                base_dir=base_dir, roots=roots, actor=f"package:{package_id}",
+            )
+            status = "updated"
+
+        applied.append({**plan, "status": status,
+                        "destination": f"collections/{ATTENTION_COLLECTION}/{entry['id']}"})
     return applied
 
 

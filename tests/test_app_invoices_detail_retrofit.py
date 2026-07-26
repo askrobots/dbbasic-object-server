@@ -43,6 +43,10 @@ def test_manifest_drops_bespoke_invoice_view_page_and_seeds_the_detail_view():
         # 0.8.0 time and materials: approved hours become one invoice, the
         # last mile of the consulting billing mode.
         "action_generate_tm_invoice",
+        # 0.9.0: invoices past their due date, counted for the home
+        # page's attention band -- a queue the calendar creates with
+        # no write happening, so nothing else announces it.
+        "system_invoice_attention",
     }
     assert {entry["collection"] for entry in package["seed"]} == {
         "invoices", "invoice_lines", "views", "site_routes",

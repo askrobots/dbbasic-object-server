@@ -1,12 +1,15 @@
 {
   "id": "app-receiving",
   "name": "Receiving",
-  "version": "0.1.0",
-  "description": "A purchase order says what was ORDERED from a supplier; a receipt says what turned up on the dock -- and the difference between them is the whole reason this package exists. Every small system collapses the two into one 'received' tick on the PO, and then discovers, three weeks later when the supplier's invoice arrives, that it has no way to say 'you billed us for ten, eight came, two of those were crushed and went back on your van'. A receipt is the counterpart of a shipment with the direction reversed, and it carries the same doctrine: the quantities on receipt_lines are the FACTS, the purchase order's status is a read of them (partial when some of what was ordered has arrived, received when all of it has), derived by system_receipt_posting and never hand-typed. The discrepancy is a first-class shape rather than a note somebody meant to write: expected, received and rejected are three separate columns, because a short delivery and a rejection are opposite arguments -- one is goods that were never sent and must never be invoiced, the other is goods we hold and want credit for -- and one column for both is exactly how a supplier gets paid for what they never delivered. The gate that makes the fold trustworthy is one hook: cumulative received quantity per order line may never exceed what was ordered, refused with all three numbers so the receiver knows which delivery is the wrong one. Goods land on the shelf when the receipt is signed for: one `purchase` stock move per line for what was RECEIVED (rejected quantities compose nothing, because they never entered stock), idempotent by a per-line provenance marker so a replayed event never shelves the same carton twice. Each move carries unit_cost_cents stamped from the PO line's agreed price -- the cost on the way IN that FIFO and weighted-average valuation both need and that cannot be reconstructed once the supplier's price list moves on (see tests/test_cogs_on_sale.py for the COGS gap this feeds). The one site object is a READ, not a table: a printable check-in sheet for the person at the roller door, because the dock is where the paperwork actually happens and a clipboard beats a phone in a cold warehouse. What is deliberately NOT here, named so it reads as a decision rather than an omission: three-way matching against supplier invoices (that is app-invoices' purchase side meeting this one, and it needs a purchase-invoice noun first), landed costs and freight apportionment, serial and lot tracking, put-away routing to specific bins (nothing in this repo yet records which product lives in which bin), and returns to supplier -- a rejection is recorded here as the fact it is, and the credit note that follows is its own slice.",
+  "version": "0.2.0",
+  "description": "A purchase order says what was ORDERED from a supplier; a receipt says what turned up on the dock -- and the difference between them is the whole reason this package exists. Every small system collapses the two into one 'received' tick on the PO, and then discovers, three weeks later when the supplier's invoice arrives, that it has no way to say 'you billed us for ten, eight came, two of those were crushed and went back on your van'. A receipt is the counterpart of a shipment with the direction reversed, and it carries the same doctrine: the quantities on receipt_lines are the FACTS, the purchase order's status is a read of them (partial when some of what was ordered has arrived, received when all of it has), derived by system_receipt_posting and never hand-typed. The discrepancy is a first-class shape rather than a note somebody meant to write: expected, received and rejected are three separate columns, because a short delivery and a rejection are opposite arguments -- one is goods that were never sent and must never be invoiced, the other is goods we hold and want credit for -- and one column for both is exactly how a supplier gets paid for what they never delivered. The gate that makes the fold trustworthy is one hook: cumulative received quantity per order line may never exceed what was ordered, refused with all three numbers so the receiver knows which delivery is the wrong one. Goods land on the shelf when the receipt is signed for: one `purchase` stock move per line for what was RECEIVED (rejected quantities compose nothing, because they never entered stock), idempotent by a per-line provenance marker so a replayed event never shelves the same carton twice. Each move carries unit_cost_cents stamped from the PO line's agreed price -- the cost on the way IN that FIFO and weighted-average valuation both need and that cannot be reconstructed once the supplier's price list moves on (see tests/test_cogs_on_sale.py for the COGS gap this feeds). The one site object is a READ, not a table: a printable check-in sheet for the person at the roller door, because the dock is where the paperwork actually happens and a clipboard beats a phone in a cold warehouse. What is deliberately NOT here, named so it reads as a decision rather than an omission: three-way matching against supplier invoices (that is app-invoices' purchase side meeting this one, and it needs a purchase-invoice noun first), landed costs and freight apportionment, serial and lot tracking, put-away routing to specific bins (nothing in this repo yet records which product lives in which bin), and returns to supplier -- a rejection is recorded here as the fact it is, and the credit note that follows is its own slice. Ships an attention provider for purchase orders left at `partial`: a supplier sent some of it, system_receipt_posting derived that fact by counting, and then no screen ever mentioned it again. The detail names the outstanding quantity, because three POs short by one unit and three short by two hundred are the same row count and different phone calls.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
-  "dependencies": ["app-orders", "app-catalog"],
+  "dependencies": [
+    "app-orders",
+    "app-catalog"
+  ],
   "objects": [
     {
       "id": "hook_receipt_lines",
@@ -23,6 +26,10 @@
     {
       "id": "site_receiving_sheet",
       "path": "objects/site/receiving_sheet.py"
+    },
+    {
+      "id": "system_receiving_attention",
+      "path": "objects/system/receiving_attention.py"
     }
   ],
   "schemas": [
@@ -55,5 +62,15 @@
     }
   ],
   "migrations": [],
-  "nav_optional": true
+  "nav_optional": true,
+  "attention": [
+    {
+      "id": "pos_short_received",
+      "object_id": "system_receiving_attention",
+      "label": "Short-received POs",
+      "path": "/orders",
+      "group": "Warehouse",
+      "severity": "normal"
+    }
+  ]
 }

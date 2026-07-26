@@ -1,8 +1,8 @@
 {
   "id": "app-nav",
   "name": "Navigation",
-  "version": "0.1.0",
-  "description": "The nav registry: one collection every navigation surface folds over, instead of three hand-maintained lists that disagreed. Before this package there were exactly that -- a 25-entry JS array in site_nav's app switcher, a 21-entry Python tuple in site_home's tile grid, and a collection-to-URL map for search hits -- each edited by whoever remembered, and between them naming none of the eight newest apps (shop, intake, billing, timers, banking, shipping, receiving, payments). Worse, site_home existed in NO package at all: it lived only on the running droplet, so a rebuilt box came back with no front door and said nothing about it, the same failure the `schedules` manifest section was built to end for cron. A package now declares its doors in its manifest and install writes them into nav_entries; the switcher and the home page both read them back through action_nav_entries, which owns the one visibility rule (public to anyone, member to a signed-in user, operator to an admin role -- the same admin test system_scheduler makes). The package owns label/path/blurb/group/surface/order and restates them on every install; the operator owns operator_hidden, which an install never writes. That split is the whole design: the package says what an app IS, the operator says what they want to SEE, and an upgrade that silently un-hides a page somebody deliberately removed is the same class of incident as one that restarts a paused nightly pass. This is a MENU and not a gate -- permissions decide who may open a page, and leaving a door off the menu hides nothing that was not already protected.",
+  "version": "0.2.0",
+  "description": "The nav registry: one collection every navigation surface folds over, instead of three hand-maintained lists that disagreed. Before this package there were exactly that -- a 25-entry JS array in site_nav's app switcher, a 21-entry Python tuple in site_home's tile grid, and a collection-to-URL map for search hits -- each edited by whoever remembered, and between them naming none of the eight newest apps (shop, intake, billing, timers, banking, shipping, receiving, payments). Worse, site_home existed in NO package at all: it lived only on the running droplet, so a rebuilt box came back with no front door and said nothing about it, the same failure the `schedules` manifest section was built to end for cron. A package now declares its doors in its manifest and install writes them into nav_entries; the switcher and the home page both read them back through action_nav_entries, which owns the one visibility rule (public to anyone, member to a signed-in user, operator to an admin role -- the same admin test system_scheduler makes). The package owns label/path/blurb/group/surface/order and restates them on every install; the operator owns operator_hidden, which an install never writes. That split is the whole design: the package says what an app IS, the operator says what they want to SEE, and an upgrade that silently un-hides a page somebody deliberately removed is the same class of incident as one that restarts a paused nightly pass. This is a MENU and not a gate -- permissions decide who may open a page, and leaving a door off the menu hides nothing that was not already protected. It now also owns the ATTENTION layer, which is the same pattern applied a third time to a different question. A menu answers 'where can I go'; the only question a home screen is actually asked is 'does anything need me?', and this server is unusually well placed to answer it because it is built out of gates and derived states -- every one of which produces a queue of things a machine deliberately refused to decide, computes it constantly, and throws it away (system_scan_processor returns a field named `needing_a_human` that nothing has ever read). So a package declares its queues in its manifest `attention` block, install writes them to attention_sources, object_daemon.process_attention executes each provider's COUNT method on an interval and writes attention_counts, and the surfaces read that one small table. A rollup and not a live fold, deliberately: this box once swapped at 675MB because something folded a big collection on a timer, and a home page that folds a dozen collections per render is that mistake with a nicer name. Zeros are stored and never shown -- a board that says '0 pending' every day trains people to stop reading it, and a page that is EMPTY when nothing needs them gets read every time.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
@@ -21,6 +21,14 @@
     {
       "collection": "nav_entries",
       "path": "schemas/nav_entries.json"
+    },
+    {
+      "collection": "attention_sources",
+      "path": "schemas/attention_sources.json"
+    },
+    {
+      "collection": "attention_counts",
+      "path": "schemas/attention_counts.json"
     }
   ],
   "permissions": [
@@ -32,6 +40,14 @@
     {
       "collection": "nav_entries",
       "path": "seed/nav_entries.tsv"
+    },
+    {
+      "collection": "attention_sources",
+      "path": "seed/attention_sources.tsv"
+    },
+    {
+      "collection": "attention_counts",
+      "path": "seed/attention_counts.tsv"
     }
   ],
   "migrations": [],

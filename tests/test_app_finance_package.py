@@ -76,6 +76,9 @@ def test_get_package_normalizes_app_finance_manifest():
         "site_statements",
         # 0.9.0: expenses -- the approval gate and the journal it composes.
         "hook_expenses", "system_expense_books",
+        # 0.10.0: what "needs a human" means here -- expenses at
+        # `submitted`, counted for the home page's attention band.
+        "system_expense_attention",
     }
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
     # + a site_routes seed for /finance/setup-accounts and /journals/{id},

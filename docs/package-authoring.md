@@ -135,6 +135,10 @@ Installs are deliberately conservative:
 - `nav` entries become rows in the `nav_entries` collection, which every
   navigation surface folds over. **If your app serves a page, declare its
   door here.** See the section below.
+- `attention` entries become rows in the `attention_sources` collection,
+  which the daemon's rollup pass reads its list of providers from.
+  **If your app has a queue that waits on a person, declare it here.**
+  See the section below.
 - The HTTP install route creates a restore point first and appends changelog
   rows under `data/package_changes/{package_id}/changes.jsonl`.
 
@@ -242,6 +246,154 @@ declare:
 
 which makes "this app has no front page" a reviewable claim in the
 manifest rather than an omission nobody notices.
+
+## Attention (`attention`)
+
+A menu answers "where can I go". The only question a home screen is
+actually asked is **does anything need me?**, and this server is unusually
+well placed to answer it, because it is built almost entirely out of gates
+and derived states. Every one of them produces a queue of things a machine
+deliberately refused to decide: scans sitting at `extracted` waiting to be
+confirmed into expenses, time entries `submitted` waiting for an approver
+who is by design not the person who logged them, invoices past their due
+date, bank lines nothing matched, POs a supplier shorted, orders committed
+and not yet in a box, returns that arrived and were never judged.
+
+The system already computes all of it, on a schedule, and throws it away
+at the end of each pass. `system_scan_processor` has been returning a
+field literally named `needing_a_human` since the day it was written and
+no surface has ever read it. The arithmetic was never missing; a place to
+declare that the arithmetic *means* something was — and that declaration
+can only honestly live in the package that owns the domain, because
+nobody else knows that `extracted` is a waiting room and `confirmed` is
+not.
+
+So it is declared, third use of the pattern that already fixed cron
+(`schedules`) and navigation (`nav`):
+
+```json
+"attention": [
+  {"id": "scans_to_confirm", "object_id": "system_scan_attention",
+   "label": "Receipts to confirm", "path": "/scans?status=extracted",
+   "nav_id": "scans", "group": "Money", "severity": "normal"}
+]
+```
+
+- `id` becomes the `attention_sources` record id, so `[a-z][a-z0-9_]*`,
+  and it must be unique across every installed package.
+- `object_id` names the provider (below). Required, and checked: a
+  counter aimed at an object neither this package nor the server provides
+  **blocks the install**, exactly as a schedule does. A counter pointing
+  at nothing reads zero forever, and a queue that reads zero forever is
+  indistinguishable from a queue that is empty — the silent failure this
+  whole section exists to end.
+- `label` is what a person calls the queue, in their words: "Receipts to
+  confirm", not "scans.status=extracted".
+- `path` is where the count clicks through to. Required, starts with `/`,
+  no whitespace. **A number that cannot be acted on in one click does not
+  belong on a home page.** Whether anything actually serves the path is
+  not checked, for the same reason `nav` does not check it.
+- `nav_id` is optional: the `nav_entries` row this count decorates, so the
+  app list itself reads "Invoices — 5 overdue" with no second surface to
+  maintain. Omit it when the package ships no door at all (app-intake).
+- `group` is free text, default `Apps`, and uses the same house groups as
+  `nav`.
+- `severity` is `normal` | `warning` | `urgent`, default `normal`, and is
+  the first sort key on the home band. `normal` is work waiting;
+  `warning` is work that is already late (an overdue invoice); `urgent`
+  is something broken (a scheduler pass that failed). Three steps,
+  because a scale with more is a scale nobody calibrates.
+
+### The COUNT contract
+
+A provider is an ordinary object exposing:
+
+```python
+def COUNT(request):
+    return {"count": 3, "detail": "1 over a week old"}
+```
+
+`COUNT` and not `GET` or `POST`, deliberately: a distinct verb means the
+same object stays free to answer a human on the other methods without
+either use accidentally serving the other. `count` must be a real
+non-negative integer — the rollup refuses to coerce a string or a float,
+because every coercion here is a way for a broken provider to look like
+an empty queue. `detail` is optional and is the sentence a bare number
+cannot say ("62 hours awaiting approval", "18 units still owed").
+
+A provider reads its own collections and **degrades to `{"count": 0}`
+when they are absent** — a deployment that never installed your app
+should not produce an error every five minutes. A provider that genuinely
+fails should raise; see below for what happens then.
+
+### Counts are a rollup, not a live fold
+
+`object_daemon.process_attention` executes every declared provider on an
+interval (`DBBASIC_ATTENTION_INTERVAL_SECONDS`, default 300) and writes
+the answers to the `attention_counts` collection. The home page and the
+app list read that one small table.
+
+This is not an optimisation, it is a rule. Folding a dozen collections on
+every home render is how a home page becomes the slowest page, and worse:
+this box went to 675MB resident and started swapping because something
+folded a big collection on a timer. A home screen that folds a dozen
+collections per render is that same mistake with a nicer name, and it
+makes the front page's cost grow with the number of installed packages —
+the one place cost must not grow. Staleness is bounded by the interval
+and **stated on the page** ("as of 6 minutes ago") rather than pretended
+away.
+
+Two consequences worth knowing when you write a provider:
+
+- **A broken provider must look broken, never look calm.** One that
+  raises, or answers with a non-integer count, has its `error` written
+  and its *previous* count kept, with `computed_at` left where it was.
+  Zeroing it would report an empty queue when what happened is that
+  nobody looked.
+- **Do not do expensive work per row.** The pass runs every five minutes
+  on the same box that serves requests. A full scan of your own
+  collections is the intended cost; calling out to a network is not.
+
+### Zeros disappear
+
+A count of zero is stored (the absence of a row means the provider has
+never run, which is a different fact) and **rendered nowhere**. When
+every queue is empty the home page's "Needs you" band is absent entirely
+— not "0 pending", not an empty panel with a heading: gone.
+
+This is the rule that separates an inbox from a dashboard. A board that
+says "0 pending approvals" every day trains people to stop reading it,
+and once they have stopped they do not start again on the day it says
+three. A page that is EMPTY when nothing needs them, and short when
+something does, gets read every time. "Nothing needs you" is a complete
+and welcome answer, and blank space gives it better than any sentence
+would.
+
+### Idempotency and the operator
+
+The same three properties `nav` has:
+
+- **The operator's `operator_muted` survives.** A deployment that does
+  not work a queue mutes it (a `role:manager` update on
+  `attention_sources`) instead of editing somebody else's manifest, and
+  an install never writes that column. A muted source is not executed at
+  all and its stored count is removed, so it costs nothing and shows
+  nothing.
+- **Unchanged means unwritten.** Every package-owned field —
+  `object_id`, `label`, `path`, `nav_id`, `group`, `severity` — is
+  compared before anything is written.
+- **Removing an entry does not delete the row.** Deregistering never
+  destroys.
+
+A **collision with another package** on an `id` blocks the install: two
+packages writing one row is two definitions of what needs a human, and
+whichever installed last would silently win. Unlike `nav` there is no
+path-collision rule — two queues legitimately point at one list, and
+blocking that would be a false blocker.
+
+If the `attention_sources` collection does not exist (app-nav is not
+installed) the entries are reported as `skipped` with a reason and the
+install proceeds, exactly as `nav` entries are.
 
 ## Authoring Workflow
 

@@ -1,0 +1,98 @@
+{
+  "name": "attention_counts",
+  "title": "Attention counts",
+  "version": 1,
+  "description": "The answers, as of a moment ago. One row per attention_sources declaration, written by object_daemon.process_attention -- never folded live at render time. That is the whole reason this collection exists rather than a helper the home page calls: this box once went to 675MB resident and started swapping because something folded a big collection on a timer, and a home page that folds a dozen collections on every render is that same mistake with a nicer name. A rollup makes the page's cost one small read no matter how many packages are installed, and bounds the staleness at the pass interval (default five minutes) instead of pretending it away. Two rules make the numbers honest. A provider that raises, or answers with something that is not an integer, writes `error` and KEEPS its previous count -- a broken provider must look broken, never look calm, and zeroing it would report an empty queue when what happened is that nobody looked. And zero is stored but never shown: an empty queue is not news, and a board that says '0 pending' every day trains people to stop reading it.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "source_id",
+      "type": "text",
+      "label": "Source",
+      "help": "The attention_sources row this count answers. Always equal to `id` -- carried as its own column so a row read on its own says what it is about."
+    },
+    {
+      "name": "label",
+      "type": "text",
+      "label": "Label",
+      "validation": {"max_length": 60},
+      "help": "Copied from the source at rollup time so a surface renders from one read. A stale label on a fresh count is a smaller problem than a second collection join on the front page."
+    },
+    {
+      "name": "path",
+      "type": "text",
+      "label": "Path",
+      "validation": {"max_length": 200},
+      "help": "Where this count clicks through to, copied from the source."
+    },
+    {
+      "name": "nav_id",
+      "type": "text",
+      "label": "Nav entry",
+      "validation": {"max_length": 64},
+      "help": "The nav_entries row this count decorates, copied from the source."
+    },
+    {
+      "name": "group",
+      "type": "text",
+      "label": "Group",
+      "default": "Apps"
+    },
+    {
+      "name": "severity",
+      "type": "enum",
+      "label": "Severity",
+      "default": "normal",
+      "enum": ["normal", "warning", "urgent"],
+      "help": "Copied from the source. First sort key on the home band; count breaks the tie."
+    },
+    {
+      "name": "count",
+      "type": "integer",
+      "label": "Count",
+      "default": "0",
+      "help": "How many things are waiting. Zero rows are written and kept -- the absence of a row means nobody has ever run the provider, which is a different fact from 'the queue is empty' -- but no surface renders them."
+    },
+    {
+      "name": "detail",
+      "type": "text",
+      "label": "Detail",
+      "validation": {"max_length": 200},
+      "help": "The provider's own second sentence: '3 over a week old', '12 units across 4 orders'. This is where a queue says the thing a bare number cannot, and it is optional because most queues have nothing extra to say."
+    },
+    {
+      "name": "computed_at",
+      "type": "datetime",
+      "label": "Computed",
+      "help": "When the pass last ran this provider. The page states the age rather than implying the number is live."
+    },
+    {
+      "name": "error",
+      "type": "text",
+      "label": "Error",
+      "validation": {"max_length": 400},
+      "help": "Why the last run of this provider did not produce a number. Set alongside the PREVIOUS count, never instead of it: a provider that fails silently and reads zero is a queue that looks handled, which is the single worst thing this collection could do."
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    }
+  ],
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["label", "count", "detail", "severity", "group", "computed_at", "error"],
+    "filter_fields": ["group", "severity"]
+  },
+  "search": {
+    "fields": ["label", "detail"]
+  }
+}

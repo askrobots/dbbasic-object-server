@@ -174,5 +174,6 @@ def test_dry_run_change_details_compacts_plan():
         "migrations": {"apply": 2},
         "schedules": {},
         "nav": {},
+        "attention": {},
         "warnings": ["review first"],
     }

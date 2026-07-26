@@ -1,0 +1,92 @@
+{
+  "name": "attention_sources",
+  "title": "Attention sources",
+  "version": 1,
+  "description": "What each installed app says 'needs a human' means in its own domain. This server is built almost entirely out of gates and derived states, and every one of them ends in a pile of things a machine deliberately refused to decide: scans sitting at `extracted` waiting to be confirmed into expenses, time entries `submitted` waiting for an approver who is not the person who logged them, invoices past their due date, bank lines nothing matched. It has been computing those piles all along and throwing them away at the end of each pass -- system_scan_processor returns a field literally named `needing_a_human` and no surface has ever read it. The arithmetic was never the missing part; a place to declare that the arithmetic MEANS something was, and that declaration can only honestly live in the package that owns the domain, because nobody else knows that `extracted` is a waiting room and `confirmed` is not. So a package declares its queues in its manifest and install writes them here, exactly as it declares its schedules and its doors. The daemon executes each row's object with method COUNT on a schedule and writes the answers to attention_counts; the home page and the app list read that small table. The package owns object_id/label/path/nav_id/group/severity and restates them on every install; the operator owns operator_muted, which an install never writes.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "package",
+      "type": "text",
+      "label": "Package",
+      "help": "Which package declared this queue. Provenance, stamped by install: it is how a second package claiming the same id is caught, and how you find the manifest to edit when a label is wrong."
+    },
+    {
+      "name": "object_id",
+      "type": "text",
+      "required": true,
+      "label": "Provider",
+      "validation": {"min_length": 1, "max_length": 128},
+      "help": "The object the rollup pass executes with method COUNT, expecting {count, detail?}. A distinct verb rather than GET or POST so the same object can also answer a human -- a provider is allowed to be a page too."
+    },
+    {
+      "name": "label",
+      "type": "text",
+      "required": true,
+      "label": "Label",
+      "validation": {"min_length": 1, "max_length": 60},
+      "help": "What the queue is called on the home page, in the words of the person who has to work it: 'Receipts to confirm', not 'scans.status=extracted'."
+    },
+    {
+      "name": "path",
+      "type": "text",
+      "required": true,
+      "label": "Path",
+      "validation": {"min_length": 1, "max_length": 200},
+      "help": "Where the count clicks through to. A number that cannot be acted on in one click does not belong on a home page. Whether anything answers this URL is a routing question this collection deliberately does not restate."
+    },
+    {
+      "name": "nav_id",
+      "type": "text",
+      "label": "Nav entry",
+      "validation": {"max_length": 64},
+      "help": "The nav_entries row this count decorates, so the app list itself can read 'Invoices - 5 overdue' with no second surface to maintain. Optional: a queue can belong to a package that ships no page at all (app-intake is one)."
+    },
+    {
+      "name": "group",
+      "type": "text",
+      "label": "Group",
+      "default": "Apps",
+      "help": "Free text heading, the same vocabulary nav_entries uses: Work, Publishing, Money, Commerce, Warehouse, System."
+    },
+    {
+      "name": "severity",
+      "type": "enum",
+      "label": "Severity",
+      "default": "normal",
+      "enum": ["normal", "warning", "urgent"],
+      "help": "How loudly a non-zero count is presented, and the first sort key on the home band. `normal` is work waiting; `warning` is work that is now late (an overdue invoice); `urgent` is something broken (a scheduler pass that failed). Deliberately three, because a scale with more steps is a scale nobody calibrates."
+    },
+    {
+      "name": "operator_muted",
+      "type": "boolean",
+      "label": "Muted by operator",
+      "default": "false",
+      "help": "The operator's word, and install NEVER overwrites it. Set it when this deployment does not work a queue somebody else's package cares about -- a shop with no warehouse does not want a picking count -- and a reinstall restates every other column but leaves this one exactly as you left it. Same posture as a paused schedule and a hidden nav entry."
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["object_id", "label", "path", "nav_id", "group", "severity", "operator_muted"]}
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["label", "object_id", "path", "group", "severity", "operator_muted", "package"],
+    "filter_fields": ["group", "severity"]
+  },
+  "search": {
+    "fields": ["label", "path", "object_id"]
+  }
+}

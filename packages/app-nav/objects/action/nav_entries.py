@@ -1,6 +1,6 @@
 """action_nav_entries -- the doors this caller may be shown, grouped.
 
-POST/GET {} -> {ok, groups: [{group, entries: [...]}], count}
+POST/GET {} -> {ok, groups: [{group, entries: [...]}], attention: [...], count}
 
 Every navigation surface on this server is meant to be a FOLD over one
 registry rather than a list somebody maintains: the app switcher in
@@ -27,6 +27,19 @@ restates the first without ever touching the second.
 This is a MENU, not a gate. Permissions decide who may actually open a
 page; leaving a door off the menu hides nothing that was not already
 protected, and putting one on it grants nothing.
+
+It also carries the ATTENTION counts, because they are the cheapest half
+of a home screen and belong on a list people already look at: an entry
+whose queue is non-empty comes back with `count`, `detail` and
+`severity`, so the app list reads "Invoices - 5 overdue" with no second
+surface to maintain. The numbers are read from `attention_counts`, the
+small table the daemon's rollup writes; nothing here folds a business
+collection, which is the rule that keeps this object's cost flat as
+packages are installed.
+
+**Zero contributes nothing.** A row whose count is zero is dropped
+entirely rather than returned as a zero, because an empty queue is not
+news, and a surface that is handed zeros will eventually render them.
 """
 
 import os
@@ -38,6 +51,11 @@ ACTOR = "action_nav_entries"
 _DEFAULT_GROUP = "Apps"
 _DEFAULT_ORDER = 100
 _TRUE = ("true", "1", "yes", "on")
+
+# Loudest first on every surface that sorts by it. Three steps, because a
+# scale with more is a scale nobody calibrates.
+_SEVERITY_RANK = {"urgent": 0, "warning": 1, "normal": 2}
+_DEFAULT_SEVERITY = "normal"
 
 
 def _base_dir():
@@ -73,6 +91,85 @@ def _visible_surfaces(identity):
     if "admin" in (identity.get("roles") or []):
         surfaces.add("operator")
     return surfaces
+
+
+def _count(row):
+    try:
+        return int(_text(row.get("count")) or 0)
+    except (TypeError, ValueError):
+        # A hand-edited count that will not parse is not a queue of
+        # unknown size, it is a broken cell: it contributes nothing rather
+        # than taking the whole menu down with it.
+        return 0
+
+
+def _attention_rows(identity):
+    """Every non-zero attention count this caller is entitled to see.
+
+    Sorted loudest first: severity, then size, then label. That order is
+    decided here rather than in each renderer for the same reason the
+    visibility tiers are -- a rule copied into two surfaces is a rule that
+    will be enforced two different ways within a year.
+
+    Anonymous visitors get nothing at all. These are internal work
+    queues, and how many receipts are unconfirmed is a fact about how a
+    business is running, not part of the public web. Rows that name a
+    nav entry are additionally held to that entry's own tier, so an
+    operator-only door does not leak a count to a member.
+    """
+    if not _text((identity or {}).get("user_id")):
+        return []
+    try:
+        rows = object_records.read_collection_records(
+            "attention_counts", base_dir=_base_dir())
+    except Exception:
+        # The rollup is not installed, or has never run. No counts is a
+        # real answer and exactly what "nothing needs you" looks like.
+        return []
+
+    attention = []
+    for row in rows:
+        count = _count(row)
+        if count <= 0:
+            continue          # an empty queue is not news
+        severity = _text(row.get("severity")).lower() or _DEFAULT_SEVERITY
+        attention.append({
+            "id": _text(row.get("id")),
+            "label": _text(row.get("label")),
+            "path": _text(row.get("path")),
+            "nav_id": _text(row.get("nav_id")),
+            "group": _text(row.get("group")) or _DEFAULT_GROUP,
+            "severity": severity,
+            "count": count,
+            "detail": _text(row.get("detail")),
+            "computed_at": _text(row.get("computed_at")),
+            "error": _text(row.get("error")),
+        })
+    attention.sort(key=lambda row: (_SEVERITY_RANK.get(row["severity"], 9),
+                                    -row["count"], row["label"]))
+    return attention
+
+
+def _decorate(entries, attention):
+    """Hang each entry's loudest count on it, in place.
+
+    One count per door, deliberately. A menu line can carry one number,
+    and the full list -- including the queues whose package ships no door
+    at all -- is what the home band is for. When two sources name the
+    same entry the louder one wins, which is already the order
+    `attention` arrives in.
+    """
+    by_nav = {}
+    for row in attention:
+        if row["nav_id"] and row["nav_id"] not in by_nav:
+            by_nav[row["nav_id"]] = row
+    for entry in entries:
+        row = by_nav.get(entry["id"])
+        if row is None:
+            continue
+        entry["count"] = row["count"]
+        entry["detail"] = row["detail"]
+        entry["severity"] = row["severity"]
 
 
 def _entries(request):
@@ -138,8 +235,16 @@ def _grouped(entries):
 
 def POST(request):
     entries = _entries(request)
+    attention = _attention_rows(request.get("_identity") or {})
+    # A count attached to a door nobody may see would leak the door. The
+    # visible set is already decided above, so the filter is a membership
+    # test rather than a second copy of the tier rule.
+    visible_ids = {entry["id"] for entry in entries}
+    attention = [row for row in attention
+                 if not row["nav_id"] or row["nav_id"] in visible_ids]
+    _decorate(entries, attention)
     return {"ok": True, "groups": _grouped(entries), "entries": entries,
-            "count": len(entries)}
+            "attention": attention, "count": len(entries)}
 
 
 def GET(request):

@@ -48,6 +48,9 @@ def test_get_package_normalizes_app_orders_manifest():
     # `list` block.
     assert {obj["id"] for obj in package["objects"]} == {
         "system_order_totals",
+        # 0.4.0: committed orders with goods still owed -- the pick
+        # queue, counted for the home page's attention band.
+        "system_order_attention",
     }
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
     assert {entry["collection"] for entry in package["seed"]} == {

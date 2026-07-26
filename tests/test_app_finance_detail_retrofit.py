@@ -40,6 +40,8 @@ def test_manifest_drops_bespoke_journal_page_and_seeds_the_detail_view():
         "action_reverse_journal", "system_fin_recurring_runner",  # books spine
         # 0.9.0: expenses -- the approval gate and the journal it composes.
         "hook_expenses", "system_expense_books",
+        # 0.10.0: the attention provider for expenses waiting on an approver.
+        "system_expense_attention",
     }
     assert {entry["collection"] for entry in package["seed"]} == {
         "denominations",  # 0.4.0: seeded units of value (USD/JPY/BTC/ETH/XAU/...)

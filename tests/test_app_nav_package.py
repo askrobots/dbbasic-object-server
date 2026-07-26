@@ -83,7 +83,9 @@ def test_get_package_normalizes_the_app_nav_manifest():
     assert [entry["id"] for entry in package["objects"]] == [
         "action_nav_entries", "site_home"]
     assert package["schemas"] == [
-        {"collection": "nav_entries", "path": "schemas/nav_entries.json"}]
+        {"collection": "nav_entries", "path": "schemas/nav_entries.json"},
+        {"collection": "attention_sources", "path": "schemas/attention_sources.json"},
+        {"collection": "attention_counts", "path": "schemas/attention_counts.json"}]
     assert package["nav"][0]["path"] == "/"
 
 
@@ -224,7 +226,8 @@ def test_an_empty_registry_is_an_empty_menu_not_an_error(tmp_path, monkeypatch):
     result = run({"data": data_dir, "objects": object_root},
                  "action_nav_entries", {"user_id": "alice"})
     assert result.ok is True
-    assert result.result == {"ok": True, "groups": [], "entries": [], "count": 0}
+    assert result.result == {"ok": True, "groups": [], "entries": [],
+                             "attention": [], "count": 0}
 
 
 # --- site_home: the fold ------------------------------------------------------
@@ -267,6 +270,134 @@ def test_the_home_page_falls_back_rather_than_showing_a_blank_front_door(install
 
 def test_the_home_page_escapes_what_the_registry_hands_it(installed):
     add_entry(installed, "xss", label='<script>alert(1)</script>', blurb='" onmouseover=x')
+
+    body = page(installed, {"user_id": "alice"})
+    assert "<script>alert(1)</script>" not in body
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in body
+
+
+# --- attention: the counts on the doors, and the band above them ----------------
+
+def add_count(installed, count_id, **fields):
+    row = {"id": count_id, "source_id": count_id, "label": count_id.title(),
+           "path": f"/{count_id}", "nav_id": "", "group": "Work",
+           "severity": "normal", "count": "1", "detail": "", "computed_at": "",
+           "error": ""}
+    row.update(fields)
+    object_records.create_collection_record(
+        "attention_counts", row, base_dir=installed["data"], actor="test")
+
+
+def test_a_door_with_a_queue_comes_back_carrying_its_number(installed):
+    """Half the value of a dashboard for none of the cost: the app list
+    people already open says how much is waiting behind each door."""
+    add_entry(installed, "invoices", group="Money", order="300")
+    add_count(installed, "invoices_overdue", label="Invoices past due",
+              nav_id="invoices", count="5", detail="oldest 45 days late",
+              severity="warning")
+
+    entries = {entry["id"]: entry for entry in
+               run(installed, "action_nav_entries", {"user_id": "alice"}).result["entries"]}
+    assert entries["invoices"]["count"] == 5
+    assert entries["invoices"]["detail"] == "oldest 45 days late"
+    assert entries["invoices"]["severity"] == "warning"
+    assert "count" not in entries["home"]      # a quiet door carries nothing
+
+
+def test_an_empty_queue_contributes_nothing_at_all(installed):
+    """Not a zero on the entry, not a row in the band: absent. A surface
+    handed zeros will eventually render them."""
+    add_entry(installed, "invoices", group="Money", order="300")
+    add_count(installed, "invoices_overdue", nav_id="invoices", count="0")
+
+    result = run(installed, "action_nav_entries", {"user_id": "alice"})
+    assert result.result["attention"] == []
+    assert all("count" not in entry for entry in result.result["entries"])
+
+
+def test_the_band_is_sorted_loudest_first(installed):
+    add_count(installed, "scheduler_failures", count="1", severity="urgent")
+    add_count(installed, "invoices_overdue", count="2", severity="warning")
+    add_count(installed, "scans_to_confirm", count="9", severity="normal")
+    add_count(installed, "time_to_approve", count="30", severity="normal")
+
+    result = run(installed, "action_nav_entries", {"user_id": "alice"})
+    assert [row["id"] for row in result.result["attention"]] == [
+        "scheduler_failures", "invoices_overdue", "time_to_approve",
+        "scans_to_confirm"]
+
+
+def test_a_visitor_is_never_told_what_needs_a_human(installed):
+    """These are internal work queues. How many receipts are unconfirmed
+    is a fact about how a business is running, not part of the public
+    web."""
+    add_count(installed, "scans_to_confirm", count="4")
+    assert run(installed, "action_nav_entries", {}).result["attention"] == []
+
+
+def test_a_count_on_an_operator_door_does_not_leak_to_a_member(installed):
+    add_entry(installed, "scheduler", surface="operator")
+    add_count(installed, "scheduler_failures", nav_id="scheduler", count="3",
+              severity="urgent")
+
+    member = run(installed, "action_nav_entries", {"user_id": "alice", "roles": ["user"]})
+    admin = run(installed, "action_nav_entries", {"user_id": "root", "roles": ["admin"]})
+    assert member.result["attention"] == []
+    assert [row["id"] for row in admin.result["attention"]] == ["scheduler_failures"]
+
+
+def test_a_queue_whose_package_ships_no_door_still_reaches_the_band(installed):
+    """app-intake is the real case: no page of its own, and the most
+    valuable queue on the box."""
+    add_count(installed, "scans_to_confirm", label="Receipts to confirm",
+              path="/scans?status=extracted", count="3", group="Money")
+
+    result = run(installed, "action_nav_entries", {"user_id": "alice"})
+    assert [row["label"] for row in result.result["attention"]] == [
+        "Receipts to confirm"]
+
+
+def test_a_hand_edited_count_that_will_not_parse_does_not_break_the_menu(installed):
+    records = installed["data"] / "collections" / "attention_counts" / "records.tsv"
+    records.write_text(
+        records.read_text()
+        + "typo\ttypo\tTypo\t/typo\t\tWork\tnormal\tloads\t\t\t\t\t\n")
+
+    result = run(installed, "action_nav_entries", {"user_id": "alice"})
+    assert result.ok is True
+    assert result.result["attention"] == []
+
+
+def test_the_home_page_shows_the_band_above_the_grid(installed):
+    add_entry(installed, "invoices", group="Money", order="300")
+    add_count(installed, "invoices_overdue", label="Invoices past due",
+              path="/invoices", nav_id="invoices", count="5",
+              detail="oldest 45 days late", severity="warning")
+
+    body = page(installed, {"user_id": "alice"})
+    assert "<h2>Needs you" in body
+    assert body.index("Needs you") < body.index("<h2>Money</h2>")
+    assert "Invoices past due" in body
+    assert "oldest 45 days late" in body
+    assert '<a class="tile" href="/invoices">' in body
+    assert 'class="badge warning">5<' in body      # and again on the tile
+
+
+def test_the_home_page_has_no_band_at_all_when_nothing_needs_you(installed):
+    """Not '0 pending', not an empty panel with a heading: absent. A board
+    that says zero every day trains people to stop reading it."""
+    add_entry(installed, "invoices", group="Money", order="300")
+    add_count(installed, "invoices_overdue", nav_id="invoices", count="0")
+
+    body = page(installed, {"user_id": "alice"})
+    assert "Needs you" not in body
+    assert "<h2>Money</h2>" in body                # the rest of the page is fine
+    assert "badge" not in body
+
+
+def test_the_home_page_escapes_what_the_rollup_hands_it(installed):
+    add_count(installed, "xss", label='<script>alert(1)</script>',
+              detail='" onmouseover=x', count="1")
 
     body = page(installed, {"user_id": "alice"})
     assert "<script>alert(1)</script>" not in body

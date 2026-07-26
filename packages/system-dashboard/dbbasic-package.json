@@ -1,8 +1,8 @@
 {
   "id": "system-dashboard",
   "name": "System Dashboard",
-  "version": "0.7.0",
-  "description": "Identity-aware staging dashboard with live admin metrics, served by a DBBASIC object. 0.6.0 adds the scheduler board (/scheduler): a Flower-style admin page over the daemon's scheduled tasks -- task table with Run now / Pause controls (mutates the scheduler trigger's state, which the daemon reads) joined with scheduler_runs, the append-only per-execution history (result JSON, error + type, duration) that object_daemon.process_scheduler records best-effort.",
+  "version": "0.8.0",
+  "description": "Identity-aware staging dashboard with live admin metrics, served by a DBBASIC object. 0.6.0 adds the scheduler board (/scheduler): a Flower-style admin page over the daemon's scheduled tasks -- task table with Run now / Pause controls (mutates the scheduler trigger's state, which the daemon reads) joined with scheduler_runs, the append-only per-execution history (result JSON, error + type, duration) that object_daemon.process_scheduler records best-effort. Ships the one `urgent` attention provider on this server: scheduler runs that failed in the last 24 hours. Every other queue is work waiting for a person; this one is the machine reporting that it stopped doing its own, and a failed nightly pass is invisible by construction -- an aging run that did not happen looks exactly like a night with no overdue invoices.",
   "compatibility": {
     "object_server": ">=0.0.1"
   },
@@ -15,6 +15,10 @@
     {
       "id": "system_scheduler",
       "path": "objects/system/scheduler.py"
+    },
+    {
+      "id": "system_scheduler_attention",
+      "path": "objects/system/scheduler_attention.py"
     }
   ],
   "schemas": [
@@ -44,6 +48,17 @@
       "surface": "operator",
       "group": "System",
       "order": 620
+    }
+  ],
+  "attention": [
+    {
+      "id": "scheduler_failures",
+      "object_id": "system_scheduler_attention",
+      "label": "Scheduler failures",
+      "path": "/scheduler",
+      "nav_id": "scheduler",
+      "group": "System",
+      "severity": "urgent"
     }
   ]
 }
