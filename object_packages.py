@@ -57,6 +57,27 @@ _SCHEDULE_METHODS = ("POST", "GET", "PUT", "DELETE")
 # evidence is never edited).
 _SCHEDULE_RUNTIME_FIELDS = ("next_run", "last_run", "run_count")
 
+# A package's `nav` entries become rows in the `nav_entries` collection,
+# which is where every navigation surface reads its doors from.
+# Before this existed there were THREE hand-maintained lists of the same
+# apps -- a JS array in site_nav, a Python tuple in site_home, and a
+# collection->URL map for search hits -- and they had already drifted:
+# 25 entries, 21 entries, and no mention at all of shop, intake, billing,
+# timers, banking, shipping, receiving or payments. A door is part of what
+# an app IS, so it ships with the app, exactly like its schedule.
+NAV_COLLECTION = "nav_entries"
+_NAV_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_NAV_SURFACES = ("public", "member", "operator", "hidden")
+_NAV_DEFAULT_GROUP = "Apps"
+_NAV_DEFAULT_ORDER = 100
+# What the package OWNS: reinstalling restates every one of these.
+_NAV_PACKAGE_FIELDS = ("label", "path", "blurb", "group", "surface", "order")
+# What the OPERATOR owns. The package says what an app is; the operator
+# says what they want to see. An install never touches this column, for
+# the same reason it never restarts a paused schedule (doctrine #8 --
+# somebody else's deliberate decision is not an install's to revert).
+_NAV_OPERATOR_FIELDS = ("operator_hidden",)
+
 
 class InvalidPackageIdError(ValueError):
     """Raised when a package id is not safe for routes or storage."""
@@ -170,6 +191,16 @@ def dry_run_package(
         )
         for entry in package["schedules"]
     ]
+    # Nav entries are compared against what is already registered, which
+    # is how "two packages claim one door" becomes visible before either
+    # of them lands. A missing nav_entries collection reads as "nothing
+    # registered yet", so the plan is create-everything rather than an
+    # error -- app-nav is not a dependency of being installable.
+    registered_nav = _load_nav_entries(base, roots=object_roots) or {}
+    nav = [
+        _nav_change(entry, existing=registered_nav, package_id=package_id, warnings=warnings)
+        for entry in package["nav"]
+    ]
 
     return {
         "package": _package_summary(package),
@@ -182,6 +213,7 @@ def dry_run_package(
         "seed": seed,
         "migrations": migrations,
         "schedules": schedules,
+        "nav": nav,
         "warnings": warnings,
     }
 
@@ -491,6 +523,13 @@ def install_package(
         package["schedules"], plan["schedules"], base_dir=base
     )
 
+    # Nav lands after the seeds, because a package that ships the
+    # nav_entries schema itself (app-nav) has to have written it before
+    # its own doors can be registered.
+    installed_nav = _apply_nav(
+        package["nav"], plan["nav"], package_id=package_id, base_dir=base, roots=roots
+    )
+
     object_package_baselines.record_baseline(
         package_id,
         version=package["version"],
@@ -512,6 +551,7 @@ def install_package(
         "seed": installed_seed,
         "migrations": plan["migrations"],
         "schedules": installed_schedules,
+        "nav": installed_nav,
         "reconciles": reconciles,
         "warnings": [],
     }
@@ -650,6 +690,14 @@ def _normalize_manifest(package_id: str, payload: Any) -> dict[str, Any]:
         "migrations": _normalize_migrations(payload.get("migrations", []), package_id=package_id),
         "connectors": _normalize_connectors(payload.get("connectors", []), package_id=package_id),
         "schedules": _normalize_schedules(payload.get("schedules", []), package_id=package_id),
+        "nav": _normalize_nav(payload.get("nav", []), package_id=package_id),
+        # The documented opt-out for a package that ships a site_* object
+        # which is not a door: a JS widget (site_thread), a fragment
+        # (site_materialize_run_button), or a per-record document reached
+        # from the record itself (site_packing_slip). Saying so in the
+        # manifest is the point -- "this app has no front page" becomes a
+        # reviewable claim rather than an omission nobody notices.
+        "nav_optional": bool(payload.get("nav_optional", False)),
     }
 
 
@@ -668,6 +716,7 @@ def _package_summary(package: Mapping[str, Any]) -> dict[str, Any]:
         "dependency_count": len(package["dependencies"]),
         "connector_count": len(package.get("connectors", [])),
         "schedule_count": len(package.get("schedules", [])),
+        "nav_count": len(package.get("nav", [])),
     }
 
 
@@ -1035,6 +1084,226 @@ def _apply_schedules(
 
         applied.append({**plan, "status": status, "task_status": task["status"],
                         "destination": f"state/{SCHEDULER_OBJECT_ID}/{key}"})
+    return applied
+
+
+def _normalize_nav(payload: Any, *, package_id: str) -> list[dict[str, Any]]:
+    """A `nav` entry declares a door the app puts on the site:
+    `{id, label, path, blurb?, surface?, group?, order?}`.
+
+    Navigation used to be a hand-maintained list, and there were three of
+    them -- the app switcher's JS array, the home page's tile list, and
+    the search result URL map -- each edited by whoever remembered. They
+    disagreed by four entries and between them knew about none of the
+    eight newest apps, so the front door of the server advertised a
+    server that no longer existed. A menu built by hand rots the moment
+    somebody ships without editing it; a menu FOLDED over what every
+    installed package declares cannot.
+
+    The id becomes the `nav_entries` record id, so it is restricted to
+    the characters a record id can safely hold. `path` is validated for
+    shape only -- whether anything answers it is a routing question this
+    module deliberately does not pretend to answer (see `_nav_change`).
+    """
+    entries = _list_field(payload, package_id=package_id, section="nav")
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in entries:
+        mapping = _entry_mapping(entry, package_id=package_id, section="nav")
+        nav_id = _required_text(mapping, "id", package_id=package_id)
+        if not _NAV_ID_RE.fullmatch(nav_id):
+            raise InvalidPackageManifestError(f"Invalid package nav id: {nav_id}")
+        if nav_id in seen:
+            raise InvalidPackageManifestError(f"Duplicate package nav id: {nav_id}")
+        seen.add(nav_id)
+
+        label = _required_text(mapping, "label", package_id=package_id)
+        path = _required_text(mapping, "path", package_id=package_id)
+        if not path.startswith("/"):
+            raise InvalidPackageManifestError(
+                f"Package nav path must start with '/': {nav_id}"
+            )
+        if any(character.isspace() for character in path):
+            # A path with a space or a newline in it is a link that never
+            # resolves and a TSV cell that can break the row it lives in.
+            raise InvalidPackageManifestError(
+                f"Package nav path may not contain whitespace: {nav_id}"
+            )
+
+        surface = (_optional_text(mapping.get("surface")) or "member").lower()
+        if surface not in _NAV_SURFACES:
+            raise InvalidPackageManifestError(
+                f"Package nav surface must be public|member|operator|hidden: {nav_id}"
+            )
+
+        order = mapping.get("order", _NAV_DEFAULT_ORDER)
+        if order in (None, ""):
+            order = _NAV_DEFAULT_ORDER
+        if isinstance(order, bool) or not isinstance(order, int):
+            raise InvalidPackageManifestError(
+                f"Package nav order must be an integer: {nav_id}"
+            )
+
+        normalized.append({
+            "id": nav_id,
+            "label": label,
+            "path": path,
+            "blurb": _optional_text(mapping.get("blurb")) or "",
+            "group": _optional_text(mapping.get("group")) or _NAV_DEFAULT_GROUP,
+            "surface": surface,
+            "order": order,
+        })
+    return normalized
+
+
+def _load_nav_entries(
+    base_dir: Path,
+    *,
+    roots: Iterable[Path] | None = None,
+) -> dict[str, dict[str, str]] | None:
+    """Every nav entry currently registered, keyed by record id.
+
+    ``None`` means the `nav_entries` collection is not installed at all
+    (app-nav absent). That is not an error: a package must never fail to
+    install because the navigation app is missing, any more than an app
+    should fail because nobody has opened the menu yet.
+    """
+    try:
+        rows = object_records.read_collection_records(
+            NAV_COLLECTION, base_dir=base_dir, roots=roots)
+    except (object_collections.CollectionNotFoundError,
+            object_collections.InvalidCollectionNameError):
+        return None
+    except (OSError, ValueError):
+        # A hand-edited row must not make a package uninstallable, the
+        # same posture _load_scheduler_tasks takes.
+        return {}
+    return {str(row.get("id") or ""): dict(row) for row in rows if row.get("id")}
+
+
+def _nav_change(
+    entry: Mapping[str, Any],
+    *,
+    existing: Mapping[str, Mapping[str, str]],
+    package_id: str,
+    warnings: list[str],
+) -> dict[str, Any]:
+    live = existing.get(entry["id"])
+    if live is None:
+        action = "create"
+    elif all(str(live.get(field) or "") == str(entry[field]) for field in _NAV_PACKAGE_FIELDS):
+        # Every package-owned field is compared, blurb and order
+        # included, so a plan that says "unchanged" is one where nothing
+        # at all is about to be written -- a dry run that under-reports
+        # is worse than no dry run.
+        action = "unchanged"
+    else:
+        action = "update"
+
+    # Whether a path is actually SERVED is not knowable here: routing has
+    # three sources (convention, site_routes records, views records) and
+    # two of them are data this install may be about to seed. Guessing
+    # would produce false blockers, so the only thing refused is the one
+    # collision that is unambiguous and destructive: two packages fighting
+    # over one door, where whichever installs last silently wins.
+    owner = str((live or {}).get("package") or "")
+    if owner and owner != package_id:
+        warnings.append(
+            f"Nav entry {entry['id']} is already registered by another package: {owner}"
+        )
+    for other_id, other in existing.items():
+        if other_id == entry["id"]:
+            continue
+        other_owner = str(other.get("package") or "")
+        if other_owner and other_owner != package_id and other.get("path") == entry["path"]:
+            warnings.append(
+                f"Nav entry {entry['id']} claims a path already registered by "
+                f"{other_owner}: {entry['path']}"
+            )
+
+    return {
+        "id": entry["id"],
+        "label": entry["label"],
+        "path": entry["path"],
+        "group": entry["group"],
+        "surface": entry["surface"],
+        "exists": live is not None,
+        "action": action,
+    }
+
+
+def _apply_nav(
+    nav: Iterable[Mapping[str, Any]],
+    planned: Iterable[Mapping[str, Any]],
+    *,
+    package_id: str,
+    base_dir: Path,
+    roots: Iterable[Path] | None = None,
+) -> list[dict[str, Any]]:
+    """Register the package's doors in the `nav_entries` collection.
+
+    Two things are deliberately preserved across an install:
+
+    **The operator's `hidden`** -- `operator_hidden` is the one column an
+    install never writes on an existing row. The package declares what
+    the app IS; the operator decides what they want to SEE, and an
+    upgrade that silently un-hides a page somebody deliberately took off
+    the menu is the same class of incident as one that restarts a paused
+    nightly pass.
+
+    **Somebody else's row** -- entries this package did not register are
+    not touched and not deleted. Removing a `nav` entry from a manifest
+    leaves the row alone, matching the rest of install: deregistering
+    never destroys.
+
+    A missing `nav_entries` collection is reported and skipped rather
+    than raised. The nav app is not a dependency of being installable.
+    """
+    entries = list(nav)
+    plans = list(planned)
+    if not entries:
+        return []
+
+    existing = _load_nav_entries(base_dir, roots=roots)
+    if existing is None:
+        return [
+            {**plan, "status": "skipped",
+             "reason": f"{NAV_COLLECTION} collection is not installed"}
+            for plan in plans
+        ]
+
+    applied = []
+    for entry, plan in zip(entries, plans, strict=True):
+        live = existing.get(entry["id"])
+        row = {
+            "package": package_id,
+            "label": entry["label"],
+            "path": entry["path"],
+            "blurb": entry["blurb"],
+            "group": entry["group"],
+            "surface": entry["surface"],
+            "order": str(entry["order"]),
+        }
+        if live is None:
+            object_records.create_collection_record(
+                NAV_COLLECTION,
+                {"id": entry["id"], "operator_hidden": "false", **row},
+                base_dir=base_dir, roots=roots, actor=f"package:{package_id}",
+            )
+            status = "written"
+        elif all(str(live.get(field) or "") == row[field] for field in row):
+            status = "unchanged"
+        else:
+            # `row` carries no operator_hidden key at all, so the update
+            # cannot reach that column even by accident.
+            object_records.update_collection_record(
+                NAV_COLLECTION, entry["id"], row,
+                base_dir=base_dir, roots=roots, actor=f"package:{package_id}",
+            )
+            status = "updated"
+
+        applied.append({**plan, "status": status,
+                        "destination": f"collections/{NAV_COLLECTION}/{entry['id']}"})
     return applied
 
 

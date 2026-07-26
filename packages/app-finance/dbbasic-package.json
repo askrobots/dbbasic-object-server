@@ -137,5 +137,43 @@
       "schedule": "25 6 * * *",
       "description": "Post recurring journals that come due."
     }
+  ],
+  "nav": [
+    {
+      "id": "accounts",
+      "label": "Accounts",
+      "path": "/accounts",
+      "blurb": "The chart of accounts the books are kept in",
+      "surface": "member",
+      "group": "Money",
+      "order": 320
+    },
+    {
+      "id": "journals",
+      "label": "Journals",
+      "path": "/journals",
+      "blurb": "Double-entry journals and the lines that must balance",
+      "surface": "member",
+      "group": "Money",
+      "order": 330
+    },
+    {
+      "id": "trial_balance",
+      "label": "Trial Balance",
+      "path": "/trial-balance",
+      "blurb": "Every account's debit and credit totals, folded from posted journals",
+      "surface": "member",
+      "group": "Money",
+      "order": 340
+    },
+    {
+      "id": "statements",
+      "label": "Statements",
+      "path": "/statements",
+      "blurb": "Profit and loss and the balance sheet, over posted journals",
+      "surface": "member",
+      "group": "Money",
+      "order": 350
+    }
   ]
 }

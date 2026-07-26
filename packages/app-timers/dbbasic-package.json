@@ -48,5 +48,6 @@
       "path": "seed/rate_cards.tsv"
     }
   ],
-  "migrations": []
+  "migrations": [],
+  "nav_optional": true
 }

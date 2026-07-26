@@ -45,5 +45,25 @@
       "path": "seed/shell_commands.tsv"
     }
   ],
-  "migrations": []
+  "migrations": [],
+  "nav": [
+    {
+      "id": "shell",
+      "label": "Shell",
+      "path": "/shell",
+      "blurb": "Type a command or talk to the AI with your tools attached",
+      "surface": "member",
+      "group": "Work",
+      "order": 10
+    },
+    {
+      "id": "talk",
+      "label": "Talk",
+      "path": "/talk",
+      "blurb": "The same conversation as the shell, voice first",
+      "surface": "member",
+      "group": "Work",
+      "order": 20
+    }
+  ]
 }

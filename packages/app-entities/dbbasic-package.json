@@ -29,5 +29,16 @@
       "path": "seed/site_routes.tsv"
     }
   ],
-  "migrations": []
+  "migrations": [],
+  "nav": [
+    {
+      "id": "entities",
+      "label": "Books",
+      "path": "/entities",
+      "blurb": "The separate sets of books one login keeps",
+      "surface": "member",
+      "group": "Money",
+      "order": 370
+    }
+  ]
 }

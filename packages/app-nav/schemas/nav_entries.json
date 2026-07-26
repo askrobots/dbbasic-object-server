@@ -1,0 +1,90 @@
+{
+  "name": "nav_entries",
+  "title": "Navigation",
+  "version": 1,
+  "description": "One registry of the doors this server puts on itself. Before this collection there were THREE hand-maintained lists of the same apps and they had already drifted apart: a 25-entry JS array in site_nav's app switcher, a 21-entry Python tuple in site_home's tile grid, and a collection-to-URL map for search results -- each edited by whoever remembered, and between them naming none of the eight newest apps (shop, intake, billing, timers, banking, shipping, receiving, payments). A menu maintained by hand rots the moment somebody ships without editing it, and the rot is invisible: nothing fails, the front door simply advertises a server that no longer exists. So a package now DECLARES its doors in its manifest and install writes them here, the same way it declares its schedules. Every navigation surface becomes a fold over this one collection. The package owns label/path/blurb/group/surface/order and restates them on every install; the operator owns operator_hidden, which an install never writes -- the package says what an app IS, the operator says what they want to SEE.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "package",
+      "type": "text",
+      "label": "Package",
+      "help": "Which package registered this door. Provenance, stamped by install: it is how a second package claiming the same path is caught, and how you find the manifest to edit when a label is wrong."
+    },
+    {
+      "name": "label",
+      "type": "text",
+      "required": true,
+      "label": "Label",
+      "validation": {"min_length": 1, "max_length": 60}
+    },
+    {
+      "name": "path",
+      "type": "text",
+      "required": true,
+      "label": "Path",
+      "validation": {"min_length": 1, "max_length": 200},
+      "help": "The URL this door opens, starting with '/'. Whether anything answers it is a routing question (convention, site_routes, or a views record) that this collection deliberately does not restate."
+    },
+    {
+      "name": "blurb",
+      "type": "text",
+      "label": "Blurb",
+      "validation": {"max_length": 160},
+      "help": "One honest line about what the app does. Shown under the label on the home grid."
+    },
+    {
+      "name": "group",
+      "type": "text",
+      "label": "Group",
+      "default": "Apps",
+      "help": "Free text heading the entry sorts under: Work, Publishing, Money, Commerce, Warehouse, System. Free text rather than an enum so a new deployment can invent its own grouping without a schema migration."
+    },
+    {
+      "name": "surface",
+      "type": "enum",
+      "label": "Surface",
+      "default": "member",
+      "enum": ["public", "member", "operator", "hidden"],
+      "help": "Who this door is shown to: public (anyone, signed in or not), member (any signed-in user), operator (an admin role), hidden (registered but never rendered). This governs the MENU only -- it is not access control. Permissions decide who may actually open the page, and a surface of 'public' on a page the policy protects hides nothing that was not already protected."
+    },
+    {
+      "name": "order",
+      "type": "integer",
+      "label": "Order",
+      "default": "100",
+      "help": "Sort position within the group; ties break on label."
+    },
+    {
+      "name": "operator_hidden",
+      "type": "boolean",
+      "label": "Hidden by operator",
+      "default": "false",
+      "help": "The operator's word, and install NEVER overwrites it. Set it to hide a door on this deployment without editing anybody's package; a reinstall or an upgrade restates label, path, blurb, group, order and surface but leaves this column exactly as you left it. Same posture as a paused schedule: the package declares what should be there, you decide what is there right now."
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "label": "Created",
+      "read_only": true
+    }
+  ],
+  "forms": {
+    "default": {"fields": ["label", "path", "blurb", "group", "surface", "order", "operator_hidden"]}
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["label", "path", "group", "surface", "order", "operator_hidden", "package"],
+    "filter_fields": ["group", "surface"]
+  },
+  "search": {
+    "fields": ["label", "path", "blurb"]
+  }
+}

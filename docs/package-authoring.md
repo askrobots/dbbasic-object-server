@@ -52,6 +52,11 @@ invoices. Small enough to review, complete enough to install and use.
      "object_id": "contacts_directory",
      "schedule": "10 6 * * *",
      "description": "Flag likely duplicate contacts overnight."}
+  ],
+  "nav": [
+    {"id": "contacts", "label": "Contacts", "path": "/contacts",
+     "blurb": "People, the organizations they belong to, and interactions",
+     "surface": "member", "group": "Work", "order": 60}
   ]
 }
 ```
@@ -127,8 +132,116 @@ Installs are deliberately conservative:
   schedule aimed at an object neither this package nor the server
   provides. Removing a schedule from a manifest does **not** delete the
   task, matching the rest of install: deregistering never destroys.
+- `nav` entries become rows in the `nav_entries` collection, which every
+  navigation surface folds over. **If your app serves a page, declare its
+  door here.** See the section below.
 - The HTTP install route creates a restore point first and appends changelog
   rows under `data/package_changes/{package_id}/changes.jsonl`.
+
+## Navigation (`nav`)
+
+A menu maintained by hand rots the moment somebody ships without editing
+it, and the rot is invisible — nothing fails, the front door just
+advertises a server that no longer exists. This repository had three such
+lists of the same apps: the app switcher's JS array in `site_nav` (25
+entries), the home page's tile grid in `site_home` (21), and a
+collection-to-URL map for search hits. They disagreed with each other and
+between them named none of the eight newest apps. Worse, `site_home`
+existed in no package at all — it lived only on a running server, so a
+rebuilt box came back with no front door and said nothing about it, which
+is precisely the failure the `schedules` section was built to end for
+cron.
+
+So a door is declared by the app that owns it, and every navigation
+surface becomes a fold over one registry:
+
+```json
+"nav": [
+  {"id": "shop", "label": "Shop", "path": "/shop",
+   "blurb": "Browse what is for sale and buy it",
+   "surface": "public", "group": "Commerce", "order": 400}
+]
+```
+
+- `id` becomes the `nav_entries` record id, so `[a-z][a-z0-9_]*`. It must
+  be unique across every installed package: two packages writing one row
+  is two packages fighting over one door.
+- `label` and `path` are required. `path` starts with `/` and holds no
+  whitespace.
+- `blurb` is one honest line in the present tense saying what the app
+  does — it is rendered under the label on the home grid. No marketing.
+- `surface` is `public` | `member` | `operator` | `hidden`, default
+  `member`. This governs the MENU and is not access control: permissions
+  decide who may open a page, and leaving a door off the menu hides
+  nothing that was not already protected. `/shop` and the public
+  product/pay/portal pages are `public`; ordinary app pages are `member`;
+  `/scheduler`, `/flow`, `/urls`, `/dashboard` and other admin or debug
+  pages are `operator`.
+- `group` is free text, default `Apps`. The house groups are **Work**,
+  **Publishing**, **Money**, **Commerce**, **Warehouse** and **System**.
+- `order` is an integer, default `100`. Packages band it by group (Work
+  in the 0s, Publishing the 200s, Money the 300s, Commerce the 400s,
+  Warehouse the 500s, System the 600s) because a group sorts where its
+  earliest entry sorts — that way the reading order of the groups falls
+  out of the same number, instead of a seventh list holding it.
+
+Three properties make declaring a door safe to do repeatedly:
+
+- **The operator's `hidden` survives.** `operator_hidden` is a separate
+  boolean column and an install never writes it on an existing row. The
+  package says what the app IS; the operator says what they want to SEE.
+  An upgrade that silently put back a page somebody deliberately removed
+  would be the same class of incident as one that restarts a paused
+  nightly pass — so an operator flips `operator_hidden` (a `role:manager`
+  update on `nav_entries`) instead of editing somebody else's manifest.
+- **Unchanged means unwritten.** Every package-owned field — label, path,
+  blurb, group, surface, order — is compared before anything is written,
+  so a plan that reports `unchanged` is one where nothing at all is about
+  to happen. A dry run that under-reports is worse than no dry run.
+- **Removing an entry does not delete the row.** Same as the rest of
+  install: deregistering never destroys.
+
+Two things are refused, and one deliberately is not:
+
+- A **duplicate id inside one manifest**, and an **invalid surface, path
+  or order**, fail at parse time.
+- A **collision with another package** blocks the install: an id already
+  registered by a different package, or a path a different package
+  already claims. Whichever installed last would otherwise silently win,
+  and the loser's menu entry would point somewhere its own package never
+  chose.
+- Whether a path is actually **served** is NOT checked. Routing has three
+  sources (convention, `site_routes` records, `views` records) and two of
+  them are data the same install may be about to seed, so resolving a
+  route here would produce false blockers. The registry records the door
+  the package intends; `/urls` is where you go to see what the server
+  actually answers.
+
+If the `nav_entries` collection does not exist yet (app-nav is not
+installed), nav entries are reported as `skipped` with a reason and the
+install proceeds. A package must never fail because the navigation app is
+absent. The corollary is an ordering note for a fresh box: **install
+`app-nav` first**, or reinstall afterwards, since entries declared before
+the registry exists are skipped rather than queued.
+
+### The opt-out
+
+`tests/test_package_nav.py` asserts that every package shipping a `site_*`
+object or a `site_routes` seed declares at least one nav entry. That test
+is the thing that stops the drift coming back. Some packages legitimately
+serve a URL that is not a door — a mounted widget (`site_thread`,
+`site_share`), a fragment inside another page
+(`site_materialize_run_button`), a POST endpoint (`site_timer_actions`),
+or a per-record document reached from the record itself
+(`site_packing_slip`, `site_receiving_sheet`, `site_return_form`). Those
+declare:
+
+```json
+"nav_optional": true
+```
+
+which makes "this app has no front page" a reviewable claim in the
+manifest rather than an omission nobody notices.
 
 ## Authoring Workflow
 

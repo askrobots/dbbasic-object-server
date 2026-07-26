@@ -9,5 +9,6 @@
   "schemas": [{"collection": "record_shares", "path": "schemas/record_shares.json"}],
   "permissions": [{"path": "permissions/rules.json"}],
   "seed": [],
-  "migrations": []
+  "migrations": [],
+  "nav_optional": true
 }

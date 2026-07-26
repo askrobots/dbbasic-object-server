@@ -72,5 +72,16 @@
       "path": "seed/site_routes.tsv"
     }
   ],
-  "migrations": []
+  "migrations": [],
+  "nav": [
+    {
+      "id": "payments",
+      "label": "Payments",
+      "path": "/payments",
+      "blurb": "Money received against invoices, and refunds of it",
+      "surface": "member",
+      "group": "Money",
+      "order": 310
+    }
+  ]
 }

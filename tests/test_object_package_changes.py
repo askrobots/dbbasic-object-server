@@ -173,5 +173,6 @@ def test_dry_run_change_details_compacts_plan():
         "seed": {"merge": 1},
         "migrations": {"apply": 2},
         "schedules": {},
+        "nav": {},
         "warnings": ["review first"],
     }

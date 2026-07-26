@@ -43,5 +43,16 @@
   "migrations": [],
   "dependencies": [
     "app-views"
+  ],
+  "nav": [
+    {
+      "id": "projects",
+      "label": "Projects",
+      "path": "/projects",
+      "blurb": "The hub notes, tasks, files and invoices hang off",
+      "surface": "member",
+      "group": "Work",
+      "order": 50
+    }
   ]
 }

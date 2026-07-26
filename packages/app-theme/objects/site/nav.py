@@ -14,6 +14,13 @@ _JS = r"""
 (function () {
   if (document.getElementById("dbbasic-appbar")) return;
 
+  // Fallback only. The switcher is a fold over the nav registry
+  // (action_nav_entries -> the nav_entries collection every package
+  // writes on install); this array is what gets drawn if that call
+  // fails. It is deliberately NOT maintained -- a second maintained list
+  // is the exact drift this registry was built to end -- but a nav that
+  // vanishes on a fetch error is worse than one that is slightly stale,
+  // so a stale door beats no door.
   const APPS = [
     ["/shell", "Shell"], ["/talk", "Talk"], ["/notes", "Notes"], ["/tasks", "Tasks"], ["/templates", "Templates"],
     ["/projects", "Projects"], ["/contacts", "Contacts"], ["/articles", "Articles"],
@@ -24,6 +31,10 @@ _JS = r"""
     ["/activity", "Activity"], ["/forum", "Forum"], ["/profile/edit", "Profile"], ["/inbox", "Inbox"],
     ["/dashboard", "Dashboard"], ["/appearance", "Appearance"],
   ];
+  // The third hand-maintained list, still hand-maintained: a search hit
+  // needs a URL for a RECORD, which the nav registry does not model (it
+  // registers doors, not permalinks). Deliberately left alone rather
+  // than half-folded into something that does not fit.
   const HIT_URL = {
     notes: (id) => "/notes/" + encodeURIComponent(id),
     articles: (id) => "/articles/" + encodeURIComponent(id),
@@ -87,14 +98,38 @@ _JS = r"""
     if (!e.target.closest(".navmenu") && !e.target.closest(".appbar .navbtn")) closeAll();
   });
 
-  // App switcher
+  // App switcher. Drawn from the fallback immediately so the menu is
+  // never empty, then replaced by the registry as soon as it answers:
+  // action_nav_entries returns the doors THIS caller may see, already
+  // grouped and sorted, so the switcher restates no visibility rule of
+  // its own.
   const appsBtn = document.getElementById("nav-apps");
   const appsMenu = menu("nav-apps-menu");
-  appsMenu.innerHTML = APPS.map(([u, n]) => '<a href="' + u + '">' + esc(n) + "</a>").join("");
+  // Two async loaders write this menu, so each owns a piece and a single
+  // render joins them -- appending straight into innerHTML made whichever
+  // one answered second wipe the other.
+  let appsHtml = APPS.map(([u, n]) => '<a href="' + u + '">' + esc(n) + "</a>").join("");
+  let pinnedHtml = "";
+  const renderApps = () => { appsMenu.innerHTML = appsHtml + pinnedHtml; };
+  renderApps();
   appsBtn.addEventListener("click", () => {
     const open = appsMenu.classList.contains("open"); closeAll();
     if (!open) { place(appsMenu, appsBtn); appsMenu.classList.add("open"); }
   });
+  (async function loadApps() {
+    try {
+      const res = await api("/objects/action_nav_entries");
+      if (!res.ok) return;                       // keep the fallback
+      const groups = (await res.json()).groups || [];
+      if (!groups.length) return;                // empty registry: keep the fallback
+      appsHtml = groups.map((g) =>
+        '<div class="head">' + esc(g.group) + "</div>" +
+        (g.entries || []).map((e) =>
+          '<a href="' + esc(e.path) + '">' + esc(e.label) + "</a>").join("")
+      ).join("");
+      renderApps();
+    } catch (e) { /* registry unreachable -- the fallback list is already drawn */ }
+  })();
 
   // Pinned views (app-views, optional): append any pinned view record to
   // the Apps switcher. The nav ships in every install, app-views does not,
@@ -107,8 +142,9 @@ _JS = r"""
       const body = await res.json();
       const pinned = (body.records || []).filter((v) => v.pinned === "true");
       if (!pinned.length) return;
-      appsMenu.innerHTML += pinned.map((v) =>
+      pinnedHtml = '<div class="head">pinned</div>' + pinned.map((v) =>
         '<a href="' + esc(v.route || ("/views/" + v.id)) + '">' + esc(v.title || "View") + "</a>").join("");
+      renderApps();
     } catch (e) { /* app-views not installed -- the switcher still works without it */ }
   })();
 

@@ -54,5 +54,16 @@
       "path": "seed/site_routes.tsv"
     }
   ],
-  "migrations": []
+  "migrations": [],
+  "nav": [
+    {
+      "id": "forum",
+      "label": "Forum",
+      "path": "/forum",
+      "blurb": "Categories, topics and threaded replies",
+      "surface": "member",
+      "group": "Publishing",
+      "order": 210
+    }
+  ]
 }

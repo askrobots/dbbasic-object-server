@@ -59,5 +59,16 @@
       "path": "seed/site_routes.tsv"
     }
   ],
-  "migrations": []
+  "migrations": [],
+  "nav": [
+    {
+      "id": "shop",
+      "label": "Shop",
+      "path": "/shop",
+      "blurb": "Browse what is for sale and buy it",
+      "surface": "public",
+      "group": "Commerce",
+      "order": 400
+    }
+  ]
 }

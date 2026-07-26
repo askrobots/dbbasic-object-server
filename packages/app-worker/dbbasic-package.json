@@ -50,5 +50,16 @@
       "path": "seed/profile_comments.tsv"
     }
   ],
-  "migrations": []
+  "migrations": [],
+  "nav": [
+    {
+      "id": "profile",
+      "label": "Profile",
+      "path": "/profile/edit",
+      "blurb": "Your public creator profile: bio, skills, experience",
+      "surface": "member",
+      "group": "Publishing",
+      "order": 230
+    }
+  ]
 }

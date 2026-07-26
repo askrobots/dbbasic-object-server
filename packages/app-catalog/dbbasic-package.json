@@ -66,5 +66,34 @@
       "path": "seed/site_routes.tsv"
     }
   ],
-  "migrations": []
+  "migrations": [],
+  "nav": [
+    {
+      "id": "products",
+      "label": "Products",
+      "path": "/products",
+      "blurb": "Things you sell, with SKUs, variants and prices in cents",
+      "surface": "member",
+      "group": "Commerce",
+      "order": 410
+    },
+    {
+      "id": "stock",
+      "label": "Stock",
+      "path": "/stock",
+      "blurb": "On-hand levels per location, derived from stock moves",
+      "surface": "member",
+      "group": "Warehouse",
+      "order": 500
+    },
+    {
+      "id": "locations",
+      "label": "Locations",
+      "path": "/locations",
+      "blurb": "Where stock is held",
+      "surface": "member",
+      "group": "Warehouse",
+      "order": 510
+    }
+  ]
 }

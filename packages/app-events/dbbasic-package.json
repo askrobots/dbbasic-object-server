@@ -33,5 +33,16 @@
       "path": "seed/events.tsv"
     }
   ],
-  "migrations": []
+  "migrations": [],
+  "nav": [
+    {
+      "id": "calendar",
+      "label": "Calendar",
+      "path": "/calendar",
+      "blurb": "Events with attendees, dates and project links",
+      "surface": "member",
+      "group": "Work",
+      "order": 70
+    }
+  ]
 }

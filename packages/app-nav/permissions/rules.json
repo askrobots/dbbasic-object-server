@@ -1,0 +1,32 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "action_nav_entries",
+      "reason": "the menu is public; the object itself decides which tier of door each caller is shown"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_home",
+      "reason": "the front door is public; it shows the public tier plus a sign-in prompt to visitors"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["read"],
+      "collection": "nav_entries",
+      "reason": "a signed-in user may read the registry the menu is folded from"
+    },
+    {
+      "effect": "allow",
+      "principal": "role:manager",
+      "actions": ["update"],
+      "collection": "nav_entries",
+      "reason": "an operator flips operator_hidden to take a door off this deployment's menu without editing anybody's package"
+    }
+  ]
+}

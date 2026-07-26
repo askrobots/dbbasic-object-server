@@ -90,5 +90,16 @@
       "schedule": "55 6 * * *",
       "description": "Escalate bank lines left unmatched too long, so a stalled reconciliation is visible rather than silent."
     }
+  ],
+  "nav": [
+    {
+      "id": "reconcile",
+      "label": "Reconcile",
+      "path": "/reconcile",
+      "blurb": "Match imported bank lines against the books and resolve what differs",
+      "surface": "member",
+      "group": "Money",
+      "order": 360
+    }
   ]
 }

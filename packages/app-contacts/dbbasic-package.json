@@ -57,5 +57,16 @@
       "path": "seed/site_routes.tsv"
     }
   ],
-  "migrations": []
+  "migrations": [],
+  "nav": [
+    {
+      "id": "contacts",
+      "label": "Contacts",
+      "path": "/contacts",
+      "blurb": "People, the organizations they belong to, and interactions logged against them",
+      "surface": "member",
+      "group": "Work",
+      "order": 60
+    }
+  ]
 }

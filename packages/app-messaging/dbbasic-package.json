@@ -62,5 +62,16 @@
       "path": "seed/site_routes.tsv"
     }
   ],
-  "migrations": []
+  "migrations": [],
+  "nav": [
+    {
+      "id": "inbox",
+      "label": "Inbox",
+      "path": "/inbox",
+      "blurb": "Private message threads between accounts",
+      "surface": "member",
+      "group": "Work",
+      "order": 110
+    }
+  ]
 }

@@ -37,5 +37,25 @@
       "path": "seed/site_routes.tsv"
     }
   ],
-  "migrations": []
+  "migrations": [],
+  "nav": [
+    {
+      "id": "flow",
+      "label": "Flow",
+      "path": "/flow",
+      "blurb": "The compiled workflow: transitions, guards, hooks and reactions",
+      "surface": "operator",
+      "group": "System",
+      "order": 630
+    },
+    {
+      "id": "urls",
+      "label": "URLs",
+      "path": "/urls",
+      "blurb": "Every URL this server answers, compiled from routes rather than listed",
+      "surface": "operator",
+      "group": "System",
+      "order": 640
+    }
+  ]
 }

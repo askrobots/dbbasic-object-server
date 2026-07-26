@@ -34,5 +34,16 @@
       "path": "seed/site_routes.tsv"
     }
   ],
-  "migrations": []
+  "migrations": [],
+  "nav": [
+    {
+      "id": "scheduler",
+      "label": "Scheduler",
+      "path": "/scheduler",
+      "blurb": "The daemon's task board, its run history, and pause or run now",
+      "surface": "operator",
+      "group": "System",
+      "order": 620
+    }
+  ]
 }

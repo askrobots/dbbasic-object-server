@@ -36,5 +36,16 @@
       "path": "seed/files.tsv"
     }
   ],
-  "migrations": []
+  "migrations": [],
+  "nav": [
+    {
+      "id": "files",
+      "label": "Files",
+      "path": "/files",
+      "blurb": "Upload, share and download files whose visibility their records govern",
+      "surface": "member",
+      "group": "Work",
+      "order": 80
+    }
+  ]
 }

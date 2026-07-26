@@ -1,0 +1,49 @@
+{
+  "id": "app-nav",
+  "name": "Navigation",
+  "version": "0.1.0",
+  "description": "The nav registry: one collection every navigation surface folds over, instead of three hand-maintained lists that disagreed. Before this package there were exactly that -- a 25-entry JS array in site_nav's app switcher, a 21-entry Python tuple in site_home's tile grid, and a collection-to-URL map for search hits -- each edited by whoever remembered, and between them naming none of the eight newest apps (shop, intake, billing, timers, banking, shipping, receiving, payments). Worse, site_home existed in NO package at all: it lived only on the running droplet, so a rebuilt box came back with no front door and said nothing about it, the same failure the `schedules` manifest section was built to end for cron. A package now declares its doors in its manifest and install writes them into nav_entries; the switcher and the home page both read them back through action_nav_entries, which owns the one visibility rule (public to anyone, member to a signed-in user, operator to an admin role -- the same admin test system_scheduler makes). The package owns label/path/blurb/group/surface/order and restates them on every install; the operator owns operator_hidden, which an install never writes. That split is the whole design: the package says what an app IS, the operator says what they want to SEE, and an upgrade that silently un-hides a page somebody deliberately removed is the same class of incident as one that restarts a paused nightly pass. This is a MENU and not a gate -- permissions decide who may open a page, and leaving a door off the menu hides nothing that was not already protected.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": [],
+  "objects": [
+    {
+      "id": "action_nav_entries",
+      "path": "objects/action/nav_entries.py"
+    },
+    {
+      "id": "site_home",
+      "path": "objects/site/home.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "nav_entries",
+      "path": "schemas/nav_entries.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "nav_entries",
+      "path": "seed/nav_entries.tsv"
+    }
+  ],
+  "migrations": [],
+  "nav": [
+    {
+      "id": "home",
+      "label": "Home",
+      "path": "/",
+      "blurb": "The switchboard: every app this server installs",
+      "surface": "public",
+      "group": "Work",
+      "order": 0
+    }
+  ]
+}

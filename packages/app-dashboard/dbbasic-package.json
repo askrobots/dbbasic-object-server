@@ -20,5 +20,16 @@
     }
   ],
   "seed": [],
-  "migrations": []
+  "migrations": [],
+  "nav": [
+    {
+      "id": "dashboard",
+      "label": "Dashboard",
+      "path": "/dashboard",
+      "blurb": "Server health, AI spend and collection counts on one page",
+      "surface": "operator",
+      "group": "System",
+      "order": 600
+    }
+  ]
 }

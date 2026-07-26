@@ -16,5 +16,16 @@
     { "collection": "views", "path": "seed/views.tsv" },
     { "collection": "site_routes", "path": "seed/site_routes.tsv" }
   ],
-  "migrations": []
+  "migrations": [],
+  "nav": [
+    {
+      "id": "analytics",
+      "label": "Analytics",
+      "path": "/analytics",
+      "blurb": "First-party traffic: page views by path, status and referrer",
+      "surface": "operator",
+      "group": "System",
+      "order": 650
+    }
+  ]
 }

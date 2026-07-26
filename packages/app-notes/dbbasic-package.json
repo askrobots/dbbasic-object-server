@@ -36,5 +36,16 @@
       "path": "seed/site_routes.tsv"
     }
   ],
-  "migrations": []
+  "migrations": [],
+  "nav": [
+    {
+      "id": "notes",
+      "label": "Notes",
+      "path": "/notes",
+      "blurb": "Quick capture, optionally linked to a project or shared publicly",
+      "surface": "member",
+      "group": "Work",
+      "order": 30
+    }
+  ]
 }

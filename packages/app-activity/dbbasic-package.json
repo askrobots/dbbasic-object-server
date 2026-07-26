@@ -20,5 +20,16 @@
     }
   ],
   "seed": [],
-  "migrations": []
+  "migrations": [],
+  "nav": [
+    {
+      "id": "activity",
+      "label": "Activity",
+      "path": "/activity",
+      "blurb": "Everything you changed, folded from the record-change ledger",
+      "surface": "member",
+      "group": "Work",
+      "order": 120
+    }
+  ]
 }

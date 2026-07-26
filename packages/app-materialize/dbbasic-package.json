@@ -33,5 +33,6 @@
     }
   ],
   "seed": [],
-  "migrations": []
+  "migrations": [],
+  "nav_optional": true
 }

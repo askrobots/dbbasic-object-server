@@ -20,5 +20,16 @@
     }
   ],
   "seed": [],
-  "migrations": []
+  "migrations": [],
+  "nav": [
+    {
+      "id": "feed",
+      "label": "Feed",
+      "path": "/feed",
+      "blurb": "Recent public posts from the accounts you follow",
+      "surface": "member",
+      "group": "Publishing",
+      "order": 220
+    }
+  ]
 }

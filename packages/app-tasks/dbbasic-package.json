@@ -33,5 +33,16 @@
       "path": "seed/site_routes.tsv"
     }
   ],
-  "migrations": []
+  "migrations": [],
+  "nav": [
+    {
+      "id": "tasks",
+      "label": "Tasks",
+      "path": "/tasks",
+      "blurb": "Work items whose status moves through enforced transitions",
+      "surface": "member",
+      "group": "Work",
+      "order": 40
+    }
+  ]
 }

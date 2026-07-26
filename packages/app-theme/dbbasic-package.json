@@ -51,5 +51,16 @@
     }
   ],
   "seed": [],
-  "migrations": []
+  "migrations": [],
+  "nav": [
+    {
+      "id": "appearance",
+      "label": "Appearance",
+      "path": "/appearance",
+      "blurb": "The theme and design system every page draws from",
+      "surface": "member",
+      "group": "System",
+      "order": 610
+    }
+  ]
 }

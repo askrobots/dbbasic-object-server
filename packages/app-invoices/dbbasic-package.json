@@ -80,5 +80,16 @@
       "schedule": "10 6 * * *",
       "description": "Flip sent invoices to overdue once past due, and escalate dunning."
     }
+  ],
+  "nav": [
+    {
+      "id": "invoices",
+      "label": "Invoices",
+      "path": "/invoices",
+      "blurb": "Bill customers and track what has been paid, in integer cents",
+      "surface": "member",
+      "group": "Money",
+      "order": 300
+    }
   ]
 }

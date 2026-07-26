@@ -46,5 +46,16 @@
       "path": "seed/site_routes.tsv"
     }
   ],
-  "migrations": []
+  "migrations": [],
+  "nav": [
+    {
+      "id": "orders",
+      "label": "Orders",
+      "path": "/orders",
+      "blurb": "Sales and purchase orders with their lines and totals",
+      "surface": "member",
+      "group": "Commerce",
+      "order": 420
+    }
+  ]
 }

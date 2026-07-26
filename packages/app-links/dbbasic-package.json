@@ -33,5 +33,16 @@
       "path": "seed/site_routes.tsv"
     }
   ],
-  "migrations": []
+  "migrations": [],
+  "nav": [
+    {
+      "id": "links",
+      "label": "Links",
+      "path": "/links",
+      "blurb": "Saved bookmarks with tags and notes",
+      "surface": "member",
+      "group": "Work",
+      "order": 100
+    }
+  ]
 }

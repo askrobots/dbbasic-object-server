@@ -33,5 +33,16 @@
       "path": "seed/site_routes.tsv"
     }
   ],
-  "migrations": []
+  "migrations": [],
+  "nav": [
+    {
+      "id": "articles",
+      "label": "Articles",
+      "path": "/articles",
+      "blurb": "Longer writing with permalinks and drafts",
+      "surface": "member",
+      "group": "Publishing",
+      "order": 200
+    }
+  ]
 }
