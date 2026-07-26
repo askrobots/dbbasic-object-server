@@ -11,6 +11,7 @@ tests pin that too, because an entry never written costs nothing to store,
 nothing to read past, and nothing to decide about later.
 """
 
+import gzip
 import json
 
 import object_ids
@@ -47,9 +48,21 @@ def entries(tmp_path, collection):
 def test_no_policy_means_no_bound_at_all():
     """An operator who has never thought about audit retention has not
     thereby consented to losing audit history."""
-    assert object_record_changes.retention_policy({}) == {"days": 0, "max_entries": 0}
+    policy = object_record_changes.retention_policy({})
+    assert policy["days"] == 0 and policy["max_entries"] == 0
     assert object_record_changes.retention_policy(
         {"DBBASIC_CHANGE_LOG_RETENTION_DAYS": "nonsense"})["days"] == 0
+
+
+def test_archiving_is_the_default_and_keeping_archives_forever_is_too():
+    """Somebody asking for a smaller hot file has not asked to lose the
+    history, and the default for evidence is never 'throw it away'."""
+    policy = object_record_changes.retention_policy(
+        {"DBBASIC_CHANGE_LOG_RETENTION_DAYS": "90"})
+    assert policy["archive"] is True
+    assert policy["keep_archives"] == 0        # 0 = keep every segment
+    assert object_record_changes.retention_policy(
+        {"DBBASIC_CHANGE_LOG_ARCHIVE": "off"})["archive"] is False
 
 
 def test_an_unconfigured_sweep_is_an_honest_no_op(tmp_path):
@@ -147,3 +160,87 @@ def test_an_ordinary_write_is_still_traceable(tmp_path):
 
     logged = entries(tmp_path, "notes")
     assert len(logged) == 1 and logged[0]["actor"] == "dana"
+
+
+# --- rotation, archival and removal are three different questions ----------------
+
+def test_rotated_entries_are_archived_not_destroyed(tmp_path):
+    """Rotating without archiving is deletion wearing a gentler word."""
+    write_entries(tmp_path, "notes", [f"2026-07-26T00:00:{i:02d}Z" for i in range(30)])
+    result = object_record_changes.prune_record_changes(
+        "notes", keep_last=5, base_dir=tmp_path)
+
+    assert result["removed"] == 25 and result["archived"]
+    assert len(entries(tmp_path, "notes")) == 5
+
+    segments = object_record_changes.list_archives("notes", base_dir=tmp_path)
+    assert len(segments) == 1
+    with gzip.open(segments[0], "rt", encoding="utf-8") as handle:
+        archived = [json.loads(line) for line in handle if line.strip()]
+    assert [e["record_id"] for e in archived] == [f"r{i}" for i in range(25)]
+
+
+def test_the_archive_and_the_hot_file_together_lose_nothing(tmp_path):
+    stamps = [f"2026-07-26T00:00:{i:02d}Z" for i in range(40)]
+    write_entries(tmp_path, "notes", stamps)
+    object_record_changes.prune_record_changes(
+        "notes", keep_last=8, base_dir=tmp_path)
+
+    kept = [e["record_id"] for e in entries(tmp_path, "notes")]
+    archived = []
+    for segment in object_record_changes.list_archives("notes", base_dir=tmp_path):
+        with gzip.open(segment, "rt", encoding="utf-8") as handle:
+            archived += [json.loads(line)["record_id"]
+                         for line in handle if line.strip()]
+    assert sorted(archived + kept, key=lambda r: int(r[1:])) == [
+        f"r{i}" for i in range(40)]
+
+
+def test_duplicate_entries_are_counted_not_deduplicated(tmp_path):
+    """Two identical entries are two facts. Differencing by set membership
+    would archive one and lose the other."""
+    path = log_path(tmp_path, "notes")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row = json.dumps({"change_id": "c", "timestamp": "2026-07-26T00:00:00Z",
+                      "collection": "notes", "record_id": "r", "action": "update",
+                      "actor": "dana"})
+    path.write_text("\n".join([row] * 6) + "\n", encoding="utf-8")
+
+    object_record_changes.prune_record_changes("notes", keep_last=2, base_dir=tmp_path)
+    with gzip.open(object_record_changes.list_archives("notes", base_dir=tmp_path)[0],
+                   "rt", encoding="utf-8") as handle:
+        archived = [line for line in handle if line.strip()]
+    assert len(archived) == 4 and len(entries(tmp_path, "notes")) == 2
+
+
+def test_archiving_can_be_turned_off_for_a_genuinely_disposable_log(tmp_path):
+    write_entries(tmp_path, "notes", [f"2026-07-26T00:00:{i:02d}Z" for i in range(20)])
+    result = object_record_changes.prune_record_changes(
+        "notes", keep_last=5, archive=False, base_dir=tmp_path)
+    assert result["archived"] is None
+    assert object_record_changes.list_archives("notes", base_dir=tmp_path) == []
+
+
+def test_old_archives_are_removed_only_when_asked(tmp_path):
+    """An archive nobody ever deletes is the original problem moved one
+    directory down -- but the default keeps everything."""
+    for _ in range(4):
+        write_entries(tmp_path, "notes", [f"2026-07-26T00:00:{i:02d}Z" for i in range(20)])
+        object_record_changes.prune_record_changes("notes", keep_last=1, base_dir=tmp_path)
+    assert len(object_record_changes.list_archives("notes", base_dir=tmp_path)) == 4
+
+    write_entries(tmp_path, "notes", [f"2026-07-26T00:00:{i:02d}Z" for i in range(20)])
+    result = object_record_changes.prune_record_changes(
+        "notes", keep_last=1, keep_archives=2, base_dir=tmp_path)
+    assert len(result["archives_removed"]) == 3
+    assert len(object_record_changes.list_archives("notes", base_dir=tmp_path)) == 2
+
+
+def test_compression_is_worth_doing(tmp_path):
+    """JSONL compresses roughly ten to twenty times; that ratio is the
+    whole argument for archiving instead of deleting."""
+    write_entries(tmp_path, "notes", [f"2026-07-26T00:00:{i % 60:02d}Z" for i in range(4000)])
+    plain = log_path(tmp_path, "notes").stat().st_size
+    object_record_changes.prune_record_changes("notes", keep_last=1, base_dir=tmp_path)
+    segment = object_record_changes.list_archives("notes", base_dir=tmp_path)[0]
+    assert segment.stat().st_size * 5 < plain

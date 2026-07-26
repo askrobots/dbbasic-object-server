@@ -7,6 +7,7 @@ this file records what actually changed.
 
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import threading
@@ -315,6 +316,32 @@ def _file_lock(path: Path) -> threading.Lock:
 
 RETENTION_DAYS_ENV = "DBBASIC_CHANGE_LOG_RETENTION_DAYS"
 MAX_ENTRIES_ENV = "DBBASIC_CHANGE_LOG_MAX_ENTRIES"
+ARCHIVE_ENV = "DBBASIC_CHANGE_LOG_ARCHIVE"
+KEEP_ARCHIVES_ENV = "DBBASIC_CHANGE_LOG_KEEP_ARCHIVES"
+ARCHIVE_DIR = "archive"
+
+# Archival and retention are different questions, and conflating them is
+# what made the first version of this uncomfortable.
+#
+#   ROTATION bounds the file the server reads on every feed render.
+#   ARCHIVAL decides whether the entries leaving that file still exist.
+#   REMOVAL decides how long the archives themselves are kept.
+#
+# An audit trail wants all three, in that order. Rotating without
+# archiving is deletion wearing a gentler word, and it is why retention
+# had to be opt-in and slightly apologetic. Archiving first inverts that:
+# pruning becomes cheap to turn on, because nothing is actually lost --
+# the entries move out of the hot read path into a compressed segment
+# that is still on disk, still greppable, and still handable to an
+# auditor. JSONL compresses roughly ten to twenty times, so the 944MB log
+# that started all this becomes a segment measured in tens of megabytes.
+#
+# Removal still has to exist, because an archive nobody ever deletes is
+# just the original problem moved one directory down. Hence
+# KEEP_ARCHIVES: the same "keep the newest N" shape object_logs already
+# uses for rotated server logs, so an operator learns the convention once.
+# Its default keeps everything, because the default for evidence should
+# never be "throw it away".
 
 
 def retention_policy(env: Mapping[str, str] | None = None) -> dict[str, int]:
@@ -333,8 +360,70 @@ def retention_policy(env: Mapping[str, str] | None = None) -> dict[str, int]:
             return 0
         return value if value > 0 else 0
 
-    return {"days": _int(RETENTION_DAYS_ENV),
-            "max_entries": _int(MAX_ENTRIES_ENV)}
+    archive = str(source.get(ARCHIVE_ENV, "")).strip().lower()
+    return {
+        "days": _int(RETENTION_DAYS_ENV),
+        "max_entries": _int(MAX_ENTRIES_ENV),
+        # Archiving is the DEFAULT when a policy is set at all. Somebody
+        # asking for a smaller hot file has not asked to lose the history.
+        "archive": archive not in ("0", "false", "no", "off"),
+        "keep_archives": _int(KEEP_ARCHIVES_ENV),
+    }
+
+
+def archive_dir(collection: str, base_dir: Path | str = DEFAULT_DATA_DIR) -> Path:
+    """Where a collection's rotated change-log segments live."""
+    return record_changes_file(collection, base_dir=base_dir).parent / ARCHIVE_DIR
+
+
+def list_archives(collection: str, base_dir: Path | str = DEFAULT_DATA_DIR) -> list[Path]:
+    """Archived segments for one collection, oldest first."""
+    directory = archive_dir(collection, base_dir=base_dir)
+    if not directory.is_dir():
+        return []
+    return sorted(p for p in directory.glob("changes-*.jsonl.gz") if p.is_file())
+
+
+def _archive_entries(collection: str, lines: list[str], *, base_dir: Path | str) -> Path:
+    """Write expired entries to a new compressed segment and return it.
+
+    A new segment per rotation rather than appending to one growing
+    archive: a gzip member you keep appending to is a file you can only
+    ever read whole, and the point of moving these out was to stop paying
+    for the whole history. Segments are timestamped and immutable, so an
+    auditor can take the three that cover a quarter and leave the rest.
+    """
+    directory = archive_dir(collection, base_dir=base_dir)
+    directory.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
+    path = directory / f"changes-{stamp}.jsonl.gz"
+    temp_path = path.with_name(f".{path.name}.tmp")
+    with gzip.open(temp_path, "wt", encoding="utf-8", compresslevel=6) as handle:
+        for line in lines:
+            handle.write(line)
+            handle.write("\n")
+    temp_path.replace(path)
+    return path
+
+
+def _remove_stale_archives(
+    collection: str, *, keep: int, base_dir: Path | str
+) -> list[str]:
+    """Delete all but the newest `keep` segments; 0 keeps everything.
+
+    This is the only place in this module that destroys anything, and it
+    is deliberately the last step of the chain rather than the first: by
+    the time a segment is dropped it has already been rotated out of the
+    hot file and compressed, so an operator who never sets this keeps
+    every entry the server ever wrote.
+    """
+    if keep <= 0:
+        return []
+    segments = list_archives(collection, base_dir=base_dir)
+    stale = segments[:-keep] if len(segments) > keep else []
+    for path in stale:
+        path.unlink(missing_ok=True)
+    return [path.name for path in stale]
 
 
 def prune_record_changes(
@@ -342,6 +431,8 @@ def prune_record_changes(
     *,
     keep_newer_than: str | None = None,
     keep_last: int | None = None,
+    archive: bool = True,
+    keep_archives: int = 0,
     base_dir: Path | str = DEFAULT_DATA_DIR,
 ) -> dict[str, Any]:
     """Trim one collection's change log to a time window and/or a count.
@@ -386,14 +477,38 @@ def prune_record_changes(
         removed = before - len(kept)
         if removed <= 0:
             return {"entries_before": before, "entries_after": before,
-                    "removed": 0, "pruned": False}
+                    "removed": 0, "pruned": False, "archived": None}
+
+        archived_to = None
+        if archive:
+            # Difference by COUNT, not by identity or membership: two
+            # identical entries are two facts, and a set would archive one
+            # of them while the file lost both.
+            kept_counts: dict[str, int] = {}
+            for line in kept:
+                kept_counts[line] = kept_counts.get(line, 0) + 1
+            expired = []
+            for line in lines:
+                if not line.strip():
+                    continue
+                if kept_counts.get(line):
+                    kept_counts[line] -= 1
+                    continue
+                expired.append(line)
+            if expired:
+                archived_to = _archive_entries(
+                    collection, expired, base_dir=base_dir).name
 
         temp_path = path.with_name(f".{path.name}.tmp")
         temp_path.write_text(
             "".join(f"{line}\n" for line in kept), encoding="utf-8")
         temp_path.replace(path)
-        return {"entries_before": before, "entries_after": len(kept),
-                "removed": removed, "pruned": True}
+
+    dropped = _remove_stale_archives(
+        collection, keep=keep_archives, base_dir=base_dir)
+    return {"entries_before": before, "entries_after": len(kept),
+            "removed": removed, "pruned": True,
+            "archived": archived_to, "archives_removed": dropped}
 
 
 def prune_all_record_changes(
@@ -401,6 +516,8 @@ def prune_all_record_changes(
     base_dir: Path | str = DEFAULT_DATA_DIR,
     days: int = 0,
     max_entries: int = 0,
+    archive: bool = True,
+    keep_archives: int = 0,
 ) -> dict[str, Any]:
     """Apply one retention policy across every collection's change log.
 
@@ -428,7 +545,9 @@ def prune_all_record_changes(
         try:
             result = prune_record_changes(
                 entry.name, keep_newer_than=cutoff,
-                keep_last=(max_entries or None), base_dir=base_dir,
+                keep_last=(max_entries or None),
+                archive=archive, keep_archives=keep_archives,
+                base_dir=base_dir,
             )
         except Exception:  # noqa: BLE001 -- one bad log must not stop the sweep
             continue
