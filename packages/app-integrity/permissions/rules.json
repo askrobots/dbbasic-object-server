@@ -1,0 +1,25 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["read"],
+      "collection": "anchors",
+      "reason": "READ ONLY. An anchor that can be rewritten after the fact is an anchor that says whatever the last person to touch it wanted it to say, so there is no create, no update and no delete here for anybody -- system_publish_head is the one writer and the collection is append storage besides. Read is granted to every registered principal rather than to admins alone because the question this collection answers ('can these records be trusted') is one an ordinary member of staff gets asked by a customer, and an integrity check only the owner can run is one nobody runs"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "site_ledger_integrity",
+      "reason": "OPERATOR-FACING rather than public, which is a real trade and worth naming. The auditor's argument for making it public is good: an integrity claim a stranger cannot check is a claim rather than evidence. What keeps it behind sign-in is that the page states the exact row count of every money ledger on the box, which tells an outsider how many payments, refunds and journal lines a business has -- commercially sensitive in a way the digests themselves are not. The public half of this story is the NOTARY: the digests are lodged there, that lookup needs no account, and anybody handed a digest can check it without also being handed the shape of the business"
+    },
+    {
+      "effect": "allow",
+      "principal": "role:admin",
+      "actions": ["execute"],
+      "object_id": "system_publish_head",
+      "reason": "the daily schedule is how this normally runs -- time-driven work belongs to the daemon (docs/logic-decisions.md #2) -- and the manual grant exists for the case that actually matters: an operator wanting a fresh anchor immediately before or after something significant, rather than waiting for tonight. Admin rather than registered because it makes outbound requests to configured notaries, and who this server talks to is an operator decision"
+    }
+  ]
+}

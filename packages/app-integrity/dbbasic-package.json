@@ -1,0 +1,65 @@
+{
+  "id": "app-integrity",
+  "name": "Ledger Integrity",
+  "version": "0.1.0",
+  "description": "Take a digest of each money ledger, lodge it where this server cannot reach, and check later that the ledger still reproduces it. THE SIMPLIFICATION THIS PACKAGE IS BUILT ON: plan/tamper-evidence-spec.md described a hash chain written into the storage layer, a per-row column computed under the append lock. That is not what shipped, because for an APPEND-ONLY log a PREFIX DIGEST IS A CHAIN HEAD -- a chain is merely an incremental way of computing prefix digests as rows arrive, and a digest wanted once a day over a file being read anyway can be folded directly in one pass. No per-row column, no storage-layer change, and no risk of two concurrent appends forking a chain, which was the specific hazard that kept the package-layer version off the table. object_ledger_head.head IS the chain fold run over the rows in order, so the value equals what an in-storage chain would produce and moving the computation into the append path later would not orphan a single anchor already published. TWO DECISIONS CARRY THE DIGEST. It is taken over LOGICAL ROWS, never file bytes: compaction rewrites an append log as routine maintenance, so a byte-level digest would report tampering on a schedule and an integrity check that cries wolf is one nobody reads by the third week. And the FIELD LIST IS STORED IN THE ANCHOR rather than read from today's schema, so adding a column is not an event that turns every historical anchor red at once -- the subtler trap, because it would make an ordinary migration indistinguishable from an attack. THE HONEST LIMIT IS THE WHOLE POINT. An anchor stored in the same data directory as the ledger it describes is defeated by anybody who can edit both, which is everybody who could have edited the ledger. site_ledger_integrity therefore refuses to show a green tick for a digest nobody else holds: with no notary.endpoints configured it says 'anchored, but only here', names what that does and does not rule out, and says which setting changes it. The distinction it draws is not verified-versus-broken but CHECKABLE-BY-A-STRANGER versus CHECKABLE-ONLY-BY-US, because the first is evidence and the second is a claim. system_publish_head runs daily from this package's own schedule and by hand from the same object, so the button and the pass cannot drift; it writes an anchor whether or not any notary accepted it, because a digest only this server holds is worth less than one a stranger holds and considerably more than none. It anchors what somebody would profit from changing -- wallet_entries, fin_journal_lines, payments, refunds, stock_moves, and the notary's own log, which is otherwise the one thing here nobody watches -- and deliberately not page_views, the highest-volume writer on the box and the least valuable thing in it. Verification lives in the PAGE and not the writer, because a pass that both took anchors and blessed them would be marking its own homework. A single anchor can only say 'something in the first N rows changed'; anchors accumulate into a ladder and object_ledger_head.locate walks it to bracket a break between the newest that verifies and the oldest that does not, which with daily anchoring is a day-sized window. Naming the exact row needs a per-row hash, which is the in-storage chain this deliberately did not build.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": ["app-settings", "app-views"],
+  "objects": [
+    {
+      "id": "system_publish_head",
+      "path": "objects/system/publish_head.py"
+    },
+    {
+      "id": "site_ledger_integrity",
+      "path": "objects/site/ledger_integrity.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "anchors",
+      "path": "schemas/anchors.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "anchors",
+      "path": "seed/anchors.tsv"
+    },
+    {
+      "collection": "site_routes",
+      "path": "seed/site_routes.tsv"
+    },
+    {
+      "collection": "views",
+      "path": "seed/views.tsv"
+    }
+  ],
+  "migrations": [],
+  "schedules": [
+    {
+      "id": "integrity_publish_head_daily",
+      "object_id": "system_publish_head",
+      "schedule": "20 4 * * *",
+      "description": "Digest each money ledger and lodge it with the configured notaries. Daily because the anchor ladder's resolution IS its interval: a break can only be bracketed between the newest anchor that verifies and the oldest that does not, so anchoring daily buys a day-sized window on which rows were touched, and anchoring monthly buys a month-sized one. It costs one full read per anchored ledger and one line written per ledger that changed -- a dormant ledger produces the same digest over the same prefix and writes nothing at all. After 04:00 so it runs behind the night's compaction rather than across it: hashing logical rows means compaction cannot invalidate an anchor, but taking one mid-rewrite would still read a file in motion for no reason. This is the pass that turns 'we believe nothing was altered' into 'here is the day it was'."
+    }
+  ],
+  "nav": [
+    {
+      "id": "ledger_integrity",
+      "label": "Ledger Integrity",
+      "path": "/ledger-integrity",
+      "blurb": "Whether the money ledgers still match what was recorded of them",
+      "surface": "operator",
+      "group": "System",
+      "order": 687
+    }
+  ]
+}
