@@ -35,6 +35,15 @@ ANALYTICS_ENABLED_ENV = "DBBASIC_ANALYTICS"
 OWNER_IPS_ENV = "DBBASIC_ANALYTICS_OWNER_IPS"
 RETENTION_DAYS_ENV = "DBBASIC_ANALYTICS_RETENTION_DAYS"
 DEFAULT_RETENTION_DAYS = 30
+# A second bound, because time alone does not bound a log. The retention
+# window says how far BACK to keep; it says nothing about how much can
+# arrive inside it, so a bot storm or a busy deploy day can fill a small
+# machine's disk and memory without a single row aging out. This is the
+# cap that was missing when a demo box hit 675MB resident and started
+# swapping: 30 days of retention, faithfully applied, on a log nobody had
+# told how big it was allowed to get.
+MAX_ROWS_ENV = "DBBASIC_ANALYTICS_MAX_ROWS"
+DEFAULT_MAX_ROWS = 200_000
 
 # Prefixes that are asset/infra/polling noise, not real page hits. NOTE we do
 # NOT skip `/api/` (bots hammer APIs -- that traffic is the point) nor 4xx/5xx
@@ -76,6 +85,16 @@ def retention_days(env: Mapping[str, str] | None = None) -> int:
     return value if value > 0 else DEFAULT_RETENTION_DAYS
 
 
+def max_rows(env: Mapping[str, str] | None = None) -> int:
+    """Hard cap on stored page_views rows; 0 disables the cap."""
+    env = os.environ if env is None else env
+    try:
+        value = int(str(env.get(MAX_ROWS_ENV, "")).strip())
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_ROWS
+    return value if value >= 0 else DEFAULT_MAX_ROWS
+
+
 def should_capture(path: str) -> bool:
     """True for a real page hit -- not an asset/infra/polling path."""
     p = path or "/"
@@ -93,11 +112,31 @@ def _cookie_value(cookie_header: str, name: str) -> str:
 def build_page_view(
     *, path: str, method: str, status: int, ip: str,
     headers: Mapping[str, str], owners: frozenset[str],
-    user_id: str = "",
+    user_id: str = "", is_operator: bool = False,
 ) -> dict[str, str]:
     """The page_views record one request implies. Pure -- created_at is stamped
-    by the record layer on write. is_owner is IP-based (cheap, no auth lookup in
-    the hot path)."""
+    by the record layer on write.
+
+    `is_owner` marks traffic that is the SITE'S OWN rather than a visitor's,
+    so reports can exclude it (every analytics rollup filters on it). Two
+    things set it, and the second was missing for a long time:
+
+    * the request came from an owner IP (cheap, no auth lookup on the hot
+      path), and
+    * `is_operator` -- the caller authenticated as the operator, which the
+      server decides from the admin token.
+
+    Without the second, every deploy call, every package install and every
+    scripted `POST /objects/...` counted as a visitor page view. On one real
+    box that produced a "Top paths" report where 45% of the rows had been hit
+    exactly once and the contents were vulnerability scanners and the
+    operator's own automation -- a report of the observer, not the observed.
+
+    Note what this deliberately does NOT flag: a signed-in member browsing
+    the site. That is real traffic and worth measuring; which pages members
+    actually use is among the most useful things this collection knows. The
+    line is between somebody USING the site and somebody OPERATING it.
+    """
     ua = (headers.get("user-agent") or "")[:_MAX_UA]
     referrer = (headers.get("referer") or headers.get("referrer") or "")[:_MAX_REFERRER]
     session_id = _cookie_value(headers.get("cookie") or "", "session_id")
@@ -110,5 +149,5 @@ def build_page_view(
         "referrer": referrer,
         "session_id": session_id,
         "user_id": user_id or "",
-        "is_owner": "true" if ip in owners else "false",
+        "is_owner": "true" if (is_operator or ip in owners) else "false",
     }

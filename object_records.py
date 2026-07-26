@@ -1010,6 +1010,7 @@ def prune_collection_records(
     *,
     keep_newer_than: str,
     timestamp_field: str = "created_at",
+    keep_last: int | None = None,
     base_dir: Path | str = DEFAULT_DATA_DIR,
     roots: Iterable[Path] | None = None,
 ) -> dict[str, Any]:
@@ -1024,6 +1025,13 @@ def prune_collection_records(
     a missing or unparseable timestamp is KEPT (never delete data we can't
     date). Only meaningful for append-format collections; a classic-mode or
     never-written collection is a correctly-reported no-op.
+
+    ``keep_last`` additionally caps the row COUNT, keeping the newest N after
+    the time filter. Time alone does not bound a log: a retention window says
+    how far back to look, not how much can arrive inside it, so a traffic
+    spike (or a bot storm) can fill a disk without aging a single row out.
+    Small machines need the second bound, and a bound nobody set is a bound
+    that fails on the worst day rather than an ordinary one.
 
     Returns ``{"rows_before", "rows_after", "removed", "pruned"}``.
     """
@@ -1048,6 +1056,11 @@ def prune_collection_records(
             return True if not stamp else stamp >= cutoff
 
         kept = [record for record in folded_records if _keep(record)]
+        if keep_last is not None and keep_last >= 0 and len(kept) > keep_last:
+            # Newest N. The append log is written in arrival order, so the tail
+            # IS the newest -- no sort, which matters because this runs against
+            # the largest file the server owns.
+            kept = kept[len(kept) - keep_last:]
         removed = len(folded_records) - len(kept)
         if removed == 0:
             return {

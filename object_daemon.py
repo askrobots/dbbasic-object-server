@@ -1455,16 +1455,22 @@ def process_analytics_retention(*, base_dir: Path | str = "data") -> dict | None
 
     days = object_analytics.retention_days()
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat().replace("+00:00", "Z")
+    cap = object_analytics.max_rows()
     try:
         result = object_records.prune_collection_records(
             object_analytics.PAGE_VIEWS_COLLECTION,
-            keep_newer_than=cutoff, timestamp_field="created_at", base_dir=base_dir,
+            keep_newer_than=cutoff, timestamp_field="created_at",
+            # Two bounds, because a retention window says how far back to
+            # keep and nothing at all about how much can arrive inside it.
+            keep_last=(cap or None),
+            base_dir=base_dir,
         )
     except (object_collections.CollectionNotFoundError,
             object_collections.InvalidCollectionNameError, OSError, ValueError):
         return None
     if result.get("pruned"):
-        log(f"Analytics: pruned {result['removed']} page_view(s) older than {days}d "
+        bound = f"older than {days}d" + (f" or beyond {cap} rows" if cap else "")
+        log(f"Analytics: pruned {result['removed']} page_view(s) {bound} "
             f"({result['rows_before']} -> {result['rows_after']})")
     return result
 

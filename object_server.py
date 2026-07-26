@@ -413,6 +413,11 @@ async def _capture_page_view(
             path=path, method=method, status=status_code,
             ip=_client_ip(scope, headers), headers=headers,
             owners=object_analytics.owner_ips(),
+            # The operator's own automation is not visitor traffic. This is a
+            # constant-time env compare, not an auth lookup -- the hot path
+            # stays cheap, and a signed-in member browsing is deliberately
+            # still counted as the real traffic it is.
+            is_operator=_request_is_operator(headers),
         )
         base_dir = _data_dir()
 
@@ -428,6 +433,24 @@ async def _capture_page_view(
         await asyncio.to_thread(_write)
     except Exception:  # noqa: BLE001 -- belt and suspenders on the hot path
         pass
+
+
+def _request_is_operator(headers: dict[str, str]) -> bool:
+    """True when this request carried the admin token.
+
+    Deliberately only the token, and deliberately constant-time: this runs
+    on every request, so it may not touch disk, and it must not leak the
+    token through timing. A session cookie is NOT resolved here -- that
+    would be a per-request identity lookup on the hot path, and a signed-in
+    member is traffic worth measuring anyway.
+    """
+    admin_token = os.environ.get(ADMIN_TOKEN_ENV, "")
+    if not admin_token:
+        return False
+    request_token = _authorization_token(headers)
+    if not request_token:
+        return False
+    return hmac.compare_digest(request_token, admin_token)
 
 
 def _realtime_enabled() -> bool:
