@@ -1,0 +1,3 @@
+id	pattern	object_id	priority
+route_document_link	/d/{token}	site_document	10
+route_documents_index	/documents	site_view_render	20

@@ -1,0 +1,46 @@
+{
+  "id": "app-privacy",
+  "name": "Privacy",
+  "version": "0.1.0",
+  "description": "A privacy policy generated from the server's live configuration, and the subject-access export that goes with it. Almost every privacy policy on the web drifts, and not because anyone lied: the policy is written once by a template and the software changes weekly, with nothing connecting the two. site_privacy is a FOLD over configuration -- the same family as app-nav's registry and the attention counts -- so it cannot claim a 30-day retention while the box keeps 180, cannot name a payment processor nobody configured, and cannot stay silent about a cookie the server sets. Analytics off says plainly that no traffic data is collected; on, it names the fields actually recorded and states the retention by reading DBBASIC_ANALYTICS_RETENTION_DAYS and DBBASIC_ANALYTICS_MAX_ROWS. The cookie table lists exactly the cookies this configuration can set with their real Max-Age and whether each is strictly necessary -- and tests/test_privacy.py sweeps the whole codebase for anything that sets a cookie and FAILS naming any cookie the table does not disclose, so a new cookie added anywhere breaks the build until somebody writes down what it is for. Sections appear only when the thing exists: payments with app-payments, delivery with app-shipping, email when SMTP is configured, AI when a provider key is stored. The sub-processor list is derived from credentials actually present (Stripe keys set, a carrier chosen, an SMTP host, an AI key), so it is a list nobody has to remember to update. Controller identity comes from app_settings (privacy.controller_name, privacy.contact_email, privacy.jurisdiction) and the page REFUSES to publish a policy until they are set, naming the missing settings -- an unsigned policy is worse than none, because it looks like compliance while giving a reader nobody to write to. privacy.extra_markdown carries the operator's own reviewed legal text, rendered under its own heading so a reader can tell generated fact from human statement. What it will not do is invent legal text: no lawful bases, no Standard Contractual Clauses, no transfer mechanisms. It states facts about the system and stops. /cookies is the table alone and /privacy.json the same fold machine-readable, with no timestamp in it so it can be diffed between deploys. action_export_subject_data folds every collection keyed to one email -- orders, invoices, carts, disputes, contacts, then payments through those invoices and shipments through those orders -- into one document, operator-executed only, and returns nothing keyed to anyone else. Erasure is deliberately absent: it needs a redaction-with-tombstone design and a doctrine decision about which fields are contact and which are evidence, and code written before that decision would make the choice silently in the one place it can never be undone.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": [
+    "app-settings"
+  ],
+  "objects": [
+    {
+      "id": "site_privacy",
+      "path": "objects/site/privacy.py"
+    },
+    {
+      "id": "action_export_subject_data",
+      "path": "objects/action/export_subject_data.py"
+    }
+  ],
+  "schemas": [],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "site_routes",
+      "path": "seed/site_routes.tsv"
+    }
+  ],
+  "migrations": [],
+  "nav": [
+    {
+      "id": "privacy",
+      "label": "Privacy",
+      "path": "/privacy",
+      "blurb": "What this server records, folded from its own configuration",
+      "surface": "public",
+      "group": "System",
+      "order": 690
+    }
+  ]
+}

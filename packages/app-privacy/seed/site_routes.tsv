@@ -1,0 +1,3 @@
+id	pattern	object_id	priority
+route_cookies	/cookies	site_privacy	10
+route_privacy_json	/privacy.json	site_privacy	10

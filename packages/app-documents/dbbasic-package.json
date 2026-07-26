@@ -1,0 +1,60 @@
+{
+  "id": "app-documents",
+  "name": "Documents",
+  "version": "0.1.0",
+  "description": "One renderer for every business document, and the rule that makes a sent one safe. Seven printable pages already shipped before this package existed -- packing slip, pick list, manifest, kitchen ticket, kitchen queue, receiving sheet, return form -- plus the invoice portal and the order tracking page. Each invented its own header, its own @media print block, and its own answer to 'does this show money?'. That is fine at seven and a problem at fifteen, and quotes, purchase orders, statements and remittance advices are all coming. Between the seven print blocks there were zero occurrences of `thead { display: table-header-group }`, which is the rule that makes a table repeat its column headings on page two: a three-page pick list printed headerless and nobody noticed, because nobody reviews on paper. The fold itself lives in object_documents.py (pure, no I/O) rather than in this package, and that is not an accident of layout -- package objects cannot import each other, so the ONLY code app-invoices and app-shipping can both reach is a root object_* module. The renderer had to live there or be copied, and copied is what it already was. What the module owns is every DECISION: the business header read from business.* settings (and the refusal to render a nameless business, which lands at SEND time where nobody is waiting rather than at print time where somebody is standing at a printer); the document identity; the parties block with the right address per kind, because a packing slip's ship-to is not an invoice's bill-to; the lines table with `show_money` as a PARAMETER of the kind rather than a paragraph re-argued in each new file -- and when it is false the money is not hidden but never put in the model at all, so a packing slip's stored snapshot contains no prices either and no future renderer, template or PDF engine can leak what was never carried; totals; terms; footer; and the print CSS. The print CSS is inlined by render_page rather than served from /style on purpose: /style is the SCREEN design system, themeable and live-swappable, while paper geometry must not move when somebody installs the terminal theme, depends on a setting (documents.page_size: A4 or Letter is a fact about a printer tray, not a brand) that app-theme has no business knowing, and has to survive the page leaving this origin -- a document saved to disk or handed to a PDF engine still has to print correctly. One definition, projected into every document page; nothing downstream owns a copy. What CHANGES BEHAVIOUR rather than appearance is sent_documents and the rule it carries: a document that was SENT is evidence of what was sent. A tokened link is often the better delivery than a PDF -- not caught by spam filters, and able to show live truth -- but that strength is the trap. Email a quote at 4,000, change the price to 4,500, and the customer's link must not silently show 4,500; they may be holding a printout of the first one. So action_send_document freezes the rendered model as a snapshot, seals it with a content hash, stamps the source record's own fingerprint, mints a token and QUEUES the mail through the existing outbox (never sends inline, idempotent per source+recipient the way system_order_email is), and site_document at /d/{token} renders the SNAPSHOT. A changed source is neither obeyed nor hidden: the page keeps serving what was sent and adds a banner naming both dates with a link to the current version, so the reader always knows which one they are looking at. opened_at comes free with a tokened link -- 'did they read it?' is the first thing anybody asks after sending a quote -- stamped once on first view and never restamped. Delivery by PDF is a CAPABILITY with an honest absent state, not a dependency: browser Print -> Save as PDF already produces a good PDF, costs nothing, and every page rendered by this layer says so out loud instead of leaving it to be discovered. action_render_pdf checks documents.pdf_engine (default none) and returns a 409 naming exactly what to install and what each option costs, and no surface draws a PDF button when it would 409 -- object_documents.pdf_engine_status is the single answer every page consults first, the same reason site_invoice_portal only draws 'Pay by card' when Stripe is actually configured. There is deliberately no WeasyPrint or headless-Chrome adapter here: nothing in this repo can test one, and the honest boundary is worth more than a guess at the far side of it -- exactly the posture app-shipping's manual carrier connector takes. 0.1.0 migrates exactly TWO pages as proof, site_invoice_portal and site_packing_slip, and leaves the other five alone: a layer nobody has migrated to is a layer that does not work, and migrating all seven at once would make a regression impossible to locate. The packing slip still shows no prices, which is the regression that mattered most.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": [
+    "app-email",
+    "app-views"
+  ],
+  "objects": [
+    {
+      "id": "site_document",
+      "path": "objects/site/document.py"
+    },
+    {
+      "id": "action_send_document",
+      "path": "objects/action/send_document.py"
+    },
+    {
+      "id": "action_render_pdf",
+      "path": "objects/action/render_pdf.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "sent_documents",
+      "path": "schemas/sent_documents.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "site_routes",
+      "path": "seed/site_routes.tsv"
+    },
+    {
+      "collection": "views",
+      "path": "seed/views.tsv"
+    }
+  ],
+  "migrations": [],
+  "nav": [
+    {
+      "id": "documents",
+      "label": "Documents",
+      "path": "/documents",
+      "blurb": "Every document that left the building, what it said, and who opened it",
+      "surface": "member",
+      "group": "Work",
+      "order": 130
+    }
+  ]
+}

@@ -20,6 +20,14 @@ Two deliberate design notes:
 * **off by default.** Capturing a row per request is an operator choice, gated
   by `DBBASIC_ANALYTICS` (env), so a deploy never silently starts writing.
 
+* **the visitor cookie is off by default too, and separately.**
+  `DBBASIC_ANALYTICS_VISITOR_COOKIE` gates the one thing here that touches a
+  visitor's device. Unset -- the default -- this module never asks a browser
+  to remember anything, which is the posture that needs no consent banner
+  anywhere in the world. Two switches rather than one because a log and a
+  device identifier are different acts: an operator who wants traffic numbers
+  should not have to take on a consent obligation to get them.
+
 This module is the pure/testable half: config, the skip-path rule, the visitor
 cookie decision, and building the record. The daemon owns retention;
 object_server owns the capture hook and the one line that puts the cookie on a
@@ -70,6 +78,33 @@ SKIP_PREFIXES = (
 # down, because rule 4 in particular is one line of code away from being
 # broken at all times.
 VISITOR_COOKIE_NAME = "dbbasic_visitor"
+
+# --- and it is OFF unless an operator turns it on ----------------------------
+#
+# The whole consent problem on this server is one cookie. Everything else
+# it stores on a device is strictly necessary for something the visitor
+# asked for -- the session they signed into, the basket they filled -- and
+# server-side logging is not device storage at all. So the default that
+# needs the least law is the one where this cookie does not exist:
+# `page_views` still counts visitors by address, nothing is written to
+# anybody's browser, and the ePrivacy consent trigger (storing a
+# non-essential identifier on a device) never fires anywhere in the world.
+#
+# Turning it ON is therefore a deliberate operator act, and it is the
+# moment the obligation appears -- so the obligation travels WITH the
+# setting rather than living in a document: OBLIGATION below is printed on
+# the daemon's and the server's boot lines, in words, by whoever is
+# starting the process. An operator who flips this should not have to
+# already know what they have taken on.
+VISITOR_COOKIE_ENV = "DBBASIC_ANALYTICS_VISITOR_COOKIE"
+
+OBLIGATION = (
+    "stores an identifier on a visitor's device; "
+    "in the EU/UK that requires consent"
+)
+NO_OBLIGATION = (
+    "no identifier is stored on any device; visitors are counted by address"
+)
 
 # What `build_page_view` read before this cookie existed: a cookie literally
 # named `session_id`, which nothing in this repo has ever set. Kept as a
@@ -153,6 +188,36 @@ def visitor_days(env: Mapping[str, str] | None = None) -> int:
     return value if value > 0 else DEFAULT_VISITOR_DAYS
 
 
+def visitor_cookie_enabled(env: Mapping[str, str] | None = None) -> bool:
+    """Whether this server may set the visitor cookie at all.
+
+    Off unless DBBASIC_ANALYTICS_VISITOR_COOKIE is truthy. Unset, the
+    server behaves exactly as it did before the cookie existed: IP-based
+    visitor counting, nothing stored on anybody's device, and no consent
+    trigger. New-versus-returning is the one thing that becomes
+    unavailable, and that is the trade -- the same trade Plausible and
+    Fathom sell as a feature.
+
+    Deliberately a separate switch from DBBASIC_ANALYTICS: recording what
+    the server did (a log) and asking a browser to remember who it is
+    (device storage) are different acts under different instruments, and
+    one flag for both would mean an operator who wanted traffic numbers
+    could not have them without also taking on a consent obligation.
+    """
+    env = os.environ if env is None else env
+    return (env.get(VISITOR_COOKIE_ENV) or "").strip().lower() in _TRUE
+
+
+def visitor_cookie_posture(env: Mapping[str, str] | None = None) -> str:
+    """One line for a boot banner, stating the obligation rather than the
+    setting. `DBBASIC_ANALYTICS_VISITOR_COOKIE=on` is not information; what
+    it commits the operator to is."""
+    if not visitor_cookie_enabled(env):
+        return f"visitor cookie off (default) -- {NO_OBLIGATION}"
+    return (f"visitor cookie ON ({visitor_days(env)}d, {VISITOR_COOKIE_NAME}) "
+            f"-- {OBLIGATION}")
+
+
 def _cookie_value(cookie_header: str, name: str) -> str:
     for part in (cookie_header or "").split(";"):
         key, _, value = part.strip().partition("=")
@@ -206,6 +271,12 @@ def should_set_visitor_cookie(
 
     Every clause is one of the rules, in the order they can refuse:
 
+    * the cookie is not switched on. This is the FIRST refusal and the
+      default one: with DBBASIC_ANALYTICS_VISITOR_COOKIE unset nothing is
+      ever stored on a visitor's device, so there is no consent question
+      to answer. Every other clause below is about a visitor who could
+      have been given a cookie; this one is about a server that does not
+      hand them out.
     * analytics is off -- nothing is being recorded, so a cookie would be
       an identifier collected for no purpose at all, which is the worst
       possible trade.
@@ -222,6 +293,8 @@ def should_set_visitor_cookie(
     Refusing to thread that visit would lose exactly the journey worth
     knowing about.
     """
+    if not visitor_cookie_enabled(env):
+        return False
     if not analytics_enabled(env):
         return False
     if refuses_tracking(headers):

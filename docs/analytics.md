@@ -136,6 +136,11 @@ not give them to you, and no amount of configuration will.
 
 - **Off by default.** `DBBASIC_ANALYTICS=on` is an operator choice,
   because it adds a write to every request.
+- **The visitor cookie is off by default and switched on separately**
+  (`DBBASIC_ANALYTICS_VISITOR_COOKIE=on`), because it is the one thing
+  here that stores an identifier on a visitor's device. See the cookie
+  section below for what that commits you to; `/privacy` states it for
+  your visitors, folded from these same settings.
 - Asset, health and polling paths are skipped; 4xx and 5xx are
   deliberately **kept**, because a 404 flood is the signal.
 - The write is offloaded off the event loop and is best-effort:
@@ -256,10 +261,10 @@ tries the product: that was three strangers.
 
 **A first-party cookie with a long-but-not-indefinite expiry fixes it.**
 It is `dbbasic_visitor`, set by `object_server` on a page response when
-analytics is on and the request carried none, and its value is stamped
-into `page_views.session_id` on the same request that mints it — so the
-first page of a visit is threaded rather than the second. It unlocks the
-questions a site actually has:
+the cookie is switched on, analytics is on, and the request carried none;
+its value is stamped into `page_views.session_id` on the same request that
+mints it — so the first page of a visit is threaded rather than the
+second. It unlocks the questions a site actually has:
 
 - **New versus returning** — the most useful ratio a site has, and
   invisible without it.
@@ -268,6 +273,46 @@ questions a site actually has:
 - **Time to conversion** — days between first visit and purchase, which
   is what tells you whether your funnel is a funnel or a queue.
 - **Real funnels**, stitched across visits rather than within one.
+
+### It is OFF by default, and that is the whole consent posture
+
+`DBBASIC_ANALYTICS_VISITOR_COOKIE` gates it, and unset — the default —
+**no visitor cookie is set at all**. The server behaves exactly as it did
+before the cookie existed: visitors counted by address, nothing written
+to anybody's device, no ePrivacy consent trigger, no banner needed
+anywhere in the world.
+
+That is deliberate, and the reason is worth stating because it is the
+whole design. The consent rule people call "the cookie law" is the
+ePrivacy Directive, not GDPR, and it fires on *storing or reading
+something on a device that is not strictly necessary for the service the
+user asked for*. Everything else this server puts in a browser —
+`dbbasic_session`, the shop's `cart` — is strictly necessary for a thing
+the person actively asked for, and `page_views` is server-side logging
+rather than device storage. **One cookie is the entire consent problem**,
+so the default that needs the least law is the one where it does not
+exist.
+
+Turning it on is a deliberate operator act, and *that* is the moment the
+obligation appears. So the obligation travels with the setting rather
+than living only here: the daemon's and the server's boot lines say, in
+words, that it "stores an identifier on a visitor's device; in the EU/UK
+that requires consent" (`object_analytics.OBLIGATION`), and `/privacy`
+grows a row in its cookie table with the real `Max-Age` the moment it is
+switched on.
+
+It is a separate switch from `DBBASIC_ANALYTICS` on purpose. Recording
+what the server did and asking a browser to remember who it is are
+different acts under different instruments, and one flag for both would
+mean an operator who wanted traffic numbers could not have them without
+also taking on a consent obligation. With the cookie off, everything on
+`/visitors` still works except new-versus-returning — which is what
+Plausible and Fathom sell as a feature.
+
+DNT and Sec-GPC suppression is unchanged and applies on top: switching
+the cookie on does not switch those off.
+
+### The five rules, for a box that switches it on
 
 The rules that keep it honest are not optional, and none of them is left
 to judgement: each is enforced in code and pinned by a test in
@@ -341,6 +386,10 @@ field waiting for the goals that are recorded from a real request.
   denominator lives on another screen is a conversion rate nobody
   computes.
 - `/analytics` — path, status and referrer detail from the rollups.
+- `/privacy` — what visitors are told, folded from these same settings by
+  `app-privacy`, so the retention on this page and the retention on that
+  one are the same number read from the same place. `/cookies` is its
+  cookie table alone.
 - `object_analytics.py` — capture, configuration and the visitor-cookie
   decision.
 - `object_visitors.py` — the classifier and the traffic fold, pure and

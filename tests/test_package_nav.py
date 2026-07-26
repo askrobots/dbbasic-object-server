@@ -330,12 +330,17 @@ def test_shipped_nav_entries_normalize_and_use_the_house_groups():
 def test_the_public_tier_is_only_the_pages_a_visitor_should_meet():
     """A `public` surface is a menu decision, not a grant -- but a door
     offered to somebody who will be bounced by permissions is still a
-    broken promise, so the list is small and deliberate."""
+    broken promise, so the list is small and deliberate.
+
+    `privacy` earns its place the same way the other two do: app-privacy
+    grants `public` execute on site_privacy, and a privacy policy behind
+    a sign-in is not a privacy policy.
+    """
     public = {entry["id"]
               for manifest in _manifests().values()
               for entry in manifest.get("nav") or []
               if entry.get("surface") == "public"}
-    assert public == {"home", "shop"}
+    assert public == {"home", "shop", "privacy"}
 
 
 def test_app_nav_declares_its_own_front_door():

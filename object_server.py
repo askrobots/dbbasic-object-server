@@ -12284,10 +12284,32 @@ async def _send_execution_error(
     )
 
 
+_ANALYTICS_POSTURE_LOGGED = False
+
+
+def _note_analytics_posture_once() -> None:
+    """State the visitor cookie's posture on the boot line, in words.
+
+    The daemon prints the same sentence; the server prints it too because
+    the two processes are started separately and an operator reading only
+    one of them should still be told. `DBBASIC_ANALYTICS_VISITOR_COOKIE=on`
+    is the single act that makes this server store an identifier on
+    somebody's device, and object_analytics.OBLIGATION says what that
+    commits them to rather than merely echoing the setting back.
+    """
+    global _ANALYTICS_POSTURE_LOGGED
+    if _ANALYTICS_POSTURE_LOGGED:
+        return
+    _ANALYTICS_POSTURE_LOGGED = True
+    print(f"[dbbasic] Analytics: {object_analytics.visitor_cookie_posture()}",
+          file=sys.stderr)
+
+
 async def _handle_lifespan(receive, send) -> None:
     while True:
         message = await receive()
         if message["type"] == "lifespan.startup":
+            _note_analytics_posture_once()
             await send({"type": "lifespan.startup.complete"})
         elif message["type"] == "lifespan.shutdown":
             await _shutdown_worker_pool()

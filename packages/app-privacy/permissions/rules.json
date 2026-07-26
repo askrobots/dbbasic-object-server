@@ -1,0 +1,22 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": [
+        "execute"
+      ],
+      "object_id": "site_privacy",
+      "reason": "a privacy policy behind a sign-in is not a privacy policy; the page is public, states only facts about the server's own configuration, and reads nothing keyed to a person"
+    },
+    {
+      "effect": "allow",
+      "principal": "role:admin",
+      "actions": [
+        "execute"
+      ],
+      "object_id": "action_export_subject_data",
+      "reason": "a subject-access export is operator-executed after the operator has satisfied themselves who they are talking to; a self-service door would be a lookup oracle for anyone who knows a customer's email address"
+    }
+  ]
+}

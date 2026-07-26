@@ -1,0 +1,94 @@
+{
+  "name": "sent_documents",
+  "title": "Sent Documents",
+  "version": 1,
+  "description": "One row per document that LEFT THE BUILDING, and what it said when it did. A tokened link is usually the better delivery than a PDF -- it is not caught by spam filters and it can show live truth (paid, shipped, collected) -- but that strength is also the trap, and this collection exists to close it. Email a quote at 4,000, change the price to 4,500, and the customer's link must not silently show 4,500: a document that was SENT is evidence of what was sent, and silently restating a document somebody is holding a printout of is the same class of error as restating an approved rate or a rolled-up invoice total (docs/logic-decisions.md #1 and #8, applied to paper). So the row carries the rendered SNAPSHOT -- the whole render model as JSON, exactly as object_documents folded it -- and site_document renders THAT, not the live record. A changed source is shown, never hidden: the page keeps serving the snapshot and adds a banner naming both dates with a link to the current version, so the customer can see that something moved and what it was. content_hash seals the snapshot; source_rev is the platform's own record fingerprint (object_records.compute_record_rev) taken at send time, which is what makes 'has the source changed?' an exact question rather than a timestamp comparison that a same-second edit would lose. The token is the whole credential and is a SEPARATE field rather than the row id, for the reason site_invoice_portal already argues: record ids appear in change logs, in owner-scoped collection paths and in correlation ids, so a leaked link must be revocable without touching the document's identity or its audit trail. opened_at is the question everyone asks the moment they send a quote -- 'did they read it?' -- and it comes free with a tokened link, stamped once on first view and never restamped, because 'they opened it on the 3rd' is the fact worth keeping and a view counter is a different feature. Rows are never deleted: a sent document cannot be made not to have been sent.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "kind",
+      "type": "text",
+      "required": true,
+      "label": "Kind",
+      "validation": {"max_length": 60, "pattern": "^[a-z][a-z0-9_]*$"},
+      "help": "A document kind object_documents.KINDS declares -- invoice, quote, order, purchase_order, packing_slip. Free text rather than a schema enum on purpose: the kind registry is code (it also decides the money rule and the address role), and a second copy of the list here could only ever disagree with it."
+    },
+    {
+      "name": "source",
+      "type": "text",
+      "required": true,
+      "label": "Source",
+      "validation": {"max_length": 200},
+      "help": "The record this document was rendered FROM, as 'collection/{id}' -- 'orders/9f3...', 'invoices/inv1'. A pointer, not a copy: the snapshot already holds what was said, and this says what it was said about, so 'which quote did we send them?' has an answer that survives the quote becoming an order."
+    },
+    {
+      "name": "token",
+      "type": "text",
+      "read_only": true,
+      "label": "Token",
+      "validation": {"max_length": 120},
+      "help": "The capability that opens /d/{token}. Read-only in the schema: never client-submitted, minted only by action_send_document with preserve_read_only=True (the escape hatch object_records reserves for a caller that owns a field's derivation). The client controls WHETHER a document is sent; it never controls what the token is."
+    },
+    {
+      "name": "sent_to",
+      "type": "text",
+      "required": true,
+      "label": "Sent To",
+      "validation": {"max_length": 200},
+      "help": "The address this copy went to. Part of the idempotency key with `source`: sending the same document to the same person twice is one document and one email, while sending it to their accounts department as well is genuinely a second delivery with its own link and its own opened_at."
+    },
+    {
+      "name": "sent_at",
+      "type": "datetime",
+      "label": "Sent",
+      "help": "One half of what the changed-document banner has to name. Stamped by the action, not derived at read time."
+    },
+    {
+      "name": "opened_at",
+      "type": "datetime",
+      "label": "Opened",
+      "help": "First view of the link, stamped once and never restamped -- idempotent by construction, because the fact worth keeping is 'they opened it', not how many times. Blank means never opened, which is a different follow-up from 'read it three times and did not reply'."
+    },
+    {
+      "name": "content_hash",
+      "type": "text",
+      "label": "Content Hash",
+      "validation": {"max_length": 128},
+      "help": "object_documents.content_hash of the snapshot: canonical JSON, SHA-256. The seal on the evidence -- a snapshot that no longer hashes to this has been edited by something that had no business editing it."
+    },
+    {
+      "name": "source_rev",
+      "type": "text",
+      "label": "Source Rev",
+      "validation": {"max_length": 128},
+      "help": "object_records.compute_record_rev of the source record at the moment of sending. Comparing it to the live record's rev is how site_document knows the source has changed -- exact, and immune to the same-second edit a timestamp comparison would miss. Blank on a row whose source could not be read at send time, which reads as 'cannot tell' and shows no banner rather than a false one."
+    },
+    {
+      "name": "snapshot",
+      "type": "textarea",
+      "label": "Snapshot",
+      "validation": {"max_length": 65536},
+      "help": "The rendered model as JSON -- header, identity, parties, lines, totals, terms, footer, exactly as object_documents.build_model produced it. This is the document. A packing slip's snapshot contains no prices at all, because build_model drops money from the model rather than hiding it in the renderer, so the no-prices rule survives being written to disk."
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    }
+  ],
+  "forms": {
+    "default": {
+      "fields": ["kind", "source", "sent_to", "sent_at"]
+    }
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["kind", "source", "sent_to", "sent_at", "opened_at"],
+    "filter_fields": ["kind"]
+  },
+  "search": {
+    "fields": ["sent_to", "source"]
+  }
+}

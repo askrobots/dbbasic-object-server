@@ -60,12 +60,19 @@ BROWSER = "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/128 Safari/537.36"
 
 @pytest.fixture()
 def site(tmp_path, monkeypatch):
-    """An ASGI server with analytics on and one page object to hit.
+    """An ASGI server with analytics on, the visitor cookie deliberately
+    switched ON, and one page object to hit.
 
     None of the cookie behaviour is testable in-process: the header is
     added by the response layer and the token is stamped by the capture
     hook, so a test that calls an object directly proves nothing about
     either. These drive the app, same as tests/test_site_cookies.py.
+
+    The cookie is OFF by default now, so this fixture has to ask for it.
+    That is the point rather than an inconvenience: every test below
+    describes a box whose operator made a deliberate choice, and the
+    default box -- the one that stores nothing on anybody's device -- is
+    covered by its own tests further down.
     """
     data_dir = tmp_path / "data"
     stage_collection(data_dir, "app-analytics", "page_views")
@@ -80,6 +87,27 @@ def site(tmp_path, monkeypatch):
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
     monkeypatch.setenv("DBBASIC_ENABLE_SITE_ROUTES", "true")
     monkeypatch.setenv("DBBASIC_ANALYTICS", "on")
+    monkeypatch.setenv("DBBASIC_ANALYTICS_VISITOR_COOKIE", "on")
+    return data_dir
+
+
+@pytest.fixture()
+def default_site(tmp_path, monkeypatch):
+    """The same server with nothing switched on but capture -- the
+    DEFAULT box. Analytics is recording, and still nothing is stored on
+    anybody's device."""
+    data_dir = tmp_path / "data"
+    stage_collection(data_dir, "app-analytics", "page_views")
+    objects_dir = tmp_path / "objects"
+    (objects_dir / "site").mkdir(parents=True)
+    (objects_dir / "site" / "probe.py").write_text(
+        "def GET(request):\n"
+        "    return {'status': 200, 'content_type': 'text/plain', 'body': 'ok'}\n")
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(objects_dir))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("DBBASIC_ENABLE_SITE_ROUTES", "true")
+    monkeypatch.setenv("DBBASIC_ANALYTICS", "on")
+    monkeypatch.delenv("DBBASIC_ANALYTICS_VISITOR_COOKIE", raising=False)
     return data_dir
 
 
@@ -195,6 +223,86 @@ def test_it_is_never_set_on_an_asset_or_api_path(site):
     assert visitor_cookies(call("/healthz")) == []
     assert visitor_cookies(call("/api/mcp", method="POST")) == []
     assert visitor_cookies(call("/collections/notes/records")) == []
+
+
+# --- the default: nothing is stored on anybody's device -----------------------
+
+def test_no_visitor_cookie_is_set_by_default(default_site):
+    """The posture the whole privacy design rests on.
+
+    With DBBASIC_ANALYTICS_VISITOR_COOKIE unset -- the default -- this
+    server sets NO visitor cookie on any response, even with analytics
+    recording. It behaves exactly as it did before the cookie existed:
+    visitors counted by address, nothing written to a device, and so no
+    ePrivacy consent trigger anywhere in the world. A banner is not
+    needed because there is nothing to ask about.
+    """
+    for path in ("/probe", "/", "/nope", "/probe?x=1"):
+        sent = call(path)
+        assert visitor_cookies(sent) == [], path
+        # And not by any other name either: no set-cookie at all on a
+        # page nobody signed in on and no basket was touched.
+        assert [value for key, value in sent["headers"]
+                if key.lower() == "set-cookie"] == [], path
+
+
+def test_the_default_still_counts_visitors_by_address(default_site):
+    """Off is not broken. Rows are still written and still threadless,
+    which is the trade being made rather than a failure of it."""
+    call("/probe")
+    rows = page_views(default_site)
+    assert rows and all(row["session_id"] == "" for row in rows)
+    assert rows[0]["ip"] or rows[0]["ip"] == ""     # a row exists at all
+
+
+def test_turning_it_on_is_the_only_thing_that_changes(site):
+    """The same server, one env var different, and now exactly one
+    identifier is stored -- with the lifetime the setting states."""
+    minted = visitor_cookies(call("/probe"))
+    assert len(minted) == 1
+    assert f"Max-Age={object_analytics.DEFAULT_VISITOR_DAYS * 86400}" in minted[0]
+
+
+def test_the_switch_is_pure_and_defaults_off():
+    assert not object_analytics.visitor_cookie_enabled({})
+    assert not object_analytics.visitor_cookie_enabled(
+        {"DBBASIC_ANALYTICS_VISITOR_COOKIE": "off"})
+    assert object_analytics.visitor_cookie_enabled(
+        {"DBBASIC_ANALYTICS_VISITOR_COOKIE": "on"})
+    # Analytics being on is not enough on its own: a log and a device
+    # identifier are separate acts and this is the separate switch.
+    assert not object_analytics.should_set_visitor_cookie(
+        "/", {}, env={"DBBASIC_ANALYTICS": "on"})
+    assert object_analytics.should_set_visitor_cookie(
+        "/", {}, env={"DBBASIC_ANALYTICS": "on",
+                      "DBBASIC_ANALYTICS_VISITOR_COOKIE": "on"})
+
+
+def test_the_boot_line_states_the_obligation_rather_than_the_setting():
+    """`DBBASIC_ANALYTICS_VISITOR_COOKIE=on` is not information; what it
+    commits an operator to is. Both the daemon and the server print this
+    line, so an operator who flips the switch is told what they took on
+    without having to go and read a document."""
+    on = object_analytics.visitor_cookie_posture(
+        {"DBBASIC_ANALYTICS_VISITOR_COOKIE": "on"})
+    assert "stores an identifier on a visitor's device" in on
+    assert "in the EU/UK that requires consent" in on
+    assert object_analytics.VISITOR_COOKIE_NAME in on
+
+    off = object_analytics.visitor_cookie_posture({})
+    assert "off (default)" in off
+    assert "no identifier is stored on any device" in off
+    assert "requires consent" not in off
+
+
+def test_dnt_and_gpc_still_suppress_it_when_it_is_switched_on(site):
+    """Switching the cookie on does not switch the refusals off. These
+    are the two ways a browser says no, and both mean no cookie -- not a
+    shorter one, not an anonymised one."""
+    assert visitor_cookies(call("/probe", headers={"dnt": "1"})) == []
+    assert visitor_cookies(call("/probe", headers={"sec-gpc": "1"})) == []
+    # DNT: 0 is a positive statement of consent, not a refusal.
+    assert len(visitor_cookies(call("/probe", headers={"dnt": "0"}))) == 1
 
 
 def test_nothing_is_set_when_analytics_is_off(tmp_path, monkeypatch, site):
@@ -812,6 +920,12 @@ def page_env(tmp_path, monkeypatch, *, settings=(), views=(), goals=()):
     stage_collection(data_dir, "app-settings", "app_settings", rows=rows)
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
     monkeypatch.setenv("DBBASIC_ANALYTICS", "on")
+    # These describe the box whose operator chose the visitor cookie --
+    # new-versus-returning, the floor caveat and the cookie note only
+    # exist there. The default box gets its own test below, which asserts
+    # the page says the question is not asked rather than answering it
+    # with a zero.
+    monkeypatch.setenv("DBBASIC_ANALYTICS_VISITOR_COOKIE", "on")
     for row in views:
         row = dict(row)
         row.pop("created_at", None)
@@ -904,3 +1018,18 @@ def test_the_page_still_says_an_ip_is_not_a_person(tmp_path, monkeypatch):
     assert "distinct IP address" in body
     assert "dbbasic_visitor" in body
     assert "Do Not Track" in body
+
+
+def test_the_page_does_not_answer_new_versus_returning_when_no_cookie_is_set(
+        tmp_path, monkeypatch):
+    """The default box. "0% returning" would be a confident zero where
+    the truth is that the question is not asked -- the exact failure this
+    page is written against -- and it would also have /visitors quietly
+    disagreeing with /privacy, which says no identifier is stored."""
+    page_env(tmp_path, monkeypatch, views=[view("a", "/shop", at="")])
+    monkeypatch.delenv("DBBASIC_ANALYTICS_VISITOR_COOKIE", raising=False)
+    body = render({"_identity": {"user_id": "dan"}})["body"]
+    assert "Not measured on this server" in body
+    assert "% returning" not in body
+    assert "asks the browser to remember nothing at all" in body
+    assert "distinct IP address" in body        # the ceiling note stays

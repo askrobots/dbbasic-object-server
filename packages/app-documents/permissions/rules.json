@@ -1,0 +1,33 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update"],
+      "collection": "sent_documents",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "a sent document is the operator's own record of their own paperwork leaving their own building, so it is owner-scoped like every other business document here. NO DELETE, deliberately: a document that was sent cannot be made not to have been sent, and the whole point of the row is to be able to answer 'what did we actually send them?' when a customer produces a printout six weeks later. A link that should stop working is revoked by regenerating the token, not by deleting the evidence -- the same distinction app-returns draws between a declined RMA and a vanished one"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_document",
+      "reason": "the customer is NOT a user of this system, exactly as site_invoice_portal argues: a document is emailed to an address, not to an identity, so there is no account to sign into and no signup wall to put between somebody and the quote they asked for. Access is a capability URL -- an unguessable token matched with hmac.compare_digest -- granting exactly 'read this one document as it was sent'. Public EXECUTE on the page object only; the sent_documents collection itself stays owner-scoped above, so nothing here widens what the HTTP collection API will hand out"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "action_send_document",
+      "reason": "sending a customer their own paperwork is counter work, not owner-only work -- making somebody fetch an account holder before they can email a quote is how quotes stop going out. What it can reach is bounded inside the object: it refuses a source record owned by somebody else unless the caller is an admin, so 'anybody signed in may send' never becomes 'anybody signed in may read anybody's records'"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "action_render_pdf",
+      "reason": "registered rather than public on purpose. The capability is an operator convenience; the CUSTOMER's delivery is the tokened link, which already prints and already saves as PDF from any browser. A public PDF endpoint would be a second door onto the same documents with a second set of reasoning about tokens behind it, and today it would only ever return a 409 naming an engine nobody has installed"
+    }
+  ]
+}

@@ -1965,6 +1965,11 @@ def main():
         print(f"Analytics: capture ON (retention {object_analytics.retention_days()}d)")
     else:
         print("Analytics: capture off (DBBASIC_ANALYTICS unset)")
+    # Stated in words, every boot, because the cookie is the only thing
+    # this server stores on somebody else's device and the setting that
+    # turns it on is one word in an env file. An operator should not have
+    # to go and read a document to find out what they took on.
+    print(f"Analytics: {object_analytics.visitor_cookie_posture()}")
     print()
     print("Press Ctrl+C to stop")
     print("=" * 60)

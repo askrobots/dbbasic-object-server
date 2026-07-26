@@ -141,6 +141,30 @@ def _setting(base, key):
     return ""
 
 
+def _cookie_note():
+    """What this box asks a browser to remember, folded from the setting
+    rather than asserted. The old wording said "the one thing this server
+    does ask a browser to remember is a first-party cookie" as a flat
+    fact; with the cookie defaulted off that sentence was false on every
+    default install, and an analytics page that misdescribes its own
+    collection is the failure this whole package is written against."""
+    if not object_analytics.visitor_cookie_enabled():
+        return ("This server asks the browser to remember nothing at all for "
+                "analytics: the first-party "
+                f"<code>{_esc(object_analytics.VISITOR_COOKIE_NAME)}</code> "
+                "cookie is off, which is the default, so every visit looks new "
+                "and no identifier is stored on anybody's device.")
+    return ("The one thing this server does ask a browser to remember is a "
+            "first-party "
+            f"<code>{_esc(object_analytics.VISITOR_COOKIE_NAME)}</code> cookie — "
+            "an opaque token, HttpOnly, SameSite, "
+            f"{object_analytics.visitor_days()} days, never set for anyone "
+            "sending Do Not Track or Global Privacy Control, and never joined "
+            "to a signed-in account. It makes returning visitors countable and "
+            "it does not raise the ceiling: it still cannot tell a phone from a "
+            "laptop, and nobody is fingerprinted.")
+
+
 def _caveat_tail(caveat):
     """The caveat minus its own headline, so the page can bold the
     headline and keep the sentence. Read from the fold rather than
@@ -150,6 +174,24 @@ def _caveat_tail(caveat):
 
 
 def _returning_block(rows, days):
+    # New-versus-returning is the one number the visitor cookie buys, so
+    # with the cookie off it is not a zero -- it is a question this box
+    # deliberately does not ask. Rendering "0% returning" here would be
+    # exactly the confident-zero failure the rest of this page is written
+    # against, and it would also be the page quietly disagreeing with
+    # /privacy, which says no identifier is stored.
+    if not object_analytics.visitor_cookie_enabled():
+        return f"""
+<h2 style="font-size:1rem">New versus returning</h2>
+<p class="vis-note"><strong>Not measured on this server.</strong> The
+first-party <code>{_esc(object_analytics.VISITOR_COOKIE_NAME)}</code> cookie is
+off (the default), so nothing is stored on a visitor's device and a returning
+visitor is indistinguishable from a new one. Everything above still works —
+this is the one question that goes away. Setting
+<code>{_esc(object_analytics.VISITOR_COOKIE_ENV)}=on</code> answers it, and
+{_esc(object_analytics.OBLIGATION)}. See <a href="/privacy">/privacy</a>, which
+states whichever of the two you chose.</p>
+"""
     fold = object_conversions.returning_visitors(rows, window_days=days)
     cards = "".join(
         f'<div class="vis-card"><div class="n">{value}</div>'
@@ -440,15 +482,10 @@ owner address or carrying the admin token, shown rather than hidden so you
 can check the page is recording at all.</p>
 <p class="hint">Unique means distinct IP address, which is an
 approximation and not a person: an office behind one connection counts
-once, a phone moving between wifi and cellular counts twice. The one thing
-this server does ask a browser to remember is a first-party
-<code>dbbasic_visitor</code> cookie — an opaque token, HttpOnly, SameSite,
-{object_analytics.visitor_days()} days, never set for anyone sending Do Not
-Track or Global Privacy Control, and never joined to a signed-in account. It
-makes returning visitors countable and it does not raise the ceiling: it still
-cannot tell a phone from a laptop, and nobody is fingerprinted. Page views are
-kept for {retention} days
-&middot; <a href="/analytics">path and status detail</a>.</p>
+once, a phone moving between wifi and cellular counts twice. {_cookie_note()}
+Page views are kept for {retention} days
+&middot; <a href="/analytics">path and status detail</a>
+&middot; <a href="/privacy">what visitors are told</a>.</p>
 """
     return _page(body)
 

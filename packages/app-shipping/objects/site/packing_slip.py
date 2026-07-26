@@ -12,12 +12,29 @@ precisely how a birthday present arrives with the amount paid stapled to
 it. The invoice has its own door (the payment portal) for anyone who
 wants the numbers.
 
-Printable rather than pretty: minimal print CSS, the nav hidden at
-@media print, everything else the ordinary page shell so an operator does
-not arrive somewhere that looks like a different product. Operator-facing,
-not customer-facing -- the shipment id is an internal record id, so this
-page sits behind the ordinary registered permission rather than a
-capability token like the invoice portal's.
+**Since the document layer landed, that rule is a PARAMETER, not a
+paragraph.** `object_documents.KINDS["packing_slip"]["show_money"]` is
+False, there is no per-call override offered, and build_model does not
+hide the money -- it never puts it in the model. This file cannot print a
+price even by mistake, because it never holds one: it passes `money=None`
+to the fold, and the fold never asks for a formatter it was told not to
+need. The old version achieved the same outcome by simply not writing the
+columns, which worked exactly as long as everybody who edited the file had
+read the docstring first.
+
+Everything else this page draws -- header, identity, ship-to, the lines
+table, page breaks, the repeated table heading, @page size -- now comes
+from the shared renderer instead of from a private `@media print` block
+that agreed with the other six printables about nothing. The one rule
+those six blocks all missed was `thead { display: table-header-group }`,
+which is why a shipment with fifty lines used to print its column
+headings once.
+
+Printable rather than pretty, and the nav stays: this is an operator page
+(the shipment id is an internal record id, so it sits behind the ordinary
+registered permission rather than a capability token like the invoice
+portal's), and an operator must not arrive somewhere that looks like a
+different product.
 
 customer_note and gift_message are printed WHEN THEY EXIST, read with
 .get. Checkout now collects both and stamps them on the order the moment
@@ -31,8 +48,7 @@ unprinted is a gift message that never happened.
 
 The gift message needs no gift flag beside it. This page shows no prices
 at all, by construction, so every parcel is already gift-safe: the
-message is about warmth, not secrecy, and a flag somebody forgets to tick
-is precisely how the amount paid ends up stapled to a present.
+message is about warmth, not secrecy.
 
 An unknown shipment is a friendly 404 in the same shell, never a
 traceback: a mistyped link is somebody who is still at their desk trying
@@ -42,9 +58,11 @@ to send a parcel.
 import html
 import os
 
+import object_documents
 import object_records
 
 ACTOR = "site_packing_slip"
+KIND = "packing_slip"
 
 
 def _base_dir():
@@ -59,94 +77,48 @@ def _esc(value):
     return html.escape(_text(value))
 
 
-def _esc_multiline(value):
-    return _esc(value).replace("\n", "<br>")
-
-
-_STYLE = """
-.wrap { max-width: 720px; margin: 0 auto; padding: 2rem 1.25rem; }
-.pagehead { margin-bottom: 1.5rem; }
-.pagehead h1 { margin: 0 0 0.25rem; font-size: 1.4rem; }
-.hint { color: var(--muted, #999); font-size: 0.9rem; }
-.shipto { border: 1px solid var(--line, #333); border-radius: 8px; padding: 0.9rem 1.1rem; margin: 1rem 0; }
-.note { border: 1px solid var(--line, #333); border-radius: 8px; padding: 0.9rem 1.1rem; margin: 1rem 0; white-space: pre-wrap; }
-table.lines { width: 100%; border-collapse: collapse; margin: 1rem 0 1.5rem; }
-table.lines th, table.lines td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--line, #38384a); }
-table.lines td.num, table.lines th.num { text-align: right; }
-.notfound { text-align: center; padding: 3rem 1rem; }
-@media print {
-  nav, header.app, .noprint, .btn { display: none !important; }
-  .wrap { max-width: none; padding: 0; }
-  body { background: #fff; color: #000; }
-  .shipto, .note { border-color: #999; }
-}
-"""
-
-
-def _page(body, *, title, status=200):
-    page = {
-        "content_type": "text/html; charset=utf-8",
-        "body": f"""<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{_esc(title)}</title>
-<link rel="stylesheet" href="/style">
-<style>{_STYLE}</style>
-</head>
-<body>
-<div class="wrap">
-{body}
-</div>
-<script src="/nav"></script>
-</body>
-</html>""",
-    }
-    if status != 200:
-        page["status"] = status
-    return page
+def _settings(base):
+    """Every app_settings row as one mapping -- what object_documents wants,
+    and one scan instead of four. Duplicated on purpose like every other
+    package that reads app_settings (docs/logic-decisions.md #4)."""
+    values = {}
+    try:
+        for row in object_records.read_collection_records("app_settings",
+                                                          base_dir=base):
+            key, value = _text(row.get("key")), _text(row.get("value"))
+            if key and value:
+                values[key] = value
+    except Exception:
+        pass
+    return values
 
 
 def _not_found():
-    return _page(
-        '<div class="notfound"><h1>Not found</h1>'
-        '<p class="hint">There is no shipment with that id. It may have been '
-        'mistyped, or the shipment may have been deleted. '
-        '<a href="/pick-list">Back to the pick list</a>.</p></div>',
-        title="Packing slip -- not found", status=404)
+    """A friendly 404 in the same shell -- an empty document with the message
+    where the document would have been, rather than a traceback at somebody
+    who is still trying to send a parcel."""
+    return object_documents.render_page(
+        object_documents.build_model(KIND, {}, {}, require_business=False),
+        title="Packing slip -- not found",
+        before='<h1>Not found</h1>'
+               '<p class="doc-hint">There is no shipment with that id. It may '
+               'have been mistyped, or the shipment may have been deleted. '
+               '<a href="/pick-list">Back to the pick list</a>.</p>',
+        setup_nudge=False,
+        status=404)
 
 
-def _lines_html(lines):
-    if not lines:
-        return ('<p class="hint">This shipment has no lines yet -- nothing '
-                'has been picked into it.</p>')
-    rows = "".join(
-        "<tr>"
-        f"<td>{_esc(line.get('description')) or _esc(line.get('product_id'))}</td>"
-        f"<td class=\"num\">{_esc(line.get('quantity') or '1')}</td>"
-        "</tr>"
-        for line in lines)
-    return f"""
-<table class="lines">
-<thead><tr><th>Item</th><th class="num">Qty</th></tr></thead>
-<tbody>{rows}</tbody>
-</table>"""
-
-
-def _note_html(order):
+def _notes_for(order):
     """Special instructions and a gift message, when the order has such
     fields at all -- .get, never [], see the module docstring."""
-    blocks = []
+    notes = []
     note = _text(order.get("customer_note"))
     if note:
-        blocks.append('<div class="note"><strong>Special instructions</strong>'
-                      f"<br>{_esc_multiline(note)}</div>")
+        notes.append({"title": "Special instructions", "body": note})
     gift = _text(order.get("gift_message"))
     if gift:
-        blocks.append('<div class="note"><strong>Gift message</strong>'
-                      f"<br>{_esc_multiline(gift)}</div>")
-    return "".join(blocks)
+        notes.append({"title": "Gift message", "body": gift})
+    return notes
 
 
 def GET(request):
@@ -169,6 +141,7 @@ def GET(request):
             "orders", _text(shipment.get("order_id")), base_dir=base)
     except Exception:
         order = {}
+    order = order or {}
 
     try:
         lines = [row for row in object_records.read_collection_records(
@@ -183,28 +156,45 @@ def GET(request):
             or _text(shipment.get("created_at"))[:10]
             or _text(order.get("order_date")))
 
-    ship_to = _text(shipment.get("ship_to_name")) or _text(order.get("customer_name"))
-    address = _text(shipment.get("ship_to_address"))
-    address_html = f"<br>{_esc_multiline(address)}" if address else ""
-
     carrier = _text(shipment.get("carrier"))
     tracking = _text(shipment.get("tracking_number"))
     carriage = " &middot; ".join(
         part for part in (_esc(carrier), _esc(tracking)) if part)
 
-    body = f"""
-<div class="pagehead">
-<h1>Packing slip</h1>
-<p class="hint">Order {_esc(number)}
-&middot; {_esc(when) or 'no date'}
-&middot; shipment {_esc(shipment_id)}</p>
-</div>
-<div class="shipto"><strong>Ship to</strong><br>{_esc(ship_to) or 'No name on this order'}{address_html}</div>
-{_note_html(order)}
-{_lines_html(lines)}
-<p class="hint">This is a packing slip, not an invoice: it says what is in
-the box and deliberately carries no prices, so any parcel can be sent as a
-gift.{(' &middot; ' + carriage) if carriage else ''}</p>
-<p class="hint noprint"><a href="/pick-list">Pick list</a></p>
-"""
-    return _page(body, title=f"Packing slip -- order {number}")
+    # money=None is not an omission: on a no-prices kind the fold never calls
+    # a formatter, so there is nothing here that could produce a price.
+    facts = object_documents.facts_from_records(
+        KIND, shipment, lines, money=None,
+        extra={
+            "number": number,
+            "date": when,
+            "reference": f"shipment {shipment_id}",
+            "to": {"name": (_text(shipment.get("ship_to_name"))
+                            or _text(order.get("customer_name"))
+                            or "No name on this order"),
+                   "address": _text(shipment.get("ship_to_address"))},
+            "notes": _notes_for(order),
+            "footer": ("This is a packing slip, not an invoice: it says what "
+                       "is in the box and deliberately carries no prices, so "
+                       "any parcel can be sent as a gift."
+                       + ((" &middot; " + carriage) if carriage else "")),
+        })
+
+    settings = _settings(base)
+    # require_business=False: an operator is standing at a printer and a parcel
+    # is waiting. A nameless business is refused where refusing costs nothing
+    # -- at send time, in action_send_document -- and nudged (no-print) here.
+    model = object_documents.build_model(KIND, facts, settings,
+                                         require_business=False)
+
+    empty = ('<p class="doc-hint">This shipment has no lines yet -- nothing '
+             'has been picked into it.</p>' if not model["lines"] else "")
+    pdf = object_documents.pdf_engine_status(
+        settings.get(object_documents.PDF_ENGINE_SETTING))
+
+    return object_documents.render_page(
+        model,
+        title=f"Packing slip -- order {number}",
+        after=empty + '<p class="doc-hint noprint"><a href="/pick-list">Pick list</a></p>',
+        pdf=pdf["available"],
+        size=settings.get(object_documents.PAGE_SIZE_SETTING))
