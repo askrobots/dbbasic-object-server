@@ -229,3 +229,109 @@ def test_billing_not_installed_is_a_graceful_skip(tmp_path, monkeypatch):
     data_dir.mkdir()
     monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
     assert replenish()["skipped"].startswith("billing not installed")
+
+
+# --- rule 2: a provenance marker is used once ---------------------------------
+#
+# Doctrine #7 says a replayed event posts nothing twice, and every money
+# writer here already honours it -- by READING the ledger, looking for its
+# marker, then writing. That is check-then-write, and it is only as good
+# as the absence of a second writer in between. system_wallet_replenish
+# runs on a daily schedule AND by hand; the Stripe charge is safe because
+# that pass sends its marker as Stripe's idempotency_key, but the wallet
+# credit that follows had nothing protecting it, so the customer could be
+# credited twice for one card charge and the shop ate the difference.
+
+def test_a_marker_cannot_be_posted_to_the_ledger_twice(tmp_path, monkeypatch):
+    data_dir = setup_env(tmp_path, monkeypatch)
+    make_wallet(data_dir)
+    entry(data_dir, "w1", 500, kind="auto_topup",
+          generated_from="auto_topup/w1/2026-07/500")
+
+    refused = hook({"wallet_id": "w1", "amount_minor": "500",
+                    "kind": "auto_topup",
+                    "generated_from": "auto_topup/w1/2026-07/500"})
+    assert refused["status"] == 409
+    assert "already been posted" in refused["error"]
+    assert "auto_topup/w1/2026-07/500" in refused["error"]
+
+
+def test_the_duplicate_check_covers_credits_which_is_the_case_it_exists_for(tmp_path, monkeypatch):
+    data_dir = setup_env(tmp_path, monkeypatch)
+    """A duplicated credit is money leaving the business exactly as a
+    duplicated debit is money leaving a customer, so the marker check runs
+    BEFORE the 'money arriving is never gated' shortcut."""
+    make_wallet(data_dir)
+    entry(data_dir, "w1", 2000, kind="topup", generated_from="checkout/o-1")
+
+    # A credit -- the path that used to return before reading anything.
+    refused = hook({"wallet_id": "w1", "amount_minor": "2000",
+                    "kind": "topup", "generated_from": "checkout/o-1"})
+    assert refused["status"] == 409
+
+
+def test_a_blank_marker_is_never_a_collision(tmp_path, monkeypatch):
+    data_dir = setup_env(tmp_path, monkeypatch)
+    """Most entries carry none: a manual top-up, an adjustment, an
+    ordinary debit. Uniqueness is a property of the markers that exist,
+    not a requirement that every entry have one -- the same view
+    hook_wallets takes of a blank gift-card code."""
+    make_wallet(data_dir)
+    for n in range(3):
+        entry(data_dir, "w1", 100, kind="topup", generated_from="",
+              eid=f"blank-{n}")
+    assert hook({"wallet_id": "w1", "amount_minor": "100",
+                 "kind": "topup", "generated_from": ""}) is None
+    assert hook({"wallet_id": "w1", "amount_minor": "100",
+                 "kind": "topup"}) is None
+
+
+def test_a_different_marker_from_the_same_source_still_posts(tmp_path, monkeypatch):
+    data_dir = setup_env(tmp_path, monkeypatch)
+    """The template runner writes release and charge as two legs of one
+    settlement, with distinct markers. Refusing the second because it
+    shares a prefix would break every multi-leg settlement on the box."""
+    make_wallet(data_dir)
+    entry(data_dir, "w1", 5000, kind="topup")
+    entry(data_dir, "w1", 50, kind="release",
+          generated_from="template_run/r1/release")
+    assert hook({"wallet_id": "w1", "amount_minor": "-50", "kind": "debit",
+                 "generated_from": "template_run/r1/charge"}) is None
+
+
+def test_an_unreadable_ledger_now_refuses_credits_too(tmp_path, monkeypatch):
+    data_dir = setup_env(tmp_path, monkeypatch)
+    """It already failed closed for debits (unknown balance). It must fail
+    closed for credits as well now, because an unreadable ledger also
+    means unknown markers, and posting into that is how a duplicate
+    becomes permanent."""
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir / "gone"))
+    refused = hook({"wallet_id": "w1", "amount_minor": "500",
+                    "kind": "topup", "generated_from": "auto_topup/w1/x"})
+    assert refused["status"] == 409
+    assert "unreadable" in refused["error"]
+
+
+def test_two_overlapping_topups_credit_the_wallet_once(tmp_path, monkeypatch):
+    data_dir = setup_env(tmp_path, monkeypatch)
+    """The reproduction. Both passes find no marker and both try to
+    credit; the ledger accepts one. Before this rule the wallet ended up
+    with 1000 against a single 500 charge at the card."""
+    make_wallet(data_dir)
+    marker = "auto_topup/w1/2026-07/500"
+    credit = {"wallet_id": "w1", "amount_minor": "500", "kind": "auto_topup",
+              "generated_from": marker, "owner_id": "dan"}
+
+    landed = 0
+    for _ in range(2):
+        if hook(dict(credit)) is None:
+            object_records.create_collection_record(
+                "wallet_entries", dict(credit), base_dir=data_dir)
+            landed += 1
+
+    assert landed == 1
+    total = sum(int(r["amount_minor"]) for r in
+                object_records.read_collection_records("wallet_entries",
+                                                       base_dir=data_dir)
+                if r["wallet_id"] == "w1")
+    assert total == 500
