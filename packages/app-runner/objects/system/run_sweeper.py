@@ -93,32 +93,57 @@ def EVENT(request):
         entries = []
 
     swept = []
+    # STEP 1 -- decide. Writing off a run is a COMPARE-AND-SET, because the
+    # sweeper races the runner it is sweeping: a runner that heartbeats or
+    # finishes between our staleness read and our write has changed the
+    # row, so our rev no longer matches and we correctly lose. Without the
+    # precondition this pass could write off a run that was completing and
+    # hand back money for work that succeeded.
     for run in runs:
         if not object_template_runs.is_stale(run, now=now,
                                              stale_seconds=stale_seconds):
             continue
         run_id = _text(run.get("id"))
+        try:
+            object_records.update_collection_record(
+                RUNS, run_id,
+                {"status": "abandoned",
+                 "error": (f"Abandoned: no heartbeat for over {stale_seconds}s. "
+                           f"NOT retried -- the provider call may already have "
+                           f"been made; check provider_job_id before starting "
+                           f"a new run."),
+                 "finished_at": now},
+                base_dir=base, actor=ACTOR,
+                expected_rev=object_records.compute_record_rev(run))
+        except object_records.VersionConflictError:
+            # It moved while we were looking at it -- alive after all.
+            continue
+        swept.append(run_id)
 
-        released = "already settled"
-        if not object_template_runs.already_settled(run_id, entries):
-            for entry in object_template_runs.settlement(run, succeeded=False):
-                object_records.create_collection_record(
-                    "wallet_entries", entry, base_dir=base, actor=ACTOR)
-            released = "released"
-
-        object_records.update_collection_record(
-            RUNS, run_id,
-            {"status": "abandoned",
-             "error": (f"Abandoned: no heartbeat for over {stale_seconds}s. "
-                       f"The hold was {released}. NOT retried -- the provider "
-                       f"call may already have been made; check "
-                       f"provider_job_id before starting a new run."),
-             "finished_at": now},
-            base_dir=base, actor=ACTOR)
-        swept.append({"run_id": run_id, "hold": released})
+    # STEP 2 -- pay back, driven by STATE rather than by "did step 1 just
+    # run". Every terminal run whose hold has not been released gets it
+    # released, so a crash between the two steps is repaired by the next
+    # pass instead of leaving money reserved against a run that is over.
+    # Idempotent by the release marker, so this is a no-op for the runs
+    # the runner already settled itself.
+    released = []
+    for run in object_records.read_collection_records(RUNS, base_dir=base):
+        if _text(run.get("status")) not in object_template_runs.TERMINAL_STATUSES:
+            continue
+        run_id = _text(run.get("id"))
+        if object_template_runs.already_settled(run_id, entries):
+            continue
+        entries_written = object_template_runs.settlement(run, succeeded=False)
+        if not entries_written:
+            continue                       # a free run: nothing was held
+        for entry in entries_written:
+            object_records.create_collection_record(
+                "wallet_entries", entry, base_dir=base, actor=ACTOR)
+        entries.extend(entries_written)     # so a second hit this pass skips
+        released.append(run_id)
 
     return {"ok": True, "swept": len(swept), "runs": swept,
-            "stale_seconds": stale_seconds}
+            "holds_released": released, "stale_seconds": stale_seconds}
 
 
 POST = EVENT

@@ -433,3 +433,133 @@ def test_wallet_entries_gained_hold_and_release_and_nothing_was_removed():
     kind = next(f for f in schema["fields"] if f["name"] == "kind")
     assert set(kind["enum"]) == {"topup", "auto_topup", "debit", "refund",
                                  "promo", "adjustment", "hold", "release"}
+
+
+# --- the claim race (63) --------------------------------------------------------
+#
+# The bug this closes was shipped and deployed before it was found, and it
+# is worth stating exactly: two passes -- the minutely schedule and an
+# operator pressing Run Now -- both read the same row as `queued`, both
+# wrote `claimed` (the transition check is a no-op when old == new), and
+# both ran the handler. Settlement is idempotent, so the USER was charged
+# once. That is what made it dangerous: the duplicate landed on OUR side
+# of the ledger as a second provider bill, which nothing in the money
+# model was watching.
+
+def _runner_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_tr", PACKAGES / "app-runner" / "objects" / "system"
+        / "template_runner.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_a_pass_holding_a_stale_row_loses_the_claim_and_never_executes(data_dir):
+    """Deterministic version: read a run, let somebody else move it, then
+    try to claim it with the row we read. The handler must not run."""
+    seed_template(data_dir)
+    seed_wallet(data_dir, 200)
+    queue(data_dir)
+
+    stale = object_records.read_collection_records("template_runs",
+                                                    base_dir=data_dir)[0]
+
+    # Another pass gets there first.
+    object_records.update_collection_record(
+        "template_runs", stale["id"],
+        {"status": "claimed", "claimed_by": "the-other-pass"},
+        base_dir=data_dir)
+
+    result = _runner_module()._execute_one(data_dir, stale, 30)
+    assert result["status"] == "lost_claim"
+    assert result["settlement"] == "not ours"
+
+    run = object_records.read_collection_records("template_runs",
+                                                  base_dir=data_dir)[0]
+    assert run["claimed_by"] == "the-other-pass"    # not overwritten
+    assert run["output"] == ""                      # handler never ran
+    assert balance(data_dir) == 150                 # still just the hold
+
+
+def test_two_concurrent_passes_execute_a_run_exactly_once(data_dir):
+    """The integration proof. Before the fix this reported [1, 1] and two
+    executions; a provider handler would have been called twice and billed
+    twice. Cannot fail spuriously: if the threads happen to serialise, the
+    second pass simply finds nothing queued -- still one execution."""
+    import threading
+
+    seed_template(data_dir)
+    seed_wallet(data_dir, 200)
+    queue(data_dir)
+
+    results = []
+    threads = [threading.Thread(
+        target=lambda: results.append(run_object("system_template_runner", {})))
+        for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert sum(r["claimed"] for r in results) == 1, results
+
+    runs = object_records.read_collection_records("template_runs",
+                                                   base_dir=data_dir)
+    assert len(runs) == 1 and runs[0]["status"] == "succeeded"
+    assert balance(data_dir) == 150          # charged exactly once
+
+
+def test_the_sweeper_will_not_write_off_a_run_that_moved_under_it(data_dir):
+    """The sweeper races the runner it is sweeping. A run that heartbeats
+    between the staleness read and the write has changed the row, so the
+    write-off loses -- otherwise the sweeper hands back money for work
+    that was in the middle of succeeding."""
+    seed_template(data_dir)
+    seed_wallet(data_dir, 200)
+    queue(data_dir)
+
+    stale = object_records.read_collection_records("template_runs",
+                                                    base_dir=data_dir)[0]
+    object_records.update_collection_record(
+        "template_runs", stale["id"],
+        {"status": "claimed", "claimed_by": "runner",
+         "claimed_at": "2026-07-26T01:00:00Z",
+         "heartbeat_at": "2026-07-26T01:00:00Z"},
+        base_dir=data_dir)
+
+    import object_records as records
+    with pytest.raises(records.VersionConflictError):
+        records.update_collection_record(
+            "template_runs", stale["id"], {"status": "abandoned"},
+            base_dir=data_dir,
+            expected_rev=records.compute_record_rev(stale))
+
+
+def test_the_sweeper_repairs_a_hold_a_crash_left_behind(data_dir):
+    """Step 2 is driven by STATE, not by 'did step 1 just run'. A crash
+    between writing off a run and releasing its hold used to leave money
+    reserved forever, because a run already marked abandoned is no longer
+    stale and would never be looked at again."""
+    seed_template(data_dir)
+    seed_wallet(data_dir, 200)
+    queue(data_dir)
+    assert balance(data_dir) == 150          # held
+
+    run = object_records.read_collection_records("template_runs",
+                                                  base_dir=data_dir)[0]
+    # Exactly the state a crash between the two steps leaves: terminal,
+    # with the hold still on.
+    object_records.update_collection_record(
+        "template_runs", run["id"], {"status": "abandoned"},
+        base_dir=data_dir)
+
+    result = run_object("system_run_sweeper", {"now": "2026-07-26T12:00:00Z"})
+    assert run["id"] in result["holds_released"]
+    assert balance(data_dir) == 200          # money back, without a retry
+
+    # And it is not released a second time.
+    again = run_object("system_run_sweeper", {"now": "2026-07-26T13:00:00Z"})
+    assert again["holds_released"] == []
+    assert balance(data_dir) == 200

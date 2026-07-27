@@ -226,14 +226,46 @@ def _settle(base, run, *, succeeded):
     return "settled"
 
 
+def _claim(base, run):
+    """Take exclusive ownership of a queued run, or return None if
+    somebody else got there first.
+
+    THE claim is a compare-and-set (63, plan/vocabulary/63-concurrency-spec.md),
+    not a plain write, and this is the difference between one provider
+    call and two. Without the precondition: two passes -- the minutely
+    schedule and an operator pressing Run Now -- both read the same row as
+    `queued`, both write `claimed` (the transition check is a no-op when
+    old == new), and both execute. Settlement is idempotent so the USER is
+    charged once, which is exactly what makes it dangerous: the duplicate
+    lands on OUR side of the ledger, as a second provider bill nothing in
+    the money model was watching.
+
+    `expected_rev` closes it inside the write lock: the second pass's rev
+    no longer matches the row the first pass just claimed, so it 409s and
+    never runs the handler. Same primitive, same idiom as
+    app-timers/objects/site/timer_actions.py, and the same one an agent
+    uses to claim a task.
+    """
+    return object_records.update_collection_record(
+        RUNS, _text(run.get("id")),
+        {"status": "claimed", "claimed_by": ACTOR,
+         "claimed_at": _now(), "heartbeat_at": _now()},
+        base_dir=base, actor=ACTOR,
+        expected_rev=object_records.compute_record_rev(run))
+
+
 def _execute_one(base, run, timeout):
     run_id = _text(run.get("id"))
 
-    object_records.update_collection_record(
-        RUNS, run_id,
-        {"status": "claimed", "claimed_by": ACTOR,
-         "claimed_at": _now(), "heartbeat_at": _now()},
-        base_dir=base, actor=ACTOR)
+    try:
+        _claim(base, run)
+    except object_records.VersionConflictError:
+        # Another pass claimed it between our read and our write. Not an
+        # error and not worth a retry: the run is somebody else's now, and
+        # the whole point is that we did NOT call the provider.
+        return {"run_id": run_id, "handler": _text(run.get("handler")),
+                "status": "lost_claim", "settlement": "not ours",
+                "error": ""}
 
     handler = HANDLERS.get(_text(run.get("handler")))
     if handler is None:
@@ -251,19 +283,35 @@ def _execute_one(base, run, timeout):
 
     settled = _settle(base, run, succeeded=bool(outcome["ok"]))
 
-    object_records.update_collection_record(
-        RUNS, run_id,
-        {"status": "succeeded" if outcome["ok"] else "failed",
-         "output": _text(outcome.get("output"))[:20000],
-         "error": _text(outcome.get("error"))[:2000],
-         "provider_cost_cents": str(_int(outcome.get("provider_cost_cents"))),
-         "provider_job_id": _text(outcome.get("provider_job_id")),
-         "finished_at": _now(), "heartbeat_at": _now()},
-        base_dir=base, actor=ACTOR)
+    final = "succeeded" if outcome["ok"] else "failed"
+    try:
+        object_records.update_collection_record(
+            RUNS, run_id,
+            {"status": final,
+             "output": _text(outcome.get("output"))[:20000],
+             "error": _text(outcome.get("error"))[:2000],
+             "provider_cost_cents": str(_int(outcome.get("provider_cost_cents"))),
+             "provider_job_id": _text(outcome.get("provider_job_id")),
+             "finished_at": _now(), "heartbeat_at": _now()},
+            base_dir=base, actor=ACTOR)
+    except Exception as exc:
+        # The one way this write legitimately fails: the sweeper decided
+        # our heartbeat had stopped and marked the run `abandoned`, which
+        # the transition map declares terminal -- so there is no move from
+        # it to `succeeded`, by design. The work IS done and the money is
+        # already right (the sweeper released the hold; `_settle` found
+        # that marker and charged nothing), so this must not crash the
+        # pass and take the rest of the batch with it. Report it: a run
+        # that completed after being written off is a signal that
+        # runner.stale_seconds is too short for this handler.
+        return {"run_id": run_id, "handler": _text(run.get("handler")),
+                "status": "finished_after_sweep", "settlement": settled,
+                "error": (f"Completed, but the run had already been swept as "
+                          f"abandoned, so its result could not be recorded "
+                          f"({str(exc)[:120]}). Raise runner.stale_seconds.")}
 
     return {"run_id": run_id, "handler": _text(run.get("handler")),
-            "status": "succeeded" if outcome["ok"] else "failed",
-            "settlement": settled,
+            "status": final, "settlement": settled,
             "error": _text(outcome.get("error"))[:160]}
 
 
@@ -290,7 +338,13 @@ def EVENT(request):
                     key=lambda row: _text(row.get("created_at")))
 
     results = [_execute_one(base, run, timeout) for run in queued[:batch]]
-    return {"ok": True, "claimed": len(results),
+    # `claimed` counts runs this pass actually OWNED and executed. A lost
+    # claim is another pass's run, and counting it here would report two
+    # passes as having done the same work -- the exact confusion the
+    # compare-and-set exists to make impossible.
+    executed = [r for r in results if r["status"] != "lost_claim"]
+    lost = len(results) - len(executed)
+    return {"ok": True, "claimed": len(executed), "lost_claims": lost,
             "queued_remaining": max(0, len(queued) - len(results)),
             "results": results}
 
