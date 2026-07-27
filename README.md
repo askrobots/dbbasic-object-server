@@ -28,6 +28,12 @@ release. That discipline continues as new capability lands.
 
 ## Documentation
 
+**Working on this repo with an AI agent?** Start at
+**[`AGENTS.md`](AGENTS.md)** — the doctrine, the traps that fail silently,
+and the conventions that are expensive to infer from the source. It is
+written from mistakes that reached production, and `CLAUDE.md` points at
+it so agents find the same guidance whichever tool they arrive with.
+
 Start with **[`docs/architecture.md`](docs/architecture.md)** — it maps the
 whole system (storage → runtime → data → permissions → generative UI →
 capabilities → surfaces) and links the doc for each layer. The full,
