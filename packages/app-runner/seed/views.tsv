@@ -1,0 +1,2 @@
+id	title	route	layout	blocks	owner_id	is_public	pinned	created_at
+view_template_runs	Runs	/runs	single	"[{""kind"": ""list"", ""collection"": ""template_runs"", ""search"": true, ""sort"": true, ""add"": false, ""owner_scoped"": true, ""title_field"": ""template_name""}]"		true	false	2026-01-01T00:00:00

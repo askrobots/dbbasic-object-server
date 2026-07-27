@@ -1,0 +1,1 @@
+id	template_id	template_name	handler	model	form_data	rendered_body	instructions	status	claimed_by	claimed_at	heartbeat_at	idempotency_key	provider_job_id	price_cents	provider_cost_cents	wallet_id	output	error	finished_at	owner_id	created_at

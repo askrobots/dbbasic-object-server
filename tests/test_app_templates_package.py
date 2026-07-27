@@ -93,10 +93,13 @@ def test_templates_schema_is_now_version_2_additive_only():
     change is purely additive (live records with no value for the new
     fields just read those fields back as empty, same as any other
     optional field on a schemaless TSV collection). v2 -> v3 adds created_at
-    (baseline record metadata), also additive.
+    (baseline record metadata), also additive. v3 -> v4 adds handler and
+    run_cost_cents (app-runner: which engine executes a template and what
+    one run costs), also additive -- a template with neither is a document
+    rather than a job, which is every template that existed before v4.
     """
     schema = _schema("templates")
-    assert schema["version"] == 3
+    assert schema["version"] == 4
     by_name = {f["name"]: f for f in schema["fields"]}
 
     # Fields present since v1, untouched.

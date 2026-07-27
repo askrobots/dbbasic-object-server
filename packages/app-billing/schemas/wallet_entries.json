@@ -1,30 +1,103 @@
 {
   "name": "wallet_entries",
   "title": "Wallet Entries",
-  "version": 1,
+  "version": 2,
   "storage": "append",
   "description": "Every movement of a wallet's balance, append-only: this ledger IS the balance (wallets.balance_minor is a rollup over it), so an entry is never edited or deleted -- a mistaken charge is corrected by a compensating entry that says so, exactly as refunds correct payments and reversing journals correct postings (docs/logic-decisions.md #3). amount_minor is signed: credits positive, debits negative, in the wallet denomination's smallest unit. generated_from carries provenance for machine-written entries (a Stripe top-up stamps its event, an auto-replenishment stamps its charge), which is what makes redelivery and re-runs safe by construction rather than by a dedup table. The reason a customer can always be shown WHY their balance is what it is: every entry names its kind, its amount, and what caused it.",
-  "hooks": {"before_write": "hook_wallet_entries"},
+  "hooks": {
+    "before_write": "hook_wallet_entries"
+  },
   "fields": [
-    {"name": "id"},
-    {"name": "wallet_id", "required": true, "label": "Wallet",
-     "relation": {"collection": "wallets", "display_field": "owner_id"}},
-    {"name": "amount_minor", "type": "integer", "required": true, "label": "Amount",
-     "help": "Signed: a credit is positive, a debit negative. Integer minor units, never a float."},
-    {"name": "kind", "type": "enum", "required": true, "default": "debit", "label": "Kind",
-     "enum": ["topup", "auto_topup", "debit", "refund", "promo", "adjustment"],
-     "help": "topup: the customer paid. auto_topup: the saved card was charged by the threshold rule. debit: usage drawn down. refund/promo/adjustment: money back, granted, or corrected."},
-    {"name": "description", "type": "text", "label": "Description",
-     "help": "What this was for, in words the customer would accept on a statement."},
-    {"name": "reference", "type": "text", "label": "Reference",
-     "help": "The thing that caused it: a task id, an invoice number, a provider charge."},
-    {"name": "generated_from", "type": "text", "label": "Generated From",
-     "help": "Provenance for machine-written entries (stripe_evt/..., auto_topup/...). Its presence is what makes a replay a no-op instead of a second charge."},
-    {"name": "owner_id", "type": "text", "label": "Owner"},
-    {"name": "created_at", "type": "datetime", "read_only": true, "label": "Recorded"}
+    {
+      "name": "id"
+    },
+    {
+      "name": "wallet_id",
+      "required": true,
+      "label": "Wallet",
+      "relation": {
+        "collection": "wallets",
+        "display_field": "owner_id"
+      }
+    },
+    {
+      "name": "amount_minor",
+      "type": "integer",
+      "required": true,
+      "label": "Amount",
+      "help": "Signed: a credit is positive, a debit negative. Integer minor units, never a float."
+    },
+    {
+      "name": "kind",
+      "type": "enum",
+      "required": true,
+      "default": "debit",
+      "label": "Kind",
+      "enum": [
+        "topup",
+        "auto_topup",
+        "debit",
+        "refund",
+        "promo",
+        "adjustment",
+        "hold",
+        "release"
+      ],
+      "help": "topup: the customer paid. auto_topup: the saved card was charged by the threshold rule. debit: usage drawn down. refund/promo/adjustment: money back, granted, or corrected. hold: money RESERVED against a commitment that has not executed yet (negative, so the balance gate fires at the moment of commitment rather than the moment of spending -- a template run queued against 5 cents of balance must be refused before the provider is paid real money, not billed after). release: a hold handed back at settlement, always in full, always paired to its hold by generated_from marker. The actual charge for a settled commitment is an ORDINARY debit, deliberately: a released hold must never read as a refund in the reports that already exist, because a hold is not a debit that got undone -- it is money that was never spent, and the ledger should say so."
+    },
+    {
+      "name": "description",
+      "type": "text",
+      "label": "Description",
+      "help": "What this was for, in words the customer would accept on a statement."
+    },
+    {
+      "name": "reference",
+      "type": "text",
+      "label": "Reference",
+      "help": "The thing that caused it: a task id, an invoice number, a provider charge."
+    },
+    {
+      "name": "generated_from",
+      "type": "text",
+      "label": "Generated From",
+      "help": "Provenance for machine-written entries (stripe_evt/..., auto_topup/...). Its presence is what makes a replay a no-op instead of a second charge."
+    },
+    {
+      "name": "owner_id",
+      "type": "text",
+      "label": "Owner"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "read_only": true,
+      "label": "Recorded"
+    }
   ],
-  "forms": {"default": {"fields": ["wallet_id", "amount_minor", "kind", "description", "reference"]}},
-  "views": {"list_mode": "table",
-            "list_fields": ["created_at", "kind", "amount_minor", "description", "reference"],
-            "filter_fields": ["wallet_id", "kind"]}
+  "forms": {
+    "default": {
+      "fields": [
+        "wallet_id",
+        "amount_minor",
+        "kind",
+        "description",
+        "reference"
+      ]
+    }
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": [
+      "created_at",
+      "kind",
+      "amount_minor",
+      "description",
+      "reference"
+    ],
+    "filter_fields": [
+      "wallet_id",
+      "kind"
+    ]
+  }
 }

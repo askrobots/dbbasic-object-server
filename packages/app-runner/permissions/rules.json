@@ -1,0 +1,32 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "action_run_template",
+      "reason": "registered and never public, and the reason is money: a run places a hold on a wallet and may spend real cash at a provider, so an anonymous run is an open tap. The object itself refuses a caller with no identity besides -- the grant and the check agree rather than one relying on the other"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["read"],
+      "collection": "template_runs",
+      "reason": "READ ONLY, and the absence of update is the enforcement of the state machine: the only hands that may move a run between statuses are the runner and the sweeper, in process, walking the transitions the schema declares. A person who could PUT a run from abandoned back to queued through the API would be re-running a paid, non-idempotent provider call from a form field. No create either -- action_run_template is the one door in, because a run typed by hand is a job with no hold behind it, which the runner would execute for free"
+    },
+    {
+      "effect": "allow",
+      "principal": "role:admin",
+      "actions": ["execute"],
+      "object_id": "system_template_runner",
+      "reason": "the minutely schedule is how this normally runs; the manual grant exists for draining a queue NOW rather than in sixty seconds. Admin rather than registered because a pass makes outbound provider calls that cost money, and who spends this server's provider budget is an operator decision"
+    },
+    {
+      "effect": "allow",
+      "principal": "role:admin",
+      "actions": ["execute"],
+      "object_id": "system_run_sweeper",
+      "reason": "same posture as the runner: scheduled normally, executable by hand when an operator is staring at a stuck run and does not want to wait ten minutes for the sweep to notice"
+    }
+  ]
+}

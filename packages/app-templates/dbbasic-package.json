@@ -1,12 +1,14 @@
 {
   "id": "app-templates",
   "name": "Templates",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Reusable, structured-data templates: a JSON Schema plus optional AI-assist config (stored preference only, no AI engine), categories, tags, and public sharing. Ships a /templates page listing the signed-in owner's templates with create/edit via the generic schema-driven form (window.dbbasicForm) and list (window.dbbasicList). 0.3.0 deletes the bespoke site_templates page object: it was ~90 lines of chrome around two generator calls with no business logic of its own, and is now a seeded VIEW record over the same `list` block /notes uses.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
-  "dependencies": ["app-views"],
+  "dependencies": [
+    "app-views"
+  ],
   "objects": [],
   "schemas": [
     {

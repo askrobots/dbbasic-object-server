@@ -1,7 +1,7 @@
 {
   "name": "templates",
   "title": "Templates",
-  "version": 3,
+  "version": 4,
   "description": "Reusable, structured-data templates. `body` remains a free-text fallback from v1; a private predecessor-system audit (not part of this repo) showed templates there are chiefly a JSON Schema (`schema`) plus optional AI-assist config, so v2 adds those fields alongside it. Edit history comes from the record changelog.",
   "fields": [
     {
@@ -75,6 +75,19 @@
         "full"
       ],
       "help": "How much AI help this template calls for, mirroring the audited predecessor's levels. Stored preference only -- deferred infra, same posture as ai_prompt."
+    },
+    {
+      "name": "handler",
+      "type": "text",
+      "label": "Run Handler",
+      "help": "Which engine executes this template when somebody presses Run: 'echo' renders the body with the form values and returns it (free, no provider); 'ai_text' sends the rendered body to a configured AI provider. Empty means this template is a document, not a job -- action_run_template refuses it by name. Text rather than an enum so a new handler is a new runner capability, not a schema migration of every install."
+    },
+    {
+      "name": "run_cost_cents",
+      "type": "integer",
+      "default": "0",
+      "label": "Run Price",
+      "help": "What one run costs the person running it, in integer cents (doctrine #10). This is a PRICE, not a passthrough of the provider's bill: it is stamped onto the run at queue time and held against the wallet before anything executes, so editing it next week changes what the NEXT run costs and restates nothing anybody already paid -- the same act as stamping a rate on a time entry (docs/logic-decisions.md #1). What the run costs US at the provider is recorded on the run separately, so margin is a fold rather than a mystery. 0 means free to run, and free runs touch the wallet not at all."
     },
     {
       "name": "default_values",
