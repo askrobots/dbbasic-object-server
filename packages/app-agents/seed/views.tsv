@@ -1,0 +1,2 @@
+id	title	route	layout	blocks	owner_id	is_public	pinned	created_at
+view_agent_registry	Agent Registry	/agent-registry	single	"[{""kind"": ""list"", ""collection"": ""agent_registry"", ""search"": true, ""sort"": true, ""add"": false, ""owner_scoped"": false, ""title_field"": ""label""}]"		true	false	2026-01-01T00:00:00

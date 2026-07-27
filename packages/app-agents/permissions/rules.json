@@ -1,0 +1,32 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "action_agent_heartbeat",
+      "reason": "any registered principal may say it is still here, and only about ITSELF -- the object takes agent_id from _identity and never from the body, so a heartbeat cannot be forged on another agent's behalf. That matters more than it looks: a heartbeat is the evidence something is alive, and evidence one party can manufacture about another is not evidence. Registered rather than admin because an agent provisioned with its own API key must be able to introduce itself without an operator present"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["execute"],
+      "object_id": "site_agents",
+      "reason": "operator-facing rather than public: the board names every agent, its purpose, its capabilities and its spend against cap, which together describe how a business runs its automation. Registered rather than admin because 'is everything still working' is a question anyone on shift gets asked, and a status board only the owner can open is a status board nobody reads"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["read"],
+      "collection": "agent_registry",
+      "reason": "read for everyone registered, so the board and the generative table agree. No CREATE: action_agent_heartbeat is the one door in, because a registration typed by hand is an agent that never introduced itself and may not exist. No DELETE either -- a retired agent's row is what keeps months of change-log actors legible, and status=retired is how one goes away"
+    },
+    {
+      "effect": "allow",
+      "principal": "role:admin",
+      "actions": ["update"],
+      "collection": "agent_registry",
+      "reason": "an OPERATOR may pause, suspend or retire an agent, and set its spend cap -- the controls that exist for the case where an agent is misbehaving and the person who has to stop it is not the agent. Deliberately admin-only: an agent that could raise its own spend cap has no spend cap"
+    }
+  ]
+}

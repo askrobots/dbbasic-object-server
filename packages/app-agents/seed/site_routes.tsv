@@ -1,0 +1,4 @@
+id	pattern	object_id	priority
+route_agents	/agents	site_agents	20
+route_agents_json	/agents.json	site_agents	10
+route_agent_registry	/agent-registry	site_view_render	20

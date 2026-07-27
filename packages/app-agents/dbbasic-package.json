@@ -1,0 +1,57 @@
+{
+  "id": "app-agents",
+  "name": "Agents",
+  "version": "0.1.0",
+  "description": "Who is operating this server, what they will accept work for, and whether they are still answering. THE COLLECTION HAD TO EARN ITS EXISTENCE, and the test was: every field must be something NOT derivable from what the box already keeps. Most of an agent block is already here and was found by auditing before building rather than after -- an agent IS a user (object_identity plus an API key, not a second identity concept); what an agent DID is record_changes, which carries an actor on every write, with app-activity already rendering it per actor; the coordination channel is feed_posts (app-collab), which has carried claim and release in its kind enum since before this package existed; and race-free claiming is expected_rev (63), whose own spec contains a worked example titled 'claim becomes race-safe'. Building any of that again would have been a second truth beside a working one. THREE THINGS SURVIVED. LIVENESS, because a heartbeat is not a last write: an agent reasoning for ten minutes writes nothing at all and is perfectly alive, while a crashed one looks alive until its last write ages out -- so no fold over the change log can ever answer 'is it still there', and that is the whole reason agent_registry exists. CAPABILITIES, because nothing records what an agent is FOR or what it can do, and they are what turn this registry into the routing table a federated worker needs; they are OPT-IN AND EMPTY BY DEFAULT, because nobody's machine should join a compute pool by accident, and an agent advertising nothing is routed nothing. SPEND CAP, which became meaningful the day app-runner shipped holds: an agent that can queue a template run can spend real money at a provider, and the cap is a FOLD over that agent's holds and debits in wallet_entries rather than a stored counter -- the identical argument hook_wallet_entries makes about wallets.balance_minor, because a counter beside a log of movements is two truths that drift and the gate that reads the counter authorises the spend that should have been refused. action_agent_heartbeat is one verb rather than two: the first beat registers and every later beat updates, because a separate register call is a step somebody forgets and then debugs, and there is nothing a registration knows that the first heartbeat does not. It identifies the CALLER from _identity and never from the body -- a heartbeat is evidence something is alive, and evidence one party can manufacture about another is not evidence. A beat that omits capabilities LEAVES THEM ALONE rather than clearing them, so a bare keep-alive is safe on a timer, and passing an empty string is how an agent withdraws. site_agents is a board rather than a table because the generative list renderer already gives this collection a perfectly good table and it is the wrong shape for the one question the page exists to answer -- is everything that should be working, working? It leads with the answer, puts the silent ones first, states liveness WITH the heartbeat it was computed from (the same reason site_ledger_integrity states its method beside its verdict: 'lost' without 'last seen four hours ago' is a claim), and renders the coordination feed beside the participants rather than duplicating it. Three liveness states rather than a boolean -- live, stale, lost, plus never for an agent that registered and has not yet spoken -- because the useful distinction is not up-or-down but 'should I be worried yet', and 'registered but silent' is usually a misconfiguration where 'was here and stopped' is an incident. A paused or retired agent reports its own status instead of a liveness, because rendering an operator's own decision as an alarm is how a board teaches people to ignore it. The arithmetic lives in object_agents at the repo root -- pure, no I/O, no clock, `now` passed in so liveness is testable without sleeping -- the same posture as object_cart, object_rates and object_ledger_head.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": ["app-collab", "app-views"],
+  "objects": [
+    {
+      "id": "action_agent_heartbeat",
+      "path": "objects/action/agent_heartbeat.py"
+    },
+    {
+      "id": "site_agents",
+      "path": "objects/site/agents.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "agent_registry",
+      "path": "schemas/agent_registry.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "agent_registry",
+      "path": "seed/agent_registry.tsv"
+    },
+    {
+      "collection": "site_routes",
+      "path": "seed/site_routes.tsv"
+    },
+    {
+      "collection": "views",
+      "path": "seed/views.tsv"
+    }
+  ],
+  "migrations": [],
+  "nav": [
+    {
+      "id": "agents",
+      "label": "Agents",
+      "path": "/agents",
+      "blurb": "Who is operating this server, and whether they are still answering",
+      "surface": "operator",
+      "group": "System",
+      "order": 340
+    }
+  ]
+}
