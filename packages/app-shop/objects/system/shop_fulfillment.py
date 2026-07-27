@@ -291,18 +291,67 @@ def EVENT(request):
         return {"ok": True, "skipped": f"order already {_text(order.get('status'))}"}
 
     if _text(order.get("status")) == "draft":
-        object_records.update_collection_record(
-            "orders", order["id"], {"status": "confirmed"},
-            base_dir=base, actor=ACTOR)
+        try:
+            object_records.update_collection_record(
+                "orders", order["id"], {"status": "confirmed"},
+                base_dir=base, actor=ACTOR,
+                expected_rev=object_records.compute_record_rev(order))
+        except object_records.VersionConflictError:
+            return {"ok": True, "order_id": order["id"],
+                    "skipped": "another pass is already handling this order"}
+        order = object_records.get_collection_record("orders", order["id"],
+                                                     base_dir=base)
 
     result = {"ok": True, "order_id": order["id"], "confirmed": True}
 
     if not _truthy(_setting(base, "shop.auto_fulfill"), True):
         # A shop with a packing bench: the order is confirmed and appears on
         # the pick list, and a human decides what goes in which box.
+        # Deliberately NOT claimed below -- the order is supposed to sit at
+        # `confirmed` waiting for a person, and claiming it would take it
+        # off the very list it needs to be on.
         result["note"] = ("shop.auto_fulfill is off; this order is confirmed "
                           "and waiting on the pick list")
         result["shipped"] = False
+        return result
+
+    # CLAIM THE ORDER BEFORE SHIPPING ANYTHING.
+    #
+    # Two concurrent deliveries of the same payment event -- the change
+    # dispatcher is at-least-once, and an operator can POST this handler by
+    # hand -- both read the order as `confirmed`, both walked past the guard
+    # above, and both shipped it. Reproduced reliably, three times in three:
+    # two shipments, FOUR units against an order of two, two sale moves. The
+    # goods left the shelf twice.
+    #
+    # Nothing below could have stopped it. action_create_shipment computes
+    # what is unshipped by reading shipment_lines, and hook_shipment_lines
+    # refuses an over-ship by summing them -- but both are check-then-write
+    # and a hook runs BEFORE the write lock, so under real concurrency both
+    # passes read an empty history and both wrote. Layered advisory checks
+    # do not compose into an atomic one.
+    #
+    # The only thing on this box that IS atomic is a compare-and-set on a
+    # single record: expected_rev, compared inside the write lock (63,
+    # plan/vocabulary/63-concurrency-spec.md). So the claim is the write
+    # that moves the order out of the shippable set, and the loser finds the
+    # row already changed.
+    #
+    # THE TRADE, stated because it is a real one: the ladder has no
+    # processing -> confirmed step, so an order whose shipment then FAILS
+    # stays at `processing` rather than falling back to `confirmed` for a
+    # redelivered event to retry. That is deliberate. A stuck order is
+    # visible on the pick list and a person ships it; a double shipment is
+    # goods out of the door against one payment, and no one finds out until
+    # the stock count.
+    try:
+        object_records.update_collection_record(
+            "orders", order["id"], {"status": "processing"},
+            base_dir=base, actor=ACTOR,
+            expected_rev=object_records.compute_record_rev(order))
+    except object_records.VersionConflictError:
+        result["shipped"] = False
+        result["skipped"] = "another pass claimed this order first"
         return result
 
     result.update(_ship_everything(base, order))

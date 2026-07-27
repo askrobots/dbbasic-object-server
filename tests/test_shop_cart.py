@@ -1127,3 +1127,114 @@ def test_paying_the_balance_later_does_ship(tmp_path, monkeypatch):
          "received_on": "2026-07-26", "status": "received", "owner_id": "shop"},
         base_dir=data_dir)
     assert fulfil(rest)["confirmed"] is True
+
+
+# --- one payment, one shipment -------------------------------------------------
+
+def test_two_concurrent_deliveries_of_one_payment_ship_once(tmp_path,
+                                                            monkeypatch):
+    """Goods leaving twice against one payment, reproduced before it was
+    fixed: two shipments, FOUR units against an order of two, two sale
+    moves.
+
+    Nothing in the shipping layer could have stopped it.
+    action_create_shipment works out what is unshipped by reading
+    shipment_lines, and hook_shipment_lines refuses an over-ship by summing
+    them -- but both are check-then-write, and a hook runs BEFORE the write
+    lock, so both passes read an empty history and both wrote. Layered
+    advisory checks do not compose into an atomic one.
+
+    The fix is the one thing on this box that IS atomic: a compare-and-set
+    on a single record (63). The claim is the write that moves the order
+    out of the shippable set, and the loser finds the row already changed.
+    """
+    import threading
+
+    data_dir = setup_env(tmp_path, monkeypatch,
+                         settings=(("shop.stock_location", "loc-shelf"),
+                                   ("shop.customer_location", "loc-customer")))
+    with_shipping(tmp_path, monkeypatch, data_dir)
+    order_id, payment = paid_order(data_dir)
+
+    out = []
+    threads = [threading.Thread(target=lambda: out.append(fulfil(payment)))
+               for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    lines = object_records.read_collection_records("shipment_lines",
+                                                    base_dir=data_dir)
+    shipments = object_records.read_collection_records("shipments",
+                                                        base_dir=data_dir)
+    sales = [m for m in moves(data_dir) if m["reason"] == "sale"]
+
+    assert len(shipments) == 1, out
+    assert sum(float(line["quantity"]) for line in lines) == 2.0
+    assert len(sales) == 1
+
+    # And the loser says so rather than reporting a silent success.
+    skipped = [r for r in out if r.get("skipped")]
+    assert len(skipped) == 1
+    assert "claimed" in skipped[0]["skipped"] or "handling" in skipped[0]["skipped"]
+
+
+def test_an_order_waiting_on_the_pick_list_is_not_claimed(tmp_path, monkeypatch):
+    """With auto_fulfill off the order is supposed to SIT at `confirmed`
+    waiting for a person. Claiming it would take it off the very list it
+    needs to be on."""
+    data_dir = setup_env(tmp_path, monkeypatch,
+                         settings=(("shop.stock_location", "loc-shelf"),
+                                   ("shop.customer_location", "loc-customer"),
+                                   ("shop.auto_fulfill", "false")))
+    with_shipping(tmp_path, monkeypatch, data_dir)
+    order_id, payment = paid_order(data_dir)
+
+    result = fulfil(payment)
+    assert result["shipped"] is False
+    assert "pick list" in result["note"]
+
+    order = object_records.get_collection_record("orders", order_id,
+                                                  base_dir=data_dir)
+    assert order["status"] == "confirmed"
+
+
+def test_an_already_confirmed_order_is_also_shipped_only_once(tmp_path,
+                                                              monkeypatch):
+    """The case the draft->confirmed promote cannot cover, and the reason
+    the claim exists as a second step.
+
+    A deposit followed by a balance payment is the ordinary shape: the
+    first payment confirms the order without settling the invoice, and the
+    SECOND is the one that tips it to paid and ships. That second event
+    finds the order already at `confirmed`, so the promote above is not
+    reached and only the claim stands between two concurrent deliveries
+    and two shipments.
+    """
+    import threading
+
+    data_dir = setup_env(tmp_path, monkeypatch,
+                         settings=(("shop.stock_location", "loc-shelf"),
+                                   ("shop.customer_location", "loc-customer")))
+    with_shipping(tmp_path, monkeypatch, data_dir)
+    order_id, payment = paid_order(data_dir)
+
+    object_records.update_collection_record(
+        "orders", order_id, {"status": "confirmed"}, base_dir=data_dir)
+
+    out = []
+    threads = [threading.Thread(target=lambda: out.append(fulfil(payment)))
+               for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    shipments = object_records.read_collection_records("shipments",
+                                                        base_dir=data_dir)
+    lines = object_records.read_collection_records("shipment_lines",
+                                                    base_dir=data_dir)
+    assert len(shipments) == 1, out
+    assert sum(float(line["quantity"]) for line in lines) == 2.0
+    assert len([m for m in moves(data_dir) if m["reason"] == "sale"]) == 1
