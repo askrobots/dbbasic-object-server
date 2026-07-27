@@ -151,3 +151,76 @@ def test_the_notary_keeps_its_canonical_utc_on_screen():
     assert "UTC" in notary
     assert "canonical" in notary
     assert "evidence should not" in notary
+
+
+# --- the generative form: display, load AND save --------------------------------
+#
+# Found by creating a note and reading its Created field: "2026-07-27
+# 09:39" for something made at 4:39am. The list renderer had been right
+# all along (relDate is client-side), so an earlier claim that "the
+# generative layer already handles this" was true of lists and false of
+# detail and edit -- which is why it needed checking rather than asserting.
+
+FORM = PACKAGES / "app-theme" / "objects" / "site" / "form.py"
+
+
+def test_a_read_only_datetime_is_shown_in_the_readers_zone():
+    """It sliced the ISO string, which shows UTC digits to somebody who
+    does not live there."""
+    js = FORM.read_text()
+    assert "window.dbbasicTime && window.dbbasicTime.format(v)" in js
+    # and degrades to the old behaviour rather than blanking
+    assert 'local || v.slice(0, 16).replace("T", " ")' in js
+
+
+def test_a_datetime_input_is_fed_local_and_answers_in_utc():
+    """THE data-corruption fix. <input type="datetime-local"> is local by
+    definition: it was being fed a UTC slice, so it displayed the wrong
+    hour AND handed that wall-clock back to be stored as UTC. Every edit
+    shifted the value by the reader's offset, compounding each round trip.
+    Nine editable datetime fields across seven collections were reachable
+    through this one control."""
+    js = FORM.read_text()
+    assert "function utcToLocalInput" in js
+    assert "function localInputToUtc" in js
+    assert "esc(utcToLocalInput(v))" in js          # load: UTC -> local
+    assert "localInputToUtc(el.value)" in js        # save: local -> UTC
+    assert "d.toISOString()" in js
+    # The old raw slice must not survive on either path.
+    assert "value=\"' + esc(v.slice(0, 16))" not in js
+
+
+def test_the_round_trip_is_lossless_in_principle():
+    """utcToLocalInput and localInputToUtc are inverses: the first drops
+    the offset for the control, the second puts it back. Pinned as a
+    property because a one-way conversion is exactly how the original bug
+    happened."""
+    js = FORM.read_text()
+    load = js.split("function utcToLocalInput")[1].split("function localInputToUtc")[0]
+    save = js.split("function localInputToUtc")[1].split("\n  }")[0]
+    # Load builds a zone-less wall-clock string from local getters...
+    assert "getHours()" in load and "getMinutes()" in load
+    assert "toISOString" not in load
+    # ...and save parses that back as local and emits UTC.
+    assert "new Date(String(v))" in save
+    assert "toISOString" in save
+
+
+def test_editable_datetime_fields_really_exist_so_this_matters():
+    """Not hypothetical: these are in default forms today, reachable
+    through the one generic control."""
+    import json as _json
+    import glob as _glob
+    found = []
+    for path in _glob.glob(str(PACKAGES / "*" / "schemas" / "*.json")):
+        schema = _json.loads(pathlib.Path(path).read_text())
+        in_forms = set()
+        for spec in (schema.get("forms") or {}).values():
+            in_forms.update(spec.get("fields") or [])
+        for field in schema["fields"]:
+            if (field.get("type") in ("datetime", "timestamp")
+                    and not field.get("read_only")
+                    and field["name"] in in_forms):
+                found.append((schema["name"], field["name"]))
+    assert len(found) >= 5, found
+    assert ("events", "starts_at") in found

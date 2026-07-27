@@ -50,8 +50,45 @@ _JS = r"""
     if (!v) return "—";
     if (t === "boolean") return v === "true" ? "Yes" : "No";
     if (t === "date") return v.slice(0, 10);
-    if (t === "datetime" || t === "timestamp") return v.slice(0, 16).replace("T", " ");
+    // A stored datetime is UTC (this server's contract). Slicing the
+    // string showed UTC digits to a reader who does not live there --
+    // "2026-07-27 09:39" for something that happened at 4:39am. Hand it
+    // to the shared formatter, which knows the reader's zone; fall back
+    // to the old slice only if that script has not loaded, because a
+    // wrong-but-present time beats a blank field.
+    if (t === "datetime" || t === "timestamp") {
+      const local = window.dbbasicTime && window.dbbasicTime.format(v);
+      return local || v.slice(0, 16).replace("T", " ");
+    }
     return v;
+  }
+
+  // <input type="datetime-local"> is LOCAL BY DEFINITION -- the browser
+  // reads and writes wall-clock time in the viewer's zone with no offset
+  // attached. Feeding it a UTC slice therefore did two wrong things at
+  // once: it displayed 09:39 for a 4:39am event, and on save it handed
+  // back that same wall-clock string which was then stored AS UTC. Every
+  // edit shifted the value by the reader's offset, compounding on each
+  // round trip. Nine editable datetime fields across seven collections
+  // (events, stock_moves, pickup_slots, time_logs, ...) were reachable.
+  //
+  // So the input is fed LOCAL and its answer is converted back to UTC.
+  function utcToLocalInput(v) {
+    if (!v) return "";
+    let text = String(v).trim().replace(" ", "T");
+    if (!/[Zz]|[+-]\d{2}:?\d{2}$/.test(text)) text += "Z";
+    const d = new Date(text);
+    if (isNaN(d)) return String(v).slice(0, 16);
+    const pad = (n) => String(n).padStart(2, "0");
+    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate())
+         + "T" + pad(d.getHours()) + ":" + pad(d.getMinutes());
+  }
+
+  function localInputToUtc(v) {
+    if (!v) return "";
+    const d = new Date(String(v));          // no zone marker -> parsed LOCAL
+    if (isNaN(d)) return String(v);
+    return d.toISOString().replace(/\.\d{3}Z$/, "Z");
   }
 
   // Money is stored as an integer number of cents under a `_cents` field
@@ -134,7 +171,7 @@ _JS = r"""
     if (t === "boolean") return '<label class="switch"><input type="checkbox" name="' + name + '"' + (v === "true" ? " checked" : "") + '> ' + esc(f.label || human(f.name)) + '</label>';
     if (t === "textarea") return '<textarea name="' + name + '" rows="3"' + req + ml + ph + '>' + esc(v) + '</textarea>';
     if (t === "date") return '<input type="date" name="' + name + '" value="' + esc(v.slice(0, 10)) + '"' + req + '>';
-    if (t === "datetime" || t === "timestamp") return '<input type="datetime-local" name="' + name + '" value="' + esc(v.slice(0, 16)) + '"' + req + '>';
+    if (t === "datetime" || t === "timestamp") return '<input type="datetime-local" name="' + name + '" value="' + esc(utcToLocalInput(v)) + '"' + req + '>';
     if (["integer", "int", "number", "float", "currency"].indexOf(t) >= 0) return '<input type="number" name="' + name + '" value="' + esc(v) + '"' + req + ph + '>';
     return '<input type="text" name="' + name + '" value="' + esc(v) + '"' + req + ml + ph + '>';
   }
@@ -207,7 +244,13 @@ _JS = r"""
       for (const f of ordered) {
         const el = form.elements[f.name];
         if (!el) continue;
-        rec[f.name] = (String(f.type || "").toLowerCase() === "boolean") ? (el.checked ? "true" : "false") : el.value;
+        const ft = String(f.type || "").toLowerCase();
+        if (ft === "boolean") { rec[f.name] = el.checked ? "true" : "false"; continue; }
+        // The datetime-local control answers in the viewer's wall clock;
+        // storage is UTC. Converting here rather than server-side is the
+        // only place that knows the offset.
+        rec[f.name] = (ft === "datetime" || ft === "timestamp")
+          ? localInputToUtc(el.value) : el.value;
       }
       let bad = false;
       form.querySelectorAll(".err").forEach((el) => el.textContent = "");
