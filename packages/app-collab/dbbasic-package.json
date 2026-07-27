@@ -1,12 +1,15 @@
 {
   "id": "app-collab",
   "name": "Collaboration",
-  "version": "0.1.0",
-  "description": "The coordination layer: task comments, a shared project feed for humans and agents, and notification records. No pages — generated UIs, the shell, and MCP are the interfaces.",
+  "version": "0.2.0",
+  "description": "The coordination layer: task comments, a shared project feed for humans and agents, and notification records. No pages \u2014 generated UIs, the shell, and MCP are the interfaces.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
-  "dependencies": ["app-projects", "app-tasks"],
+  "dependencies": [
+    "app-projects",
+    "app-tasks"
+  ],
   "objects": [],
   "schemas": [
     {

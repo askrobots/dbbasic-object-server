@@ -57,8 +57,10 @@ _STYLE = """
 .ag .banner { border: 1px solid var(--line, #38384a); border-radius: 8px;
               padding: .85rem 1.05rem; margin: 1rem 0 1.4rem; }
 .ag .banner.warn { border-color: var(--accent, #b5713a); }
-.ag .cards { display: grid; gap: .7rem;
-             grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); }
+.ag .cols { display: grid; gap: 1.2rem; grid-template-columns: 1fr 1fr;
+             align-items: start; }
+@media (max-width: 46rem) { .ag .cols { grid-template-columns: 1fr; } }
+.ag .cards { display: grid; gap: .7rem; }
 .ag .card { border: 1px solid var(--line, #38384a); border-radius: 8px;
             padding: .7rem .85rem; }
 .ag .card.live { border-left: 3px solid var(--accent, #b5713a); }
@@ -136,6 +138,11 @@ def report(*, base=None, now=None):
         "body": _text(post.get("body")),
         "owner_id": _text(post.get("owner_id")),
         "created_at": _text(post.get("created_at")),
+        # Blank for rows written before feed_posts gained created_at (v2).
+        # Those render WITHOUT a time rather than as "never", because a
+        # post that predates the column is not a post that never happened.
+        "ago": (object_agents.relative_time(post.get("created_at"), now)
+                if _text(post.get("created_at")) else ""),
     } for post in posts[:FEED_LIMIT]]
     fold["feed_installed"] = bool(posts) or _rows(FEED, base) != []
     return fold
@@ -194,8 +201,9 @@ def _card(row):
                    for tag in row["capabilities"])
     if not tags:
         tags = '<span class="muted">no capabilities advertised</span>'
-    beat = (_esc(row["heartbeat_at"]) if row["heartbeat_at"]
-            else "never checked in")
+    # The phrase, not the stamp: an operator asked "is it still there"
+    # should not have to subtract two datetimes in their head.
+    beat = _esc(row["heartbeat_ago"]) if row["heartbeat_at"] else "never checked in"
     return f"""
 <div class="card {_esc(row['liveness'])}">
 <h3>{_esc(row['label'])}</h3>
@@ -203,7 +211,7 @@ def _card(row):
 <p class="muted">{_esc(row['agent_id'])}</p>
 {f'<p class="muted">{_esc(row["purpose"])}</p>' if row['purpose'] else ''}
 <p>{tags}</p>
-<p class="muted">last beat {beat}</p>
+<p class="muted" title="{_esc(row['heartbeat_at'])}">last beat {beat}</p>
 {spend}
 </div>"""
 
@@ -214,11 +222,16 @@ def _feed_html(fold):
                 '<code>feed_posts</code> collection (app-collab), which has '
                 'carried <code>claim</code> and <code>release</code> in its '
                 'kinds since before this page existed.</p>')
+    # Relative time on the line, the exact stamp in the tooltip. A feed is
+    # read for "how long ago", never for "at what instant" -- and the one
+    # time somebody does want the instant, hovering gives it without
+    # spending a line on it.
     items = "".join(
         f'<li><span class="kind">{_esc(post["kind"])}</span>'
         f'{_esc(post["body"])}'
-        f'<br><span class="muted">{_esc(post["owner_id"])} · '
-        f'{_esc(post["created_at"])}</span></li>'
+        f'<br><span class="muted" title="{_esc(post["created_at"])}">'
+        f'{_esc(post["owner_id"])}'
+        f'{" &middot; " + _esc(post["ago"]) if post["ago"] else ""}</span></li>'
         for post in fold["feed"])
     return f'<ul class="feed">{items}</ul>'
 
@@ -233,7 +246,16 @@ def _page(fold):
 <p>Who is operating this server, what they will accept work for, and
 whether they are still answering.</p>
 {_banner(fold)}
+<div class="cols">
+<div>
+<h2>Agents</h2>
 <div class="cards">{cards}</div>
+</div>
+<div>
+<h2>Coordination feed</h2>
+{_feed_html(fold)}
+</div>
+</div>
 <p class="note">Liveness is a <strong>heartbeat</strong>, not a last write.
 An agent reasoning for ten minutes writes nothing and is perfectly alive,
 so "when did it last change a record" cannot answer "is it still there" —
@@ -246,9 +268,6 @@ agent is already recorded: what it did is the
 <p class="muted">Capabilities are opt-in and empty by default. An agent
 advertising nothing is routed nothing — nobody's machine joins a compute
 pool by accident.</p>
-
-<h2>Coordination feed</h2>
-{_feed_html(fold)}
 
 <p class="note"><a href="/agents.json">This page as JSON</a> ·
 <a href="/agent-registry">the registry as a table</a></p>

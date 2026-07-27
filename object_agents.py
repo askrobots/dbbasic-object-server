@@ -196,6 +196,9 @@ def board(agents, wallet_entries=None, *, now,
             "endpoint": _text(agent.get("endpoint")),
             "status": _text(agent.get("status")) or "active",
             "heartbeat_at": _text(agent.get("heartbeat_at")),
+            # Both forms: the stamp for anything computing, the phrase for
+            # the human being asked "is it still there".
+            "heartbeat_ago": relative_time(agent.get("heartbeat_at"), now),
             "liveness": state,
             "spend": over_cap(agent, wallet_entries or []),
         })
@@ -219,6 +222,46 @@ def board(agents, wallet_entries=None, *, now,
                      if row["spend"] and row["spend"]["over"]],
         "capabilities": sorted({tag for row in rows for tag in row["capabilities"]}),
     }
+
+
+def relative_time(stamp, now):
+    """"4 hours ago" rather than "2026-07-27T03:12:44Z".
+
+    A liveness verdict is supposed to be stated WITH its evidence, and an
+    ISO timestamp is not evidence a human can act on -- an operator asked
+    "is it still there" does not want to subtract two datetimes in their
+    head. "last beat 4 hours ago" answers the question the page exists to
+    answer; the raw stamp is kept in the JSON for anything that needs to
+    compute rather than read.
+
+    Pure, `now` passed in, same as everything else here. Deliberately
+    coarse: nobody needs "3 hours, 14 minutes, 9 seconds", they need to
+    know whether it is minutes or days.
+    """
+    from datetime import datetime
+
+    text, current = _text(stamp), _text(now)
+    if not text:
+        return "never"
+    try:
+        then = datetime.fromisoformat(text.rstrip("Z"))
+        right_now = datetime.fromisoformat(current.rstrip("Z"))
+    except ValueError:
+        return text
+
+    seconds = (right_now - then).total_seconds()
+    if seconds < 0:
+        return "just now"          # clock skew reads as now, never "in 3 hours"
+    for limit, divisor, unit in ((60, 1, "second"), (3600, 60, "minute"),
+                                 (86400, 3600, "hour"), (604800, 86400, "day"),
+                                 (2629800, 604800, "week")):
+        if seconds < limit:
+            value = int(seconds // divisor)
+            if value <= 0:
+                return "just now"
+            return f"{value} {unit}{'' if value == 1 else 's'} ago"
+    months = int(seconds // 2629800)
+    return f"{months} month{'' if months == 1 else 's'} ago"
 
 
 def _shift_iso(stamp, seconds):

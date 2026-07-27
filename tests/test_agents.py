@@ -260,3 +260,87 @@ def test_the_registry_has_no_field_that_duplicates_the_change_log():
                         "runs_completed", "actions", "activity", "spend_minor",
                         "committed_minor"}
     assert "heartbeat_at" in names          # the one thing that is NOT derivable
+
+
+# --- relative time --------------------------------------------------------------
+#
+# Added after comparing against the dashboard this page replaces, whose
+# feed reads "2 weeks, 4 days ago" while an earlier draft of ours printed
+# a raw ISO stamp. A liveness verdict is supposed to be stated WITH its
+# evidence, and an operator asked "is it still there" should not have to
+# subtract two datetimes in their head.
+
+def test_relative_time_is_coarse_on_purpose():
+    """Nobody needs '3 hours, 14 minutes, 9 seconds'. They need to know
+    whether it is minutes or days."""
+    now = "2026-07-27T12:00:00Z"
+    cases = {
+        "2026-07-27T11:59:58Z": "2 seconds ago",
+        "2026-07-27T11:59:00Z": "1 minute ago",
+        "2026-07-27T11:30:00Z": "30 minutes ago",
+        "2026-07-27T08:00:00Z": "4 hours ago",
+        "2026-07-25T12:00:00Z": "2 days ago",
+        "2026-07-06T12:00:00Z": "3 weeks ago",
+        "2026-03-27T12:00:00Z": "4 months ago",
+    }
+    for stamp, expected in cases.items():
+        assert object_agents.relative_time(stamp, now) == expected, stamp
+
+    assert object_agents.relative_time("", now) == "never"
+
+
+def test_a_clock_skewed_future_stamp_reads_as_now_not_as_negative():
+    """Two machines whose clocks disagree by a second must not produce
+    'in 3 hours', which reads as a bug in the page rather than in NTP."""
+    assert object_agents.relative_time(
+        "2026-07-27T12:00:05Z", "2026-07-27T12:00:00Z") == "just now"
+
+
+def test_the_board_renders_the_phrase_and_keeps_the_stamp(data_dir):
+    """Both forms: the phrase on the line, the exact stamp in the tooltip
+    and in the JSON, so a monitor can compute what a human only reads."""
+    beat(label="Server Agent", capabilities="gpu")
+    object_records.create_collection_record(
+        "feed_posts", {"kind": "claim", "body": "taking the shipping bug",
+                       "owner_id": "server-agent"}, base_dir=data_dir)
+
+    # A beat seconds old renders as "just now" -- which IS the relative
+    # phrasing, and is the case an operator sees most often.
+    body = " ".join(run("site_agents", {}, method="GET")["body"].split())
+    assert "last beat just now" in body
+    assert "2026-" not in body.split("last beat")[1][:40]   # no raw stamp inline
+
+    fold = json.loads(run("site_agents", {"_path": "/agents.json"},
+                          method="GET")["body"])
+    agent_row = fold["agents"][0]
+    assert agent_row["heartbeat_ago"]                 # the phrase
+    assert agent_row["heartbeat_at"].endswith("Z")    # and the stamp
+    assert fold["feed"][0]["ago"]
+    assert fold["feed"][0]["created_at"]
+
+
+def test_a_feed_post_written_before_v2_renders_without_a_time(data_dir):
+    """feed_posts gained created_at in v2, found when this page tried to
+    render the feed and discovered it had no time at all. Rows written
+    before that have none, and a post that predates the column is not a
+    post that never happened -- so it renders with no time rather than as
+    'never'."""
+    # created_at is read-only, so a legacy row can only be made the way a
+    # legacy row actually exists: written to the file before the column
+    # did. Appending raw is the honest simulation.
+    path = data_dir / "collections" / "feed_posts" / "records.tsv"
+    header = path.read_text().splitlines()[0].split("\t")
+    row = {"id": "legacy-1", "kind": "status",
+           "body": "from before the column", "owner_id": "old-agent"}
+    with path.open("a") as handle:
+        handle.write("\t".join(row.get(name, "") for name in header) + "\n")
+
+    fold = json.loads(run("site_agents", {"_path": "/agents.json"},
+                          method="GET")["body"])
+    post = fold["feed"][0]
+    assert post["body"] == "from before the column"
+    assert post["ago"] == ""
+
+    body = " ".join(run("site_agents", {}, method="GET")["body"].split())
+    assert "from before the column" in body
+    assert "never" not in body.split("from before the column")[1][:60]
