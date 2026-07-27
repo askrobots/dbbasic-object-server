@@ -311,6 +311,101 @@ _JS = r"""
   });
   loadUser();
 })();
+
+// === local time ============================================================
+//
+// Every timestamp this server STORES is UTC, which is correct and is not
+// negotiable -- a stamp without a zone is a bug waiting for the clocks to
+// change. Every timestamp a person READS should be in their own zone,
+// which is a rendering question and belongs here rather than in each page.
+//
+// The generative renderer already got this right by accident of being
+// client-side: `new Date(iso)` parses UTC and `toLocaleString` prints
+// local. Server-rendered pages did not, because a Python f-string has no
+// idea who is reading it. So the convention is one element:
+//
+//     <time datetime="2026-07-27T03:12:44Z">2026-07-27T03:12:44Z</time>
+//
+// and this converts the text while leaving the machine-readable attribute
+// exactly as the server wrote it. No JavaScript, or an unparseable stamp,
+// leaves the UTC text in place -- which is honest rather than blank.
+//
+// THE BROWSER IS THE DEFAULT, NOT A PREFERENCE, because it is right more
+// often: it follows the reader across daylight saving and across a plane,
+// and it needs nobody to have set anything. A stored preference OVERRIDES
+// it (display.timezone in user_prefs) for the real case the browser gets
+// wrong -- a business whose books are kept in one zone regardless of where
+// the person reading them happens to be sitting.
+//
+// AND THE BROWSER'S ZONE IS NEVER SENT TO THE SERVER. It is available
+// (Intl.DateTimeFormat().resolvedOptions().timeZone returns the IANA
+// name) and it is deliberately used only in this process. A timezone is a
+// real fingerprinting signal -- one of the higher-entropy bits in the
+// standard browser fingerprint -- so silently posting it back to store as
+// a preference would be collecting an identifying attribute nobody asked
+// us to collect, and /privacy is a fold over exactly that. Reading it to
+// format text costs nothing and discloses nothing. If a user wants a
+// fixed zone, they set the pref themselves and it is their statement
+// rather than our observation.
+(function () {
+  const ISO = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/;
+  let zone = null;   // null = browser default
+
+  function fmt(iso, opts) {
+    if (!iso || !ISO.test(String(iso).trim())) return null;
+    // A bare stamp with no zone marker is UTC by this server's contract.
+    let text = String(iso).trim().replace(" ", "T");
+    if (!/[Zz]|[+-]\d{2}:?\d{2}$/.test(text)) text += "Z";
+    const d = new Date(text);
+    if (isNaN(d)) return null;
+    const o = Object.assign({dateStyle: "medium", timeStyle: "short"}, opts || {});
+    if (o.timeStyle === undefined) delete o.timeStyle;   // date-only, cleanly
+    if (zone) o.timeZone = zone;
+    try { return d.toLocaleString(undefined, o); }
+    catch (e) { return d.toLocaleString(); }   // a bad pref must not blank the page
+  }
+
+  function apply(root) {
+    (root || document).querySelectorAll("time[datetime]").forEach((el) => {
+      if (el.dataset.localized === "1") return;
+      const out = fmt(el.getAttribute("datetime"),
+                      el.dataset.timeStyle === "date" ? {timeStyle: undefined} : null);
+      if (!out) return;                        // unparseable: leave UTC showing
+      if (!el.title) el.title = el.getAttribute("datetime") + " (UTC)";
+      el.textContent = out;
+      el.dataset.localized = "1";
+    });
+  }
+
+  window.dbbasicTime = {format: fmt, apply: apply,
+                        zone: () => zone || Intl.DateTimeFormat().resolvedOptions().timeZone};
+
+  function start() {
+    apply(document);
+    // Anything rendered after load -- the generative list, a form panel,
+    // a realtime push -- gets converted as it arrives, so a page does not
+    // have to remember to call apply().
+    if (window.MutationObserver) {
+      new MutationObserver((muts) => {
+        for (const m of muts) if (m.addedNodes.length) { apply(document); break; }
+      }).observe(document.body, {childList: true, subtree: true});
+    }
+  }
+
+  fetch("/prefs", {credentials: "same-origin"})
+    .then((r) => (r.ok ? r.json() : null))
+    .then((p) => {
+      const prefs = (p && (p.prefs || p.records || p)) || {};
+      const tz = prefs["display.timezone"] || prefs.display_timezone;
+      if (tz && String(tz).trim()) zone = String(tz).trim();
+    })
+    .catch(() => {})
+    .finally(() => {
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", start);
+      } else { start(); }
+    });
+})();
 """
 
 

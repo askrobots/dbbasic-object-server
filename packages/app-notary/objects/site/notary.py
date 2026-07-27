@@ -173,7 +173,12 @@ this log proves nothing about the data, its age or its author.</p>
 <p class="digest">{_esc(answer['digest'])}</p>
 <div class="card hit">
 <p class="muted">First recorded by this server at</p>
-<p class="when">{_esc(answer['first_seen_at'])}</p>
+<p class="when"><time datetime="{_esc(answer['first_seen_at'])}">
+{_esc(answer['first_seen_at'])}</time></p>
+<p class="muted">{_esc(answer['first_seen_at'])} UTC &mdash; the canonical
+value, shown because an attestation is evidence and evidence should not
+change shape with who is reading it. The line above is the same instant in
+your own timezone.</p>
 <p class="muted">{_esc(answer['algorithm'])}{
     ' &middot; ' + _esc(answer['label']) if answer.get('label') else ''}</p>
 </div>

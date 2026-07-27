@@ -251,7 +251,8 @@ def _ledger_html(entry):
                  'can be computed.</p>')
 
     rows = "".join(
-        f'<tr><td>{_esc(anchor["taken_at"])}</td>'
+        f'<tr><td><time datetime="{_esc(anchor["taken_at"])}">'
+        f'{_esc(anchor["taken_at"])}</time></td>'
         f'<td>{anchor["row_count"]:,}</td>'
         f'<td class="digest">{_esc(anchor["digest"][:16])}&hellip;</td>'
         f'<td>{anchor["notary_count"] or "&mdash;"}</td>'
