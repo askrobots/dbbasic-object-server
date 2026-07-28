@@ -204,3 +204,107 @@ def test_mcp_update_record_rejects_non_string_expected_rev():
             "update_record",
             {"collection": "tasks", "record_id": "t1", "changes": {}, "expected_rev": 5},
         )
+
+
+# ---------------------------------------------------------------------------
+# `revs` on the LIST read -- 63's missing half
+#
+# Single-record reads have always returned `_rev`. List reads did not, so a
+# claiming agent had to GET each candidate individually just to obtain a rev
+# before it could claim safely with If-Match: an extra round trip per attempt,
+# on the exact path 63 exists for ("claim becomes race-safe"). A list that
+# hands back rows you cannot act on without re-reading them made the caller
+# do the work twice.
+
+import sys as _sys                                                  # noqa: E402
+_sys.path.insert(0, str(Path(__file__).resolve().parent))
+from test_object_server import (                                    # noqa: E402
+    auth_headers, enable_admin_token, request, write_records, write_source,
+)
+
+
+def _contacts_box(tmp_path, monkeypatch, rows="id\tname\nc1\tAda\nc2\tGrace\n"):
+    root, data_dir = tmp_path / "objects", tmp_path / "data"
+    write_source(root / "contacts" / "directory.py", "def GET(request):\n    return {}\n")
+    write_records(data_dir, "contacts", rows)
+    monkeypatch.setenv("DBBASIC_OBJECTS_DIR", str(root))
+    monkeypatch.setenv("DBBASIC_DATA_DIR", str(data_dir))
+    enable_admin_token(monkeypatch)
+    return data_dir
+
+
+def test_a_list_read_hands_back_a_rev_for_every_row(tmp_path, monkeypatch):
+    _contacts_box(tmp_path, monkeypatch)
+    status, _, payload = request("/admin/collections/contacts/records",
+                                 headers=auth_headers())
+    assert status == 200
+    assert set(payload["revs"]) == {"c1", "c2"}
+    assert all(len(rev) == 64 for rev in payload["revs"].values())
+
+
+def test_the_list_rev_is_the_same_token_the_single_read_gives(tmp_path, monkeypatch):
+    """If these two ever disagreed, an If-Match built from a list would 409
+    forever while the identical one from a detail read succeeded -- the
+    worst kind of bug, because it looks like a race that is not there."""
+    _contacts_box(tmp_path, monkeypatch)
+    _, _, listed = request("/admin/collections/contacts/records",
+                           headers=auth_headers())
+    _, _, single = request("/admin/collections/contacts/records/c1",
+                           headers=auth_headers())
+    assert listed["revs"]["c1"] == single["_rev"]
+
+
+def test_a_rev_from_a_list_actually_claims(tmp_path, monkeypatch):
+    """The whole point, end to end: list, claim with the listed rev, and a
+    second claim holding the same now-stale rev loses."""
+    _contacts_box(tmp_path, monkeypatch)
+    _, _, listed = request("/admin/collections/contacts/records",
+                           headers=auth_headers())
+    rev = listed["revs"]["c1"]
+
+    first = request("/admin/collections/contacts/records/c1", method="PUT",
+                    body=json.dumps({"name": "Ada L"}).encode(),
+                    headers=auth_headers() + [("if-match", rev)])
+    assert first[0] == 200
+
+    second = request("/admin/collections/contacts/records/c1", method="PUT",
+                     body=json.dumps({"name": "Somebody Else"}).encode(),
+                     headers=auth_headers() + [("if-match", rev)])
+    assert second[0] == 409
+
+
+def test_only_the_returned_window_is_hashed(tmp_path, monkeypatch):
+    """One sha256 per RETURNED row, never per matching row, so a narrow
+    page over a large collection stays cheap."""
+    rows = "id\tname\n" + "".join(f"c{n}\tName{n}\n" for n in range(1, 51))
+    _contacts_box(tmp_path, monkeypatch, rows=rows)
+    _, _, payload = request("/admin/collections/contacts/records",
+                            query_string="limit=5", headers=auth_headers())
+    assert payload["count"] == 5
+    assert payload["total"] == 50
+    assert len(payload["revs"]) == 5
+    assert set(payload["revs"]) == {row["id"] for row in payload["records"]}
+
+
+def test_revs_are_a_sibling_map_never_merged_into_the_rows(tmp_path, monkeypatch):
+    """The record shape is a contract: the single-record read documents
+    `_rev` as sibling metadata that must never collide with a schema field
+    or appear on write-back. A list is the one place records are most
+    likely to be echoed straight into a write, so merging it there would
+    break the rule where it matters most."""
+    _contacts_box(tmp_path, monkeypatch)
+    _, _, payload = request("/admin/collections/contacts/records",
+                            headers=auth_headers())
+    for row in payload["records"]:
+        assert "_rev" not in row
+
+
+def test_the_flag_governs_the_list_too(tmp_path, monkeypatch):
+    """With the precondition ignored, shipping revs would hand callers a
+    token that buys them nothing -- and every If-Match built from it would
+    silently succeed against a changed row."""
+    _contacts_box(tmp_path, monkeypatch)
+    monkeypatch.setenv("DBBASIC_ENABLE_CONCURRENCY", "false")
+    _, _, payload = request("/admin/collections/contacts/records",
+                            headers=auth_headers())
+    assert "revs" not in payload

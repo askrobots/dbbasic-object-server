@@ -3788,6 +3788,9 @@ def test_collection_records_return_paginated_tsv_rows(tmp_path, monkeypatch):
     )
 
     assert status == 200
+    # 63 ships a rev per returned row -- only the WINDOW, which is what
+    # this offset/limit case is here to pin.
+    assert set(payload.pop("revs")) == {"c2", "c3"}
     assert payload == {
         "status": "ok",
         "collection": "contacts",
@@ -4884,6 +4887,9 @@ def test_collection_records_enforcement_filters_rows_for_trusted_subject(tmp_pat
     )
 
     assert status == 200
+    # 63 ships a rev per returned row; asserted separately so the rest of
+    # the payload stays an exact-shape comparison.
+    assert set(payload.pop("revs")) == {"1", "3"}
     assert payload == {
         "status": "ok",
         "collection": "contacts",

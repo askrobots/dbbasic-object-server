@@ -7712,6 +7712,31 @@ async def _handle_collection_records_get(
         # never widen it -- see object_records.filter_records.
         records = object_records.filter_records(records, normalized_where)
 
+    # 63: a `_rev` per row, computed HERE -- after the row filter (so it
+    # only covers rows the caller may see) and BEFORE field redaction (so
+    # it is taken over the full surfaced record the write-side precondition
+    # will compare against). Getting that order wrong is the whole subtlety:
+    # a rev computed over a trimmed row can never match update's, and every
+    # If-Match built from a list would 409 forever.
+    #
+    # WHY THIS EXISTS. Without it a claiming agent had to GET each candidate
+    # individually just to obtain a rev before it could claim safely -- an
+    # extra round trip per attempt on the one path 63 was written for
+    # ("claim becomes race-safe"). A list that hands back rows you cannot
+    # act on without re-reading them is a list that made the caller do the
+    # work twice.
+    #
+    # Only the WINDOW is hashed, never the whole filtered set: the cost is
+    # one sha256 per returned row (<=1000, default 100), not per matching
+    # row, so a narrow page over a large collection stays cheap.
+    revs = None
+    if _concurrency_enabled():
+        revs = {
+            str(record["id"]): object_records.compute_record_rev(record)
+            for record in records[offset:offset + limit]
+            if record.get("id")
+        }
+
     if enforced:
         try:
             records = _redact_records_for_permission(
@@ -7730,6 +7755,14 @@ async def _handle_collection_records_get(
         limit=limit,
         offset=offset,
     )
+    # A parallel MAP rather than a `_rev` on each row, because the record
+    # shape is a contract: the single-record read documents `_rev` as
+    # "sibling metadata, never merged into record fields (must never
+    # collide with a schema field or appear on write-back)". Merging it
+    # into rows here would break that rule in the one place records are
+    # most likely to be echoed straight back into a write.
+    if revs is not None:
+        records_payload["revs"] = revs
     await _send_json(send, {"status": "ok", **records_payload})
 
 

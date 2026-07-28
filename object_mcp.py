@@ -139,7 +139,7 @@ TOOLS: list[dict[str, Any]] = [
     },
     {
         "name": "list_records",
-        "description": "List records in one collection, optionally filtered",
+        "description": ("List records in one collection, optionally filtered. The response carries a `revs` map (record id -> _rev) alongside `records`: pass one back as If-Match on update_record to claim a row safely against another agent doing the same thing."),
         "inputSchema": {
             "type": "object",
             "properties": {

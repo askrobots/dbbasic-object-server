@@ -1084,6 +1084,68 @@ Response:
 }
 ```
 
+## Optimistic Concurrency (`_rev` / `If-Match`)
+
+Record updates are last-write-wins by default. To make a read-then-write
+safe against a concurrent writer, send back the `_rev` you read.
+
+**Reading a rev.** A single-record read returns it as a **sibling** of
+`record`, never a field inside it:
+
+```json
+{"status": "ok", "collection": "tasks", "record": {"id": "t1", "status": "open"},
+ "_rev": "a1b2c3…"}
+```
+
+A list read returns a parallel **`revs` map**, keyed by record id, covering
+exactly the rows in the returned window:
+
+```json
+{"status": "ok", "collection": "tasks",
+ "records": [{"id": "t1", "status": "open"}, {"id": "t2", "status": "open"}],
+ "count": 2, "total": 57, "limit": 100, "offset": 0,
+ "revs": {"t1": "a1b2c3…", "t2": "d4e5f6…"}}
+```
+
+It is a map rather than a `_rev` on each row so the record shape stays a
+contract: a rev must never collide with a schema field, and must never be
+echoed back on write.
+
+**Using one.** Send `If-Match: <rev>` (or an `expected_rev` body field) on
+`PUT`. The rev is compared **inside the write lock**, before validation:
+
+- match → the write proceeds
+- mismatch → **409**, and nothing is written
+
+```
+PUT /collections/tasks/records/t1
+If-Match: a1b2c3…
+
+{"status": "assigned", "assigned_to": "agent-A"}
+```
+
+**Why it exists — the claim.** Two agents both read a task as `open` and
+both write `assigned`. Without a precondition both succeed and whoever
+lands second silently overwrites the first; both believe they hold it and
+neither can tell. With `If-Match`, the second finds the row changed, gets a
+409, re-reads, and moves on. The rev captures "the record I read is still
+the record on disk", which necessarily includes every field — so no
+per-field guard is needed.
+
+Because the `revs` map ships with the list, an agent can find work and
+claim it without re-reading each candidate first.
+
+**Notes.**
+
+- Omitting `If-Match` is still valid and still last-write-wins. The
+  precondition is opt-in per write, never mandatory.
+- The rev is computed over the **full stored record**, before any
+  field-level permission trimming. A caller who cannot see a field still
+  gets a rev that depends on it — which only ever fails closed, and
+  discloses nothing about the value.
+- `DBBASIC_ENABLE_CONCURRENCY=false` turns the feature off: preconditions
+  are ignored (never a 409) and `revs` is omitted from list payloads.
+
 ## Object List
 
 ```http
