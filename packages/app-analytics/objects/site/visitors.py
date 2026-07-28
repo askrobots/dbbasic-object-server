@@ -227,7 +227,8 @@ nothing was written.</p>
         f'<tr><td><code>{_esc(row["event_type"])}</code></td>'
         f'<td class="num">{row["count"]}</td>'
         f'<td class="num">{row["threaded"]}</td>'
-        f'<td>{_esc(row["last"][:16].replace("T", " "))}</td></tr>'
+        f'<td><time datetime="{_esc(row["last"])}">'
+        f'{_esc(row["last"][:16].replace("T", " "))}</time></td></tr>'
         for row in summary
     ) or ('<tr><td colspan="4" class="hint">No conversions recorded in this '
           'window. Goals are written by a transition — an order confirmed, a '

@@ -315,7 +315,8 @@ def _render_paid(invoice, currency, base, lines, settings) -> dict:
     paid_at = invoice.get("paid_at") or ""
     model = _model_for(invoice, lines, settings, base)
     before = (f'<p><span class="badge ok">Paid in full</span>'
-              + (f' <span class="doc-hint">on {_esc(paid_at)}</span>' if paid_at else "")
+              + (f' <span class="doc-hint">on <time datetime="{_esc(paid_at)}">'
+                 f'{_esc(paid_at)}</time></span>' if paid_at else "")
               + "</p>"
               + _tiles(("Total", total), ("Paid", paid)))
     return _page(model, settings=settings, before=before,

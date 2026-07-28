@@ -224,3 +224,61 @@ def test_editable_datetime_fields_really_exist_so_this_matters():
                 found.append((schema["name"], field["name"]))
     assert len(found) >= 5, found
     assert ("events", "starts_at") in found
+
+
+# --- the picker -----------------------------------------------------------------
+#
+# display.timezone was writable over PUT /prefs/... from the moment the
+# formatter shipped, and had nowhere a person would ever find it -- which
+# is the same as not existing.
+
+APPEARANCE = PACKAGES / "app-theme" / "objects" / "site" / "appearance.py"
+
+
+def test_the_timezone_pref_has_a_place_a_person_can_find_it():
+    page = APPEARANCE.read_text()
+    assert 'id="tz"' in page
+    assert "/prefs/display.timezone" in page
+    assert 'method: "PUT"' in page
+
+
+def test_the_default_option_is_the_browser_not_a_named_zone():
+    """Blank means 'use the browser', which stays the default because it
+    is right more often and requires nobody to decide anything."""
+    page = APPEARANCE.read_text()
+    assert '<option value="">Whatever my browser says (recommended)</option>' in page
+
+
+def test_the_page_says_the_zone_is_not_transmitted():
+    """The privacy property is only worth having if a user is told about
+    it -- an undisclosed protection is indistinguishable from none."""
+    page = APPEARANCE.read_text()
+    assert "Nothing is sent to the server to work that out" in page
+    assert "unless you choose one below" in page
+
+
+def test_the_picker_writes_the_documented_pref_contract():
+    """PUT /prefs/{key} takes {"value": "<string>"} -- a mismatch here
+    would fail silently in the browser and look like the pref not
+    sticking."""
+    page = APPEARANCE.read_text()
+    assert 'body: JSON.stringify({value: sel.value})' in page
+    assert 'credentials: "same-origin"' in page
+
+
+def test_the_zone_list_degrades_rather_than_bundling_a_database():
+    """Intl.supportedValuesOf where it exists, a short explicit list where
+    it does not. Shipping 400 names to render a dropdown nobody scrolls is
+    not worth the bytes, and an exotic zone can still be PUT directly."""
+    page = APPEARANCE.read_text()
+    assert 'Intl.supportedValuesOf("timeZone")' in page
+    assert "catch (e)" in page
+    assert '"UTC"' in page
+
+
+def test_the_public_invoice_portal_shows_a_customers_own_time():
+    """The portal is public and a customer may be on another continent;
+    paid_at is a datetime, so a raw stamp put UTC on somebody's receipt."""
+    portal = (PACKAGES / "app-invoices" / "objects" / "site"
+              / "invoice_portal.py").read_text()
+    assert '<time datetime="{_esc(paid_at)}">' in portal
