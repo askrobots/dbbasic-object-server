@@ -1486,6 +1486,7 @@ RESTORE_POINT_RETENTION_MARKER_NAME = ".restore_point_retention_last_run"
 RESTORE_POINT_RETENTION_INTERVAL_ENV = "DBBASIC_RESTORE_POINT_RETENTION_INTERVAL_SECONDS"
 RESTORE_POINT_KEEP_LAST_ENV = "DBBASIC_RESTORE_POINT_KEEP_LAST"
 RESTORE_POINT_KEEP_DAYS_ENV = "DBBASIC_RESTORE_POINT_KEEP_DAYS"
+RESTORE_POINT_MAX_BYTES_ENV = "DBBASIC_RESTORE_POINT_MAX_BYTES"
 _DEFAULT_RESTORE_POINT_INTERVAL = 21600            # 6h, like the other sweeps
 _DEFAULT_RESTORE_POINT_KEEP_LAST = 20
 _DEFAULT_RESTORE_POINT_KEEP_DAYS = 7
@@ -1514,6 +1515,12 @@ def process_restore_point_retention(*, base_dir: Path | str = "data") -> dict | 
     net. Setting KEEP_LAST to 0 does NOT disable the sweep -- the floor is
     object_backup_index.MIN_KEEP -- because sweeping to the bone would
     remove the very safety net this feature exists to provide.
+
+    The BUDGET (DBBASIC_RESTORE_POINT_MAX_BYTES, default 2GB) is what
+    actually bounds the disk, and it outranks the window. A first cut of
+    this pass had only a count and an age window; a dry run on the real box
+    freed 78MB of 14.3GB, because 93 archives were two days old and the
+    window protected them all. Count and age cannot bound bytes.
     """
     marker_path = Path(base_dir) / RESTORE_POINT_RETENTION_MARKER_NAME
     interval = _env_int(RESTORE_POINT_RETENTION_INTERVAL_ENV,
@@ -1534,6 +1541,9 @@ def process_restore_point_retention(*, base_dir: Path | str = "data") -> dict | 
                                _DEFAULT_RESTORE_POINT_KEEP_LAST),
             keep_newer_than_days=_env_int(RESTORE_POINT_KEEP_DAYS_ENV,
                                           _DEFAULT_RESTORE_POINT_KEEP_DAYS),
+            max_total_bytes=_env_int(
+                RESTORE_POINT_MAX_BYTES_ENV,
+                object_backup_index.DEFAULT_MAX_TOTAL_BYTES),
         )
     except OSError:
         return None

@@ -363,20 +363,40 @@ PRUNABLE_KINDS = ("package",)
 # remove the safety net this exists to provide.
 MIN_KEEP = 5
 
+# The ceiling that actually matters. A first cut of this used only
+# keep_last plus an age window, and a dry run on the real box showed it
+# freeing 78MB out of 14.3GB: 93 archives had been written in two days, so
+# the age window protected nearly all of them -- and because the data
+# directory grows, the RECENT ones are the large ones (~91MB each against
+# ~1.7MB for the oldest). A policy expressed in COUNT and AGE cannot bound
+# a quantity measured in BYTES.
+#
+# So the budget is the primary control and the window is a courtesy inside
+# it: newest-first, keep while there is room. 2GB holds roughly the last
+# twenty snapshots of a mid-size box and is a rounding error next to the
+# disk it protects.
+DEFAULT_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
+
 
 def prune_backups(
     *,
     data_dir: Path | str | None = None,
     keep_last: int = 20,
     keep_newer_than_days: int = 0,
+    max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES,
     dry_run: bool = False,
 ) -> dict[str, object]:
     """Remove old AUTOMATIC restore points. Never touches manual backups.
 
-    `keep_last` -- how many of the newest automatic archives survive.
-    `keep_newer_than_days` -- anything younger than this survives even if
-    it falls outside keep_last, so a burst of installs in one afternoon
-    does not evict the morning's safety net. 0 disables the window.
+    `keep_last` -- how many of the newest automatic archives always
+    survive, whatever they weigh. The safety floor.
+    `max_total_bytes` -- the ceiling on everything kept. THE control that
+    actually bounds a disk; see DEFAULT_MAX_TOTAL_BYTES for why count and
+    age alone provably do not. 0 disables it.
+    `keep_newer_than_days` -- inside the budget, prefer keeping anything
+    younger than this, so a burst of installs in one afternoon does not
+    evict the morning's safety net. It can never push the total past the
+    ceiling. 0 disables the window.
 
     Returns what it did (or would do, with `dry_run`), never raising for
     an individual file it cannot delete: a backup directory that is
@@ -396,10 +416,19 @@ def prune_backups(
             - timedelta(days=int(keep_newer_than_days))
         ).isoformat().replace("+00:00", "Z")
 
-    doomed = [
-        entry for entry in prunable[keep_last:]
-        if not (cutoff and str(entry["created_at"]) >= cutoff)
-    ]
+    # Newest-first: the floor is unconditional, then the window is honoured
+    # only while the running total stays under the ceiling.
+    kept_bytes = sum(int(e["size"]) for e in prunable[:keep_last])
+    budget = int(max_total_bytes)
+    doomed = []
+    for entry in prunable[keep_last:]:
+        size = int(entry["size"])
+        in_window = bool(cutoff) and str(entry["created_at"]) >= cutoff
+        room = (not budget) or (kept_bytes + size <= budget)
+        if in_window and room:
+            kept_bytes += size
+            continue
+        doomed.append(entry)
 
     removed, freed, errors = [], 0, []
     if not dry_run:
@@ -423,6 +452,7 @@ def prune_backups(
         "removed_ids": removed,
         "freed_bytes": freed,
         "kept": len(prunable) - len(removed),
+        "kept_bytes": kept_bytes,
         "protected": len(protected),
         "errors": errors,
         "dry_run": bool(dry_run),

@@ -212,3 +212,56 @@ def test_the_env_knobs_are_honoured(tmp_path, monkeypatch):
 
     result = object_daemon.process_restore_point_retention(base_dir=tmp_path)
     assert result["kept"] == 7
+
+
+# --- the budget -----------------------------------------------------------------
+#
+# The first cut of this policy had only keep_last and an age window. A dry
+# run against the real droplet freed 78MB out of 14.3GB: 93 archives had
+# been written in two days, so the window protected almost all of them --
+# and because the data directory grows, the RECENT archives are the large
+# ones (~91MB each against ~1.7MB for the oldest). A policy expressed in
+# COUNT and AGE cannot bound a quantity measured in BYTES.
+
+def test_the_budget_outranks_the_age_window(tmp_path):
+    """The exact shape that made the first policy useless: everything is
+    inside the window, and the window must not be able to blow the disk
+    budget to honour it."""
+    backups = backups_of(tmp_path)
+    for n in range(40):                       # 40 x 1MB, all written today
+        make_archive(backups, f"package-burst-{n}", age_days=0, size=1024 * 1024)
+
+    result = object_backup_index.prune_backups(
+        data_dir=tmp_path, keep_last=5, keep_newer_than_days=7,
+        max_total_bytes=10 * 1024 * 1024)     # room for ~10
+
+    assert result["kept"] <= 11
+    assert result["removed"] >= 29
+    assert result["kept_bytes"] <= 11 * 1024 * 1024
+
+
+def test_the_floor_survives_even_a_budget_smaller_than_it(tmp_path):
+    """keep_last is unconditional: a budget set below what the newest few
+    weigh must not delete them. A rollback point you cannot afford is
+    still a rollback point."""
+    backups = backups_of(tmp_path)
+    for n in range(20):
+        make_archive(backups, f"package-app-{n}", age_days=n, size=1024 * 1024)
+
+    result = object_backup_index.prune_backups(
+        data_dir=tmp_path, keep_last=8, keep_newer_than_days=0,
+        max_total_bytes=1024)                 # 1KB: less than one archive
+
+    assert result["kept"] == 8
+
+
+def test_a_zero_budget_disables_the_ceiling(tmp_path):
+    backups = backups_of(tmp_path)
+    for n in range(30):
+        make_archive(backups, f"package-app-{n}", age_days=0, size=1024 * 1024)
+
+    result = object_backup_index.prune_backups(
+        data_dir=tmp_path, keep_last=5, keep_newer_than_days=7,
+        max_total_bytes=0)
+
+    assert result["removed"] == 0             # window keeps everything again
