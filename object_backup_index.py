@@ -17,7 +17,7 @@ import hashlib
 import io
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import object_backup
@@ -323,4 +323,107 @@ def preview_record(
         "record": backup_rows.get(record_id),
         "present_in_backup": record_id in backup_rows,
         "present_in_live": record_id in live_rows,
+    }
+
+
+# === retention ==============================================================
+#
+# A restore point is created automatically before EVERY package install
+# (object_server's create_restore_point, passed to install_package as
+# before_write). Nothing ever removed them. On the box that motivated this
+# there were 157 of them at ~91MB each -- 14.3GB against 4.0GB free, on a
+# machine that also serves production, growing by one archive per install.
+# 93 of them had been written in the preceding two days.
+#
+# That is the fourth instance of one pattern here: page_views, restore
+# points, change logs, and now restore points again. A log nobody told how
+# big it may get fails on the worst day rather than an ordinary one.
+#
+# WHAT MAKES A DEFAULT SAFE HERE, and why this differs from the change-log
+# pass (which is off unless an operator asks): those archives are not the
+# operator's data. Nobody asked for 157 of them; they are scaffolding the
+# server produced on its own behalf, and the value of the hundredth-oldest
+# one from three weeks ago is indistinguishable from zero. A change log,
+# by contrast, IS the audit trail, which is why deciding how much of it to
+# keep is not a decision a daemon makes for somebody.
+#
+# So the split is by KIND, which `_entry` already computes:
+#
+#   package        automatic, one per install       -> prunable
+#   manual         a person pressed a button        -> NEVER touched
+#   restore-point  a named point somebody chose     -> NEVER touched
+#
+# Anything a human asked for survives forever regardless of policy. Only
+# the machine's own scaffolding is swept.
+
+PRUNABLE_KINDS = ("package",)
+
+# Below this many prunable archives, do nothing at all. A handful of
+# restore points is the feature working; sweeping down to the bone would
+# remove the safety net this exists to provide.
+MIN_KEEP = 5
+
+
+def prune_backups(
+    *,
+    data_dir: Path | str | None = None,
+    keep_last: int = 20,
+    keep_newer_than_days: int = 0,
+    dry_run: bool = False,
+) -> dict[str, object]:
+    """Remove old AUTOMATIC restore points. Never touches manual backups.
+
+    `keep_last` -- how many of the newest automatic archives survive.
+    `keep_newer_than_days` -- anything younger than this survives even if
+    it falls outside keep_last, so a burst of installs in one afternoon
+    does not evict the morning's safety net. 0 disables the window.
+
+    Returns what it did (or would do, with `dry_run`), never raising for
+    an individual file it cannot delete: a backup directory that is
+    partially unwritable should still be swept as far as it can be, and
+    the caller gets the errors rather than an exception mid-loop.
+    """
+    keep_last = max(MIN_KEEP, int(keep_last))
+    entries = list_backups(data_dir=data_dir)          # newest first
+
+    prunable = [e for e in entries if e["kind"] in PRUNABLE_KINDS]
+    protected = [e for e in entries if e["kind"] not in PRUNABLE_KINDS]
+
+    cutoff = ""
+    if keep_newer_than_days and int(keep_newer_than_days) > 0:
+        cutoff = (
+            datetime.now(tz=timezone.utc)
+            - timedelta(days=int(keep_newer_than_days))
+        ).isoformat().replace("+00:00", "Z")
+
+    doomed = [
+        entry for entry in prunable[keep_last:]
+        if not (cutoff and str(entry["created_at"]) >= cutoff)
+    ]
+
+    removed, freed, errors = [], 0, []
+    if not dry_run:
+        directory = backups_dir(data_dir)
+        for entry in doomed:
+            path = directory / str(entry["id"])
+            try:
+                size = path.stat().st_size
+                path.unlink()
+            except OSError as exc:
+                errors.append(f"{entry['id']}: {exc}")
+                continue
+            removed.append(str(entry["id"]))
+            freed += size
+    else:
+        removed = [str(entry["id"]) for entry in doomed]
+        freed = sum(int(entry["size"]) for entry in doomed)
+
+    return {
+        "removed": len(removed),
+        "removed_ids": removed,
+        "freed_bytes": freed,
+        "kept": len(prunable) - len(removed),
+        "protected": len(protected),
+        "errors": errors,
+        "dry_run": bool(dry_run),
     }

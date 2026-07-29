@@ -38,7 +38,8 @@ structure to catastrophically damage.
   one — never a half-written file.
 - **Append-only collections** (used for high-write logs) treat an interrupted
   write as a torn tail: only the last, incomplete entry is ignored on read;
-  every fully-written entry before it survives.
+  every fully-written entry before it survives. **One documented exception —
+  see [Known gap](#known-gap-torn-tail-repair-on-the-write-path) below.**
 - **Concurrency** is serialized with a kernel file lock (`flock`) that applies
   across both threads *and* separate processes, so concurrent writers on a
   multi-worker deployment cannot corrupt or lose each other's writes.
@@ -78,8 +79,10 @@ Durability is verified by a dedicated conformance suite, run deliberately
   round-tripped byte-exact through every storage and read path, with no silent
   normalization.
 - **Crash recovery** — a write interrupted at *every byte offset* is simulated
-  and the store is checked to recover to a valid state with no loss of
-  committed data.
+  and the store is checked to recover to a valid state. This holds for
+  single-line rows; for rows containing a newline inside a quoted field it
+  does **not** yet — the simulation maps that failure rather than passing it,
+  and the tests are held as strict xfails. See [Known gap](#known-gap-torn-tail-repair-on-the-write-path).
 - **Concurrency** — real concurrent processes writing the same collection,
   checked for lost updates and corruption.
 - **Atomicity** — single-record writes are all-or-nothing, and a reader never
@@ -93,3 +96,46 @@ Durability is verified by a dedicated conformance suite, run deliberately
 
 The philosophy follows the databases that made testing their reputation: a
 visible, exhaustive test suite is itself the assurance that the data is safe.
+
+## Known gap: torn-tail repair on the write path
+
+**Status: open.** Stated here because a durability document that omits it is
+worse than no document — a reader plans around the guarantee they were given.
+
+Before an append lands, `object_records._repair_torn_tail` trims any partial
+row left by an interrupted write. That trim finds the last row boundary by
+scanning backwards for a newline, and **that scan is quote-blind**: a newline
+*inside* a quoted multi-line field looks exactly like a row boundary. So the
+repair can cut mid-field, leave a fragment with an unclosed quote, and let the
+next appended row be swallowed by it.
+
+**Scope.** Only rows containing an embedded newline — in practice a field
+holding JSON, an address block, or a multi-line note. Single-line rows are
+unaffected. Within an affected row the exposure covers roughly 97% of its
+write window.
+
+**The read path is already fixed.** `_drop_torn_tail` uses a quote-aware
+scan (`_committed_prefix_len`). The write path was changed to match and the
+change was reverted: correct in isolation, but it regressed the ordinary
+single-line self-heal under the full test suite in a way that was never fully
+explained. It is being redone deliberately rather than reapplied.
+
+**Also affected:** `object_backup_index._drop_torn_tail` carries the same
+quote-blind check, has no test covering it, and sits in the restore path.
+
+**How it is tracked.** Three strict-xfail acceptance tests already assert the
+correct behaviour and map the trigger surface. They fail loudly the day the
+bug is fixed, at which point they become ordinary regression tests:
+
+- `tests/test_durability_torn_write_characterization.py` — every offset from
+  the row's first embedded newline to its last byte
+- `tests/test_embedded_json_lines_characterization.py` — the original
+  silent-resurrection-and-cascade finding
+- `tests/test_durability_torn_write_characterization.py` — a torn *header*,
+  which reports success while truncating the file to zero bytes
+
+**What to do meanwhile.** Nothing, for most deployments: the affected shape is
+a quoted embedded newline in an append-only collection, interrupted by process
+death mid-write. If you store multi-line text in a high-write append
+collection and cannot tolerate the risk, keep that collection in classic
+(rewrite) mode, which is unaffected.

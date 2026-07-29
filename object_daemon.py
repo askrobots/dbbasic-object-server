@@ -32,6 +32,7 @@ except ImportError:
     croniter = None
 
 import object_analytics
+import object_backup_index
 import object_books_status
 import object_change_dispatch
 import object_collections
@@ -1481,6 +1482,71 @@ def process_change_log_retention(*, base_dir: Path | str = "data") -> dict | Non
     return result
 
 
+RESTORE_POINT_RETENTION_MARKER_NAME = ".restore_point_retention_last_run"
+RESTORE_POINT_RETENTION_INTERVAL_ENV = "DBBASIC_RESTORE_POINT_RETENTION_INTERVAL_SECONDS"
+RESTORE_POINT_KEEP_LAST_ENV = "DBBASIC_RESTORE_POINT_KEEP_LAST"
+RESTORE_POINT_KEEP_DAYS_ENV = "DBBASIC_RESTORE_POINT_KEEP_DAYS"
+_DEFAULT_RESTORE_POINT_INTERVAL = 21600            # 6h, like the other sweeps
+_DEFAULT_RESTORE_POINT_KEEP_LAST = 20
+_DEFAULT_RESTORE_POINT_KEEP_DAYS = 7
+
+
+def process_restore_point_retention(*, base_dir: Path | str = "data") -> dict | None:
+    """Sweep AUTOMATIC restore points. Never touches a manual backup.
+
+    ON BY DEFAULT, which is the opposite of the change-log pass above, and
+    the difference is who asked for the files. A change log IS the audit
+    trail, so how much to keep is not a decision a daemon makes on
+    somebody's behalf. Restore points are scaffolding the server writes for
+    itself before every package install -- nobody asked for them, and the
+    hundredth-oldest one from three weeks ago is worth nothing.
+
+    The box that motivated this had 157 of them at ~91MB, 14.3GB against
+    4.0GB free, on a machine also serving production, with 93 written in
+    the preceding two days. Left alone it fills the disk in about a day,
+    and a full disk on that box takes production down with it. That is the
+    fourth time this shape of bug has appeared here (page_views, restore
+    points, change logs, restore points again).
+
+    Keeps the newest DBBASIC_RESTORE_POINT_KEEP_LAST (default 20) and
+    anything younger than DBBASIC_RESTORE_POINT_KEEP_DAYS (default 7), so
+    a burst of installs in one afternoon cannot evict the morning's safety
+    net. Setting KEEP_LAST to 0 does NOT disable the sweep -- the floor is
+    object_backup_index.MIN_KEEP -- because sweeping to the bone would
+    remove the very safety net this feature exists to provide.
+    """
+    marker_path = Path(base_dir) / RESTORE_POINT_RETENTION_MARKER_NAME
+    interval = _env_int(RESTORE_POINT_RETENTION_INTERVAL_ENV,
+                        _DEFAULT_RESTORE_POINT_INTERVAL)
+    now = time.time()
+    try:
+        if now - marker_path.stat().st_mtime < interval:
+            return None
+    except OSError:
+        pass  # no marker yet -> run now
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    marker_path.write_text(str(now))
+
+    try:
+        result = object_backup_index.prune_backups(
+            data_dir=base_dir,
+            keep_last=_env_int(RESTORE_POINT_KEEP_LAST_ENV,
+                               _DEFAULT_RESTORE_POINT_KEEP_LAST),
+            keep_newer_than_days=_env_int(RESTORE_POINT_KEEP_DAYS_ENV,
+                                          _DEFAULT_RESTORE_POINT_KEEP_DAYS),
+        )
+    except OSError:
+        return None
+    if result.get("removed"):
+        freed_mb = int(result["freed_bytes"]) // (1024 * 1024)
+        log(f"Restore points: removed {result['removed']} archive(s), "
+            f"freed {freed_mb}MB, kept {result['kept']} "
+            f"(+{result['protected']} manual, never swept)")
+    for problem in result.get("errors") or []:
+        log(f"Restore points: could not remove {problem}", "ERROR")
+    return result
+
+
 ANALYTICS_RETENTION_MARKER_NAME = ".analytics_retention_last_run"
 ANALYTICS_RETENTION_INTERVAL_ENV = "DBBASIC_ANALYTICS_RETENTION_INTERVAL_SECONDS"
 _DEFAULT_ANALYTICS_RETENTION_INTERVAL = 21600  # 6h -- a rewrite of a big file isn't cheap
@@ -2054,6 +2120,11 @@ def main():
             process_change_log_retention(base_dir=base_dir)
         except Exception as e:
             log(f"Change log retention error: {e}", 'ERROR')
+
+        try:
+            process_restore_point_retention(base_dir=base_dir)
+        except Exception as e:
+            log(f"Restore point retention error: {e}", 'ERROR')
 
         try:
             process_attention(base_dir=base_dir)

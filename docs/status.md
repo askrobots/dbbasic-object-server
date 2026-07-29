@@ -126,6 +126,18 @@ untrusted public users.
 - A background-job runtime (long media transcodes, PDF text extraction,
   thumbnails, scheduled AI work wait on it)
 - Cluster correctness claims
+- **Torn-tail repair on the write path is quote-blind** — a crash mid-write to
+  an append-only collection can swallow the next row, but only for rows
+  containing a newline inside a quoted field (JSON, address blocks, multi-line
+  notes). The read path is already fixed; the write path's fix was attempted
+  and reverted. Three strict-xfail acceptance tests hold the correct
+  behaviour. Full detail and the mitigation in
+  [`durability-and-recovery.md`](durability-and-recovery.md#known-gap-torn-tail-repair-on-the-write-path).
+- **Cost of goods sold is not booked on a sale** — inventory leaves the shelf
+  and never leaves the balance sheet, so inventory is overstated and COGS
+  understated until a valuation method (FIFO / weighted average) and a COGS
+  account setting exist. Three strict-xfail tests staged in
+  `tests/test_cogs_on_sale.py`.
 
 ## Next Work
 

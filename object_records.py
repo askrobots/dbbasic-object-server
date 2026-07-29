@@ -2247,26 +2247,40 @@ def _repair_torn_tail(path: Path) -> None:
     """Ensure `path` ends with a complete row before an append lands.
 
     A write interrupted mid-row leaves a fragment; appending after it would
-    concatenate the next row onto the fragment -- and if the fragment holds an
-    unclosed quoted field, silently swallow that next row. This truncates the
-    file to the end of its last COMPLETE csv row, computed QUOTE-AWARE
-    (_committed_prefix_len), so a "\\n" INSIDE a quoted multi-line field is
-    never mistaken for a row boundary. That was the old backward
-    rfind(b"\\n")'s bug (substrate bug #2): it could cut mid-quoted-field,
-    leave an open-quote fragment, and let the next append be swallowed.
+    concatenate the next row onto the fragment -- and if the fragment holds
+    an unclosed quoted field, silently swallow that next row.
 
-    Cheap common case: the in-memory oidx cache records how many bytes of the
-    file the last completed write covered. A torn tail can only appear after a
-    process DEATH, which clears the in-memory cache -- so a WARM cache whose
-    covered_bytes equals the current size proves the file ends exactly at a
-    committed row, and we return without reading it. The quote-aware whole-file
-    scan below runs only when the cache is cold (the first append after a
-    restart -- exactly when a torn tail might exist and repair matters) or
-    stale (e.g. a concurrent cross-process append this process hasn't cached);
-    in the stale case the scan simply finds the file already clean and trims
-    nothing. Correctness rests entirely on _committed_prefix_len, which only
-    ever trims a torn TAIL and never bisects a committed row; the cache gate
-    affects only WHEN the scan runs, never its result.
+    ⚠️ KNOWN LIMITATION -- substrate bug #2, WRITE SIDE, STILL OPEN.
+
+    This truncates to the last "\n" found scanning backwards
+    (chunk.rfind(b"\n") below). That is QUOTE-BLIND: a newline INSIDE a
+    quoted multi-line field is mistaken for a row boundary, so this can cut
+    mid-quoted-field, leave an open-quote fragment, and let the very next
+    append be swallowed. The exposure is roughly 97% of a multi-line row's
+    write window.
+
+    THE READ SIDE IS FIXED AND THIS IS NOT. `_drop_torn_tail` (read path)
+    uses `_committed_prefix_len`, which is quote-aware. The write path was
+    changed to match and the change was REVERTED: it was correct in
+    isolation but regressed the ordinary single-line self-heal in the full
+    suite, in a context-dependent way not fully explained (failed under
+    pytest, passed standalone). See plan/parity-completion-plan.md.
+
+    An earlier version of THIS DOCSTRING described the reverted fix as
+    though it had shipped -- claiming a quote-aware scan and a
+    covered_bytes cache gate that the body below has never contained. It
+    was rewritten on 2026-07-29 after a survey caught the contradiction.
+    If you are auditing crash safety, believe the code.
+
+    The fix, when it is attempted again: truncate to `_scan_append_tail`'s
+    csv-aware covered_bytes from the sidecar's last known-good offset,
+    rather than rfind(b"\n"). Two strict-xfail acceptance tests already map
+    the trigger surface and will flip to XPASS the day it lands --
+    tests/test_durability_torn_write_characterization.py and
+    tests/test_embedded_json_lines_characterization.py.
+
+    `object_backup_index._drop_torn_tail` carries the SAME quote-blind
+    check with no test at all, and is in the restore path.
     """
     try:
         size = path.stat().st_size
