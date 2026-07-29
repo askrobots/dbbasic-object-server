@@ -22,6 +22,7 @@ from pathlib import Path
 
 import object_backup
 import object_collections
+import object_records
 
 MANUAL_LABEL = "manual"
 _ID_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]{0,255}\.tar\.gz$")
@@ -110,16 +111,34 @@ _OP_DELETE = "del"
 def _drop_torn_tail(text: str) -> str:
     """Drop an unterminated final physical line (a write caught mid-append).
 
-    Mirrors object_records._drop_torn_tail: append-mode writers only
-    consider a row committed once it is followed by "\\n" (see
-    docs/append-only-storage-design.md, Crash Safety), so a trailing line
-    with no newline is an in-flight write, not data, on either the backup
-    or the live side.
+    Append-mode writers only consider a row committed once it is followed
+    by a row-terminating "\\n" (see docs/append-only-storage-design.md,
+    Crash Safety), so anything after the last one is an in-flight write --
+    not data -- on either the backup or the live side.
+
+    QUOTE-AWARE, via the shared `object_records.committed_prefix_len`: a
+    "\\n" INSIDE a quoted multi-line field is content, never a row
+    boundary.
+
+    THIS WAS THE BUG, and it is worth naming because of how it survived.
+    The body used to be `endswith("\\n") or rfind("\\n")` under a docstring
+    claiming it "mirrors object_records._drop_torn_tail" -- which had been
+    upgraded to be quote-aware while this copy was not, silently, for
+    months. Worse than the read-side original: a file ending with a "\\n"
+    that sits INSIDE an unclosed quote was returned untouched, so a
+    restored backup could resurrect a garbled row that a live read of the
+    same bytes handles correctly. It carried no test at all, which is
+    precisely why nothing caught the drift.
+
+    It now CALLS the shared implementation instead of mirroring it. That is
+    a deliberate exception to this module's usual independence from
+    object_records' internals: keeping a private copy is exactly what
+    failed, `committed_prefix_len` is exported for this reason, and two
+    implementations of one invariant drift while one cannot.
     """
-    if text == "" or text.endswith("\n"):
+    if text == "":
         return text
-    cut = text.rfind("\n")
-    return text[: cut + 1] if cut >= 0 else ""
+    return text[: object_records.committed_prefix_len(text)]
 
 
 def _fold_append_rows(rows: list[dict[str, str]]) -> dict[str, dict[str, str]]:

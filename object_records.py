@@ -1789,6 +1789,19 @@ def _committed_prefix_len(text: str) -> int:
     return last_row_end
 
 
+# Public alias. `_committed_prefix_len` is the one correct answer to "where
+# does the last complete CSV row end", and it is needed in more than one
+# module: object_backup_index parses records.tsv out of a backup archive on
+# the restore path and must reach the same verdict.
+#
+# It is exported rather than copied because the copy is what went wrong.
+# object_backup_index kept its own `_drop_torn_tail` with a docstring saying
+# it "mirrors object_records._drop_torn_tail" -- and when this module's copy
+# was upgraded to be quote-aware, the mirror was not, silently, for months.
+# Two implementations of one invariant drift; one implementation cannot.
+committed_prefix_len = _committed_prefix_len
+
+
 def _drop_torn_tail(text: str) -> str:
     """Return `text` truncated to the end of its last COMPLETE csv row.
 
