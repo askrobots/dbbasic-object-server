@@ -7069,6 +7069,83 @@ async def _handle_ai_chat(
         await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
         return
 
+    # --- chat attachments: file ids -> provider-neutral parts ----------------
+    #
+    # Resolved HERE, after the key check and before any provider call, so a
+    # refused attachment costs nothing. The split of labour: this handler
+    # does all the I/O (ownership, record lookup, blob read) and
+    # object_ai.attachment_part does the pure classification, so the gate
+    # logic is testable without a data directory.
+    #
+    # OWNERSHIP IS STRICT in v1: the caller may attach only files whose
+    # record they own. Deliberately not consulting record_shares yet -- a
+    # share grants READ of the record, and whether that extends to feeding
+    # the blob into an AI provider is a real question (the provider sees
+    # the content), so it waits to be decided rather than being implied.
+    # The refusal says so.
+    #
+    # Every problem is reported at once (the blockers idiom): a user who
+    # attached four files does not want them peeled back one error at a
+    # time.
+    attachment_ids = payload.get("attachments") or []
+    attachment_parts: list[dict[str, Any]] = []
+    if attachment_ids:
+        if not isinstance(attachment_ids, list) or not all(
+            isinstance(fid, str) and fid for fid in attachment_ids
+        ):
+            await _send_json(
+                send,
+                {"status": "error", "error": "attachments must be a list of file ids"},
+                status=400,
+            )
+            return
+        problems: list[str] = []
+        for fid in attachment_ids[: object_ai.MAX_ATTACHMENTS_PER_TURN + 1]:
+            try:
+                record = object_records.get_collection_record(
+                    USER_FILES_COLLECTION, fid, base_dir=_data_dir()
+                )
+            except Exception:
+                problems.append(f"{fid}: no such file")
+                continue
+            if str(record.get("owner_id") or "") != str(session.user_id):
+                problems.append(
+                    f"{record.get('filename') or fid}: not your file. Chat "
+                    f"attachments are owner-only for now -- a share grants "
+                    f"read of the record, and whether that extends to sending "
+                    f"the content to an AI provider is deliberately not yet "
+                    f"decided."
+                )
+                continue
+            try:
+                blob = object_user_files.read_file(
+                    str(record.get("owner_id")), fid, base_dir=_data_dir()
+                )
+            except Exception:
+                problems.append(f"{record.get('filename') or fid}: bytes are missing")
+                continue
+            try:
+                attachment_parts.append(object_ai.attachment_part(
+                    str(record.get("filename") or fid),
+                    str(record.get("content_type") or ""),
+                    blob,
+                ))
+            except object_ai.InvalidChatRequestError as exc:
+                problems.append(str(exc))
+        if len(attachment_ids) > object_ai.MAX_ATTACHMENTS_PER_TURN:
+            problems.append(
+                f"{len(attachment_ids)} attachments; the limit is "
+                f"{object_ai.MAX_ATTACHMENTS_PER_TURN} per message."
+            )
+        if problems:
+            await _send_json(
+                send,
+                {"status": "error",
+                 "error": " ".join(problems), "problems": problems},
+                status=400,
+            )
+            return
+
     key = object_service_keys.get_service_key(session.user_id, service, base_dir=_data_dir())
     if key is None:
         await _send_json(
@@ -7129,6 +7206,7 @@ async def _handle_ai_chat(
             system=system if isinstance(system, str) else None,
             tools=provider_tools,
             history=payload.get("history"),
+            attachments=attachment_parts or None,
             max_rounds=max_rounds,
         )
     except object_ai.InvalidChatRequestError as exc:

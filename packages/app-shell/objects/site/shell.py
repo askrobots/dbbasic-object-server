@@ -28,6 +28,15 @@ _STYLE = """
 form#prompt { display: flex; gap: 0.5rem; border-top: 1px solid var(--line);
               padding-top: 0.75rem; }
 form#prompt input { flex: 1; font-family: var(--font-mono); }
+#attachbar { display: flex; gap: 0.4rem; flex-wrap: wrap; padding: 0.3rem 0.6rem;
+  border-top: 1px solid var(--line); font-size: 0.8rem; }
+#attachbar .chip { border: 1px solid var(--line); border-radius: 10px;
+  padding: 0 0.5rem; display: inline-flex; gap: 0.35rem; align-items: center; }
+#attachbar .chip button { border: 0; background: none; cursor: pointer; color: inherit; }
+body.dragover::after { content: "drop files to attach"; position: fixed; inset: 0;
+  display: grid; place-items: center; font-size: 1.2rem;
+  background: rgba(20, 20, 28, 0.7);
+  border: 2px dashed var(--accent, #b5713a); pointer-events: none; }
 #mic { font-family: var(--font-mono); font-size: 0.78rem; color: var(--muted);
        background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-sm);
        padding: 0 0.7rem; cursor: pointer; }
@@ -405,8 +414,15 @@ async function run(input) {
   }
 
   const tools = prefs.tools.split(",").map((t) => t.trim()).filter(Boolean);
+  // Attachments ride THIS turn only. History keeps a text marker instead of
+  // re-sending the bytes -- images are big, and the model's own reply
+  // already carries what it saw in them.
+  const attachIds = pendingAttach.map((f) => f.id);
+  const attachNote = pendingAttach.length
+    ? " [attached: " + pendingAttach.map((f) => f.name).join(", ") + "]" : "";
   const [ok, body] = await api("POST", "/api/ai/chat",
     {message: input, model: prefs.ai_model, tools, history: aiHistory.slice(-20),
+     attachments: attachIds.length ? attachIds : undefined,
      system: "You are the shell of this user's object server. Answer in plain terminal text " +
              "with no markdown formatting. Be concise. Use your tools when the question is " +
              "about the user's records. " +
@@ -442,8 +458,9 @@ async function run(input) {
              " Current local date/time: " + new Date().toString() + "."});
   finish(out, ok ? body.reply : body.error,
          {err: !ok, tools: ok ? body.tool_calls : null, markdown: ok});
+  if (ok && pendingAttach.length) { pendingAttach = []; renderAttachBar(); }
   if (ok) {
-    aiHistory.push({role: "user", content: input});
+    aiHistory.push({role: "user", content: input + attachNote});
     aiHistory.push({role: "assistant", content: body.reply});
     // Only the final assistant text is ever spoken -- never tool-call noise.
     if (voiceOn()) speak(body.reply);
@@ -463,6 +480,73 @@ initMic();
 loadPrefs();
 loadHistory();
 </script>
+
+// === drag a file in, talk about it ==========================================
+//
+// Drop anywhere on the page. Each file is uploaded to the EXISTING
+// /api/files surface (owner-stamped server-side, the same endpoint the
+// record-attachments capability uses -- no parent, so it is simply the
+// user's file), and its id rides the NEXT AI message as `attachments`.
+// The server turns ids into provider content: images become vision input,
+// text files are inlined. Binaries the model cannot see are refused by
+// name at send time rather than arriving as mojibake.
+let pendingAttach = [];
+function renderAttachBar() {
+  const bar = document.getElementById("attachbar");
+  if (!bar) return;
+  bar.hidden = !pendingAttach.length;
+  bar.innerHTML = pendingAttach.map((f, i) =>
+    '<span class="chip">[file] ' + esc(f.name)
+    + '<button type="button" data-detach="' + i + '" aria-label="remove">x</button></span>'
+  ).join("");
+}
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-detach]");
+  if (!btn) return;
+  pendingAttach.splice(Number(btn.getAttribute("data-detach")), 1);
+  renderAttachBar();
+});
+function attachNoteLine(text) {
+  const log = document.getElementById("log");
+  if (!log) return;
+  const div = document.createElement("div");
+  div.className = "entry";
+  div.innerHTML = '<div class="out">' + esc(text) + "</div>";
+  log.appendChild(div); log.scrollTop = log.scrollHeight;
+}
+async function uploadDropped(file) {
+  const data = new FormData();
+  data.append("file", file);
+  const res = await fetch("/api/files", {method: "POST", credentials: "same-origin", body: data});
+  let resp = null; try { resp = await res.json(); } catch (x) {}
+  if (!res.ok || !resp || !resp.file) {
+    attachNoteLine("could not attach " + file.name + ": " + ((resp && resp.error) || res.status));
+    return;
+  }
+  pendingAttach.push({id: resp.file.id, name: resp.file.filename || file.name});
+  renderAttachBar();
+  attachNoteLine("attached: " + (resp.file.filename || file.name)
+    + " -- it rides your next message");
+}
+let dragDepth = 0;
+document.addEventListener("dragenter", (e) => {
+  const types = (e.dataTransfer && e.dataTransfer.types) || [];
+  if (![].some.call(types, (t) => t === "Files")) return;
+  e.preventDefault(); dragDepth++; document.body.classList.add("dragover");
+});
+document.addEventListener("dragover", (e) => { e.preventDefault(); });
+document.addEventListener("dragleave", () => {
+  if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove("dragover"); }
+});
+document.addEventListener("drop", (e) => {
+  e.preventDefault(); dragDepth = 0; document.body.classList.remove("dragover");
+  if (typeof OWNER_ID === "undefined" || !OWNER_ID) {
+    attachNoteLine("sign in to attach files"); return;
+  }
+  const files = (e.dataTransfer && e.dataTransfer.files) || [];
+  for (const file of files) uploadDropped(file);
+});
+
 """
 
 
@@ -477,6 +561,7 @@ def GET(request):
     else:
         body = """
 <div id="log"><div class="entry"><div class="out">type /help for commands, or just talk</div></div></div>
+<div id="attachbar" hidden></div>
 <form id="prompt" autocomplete="off">
 <input name="line" placeholder="&gt;_" autofocus>
 <button type="submit" class="btn primary" aria-label="send">send</button>

@@ -105,6 +105,7 @@ def run_chat(
     system: str | None = None,
     tools: list[dict[str, Any]] | None = None,
     history: list[dict[str, str]] | None = None,
+    attachments: list[dict[str, Any]] | None = None,
     max_rounds: int = DEFAULT_MAX_ROUNDS,
     max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> dict[str, Any]:
@@ -116,6 +117,11 @@ def run_chat(
     """
     if not isinstance(message, str) or not message.strip():
         raise InvalidChatRequestError("message is required")
+    if attachments and len(attachments) > MAX_ATTACHMENTS_PER_TURN:
+        raise InvalidChatRequestError(
+            f"{len(attachments)} attachments; the limit is "
+            f"{MAX_ATTACHMENTS_PER_TURN} per message."
+        )
     rounds = max(1, min(int(max_rounds), MAX_ROUNDS_LIMIT))
 
     if service == "anthropic":
@@ -125,7 +131,7 @@ def run_chat(
 
     for turn in normalize_history(history):
         provider.messages.append(turn)
-    provider.start(message.strip())
+    provider.start(message.strip(), attachments or None)
     tool_log: list[dict[str, Any]] = []
     usage = {"input_tokens": 0, "output_tokens": 0}
 
@@ -188,6 +194,112 @@ def normalize_history(history: list[dict[str, str]] | None) -> list[dict[str, st
     return turns[-MAX_HISTORY_TURNS:]
 
 
+# === chat attachments ========================================================
+#
+# A dropped file becomes a provider-neutral PART here, and the split of
+# labour is the point: the SERVER resolves file ids to bytes (permissions,
+# ownership, reading the blob -- all I/O), while this module classifies and
+# formats -- pure, testable without a data directory, like everything else
+# in it. run_chat then renders parts per provider, because Anthropic wants
+# a content array with base64 image blocks and OpenAI wants data: URLs,
+# and neither difference belongs anywhere near the caller.
+
+MAX_ATTACHMENTS_PER_TURN = 8
+MAX_IMAGE_BYTES = 5 * 1024 * 1024        # both providers cap around here
+MAX_TEXT_BYTES = 200 * 1024              # ~50k tokens of context is plenty
+
+IMAGE_MEDIA_TYPES = ("image/png", "image/jpeg", "image/gif", "image/webp")
+TEXTUAL_CONTENT_TYPES = (
+    "application/json", "application/xml", "application/x-yaml",
+    "application/csv", "application/javascript", "application/sql",
+)
+
+
+def attachment_part(filename: str, content_type: str, data: bytes) -> dict[str, Any]:
+    """Classify one file's bytes into a chat part, or refuse by name.
+
+    Images pass through as base64 for the provider's vision input; anything
+    that reads as text is inlined as text. Everything else is refused with
+    a message that says what IS supported -- a binary the model cannot see
+    must fail here, loudly, rather than arrive as mojibake the model
+    hallucinates an interpretation of. That silent path is the whole
+    reason this function exists as a gate rather than a best-effort
+    decoder.
+    """
+    import base64
+
+    name = str(filename or "file")
+    ctype = str(content_type or "").split(";")[0].strip().lower()
+
+    if ctype in IMAGE_MEDIA_TYPES:
+        if len(data) > MAX_IMAGE_BYTES:
+            raise InvalidChatRequestError(
+                f"{name}: image is {len(data) // 1024}KB; the limit is "
+                f"{MAX_IMAGE_BYTES // 1024}KB. Resize it before attaching."
+            )
+        return {"kind": "image", "name": name, "media_type": ctype,
+                "data_b64": base64.b64encode(data).decode("ascii")}
+
+    looks_textual = (
+        ctype.startswith("text/")
+        or ctype in TEXTUAL_CONTENT_TYPES
+        or ctype.endswith("+json") or ctype.endswith("+xml")
+    )
+    if not looks_textual:
+        try:
+            data.decode("utf-8")
+            looks_textual = True          # honest text under a lazy MIME type
+        except UnicodeDecodeError:
+            looks_textual = False
+    if looks_textual:
+        if len(data) > MAX_TEXT_BYTES:
+            raise InvalidChatRequestError(
+                f"{name}: text file is {len(data) // 1024}KB; the limit is "
+                f"{MAX_TEXT_BYTES // 1024}KB. Attach an excerpt instead."
+            )
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise InvalidChatRequestError(
+                f"{name}: declared {ctype or 'text'} but is not valid UTF-8."
+            ) from exc
+        return {"kind": "text", "name": name, "text": text}
+
+    raise InvalidChatRequestError(
+        f"{name}: cannot attach {ctype or 'unknown'} to a chat. Supported: "
+        f"images ({', '.join(IMAGE_MEDIA_TYPES)}) and text-like files "
+        f"(anything UTF-8). PDFs and other binaries need their text "
+        f"extracted first."
+    )
+
+
+def _content_with_parts_anthropic(message: str, parts: list[dict[str, Any]]):
+    content: list[dict[str, Any]] = []
+    for part in parts:
+        if part["kind"] == "image":
+            content.append({"type": "image", "source": {
+                "type": "base64", "media_type": part["media_type"],
+                "data": part["data_b64"]}})
+        else:
+            content.append({"type": "text",
+                            "text": f"[file: {part['name']}]\n{part['text']}"})
+    content.append({"type": "text", "text": message})
+    return content
+
+
+def _content_with_parts_openai(message: str, parts: list[dict[str, Any]]):
+    content: list[dict[str, Any]] = []
+    for part in parts:
+        if part["kind"] == "image":
+            content.append({"type": "image_url", "image_url": {
+                "url": f"data:{part['media_type']};base64,{part['data_b64']}"}})
+        else:
+            content.append({"type": "text",
+                            "text": f"[file: {part['name']}]\n{part['text']}"})
+    content.append({"type": "text", "text": message})
+    return content
+
+
 class _AnthropicProvider:
     def __init__(self, key, model, system, tools, max_tokens):
         self.key = key
@@ -197,8 +309,12 @@ class _AnthropicProvider:
         self.max_tokens = max_tokens
         self.messages: list[dict[str, Any]] = []
 
-    def start(self, message: str) -> None:
-        self.messages.append({"role": "user", "content": message})
+    def start(self, message: str, parts: list[dict[str, Any]] | None = None) -> None:
+        # A plain string when there are no parts, so a text-only chat's
+        # outbound payload is byte-identical to what it always was.
+        content = (_content_with_parts_anthropic(message, parts)
+                   if parts else message)
+        self.messages.append({"role": "user", "content": content})
 
     def request(self) -> tuple[str, dict[str, str], bytes]:
         payload: dict[str, Any] = {
@@ -265,8 +381,10 @@ class _OpenAIProvider:
         if system:
             self.messages.append({"role": "system", "content": system})
 
-    def start(self, message: str) -> None:
-        self.messages.append({"role": "user", "content": message})
+    def start(self, message: str, parts: list[dict[str, Any]] | None = None) -> None:
+        content = (_content_with_parts_openai(message, parts)
+                   if parts else message)
+        self.messages.append({"role": "user", "content": content})
 
     def request(self) -> tuple[str, dict[str, str], bytes]:
         payload: dict[str, Any] = {
