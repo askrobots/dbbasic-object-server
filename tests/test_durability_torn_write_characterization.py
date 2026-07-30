@@ -390,22 +390,32 @@ def test_append_multiline_row_torn_at_every_byte_offset_maps_bug_2_surface(tmp_p
     assert set(bug_confirmed) <= set(predicted_bug_offsets)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="substrate bug #2 (torn-tail is quote-blind) PENDING FIX -- see "
-    "object_records._repair_torn_tail's 'KNOWN LIMITATION' docstring and "
-    "test_append_mode_torn_tail_mid_multiline_row_is_silently_resurrected_and_"
-    "cascades_FINDING in test_embedded_json_lines_characterization.py, which "
-    "first identified this with one hand-picked offset. This test asserts the "
-    "SAME failure mode reproduces at EVERY offset from right after the row's "
-    "FIRST embedded newline through its last byte -- a materially BROADER "
-    "surface than 'immediately following a newline' (see "
-    "_setup_multiline_scenario's docstring for why) -- mapping the full "
-    "trigger surface rather than re-confirming a single point. strict=True "
-    "flips this to XPASS (a hard failure) the moment the underlying bug is "
-    "fixed, so it becomes a real regression guard at that point.",
-)
-def test_append_multiline_row_torn_past_first_internal_newline_reproduces_bug_2(tmp_path):
+def test_append_multiline_row_torn_at_every_offset_recovers_bug_2_regression(tmp_path):
+    """Bug #2's write side, FIXED -- this is the regression guard the old
+    strict xfail said it would become.
+
+    History, because the shape of this test is the evidence: the xfail it
+    replaces asserted the bug REPRODUCED at every offset -- a phantom C on
+    a bare read (effect 1) and the next write D swallowed into C's open
+    quote (effect 2). The read-side fix (2026-07-20) killed effect 1, so
+    the xfail could never flip to XPASS however the write side fared: it
+    kept "failing" on an assertion about a bug that was already half gone.
+    A strict xfail that bundles two effects can only flip when BOTH flip.
+
+    Now, at EVERY offset from right after the row's first embedded newline
+    through its last byte (the full trigger surface the characterization
+    mapped -- see _setup_multiline_scenario):
+
+    1. a bare read shows exactly [A, B] -- no phantom C (read-side fix);
+    2. the next write's repair truncates the torn fragment QUOTE-AWARELY,
+       so D lands as its own row instead of vanishing into C's unclosed
+       quote (write-side fix: _repair_torn_tail via committed_prefix_len);
+    3. a fresh parse afterwards shows [A, B, D] with D's payload intact.
+
+    The caches are cleared each iteration, so the repair runs COLD -- no
+    anchor, full scan -- which is the crash case, and the case the
+    reverted first fix got wrong by delegating to a warm cache.
+    """
     data_dir, path, before, row_bytes, predicted_bug_offsets = _setup_multiline_scenario(tmp_path)
 
     for offset in predicted_bug_offsets:
@@ -417,17 +427,14 @@ def test_append_multiline_row_torn_past_first_internal_newline_reproduces_bug_2(
             oidx_path.unlink()
         _clear_caches()
 
-        # Effect 1: a bare read resurrects the incomplete row C as if genuine.
-        listing = object_records.list_collection_records("invoices", base_dir=data_dir, roots=[])[
-            "records"
-        ]
+        listing = object_records.list_collection_records(
+            "invoices", base_dir=data_dir, roots=[]
+        )["records"]
         ids = [r["id"] for r in listing]
-        assert ids == ["A", "B", "C"], (
-            f"offset={offset}: expected bug #2 to resurrect a phantom C; got {ids!r}"
+        assert ids == ["A", "B"], (
+            f"offset={offset}: a bare read must drop the torn C, got {ids!r}"
         )
 
-        # Effect 2: the next normal write cascades -- D is silently absorbed
-        # into C's still-open corrupted field instead of landing on its own.
         object_records.create_collection_record(
             "invoices", {"id": "D", "lines": json.dumps([{"sku": "D-1"}])},
             base_dir=data_dir, roots=[],
@@ -436,10 +443,13 @@ def test_append_multiline_row_torn_past_first_internal_newline_reproduces_bug_2(
         listing_after = object_records.list_collection_records(
             "invoices", base_dir=data_dir, roots=[]
         )["records"]
-        ids_after = [r["id"] for r in listing_after]
-        assert ids_after == ["A", "B", "C", "D"], (
-            f"offset={offset}: expected D to be swallowed into C's corrupted "
-            f"field (cascade); got ids={ids_after!r}"
+        by_id = {r["id"]: r for r in listing_after}
+        assert sorted(by_id) == ["A", "B", "D"], (
+            f"offset={offset}: D must land as its own row after repair; "
+            f"got {sorted(by_id)!r}"
+        )
+        assert by_id["D"]["lines"] == json.dumps([{"sku": "D-1"}]), (
+            f"offset={offset}: D's payload must survive intact"
         )
 
 
@@ -522,22 +532,6 @@ def test_append_oidx_sidecar_torn_at_every_byte_offset_self_heals(tmp_path, monk
 # =============================================================================
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="FINDING (new, distinct from bug #2): create_collection_record can "
-    "report SUCCESS (no exception at all) while silently truncating an "
-    "intact-but-unterminated header down to zero bytes via "
-    "_repair_torn_tail's 'no newline found anywhere -> truncate whole file' "
-    "fallback, then appending a bare data row with NO header in front of it "
-    "-- so the very next read (by anyone) fails with an uncaught ValueError. "
-    "See this test's docstring for the exact mechanism. Not fixed here "
-    "(characterization only). A torn header is not reachable via this "
-    "module's OWN crash paths (headers are always written via atomic "
-    "temp+rename -- see section 6/7 below) but IS reachable via any external "
-    "corruption that clips exactly the header's own trailing byte (a copy "
-    "mid-write, a truncating disk fault, a manual edit) while leaving no "
-    "other newline in the file -- worth hardening given how silent it is.",
-)
 def test_append_torn_header_every_byte_offset_characterization(tmp_path):
     """The header line is written ONLY as part of a full-rewrite (temp file +
     atomic rename) -- the transition-in write for a collection's very first
@@ -580,25 +574,22 @@ def test_append_torn_header_every_byte_offset_characterization(tmp_path):
         Not a crash -- worse, in a sense: a quiet, permanent schema
         pollution that round-trips forever afterward.
       - offset 12 (the full, correct 3-column header content, missing ONLY
-        its own trailing "\\n"): read alone succeeds (empty collection,
-        since a headers-only single physical line with no newline still
-        parses fine via csv.reader's EOF tolerance). But CREATE takes the
-        FAST-APPEND branch (the header parses as valid append-physical),
-        which calls _repair_torn_tail first -- and because this 12-byte
-        file has NO newline ANYWHERE (not even the header's own), that
-        function's backward scan finds nothing to truncate to and hits its
-        last-resort `handle.truncate(0)` fallback, destroying the header
-        entirely. The append then writes a bare, header-less data row.
-        create_collection_record ITSELF RAISES NO EXCEPTION -- the caller
-        sees a normal-looking success -- yet the very next read of this
-        collection, by anyone, raises an uncaught ValueError (the bare data
-        row is now misread as the header, containing an empty leading
-        field). This is the worst outcome in the sweep: silent apparent
-        success immediately followed by an unreadable collection.
+        its own trailing "\\n"): read alone succeeds (empty collection).
+        CREATE used to be the worst outcome in the sweep -- the old repair,
+        finding no newline anywhere, hit its truncate-whole-file fallback,
+        destroyed the intact header, appended a bare headerless row, and
+        REPORTED SUCCESS, leaving every subsequent read raising an uncaught
+        ValueError. FIXED: the quote-aware repair still (correctly) treats
+        a never-terminated header as uncommitted, but _append_records_rows
+        now restores the header from physical_fields whenever it finds the
+        file empty, so the append lands in a well-formed file and the next
+        read returns the row.
 
-    This test's terminal assertion locks in exactly that last (offset 12)
-    outcome as the headline finding; the full per-offset matrix is printed
-    for the complete picture.
+    This test was a strict xfail while that offset-12 silent corruption
+    existed; its terminal assertion IS the fixed-world invariant (a
+    reported success must never leave the collection unreadable), so the
+    fix simply removed the decorator. The full per-offset matrix is still
+    printed for the record.
     """
     header_bytes = b"_op\tid\tvalue\n"
     matrix: list[tuple[int, str, str, str]] = []

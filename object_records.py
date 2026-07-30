@@ -2256,44 +2256,21 @@ def _refresh_records_cache_after_append(
     return True
 
 
-def _repair_torn_tail(path: Path) -> None:
-    """Ensure `path` ends with a complete row before an append lands.
+def _repair_torn_tail_lines(path: Path) -> None:
+    """Trim a torn trailing LINE from a line-oriented file (the sidecar).
 
-    A write interrupted mid-row leaves a fragment; appending after it would
-    concatenate the next row onto the fragment -- and if the fragment holds
-    an unclosed quoted field, silently swallow that next row.
+    Backward rfind(b"\n") -- quote-BLIND, and correct HERE, for exactly one
+    reason: an idx line can never contain a literal tab or newline inside a
+    field (ids are restricted to _RECORD_ID_RE; offsets and op are plain
+    digits/literals), so "the file ends with \n" really is a complete
+    completeness signal for the sidecar.
 
-    ⚠️ KNOWN LIMITATION -- substrate bug #2, WRITE SIDE, STILL OPEN.
-
-    This truncates to the last "\n" found scanning backwards
-    (chunk.rfind(b"\n") below). That is QUOTE-BLIND: a newline INSIDE a
-    quoted multi-line field is mistaken for a row boundary, so this can cut
-    mid-quoted-field, leave an open-quote fragment, and let the very next
-    append be swallowed. The exposure is roughly 97% of a multi-line row's
-    write window.
-
-    THE READ SIDE IS FIXED AND THIS IS NOT. `_drop_torn_tail` (read path)
-    uses `_committed_prefix_len`, which is quote-aware. The write path was
-    changed to match and the change was REVERTED: it was correct in
-    isolation but regressed the ordinary single-line self-heal in the full
-    suite, in a context-dependent way not fully explained (failed under
-    pytest, passed standalone). See plan/parity-completion-plan.md.
-
-    An earlier version of THIS DOCSTRING described the reverted fix as
-    though it had shipped -- claiming a quote-aware scan and a
-    covered_bytes cache gate that the body below has never contained. It
-    was rewritten on 2026-07-29 after a survey caught the contradiction.
-    If you are auditing crash safety, believe the code.
-
-    The fix, when it is attempted again: truncate to `_scan_append_tail`'s
-    csv-aware covered_bytes from the sidecar's last known-good offset,
-    rather than rfind(b"\n"). Two strict-xfail acceptance tests already map
-    the trigger surface and will flip to XPASS the day it lands --
-    tests/test_durability_torn_write_characterization.py and
-    tests/test_embedded_json_lines_characterization.py.
-
-    `object_backup_index._drop_torn_tail` carries the SAME quote-blind
-    check with no test at all, and is in the restore path.
+    It is NOT correct for records.tsv, whose quoted cells may hold
+    newlines. That distinction is why this is now a separate function: the
+    data file's repair below is quote-aware and costs a scan, and pointing
+    the sidecar at it would spend that scan on every append to buy nothing.
+    Do not "unify" these; they were one function once, and the shared body
+    was wrong for one caller and slow for the other.
     """
     try:
         size = path.stat().st_size
@@ -2319,6 +2296,118 @@ def _repair_torn_tail(path: Path) -> None:
                 return
             window *= 2
         handle.truncate(0)
+
+
+def _repair_torn_tail(path: Path) -> None:
+    """Ensure records.tsv ends at a committed CSV row boundary before an
+    append lands. QUOTE-AWARE -- substrate bug #2's write side, fixed.
+
+    A write interrupted mid-row leaves a fragment; appending after it
+    would concatenate the next row onto the fragment -- and if the
+    fragment holds an unclosed quoted field, silently swallow that next
+    row. The previous body found "the last row boundary" with
+    rfind(b"\n"), which mistakes a newline INSIDE a quoted multi-line
+    field for a boundary; worse, its fast path returned immediately
+    whenever the file's last byte was "\n" -- including a newline inside
+    an unclosed quote -- so the very case that needed repair was the case
+    it skipped. Exposure was ~97% of a multi-line row's write window.
+
+    ## Why the first fix was reverted, and what this one does differently
+
+    The 2026-07-20 attempt gated correctness on _RECORDS_CACHE's
+    covered_bytes. That value lives ONLY in process memory -- the on-disk
+    sidecar header records just the inode -- so the gate read state the
+    test harness happened to share: under pytest one interpreter runs the
+    whole suite and the cache was warm from other tests' files; standalone
+    it was cold every time. "Fails in pytest, passes standalone" was never
+    a race; it was a correctness decision delegated to a cache. And a torn
+    tail only exists after a process DIED, which is exactly when no cache
+    exists.
+
+    So the rule here, stated so nobody re-learns it: **a cache may only
+    ever SKIP this repair, never choose where it truncates.**
+
+    ## How it works
+
+    1. SKIP (sound): a warm _OIDX_CACHE entry, inode-matched, whose
+       covered_bytes equals the file's size right now. Every covered value
+       in that cache is a genuine committed row boundary (from
+       _scan_append_tail, which excludes torn tails, or from this
+       process's own completed append), so EOF landing exactly on one
+       proves the file is clean. _RECORDS_CACHE is deliberately NOT
+       consulted -- see the inline comment for why its covered_bytes lies
+       about exactly the files that need repair, which is the probable
+       mechanism of the original revert.
+    2. ANCHOR (cheap): the same sidecar-cache covered, when it is short of
+       EOF, is a boundary to scan forward from instead of from zero.
+       Append-mode files only ever grow in place (any rewrite is an atomic
+       rename and changes the inode), and a correct repair never truncates
+       below the last committed boundary, so bytes before a recorded
+       boundary are stable under a matching inode.
+    3. SCAN: decode the tail with errors="surrogateescape" and take
+       _committed_prefix_len -- THE quote-aware answer, the same single
+       implementation the read path and object_backup_index use, because a
+       second copy of this logic is how the backup module silently carried
+       the bug for months. The char prefix is re-encoded to recover the
+       exact byte length (surrogateescape round-trips arbitrary bytes).
+    4. Truncate to the last committed boundary found. With no anchor this
+       is a full O(n) scan -- paid on the first append after a restart,
+       which is the one moment a torn tail can actually exist.
+
+    Deliberately NOT trusted: the on-disk sidecar's row_end offsets. They
+    would be a durable anchor, but files damaged by the OLD repair may
+    carry sidecar offsets that no longer sit on real boundaries, and
+    anchoring the fix to state the bug may have corrupted would rebuild
+    the bug. Process-local anchors are attested by this process's own
+    reads and writes.
+
+    The three strict-xfail acceptance tests that held this behaviour map
+    the trigger surface; they were rewritten into regression guards when
+    this landed.
+    """
+    signature = _stat_signature(path)
+    if signature is None:
+        return
+    size = signature[1]
+    if size == 0:
+        return
+
+    cache_key = str(path.resolve(strict=False))
+    anchor = 0
+
+    # ONLY the sidecar cache. _RECORDS_CACHE is deliberately not consulted,
+    # and the reason is the probable mechanism of the original revert: a
+    # FULL parse stores covered_bytes = signature[1] -- the whole file size
+    # -- even when that parse dropped a torn tail (the read fold "accounts
+    # for" the torn bytes by knowing they are torn). So on precisely the
+    # file that needs repair, a warm records-cache entry reports
+    # covered == size and looks like proof of a clean boundary. Warm cache
+    # -> skip -> regression; cold cache -> scan -> correct. Under pytest
+    # the cache is warm; standalone it is cold. That is the whole
+    # "fails in pytest, passes standalone".
+    #
+    # _OIDX_CACHE's covered comes from _scan_append_tail, which returns the
+    # offset up to which parsing is AUTHORITATIVE -- torn tails excluded --
+    # or from handle.tell() after this process's own completed append.
+    # Every value in it is a genuine committed row boundary.
+    oidx = _OIDX_CACHE.get(cache_key)
+    if oidx is not None:
+        oidx_ino, oidx_covered, _offsets = oidx
+        if oidx_ino == signature[2] and 0 < oidx_covered <= size:
+            if oidx_covered == size:
+                return              # EOF sits exactly on a recorded boundary
+            anchor = oidx_covered
+
+    with path.open("rb+") as handle:
+        handle.seek(anchor)
+        data = handle.read(size - anchor)
+        text = data.decode("utf-8", errors="surrogateescape")
+        keep_chars = _committed_prefix_len(text)
+        committed = anchor + len(
+            text[:keep_chars].encode("utf-8", errors="surrogateescape")
+        )
+        if committed < size:
+            handle.truncate(committed)
 
 
 def _append_records_rows(
@@ -2354,6 +2443,20 @@ def _append_records_rows(
             handle, delimiter="\t", lineterminator="\n",
             quoting=(csv.QUOTE_ALL if _rows_need_full_quoting(rows) else csv.QUOTE_MINIMAL),
         )
+        if handle.tell() == 0:
+            # The file has no committed content -- most likely the repair
+            # above found a TORN HEADER (intact bytes, no terminating
+            # newline: external truncation clipping exactly the trailing
+            # byte) and correctly truncated to zero. Appending a bare data
+            # row here would leave a headerless file every subsequent read
+            # rejects with an uncaught ValueError, having REPORTED SUCCESS
+            # for this write -- the torn-header finding in
+            # tests/test_durability_torn_write_characterization.py. The
+            # header is fully determined by physical_fields, so restore it
+            # rather than manufacturing a poisoned file.
+            csv.writer(handle, delimiter="\t", lineterminator="\n").writerow(
+                physical_fields
+            )
         for row in rows:
             start = handle.tell()
             projected = _project_record(row, physical_fields)
@@ -2521,7 +2624,7 @@ def _append_oidx_lines(
     records.tsv)."""
     if not entries:
         return
-    _repair_torn_tail(oidx_path)
+    _repair_torn_tail_lines(oidx_path)
     with oidx_path.open("a", newline="") as handle:
         handle.writelines(
             f"{row_start}\t{row_end}\t{op}\t{record_id}\n"
@@ -2537,7 +2640,13 @@ def _read_oidx_header(oidx_path: Path) -> int | None:
     try:
         with oidx_path.open("r", newline="") as handle:
             first_line = handle.readline()
-    except OSError:
+    except (OSError, UnicodeDecodeError, ValueError):
+        # A sidecar corrupted with non-UTF-8 bytes must read as "header
+        # does not parse" -> rebuild, per _load_oidx's own contract
+        # ("100% best-effort and NEVER raises"). Catching only OSError
+        # here let a garbage sidecar crash every read of the collection
+        # instead of self-healing -- the atomicity characterization's
+        # sidecar finding.
         return None
     parts = first_line.rstrip("\n").split("\t")
     if len(parts) != 2 or parts[0] != OIDX_HEADER_TAG:

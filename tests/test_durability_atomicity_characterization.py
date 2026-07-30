@@ -396,35 +396,18 @@ def test_append_mode_sidecar_corrupted_valid_utf8_garbage_still_recoverable(
         )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="FINDING (durability/atomicity characterization): _read_oidx_header "
-    "(object_records.py) opens the sidecar in TEXT mode with only "
-    "`except OSError` around the read, so a sidecar corrupted with bytes "
-    "that are not valid UTF-8 raises an uncaught UnicodeDecodeError instead "
-    "of being treated as 'header doesn't parse -> rebuild' like every other "
-    "corrupt-header shape already is (a wrong tag, wrong column count, a "
-    "non-integer ino all safely fall through to None/rebuild). This breaks "
-    "_load_oidx's own documented contract ('100% best-effort and NEVER "
-    "raises... any inconsistency -- missing sidecar, corrupt sidecar, inode "
-    "mismatch -- triggers a rebuild rather than propagating an error'). The "
-    "practical effect: get_collection_record/list_collection_records raise "
-    "instead of self-healing, for any append-mode collection whose sidecar "
-    "got corrupted with invalid-UTF-8 bytes (a plausible real crash shape -- "
-    "a write torn mid multi-byte character, or a completely unrelated file "
-    "clobbering the same path). Deferred as characterization-only per this "
-    "task's scope (no production code changes); strict=True flips this to "
-    "XPASS the day _read_oidx_header is hardened to catch decode errors too.",
-)
-def test_append_mode_sidecar_corrupted_non_utf8_garbage_crashes_reads_FINDING(
+def test_append_mode_sidecar_corrupted_non_utf8_garbage_self_heals(
     tmp_path, monkeypatch
 ):
-    """FINDING: unlike the sidecar-deleted case (fully recoverable) and a
-    valid-UTF8-but-wrong-format-garbage sidecar (also recoverable --
-    `_read_oidx_header`'s tag/column/int checks handle that), a sidecar
-    corrupted with bytes that are not valid UTF-8 at all crashes the read
-    with an uncaught UnicodeDecodeError instead of falling back to a
-    rebuild. See the xfail reason above for the exact mechanism."""
+    """A sidecar corrupted with invalid-UTF-8 bytes self-heals like every
+    other corrupt-sidecar shape. FIXED, formerly a strict-xfail FINDING:
+    _read_oidx_header opened the file in text mode with only `except
+    OSError`, so garbage that was not valid UTF-8 raised an uncaught
+    UnicodeDecodeError on every read instead of reading as "header does
+    not parse -> rebuild" -- breaking _load_oidx's own contract ("100%
+    best-effort and NEVER raises"). The hardening catches decode errors in
+    the same clause, and this test flipped from asserting the crash to
+    asserting the recovery the contract always promised."""
     monkeypatch.setenv("DBBASIC_RECORDS_CACHE_MAX_ROWS", "0")
     data_dir = tmp_path / "data"
     write_append_schema(data_dir, "logs", [ID_FIELD, VALUE_FIELD])

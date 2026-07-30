@@ -38,8 +38,9 @@ structure to catastrophically damage.
   one — never a half-written file.
 - **Append-only collections** (used for high-write logs) treat an interrupted
   write as a torn tail: only the last, incomplete entry is ignored on read;
-  every fully-written entry before it survives. **One documented exception —
-  see [Known gap](#known-gap-torn-tail-repair-on-the-write-path) below.**
+  every fully-written entry before it survives — including rows whose quoted
+  fields span multiple physical lines (the write-side repair is quote-aware;
+  see [History: the torn-tail gap](#history-the-torn-tail-write-gap-fixed)).
 - **Concurrency** is serialized with a kernel file lock (`flock`) that applies
   across both threads *and* separate processes, so concurrent writers on a
   multi-worker deployment cannot corrupt or lose each other's writes.
@@ -79,10 +80,10 @@ Durability is verified by a dedicated conformance suite, run deliberately
   round-tripped byte-exact through every storage and read path, with no silent
   normalization.
 - **Crash recovery** — a write interrupted at *every byte offset* is simulated
-  and the store is checked to recover to a valid state. This holds for
-  single-line rows; for rows containing a newline inside a quoted field it
-  does **not** yet — the simulation maps that failure rather than passing it,
-  and the tests are held as strict xfails. See [Known gap](#known-gap-torn-tail-repair-on-the-write-path).
+  and the store is checked to recover to a valid state with no loss of
+  committed data — including multi-line quoted rows, whose every-offset sweep
+  was held as strict xfails until the write-side repair was fixed and is now
+  an ordinary regression battery.
 - **Concurrency** — real concurrent processes writing the same collection,
   checked for lost updates and corruption.
 - **Atomicity** — single-record writes are all-or-nothing, and a reader never
@@ -97,45 +98,45 @@ Durability is verified by a dedicated conformance suite, run deliberately
 The philosophy follows the databases that made testing their reputation: a
 visible, exhaustive test suite is itself the assurance that the data is safe.
 
-## Known gap: torn-tail repair on the write path
+## History: the torn-tail write gap (fixed)
 
-**Status: open.** Stated here because a durability document that omits it is
-worse than no document — a reader plans around the guarantee they were given.
+**Status: fixed (2026-07-30).** This section replaces a "Known gap" that
+stood here for one day — kept as history because the shape of the bug and of
+its first, reverted fix are both instructive.
 
-Before an append lands, `object_records._repair_torn_tail` trims any partial
-row left by an interrupted write. That trim finds the last row boundary by
-scanning backwards for a newline, and **that scan is quote-blind**: a newline
-*inside* a quoted multi-line field looks exactly like a row boundary. So the
-repair can cut mid-field, leave a fragment with an unclosed quote, and let the
-next appended row be swallowed by it.
+**The bug.** Before an append lands, `_repair_torn_tail` trims any partial
+row left by an interrupted write. It found "the last row boundary" by
+scanning backwards for a newline — quote-blind, so a newline *inside* a
+quoted multi-line field looked like a boundary. Worse, its fast path
+returned untouched any file whose final byte was `\n`, including a newline
+inside an unclosed quote — skipping repair in exactly the case that needed
+it. A crash mid-multi-line-row could then swallow the next appended row into
+the open quote. Exposure: ~97% of such a row's write window.
 
-**Scope.** Only rows containing an embedded newline — in practice a field
-holding JSON, an address block, or a multi-line note. Single-line rows are
-unaffected. Within an affected row the exposure covers roughly 97% of its
-write window.
+**The first fix, and why it was reverted.** It gated the repair on the
+records cache's `covered_bytes`. Two flaws, found the second time around:
+that value lives only in process memory (gone precisely when a crash makes
+repair matter), and — the actual killer — a full parse of a *torn* file
+stores `covered_bytes` equal to the whole file size, because the read fold
+"accounts for" the torn bytes by knowing they are torn. So a warm cache
+reported clean on exactly the files needing repair. Under pytest the cache
+was warm from other tests; standalone it was cold. "Fails in pytest, passes
+standalone" was that, nothing more.
 
-**The read path is already fixed.** `_drop_torn_tail` uses a quote-aware
-scan (`_committed_prefix_len`). The write path was changed to match and the
-change was reverted: correct in isolation, but it regressed the ordinary
-single-line self-heal under the full test suite in a way that was never fully
-explained. It is being redone deliberately rather than reapplied.
+**The fix that stands.** The repair scans forward with the same quote-aware
+`committed_prefix_len` the read path and the backup index use — one
+implementation, three users, no copies to drift. A cache may only ever
+*skip* the scan, never choose a truncation point, and the only cache
+consulted is the id-sidecar's, whose `covered_bytes` values are genuine row
+boundaries by construction. Cold (post-crash) the repair pays one full scan,
+which is the honest price of the one moment a torn tail can exist. Two
+neighbouring holes were closed in the same pass: an intact-but-unterminated
+*header* no longer truncates to a headerless file that reports success and
+then fails every read (the header is restored from the schema), and a
+sidecar corrupted with non-UTF-8 bytes now rebuilds instead of raising on
+every read.
 
-**Also affected:** `object_backup_index._drop_torn_tail` carries the same
-quote-blind check, has no test covering it, and sits in the restore path.
-
-**How it is tracked.** Three strict-xfail acceptance tests already assert the
-correct behaviour and map the trigger surface. They fail loudly the day the
-bug is fixed, at which point they become ordinary regression tests:
-
-- `tests/test_durability_torn_write_characterization.py` — every offset from
-  the row's first embedded newline to its last byte
-- `tests/test_embedded_json_lines_characterization.py` — the original
-  silent-resurrection-and-cascade finding
-- `tests/test_durability_torn_write_characterization.py` — a torn *header*,
-  which reports success while truncating the file to zero bytes
-
-**What to do meanwhile.** Nothing, for most deployments: the affected shape is
-a quoted embedded newline in an append-only collection, interrupted by process
-death mid-write. If you store multi-line text in a high-write append
-collection and cannot tolerate the risk, keep that collection in classic
-(rewrite) mode, which is unaffected.
+**Verification.** The strict-xfail acceptance tests that mapped the trigger
+surface — every byte offset from a row's first embedded newline to its last
+— were rewritten into the regression guards they were designed to become,
+and the every-offset sweeps now pass as ordinary tests.

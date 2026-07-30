@@ -572,19 +572,22 @@ def test_append_mode_torn_tail_ordinary_case_still_self_heals_with_lines_field(t
     ]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="substrate bug #2 (torn-tail is quote-blind) PENDING FIX -- see "
-    "plan/parity-completion-plan.md Stage 1a. Fix: _repair_torn_tail must "
-    "truncate to _scan_append_tail's csv-aware covered_bytes from the "
-    "sidecar's last known-good offset, not rfind(b'\\n'). Deferred as a "
-    "careful crash-safety change; strict=True flips this to XPASS when fixed "
-    "so the test gets rewritten into a real regression guard.",
-)
-def test_append_mode_torn_tail_mid_multiline_row_is_silently_resurrected_and_cascades_FINDING(
+def test_append_mode_torn_tail_mid_multiline_row_is_dropped_and_never_cascades(
     tmp_path,
 ):
-    """FINDING (see report -- this is the most serious one): the torn-tail
+    """The original bug #2 finding, now its regression guard.
+
+    The scenario is unchanged from the FINDING version -- record C torn
+    mid-multiline-row at the unluckiest boundary, right after an internal
+    newline, so the file's raw bytes end in "\n" and the old quote-blind
+    check saw a committed tail. What is asserted flipped from the two
+    failure effects to their absence: a bare read shows [A, B] with no
+    phantom C, and a following create of D lands as its own record instead
+    of being swallowed into C's unclosed quote.
+
+    Original finding text, kept because the mechanism is the documentation:
+
+    FORMER FINDING (was the most serious one): the torn-tail
     safety net (_drop_torn_tail / _repair_torn_tail) decides "is the file's
     tail committed?" with exactly one check: does the file end with a
     literal b'\\n' byte. That check is unsound for any row whose value spans
@@ -661,22 +664,18 @@ def test_append_mode_torn_tail_mid_multiline_row_is_silently_resurrected_and_cas
     path.write_text(full_text + torn_fragment)
     assert path.read_text().endswith("\n")  # file passes the "torn tail" check despite being torn
 
-    # Effect 1: a plain read resurrects the incomplete row C as if genuine.
-    # (Report this via a soft check rather than a hard `assert`+stop: effect
-    # 2, below, is the more important half of the finding and must still
-    # run and be reported even if effect 1's exact shape ever changes.)
+    # Guard 1: a plain read DROPS the torn C rather than resurrecting it.
     _clear_caches()
     listing = object_records.list_collection_records("invoices", base_dir=data_dir, roots=[])[
         "records"
     ]
     ids = [r["id"] for r in listing]
-    effect_1_confirmed = ids == ["A", "B", "C"]
-    print(f"\n[torn-tail FINDING] effect 1 -- ids after a bare read of the torn file: {ids!r}")
-    if not effect_1_confirmed:
-        print(f"  (effect 1 did NOT reproduce as expected -- got {ids!r}, expected ['A', 'B', 'C'])")
+    assert ids == ["A", "B"], (
+        f"read-side regression: the torn C must be dropped, got {ids!r}"
+    )
 
-    # Effect 2: the next NORMAL write does not self-heal -- it cascades,
-    # silently absorbing D's entire row into C's still-open field.
+    # Guard 2: the next NORMAL write self-heals -- the repair truncates the
+    # unclosed-quote fragment before appending, so D lands as its own row.
     object_records.create_collection_record(
         "invoices",
         {"id": "D", "lines": json.dumps([{"sku": "D-1"}])},
@@ -688,17 +687,12 @@ def test_append_mode_torn_tail_mid_multiline_row_is_silently_resurrected_and_cas
         "invoices", base_dir=data_dir, roots=[]
     )["records"]
     ids_after = [r["id"] for r in listing_after]
-    print(f"[torn-tail FINDING] effect 2 -- ids after one more normal create('D'): {ids_after!r}")
-
-    assert effect_1_confirmed, (
-        "FINDING confirmed: a torn write that crashed mid-multiline-row was "
-        f"NOT dropped -- it was resurrected as a committed record. Got ids: {ids!r}"
+    assert ids_after == ["A", "B", "D"], (
+        f"write-side regression: D must land as its own record after the "
+        f"quote-aware repair, got {ids_after!r} / {listing_after!r}"
     )
-    assert ids_after == ["A", "B", "C", "D"], (
-        "FINDING confirmed: record D's write was silently absorbed into "
-        f"C's still-open corrupted field instead of landing as its own "
-        f"record. Got ids: {ids_after!r} / records: {listing_after!r}"
-    )
+    by_id = {r["id"]: r for r in listing_after}
+    assert by_id["D"]["lines"] == json.dumps([{"sku": "D-1"}])
 
 
 # =============================================================================
