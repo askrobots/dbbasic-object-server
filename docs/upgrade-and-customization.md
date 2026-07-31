@@ -73,6 +73,17 @@ package's, so upgrades and edits never touch the same bytes.
   `overrides: {site_articles: my_articles}` map). The shipped object stays
   pristine and freely upgradeable; the override persists across upgrades.
   This is Odoo `_inherit` / WordPress child themes done with plain files.
+
+- **Where an install writes.** A NEW package object is written to the
+  base/system root, never the override root — `object_namespace.
+  get_base_object_roots` is explicit that this is "the root packages
+  install into and reconcile against ... the pristine, upgradeable copy".
+  An object that ALREADY exists is rewritten wherever it already lives, so
+  an operator's override survives every upgrade. Both halves matter:
+  installing into the override root would make package content
+  indistinguishable from customization, and it also silently disables
+  event handlers (see `event-hooks-decisions.md` Decision 2 — an override
+  is invisible to the handler index).
 - **Extension points.** Objects should invite extension instead of forking:
   named hooks (see Rule 4) and small overridable pieces rather than one
   monolith page.

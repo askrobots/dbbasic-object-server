@@ -123,8 +123,12 @@ untrusted public users.
   `DBBASIC_ENABLE_SESSION_ADMIN_GATES=true`
 - CPU and memory isolation for untrusted object code
 - Fully managed event delivery/admin control API
-- A background-job runtime (long media transcodes, PDF text extraction,
-  thumbnails, scheduled AI work wait on it)
+- Long media work specifically. There IS a background-job runtime now
+  (`app-runner`: submit → run record → worker → result, with money held at
+  submission and settled on completion, and an asynchronous submit/poll
+  path for jobs that outlive a pass), and scheduled AI text runs through
+  it in production. What it has no handler for yet is image/video
+  generation, transcodes, PDF text extraction and thumbnails.
 - Cluster correctness claims
 - **No lot or serial tracking on stock.** Inventory is valued at a moving
   weighted average (`object_stock.weighted_average_cost_cents`), which is
@@ -139,8 +143,19 @@ The application suite is ported (see [`app-packages.md`](app-packages.md)), the 
 installer and quickstart exist (`scripts/install.sh`, [`quickstart.md`](quickstart.md)),
 and realtime push over websockets is live (`/ws`, permission-filtered —
 see [`http-api-contract.md`](http-api-contract.md) and [`asgi-realtime-direction.md`](asgi-realtime-direction.md); the nav's
-notification bell already updates on push). The remaining work is platform
-capability, in rough priority order:
+notification bell already updates on push).
+
+Four items that were on this list have since shipped and are recorded here
+rather than deleted, because a plan that only ever grows is one nobody
+trusts: the **generative renderer** (schema → list/detail/form, now the
+default surface for most collections rather than a per-app page), the
+**background-job runtime** (`app-runner` — submit → run record → worker →
+result, with holds and settlement, and asynchronous submit/poll for jobs
+that outlive a pass), **metered billing** (`app-billing` wallets and usage),
+and the **remaining q9 apps** (messaging, email, finance, catalog, billing
+all exist).
+
+The remaining work is platform capability, in rough priority order:
 
 1. Extend realtime further: object source/state/version rooms
    (`/ws/objects/{id}`) so the dashboard goes live, organic notification
@@ -150,15 +165,13 @@ capability, in rough priority order:
    already live over `/ws`.)
 2. Write-level project sharing (`$writable_projects`) and a per-family
    "builder role" so agents and collaborators can be scoped below admin.
-3. A background-job runtime: submit → job record → worker object → result
-   record + notification. Unlocks long media work, PDF extraction,
-   thumbnails, and scheduled AI summarization.
-4. The generative renderer (schema → dense list with row actions, filters,
-   relative timestamps); needs a `created_at` field added to schemas.
-5. Add CPU/memory isolation and a better worker boundary for untrusted code.
-6. Self-service signup and password reset flows.
-7. The remaining q9 apps that need infrastructure: messaging/email
-   (mail server), finance/catalog (large but no infra blocker), billing.
+3. Add CPU/memory isolation and a better worker boundary for untrusted code.
+4. Self-service signup and password reset flows.
+5. Media generation through the runner: the engine, the async submit/poll
+   loop and per-image/per-second pricing (`unit_prices`) are in place; what
+   is missing is a handler for an image or video provider, and the quality
+   gate that decides whether what came back is usable before it is charged
+   for.
 
 ## Release Rule
 

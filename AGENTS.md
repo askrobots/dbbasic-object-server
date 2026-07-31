@@ -94,6 +94,30 @@ write lock, so its checks are advisory. Layered advisory checks do not
 compose into an atomic one. The only atomic operation available is
 `expected_rev` on a single record.
 
+**A handler in the override root never fires.** `object_handlers.build_index`
+indexes only sources whose `kind` is `"system"` (event-hooks-decisions.md
+Decision 2). An object under the override root is `kind="override"`, so it
+declares `HANDLES`, installs cleanly, reports `"written"` — and receives
+nothing. Found in production when a package install put a new object in
+`roots[0]`, which is the override root in lookup order. If a handler is
+silent, check its `kind` before you check its code.
+
+**A hook is wired by the SCHEMA, not by its name.** `hook_app_settings`
+does nothing until `app_settings.json` declares
+`"hooks": {"before_write": "hook_app_settings"}`. A correctly named hook
+object that no schema points at passes every unit test that calls it
+directly and never runs in production — which is exactly how one shipped.
+Assert the schema declaration, the way `test_disputes`, `test_pickup_slots`
+and `test_inventory_adjustments` already do.
+
+**Two spellings of the same instant do not compare equal.** ISO-8601
+sorts lexicographically only within ONE format. `+` (0x2B) sorts below `Z`
+(0x5A), so `...T14:00:00+00:00` < `...T14:00:00Z` — the same moment reads
+as older. Anything comparing timestamps from two different writers must
+parse them, not sort the strings; `object_agents._utc_naive` is the
+canonical example, added after a board that had passed every test reported
+live workers as stale.
+
 **Retention and unbounded logs.** Three separate incidents (page views,
 restore points, change logs — one reached 944MB describing 1,818 rows). A
 log nobody told how big it may get fails on the worst day rather than an

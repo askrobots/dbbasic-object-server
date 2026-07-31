@@ -43,6 +43,30 @@ phase's blast radius to code the operator explicitly installed, and the
 identity-threading design gets to mature before it's exposed to untrusted
 authors. Same staging we used for overrides (opt-in, dormant by default).
 
+**The trap this creates, found in production.** `build_index` scans object
+sources and skips anything whose `kind` is not `"system"` — which is how
+this decision is enforced. An object living in the OVERRIDE root is
+`kind="override"`, so a handler installed there declares `HANDLES`,
+installs cleanly, reports `"written"`, and then receives no events at all.
+Nothing errors; the dispatcher simply never learns the object exists.
+
+This bit a real deploy: `install_package` sent every new object to
+`roots[0]`, and `get_object_roots()` returns `[override, base]` in LOOKUP
+order, so new package objects landed in the override root by default. Fixed
+(new objects now go to the base root; an object that already exists stays
+wherever it lives, so a customization is never yanked out by an upgrade),
+but the underlying sharp edge remains by design: an override cannot handle
+events.
+
+If a handler is silent, check its `kind` before checking its code:
+
+```python
+import object_handlers, object_namespace
+print(object_handlers.build_index().get("your_collection.record.created"))
+print([(s.object_id, s.kind) for s in object_namespace.iter_object_sources()
+       if s.object_id == "system_your_handler"])
+```
+
 ## Decision 3: Phase 6 (prefs + flags) ships first
 
 **Why.** (1) It's data + permission rules on machinery that already exists —

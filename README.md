@@ -339,6 +339,32 @@ This repository currently contains:
 - `object_import.py` - CSV/TSV record import slice of the import/export design
 - `object_reader.py` - text-first read surface for AI and voice consumers
 - `object_tts.py` - optional text-to-speech bridge to a host voice engine
+- `object_lines.py` - one implementation of what a document line costs: quantity,
+  modifier, discount and tax, shared by orders and invoices
+- `object_promotions.py` - promotion codes, what they take off, and every reason
+  one cannot apply, returned together rather than one at a time
+- `object_cart.py` - the basket: what somebody intends to buy, before they commit
+- `object_billing.py` - rating measured usage into money owed, and the wallet
+  postings that reach the double-entry books
+- `object_unit_prices.py` - per-image and per-second media pricing, looked up
+  rather than derived
+- `object_template_runs.py` - the arithmetic of running a template: holds,
+  settlement, staleness and the disposition of a job a provider still holds
+- `object_agents.py` - who is here, what they can do, and whether they and this
+  server's own scheduled work are still answering
+- `object_rates.py` - rate cards: what an hour of human work costs, and which hour
+- `object_documents.py` - one renderer for every business document
+- `object_intake.py` - reading a receipt: text in, a suggestion out, never a posting
+- `object_ofx.py` - OFX/QFX bank statement parsing
+- `object_stripe.py` - Stripe webhook signature verification and API calls
+- `object_notary.py` - store a digest, check it later
+- `object_ledger_head.py` - one digest that stands for a whole ledger, and the
+  chain that lets a break be bracketed to a day
+- `object_governance.py` - what governs a collection, and the workflow diagram
+- `object_books_status.py` - readiness check behind the books spine's silent-skip
+- `object_conversions.py` - goals and funnels: the question a page view cannot answer
+- `object_visitors.py` - who actually turned up: visitors, bots, and us, counted apart
+- `object_change_dispatch.py` - change-log event dispatch
 - `http_api_contract.py` - compatibility constants for paths and response shapes
 - `deployment_checks.py` - single-VM filesystem ownership and permission checks
 - `packages/hello-world/` - minimal example package with one object
@@ -869,7 +895,24 @@ idempotent composer with provenance. The placement guide is
 decisions and their reasons accumulate in
 [`docs/logic-decisions.md`](docs/logic-decisions.md). Scheduled work is
 first-class and observable (see "The Clock Is Part of the Framework" above).
-CI runs the full suite (~2070 tests) on CPython 3.10 through 3.14 including
+
+On top of that sits a metered-work layer, which is where the doctrine gets
+tested by real money. A template run holds the stamped price against a
+prepaid wallet at SUBMISSION — through the same gate that sums the ledger
+rather than trusting a cached balance — then executes (inline, or submit
+and poll for jobs that outlive a pass) and settles exactly once by
+provenance marker: release the hold, then debit, or release alone if the
+work did not happen. A prepaid balance is booked as a LIABILITY and becomes
+revenue only when the work is done, and a reconciliation proves the wallets
+and the books still agree. Two refusals are load-bearing: a paid,
+non-idempotent provider call is never retried automatically, and a job the
+provider may already have charged for is never written off by a timer — it
+is polled, and if that never resolves it stops for a person with the money
+still held. The AI surfaces sit on the same foundation: chat with tool
+access scoped to exactly what the caller could do directly, file
+attachments, and per-turn token cost recorded against a price table.
+
+CI runs the full suite (~3,670 tests) on CPython 3.10 through 3.14 including
 the free-threaded 3.14t build, plus an end-to-end Docker Compose
 build-and-health-check, on every push.
 

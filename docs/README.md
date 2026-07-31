@@ -88,6 +88,13 @@ flowchart TB
   vault, hash-only tokens, and the trust boundary.
 - [shell-and-ai.md](shell-and-ai.md) — the talk-to-everything terminal: per-user
   AI keys, model choice, MCP tool subsets, and building objects by asking.
+- [event-hooks-decisions.md](event-hooks-decisions.md) — why event handlers
+  are operator-installed only, and the trap that follows from it: an object
+  in the override root declares `HANDLES` and silently never receives one.
+- [write-pipeline.md](write-pipeline.md) — every stage a record write passes
+  through, in order, and which of them can refuse it.
+- [zero-to-code.md](zero-to-code.md) — the path from an empty box to a
+  running app without writing server code.
 
 ## Storage & durability
 
@@ -98,6 +105,8 @@ flowchart TB
   and recovery-by-replay.
 - [backup-restore.md](backup-restore.md) — archive format, verification, and
   safe read-only restore preview.
+- [per-tenant-storage-direction.md](per-tenant-storage-direction.md) — the
+  direction for isolating one tenant's data, and what is not decided yet.
 
 ## Operating
 
