@@ -226,15 +226,30 @@ def test_unconfigured_accounts_skip_and_move_is_unaffected(tmp_path, monkeypatch
     assert object_records.get_collection_record("stock_moves", "mv1", base_dir=data_dir)
 
 
-def test_non_loss_moves_compose_nothing(tmp_path, monkeypatch):
+def test_a_transfer_shaped_adjustment_composes_nothing(tmp_path, monkeypatch):
+    """Both locations set: goods moved between shelves, no value changed."""
+    data_dir = setup_env(tmp_path, monkeypatch)
+    make_product(data_dir)
+    make_location(data_dir)
+    make_move(data_dir, "mv-tr", reason="adjustment", qty="2",
+              from_loc="loc1", to_loc="loc1")
+    assert fire_stock_books("mv-tr")["skipped"] == "not a loss event"
+    assert journals(data_dir) == []
+
+
+def test_a_sale_needs_its_own_account_and_never_borrows_shrinkage(
+        tmp_path, monkeypatch):
+    """A sale IS a composable direction now (COGS-on-sale, see
+    test_cogs_on_sale.py) -- but this env configures only inventory and
+    shrinkage, and cost of sales must never fall back to the shrinkage
+    account the loss reasons default to. Goods sold are not goods lost,
+    and routing one into the other misstates the P&L while still
+    balancing, which is the failure mode nobody notices."""
     data_dir = setup_env(tmp_path, monkeypatch)
     make_product(data_dir)
     make_location(data_dir)
     make_move(data_dir, "mv-sale", reason="sale", qty="2", from_loc="loc1")
-    assert fire_stock_books("mv-sale")["skipped"] == "not a loss event"
-    make_move(data_dir, "mv-tr", reason="adjustment", qty="2",
-              from_loc="loc1", to_loc="loc1")
-    assert fire_stock_books("mv-tr")["skipped"] == "not a loss event"
+    assert fire_stock_books("mv-sale")["skipped"] == "accounts unconfigured"
     assert journals(data_dir) == []
 
 

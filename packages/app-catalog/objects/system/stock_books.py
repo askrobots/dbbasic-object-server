@@ -21,9 +21,15 @@ Account mapping is configuration (app_settings):
 Soft dependency, same posture as system_books: books absent or accounts
 unmapped -> skip with a reason; stock keeping works without books.
 
-Purchases/sales composition is explicitly NOT here: COGS-on-sale needs a
-real valuation method (FIFO/weighted average); stamped-cost losses do not.
-That boundary holds until a valuation spec exists.
+COGS-on-sale composes too, now that a valuation method exists: a sale
+move books DR cost-of-goods-sold / CR inventory from the cost STAMPED on
+the move (hook_stock_moves stamps the moving weighted average at write
+time -- object_stock.weighted_average_cost_cents). This handler never
+values anything itself; a costless sale skips rather than reaching for
+the product's current cost, because picking a valuation method by
+accident inside a handler is exactly what the old boundary existed to
+prevent. Purchase composition (DR inventory / CR payable) is still not
+here -- that belongs with receiving, which has its own composer.
 """
 
 import os
@@ -91,6 +97,8 @@ def compose_for_move(base, move):
         direction = "loss"       # count shortage
     elif reason == "adjustment" and to_loc and not from_loc:
         direction = "overage"    # count overage: the mirror
+    elif reason == "sale" and from_loc:
+        direction = "sale"
     else:
         return {"ok": True, "skipped": "not a loss event"}
 
@@ -99,7 +107,17 @@ def compose_for_move(base, move):
 
     inventory_acct = _setting(base, "inventory.journal.inventory_account")
     shrinkage_acct = _setting(base, "inventory.journal.shrinkage_account")
-    loss_acct = _setting(base, f"inventory.journal.{reason}_account", shrinkage_acct)
+    if direction == "sale":
+        # Deliberately NOT defaulted to shrinkage the way loss reasons are.
+        # Goods sold are not goods lost, and routing cost of sales into a
+        # shrinkage account would misstate the P&L in a way that still
+        # balances -- the failure mode nobody notices. Either key works:
+        # cogs_account reads naturally, sale_account fits the existing
+        # per-reason override shape.
+        loss_acct = (_setting(base, "inventory.journal.cogs_account")
+                     or _setting(base, "inventory.journal.sale_account"))
+    else:
+        loss_acct = _setting(base, f"inventory.journal.{reason}_account", shrinkage_acct)
     if not inventory_acct or not loss_acct:
         return {"ok": True, "skipped": "accounts unconfigured"}
 
@@ -107,7 +125,13 @@ def compose_for_move(base, move):
     if amount <= 0:
         return {"ok": True, "skipped": "no stamped cost; nothing to book"}
 
-    if direction == "loss":
+    if direction == "sale":
+        # The one entry a shop cannot do without: the cost of what left
+        # the shelf stops being an asset and becomes an expense. Without
+        # it every sale looks like pure margin.
+        debit_acct, credit_acct = loss_acct, inventory_acct
+        what = "Cost of goods sold"
+    elif direction == "loss":
         debit_acct, credit_acct = loss_acct, inventory_acct
         what = f"Inventory {reason}" if reason in LOSS_REASONS else "Count shortage"
     else:

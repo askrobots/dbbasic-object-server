@@ -126,11 +126,12 @@ untrusted public users.
 - A background-job runtime (long media transcodes, PDF text extraction,
   thumbnails, scheduled AI work wait on it)
 - Cluster correctness claims
-- **Cost of goods sold is not booked on a sale** — inventory leaves the shelf
-  and never leaves the balance sheet, so inventory is overstated and COGS
-  understated until a valuation method (FIFO / weighted average) and a COGS
-  account setting exist. Three strict-xfail tests staged in
-  `tests/test_cogs_on_sale.py`.
+- **No lot or serial tracking on stock.** Inventory is valued at a moving
+  weighted average (`object_stock.weighted_average_cost_cents`), which is
+  accepted under GAAP and IFRS and needs nothing the append log does not
+  already carry. FIFO — and any question of the form "which specific units
+  are still on the shelf", including expiry-date picking and serial
+  recalls — needs cost layers that `stock_moves` has no dimension for.
 
 ## Next Work
 
