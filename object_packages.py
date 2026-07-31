@@ -336,7 +336,26 @@ def install_package(
     for entry, planned in zip(package["objects"], plan["objects"], strict=True):
         source = _package_file(package_dir, entry["path"])
         existing = resolve_object_id(entry["id"], roots)
-        destination_root = _root_for_path(existing, roots) if existing is not None else roots[0]
+        # An object that already exists stays where it lives -- a customized
+        # object must not be yanked out of the override root by an upgrade.
+        #
+        # A NEW object goes to the LAST root, which is the base/system root:
+        # get_object_roots() returns [override, base] in LOOKUP order, so
+        # roots[0] is the override root, and installing there was silently
+        # wrong. object_namespace.get_base_object_roots says so directly --
+        # "the root packages install into and reconcile against ... the
+        # pristine, upgradeable copy" -- but this line used roots[0] and
+        # contradicted it. The consequence was not cosmetic: iter_object_sources
+        # labels anything under the override root kind="override", and
+        # object_handlers.build_index indexes ONLY kind=="system" (Decision 2,
+        # user-authored handlers deferred). So every package-installed object
+        # declaring HANDLES installed successfully, reported "written", and
+        # then never received a single event.
+        #
+        # With one root configured (no overrides) this is the same root it
+        # always was.
+        destination_root = (_root_for_path(existing, roots) if existing is not None
+                            else roots[-1])
         if destination_root is None:
             raise PackageInstallError(f"Existing object is outside configured object roots: {entry['id']}")
         destination = existing or _object_destination(entry, destination_root)

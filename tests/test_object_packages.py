@@ -1511,3 +1511,89 @@ def test_a_dry_run_reports_the_same_data_dir_it_would_install_into(tmp_path,
     plan = object_packages.dry_run_package(
         "hello-world", root=packages_root, object_roots=[object_root])
     assert plan["data_dir"] == str(live.resolve())
+
+
+def test_a_new_package_object_installs_into_the_base_root_not_overrides(tmp_path):
+    """A package install that lands in the override root is a silent no-run.
+
+    get_object_roots() returns [override, base] in LOOKUP order, so the
+    override root is roots[0] -- and installing new objects there
+    contradicted object_namespace.get_base_object_roots's own stated
+    contract ("the root packages install into and reconcile against ...
+    the pristine, upgradeable copy").
+
+    The consequence was not cosmetic, which is why this test exists at
+    the level of `kind` rather than just the path: iter_object_sources
+    labels anything under the override root kind="override", and
+    object_handlers.build_index indexes ONLY kind=="system" (Decision 2,
+    user-authored handlers deferred). So a package object declaring
+    HANDLES installed cleanly, reported "written", and then never
+    received a single event. Caught in production on system_wallet_books,
+    not by a test.
+    """
+    packages_root = tmp_path / "packages"
+    base_root = tmp_path / "objects"
+    override_root = tmp_path / "overrides"
+    base_root.mkdir()
+    override_root.mkdir()
+
+    handler_source = 'HANDLES = ["widgets.record.created"]\n\n\ndef EVENT(request):\n    return {"ok": True}\n'
+    write_package(
+        packages_root, "handler-pkg",
+        {"id": "handler-pkg", "name": "Handler", "version": "0.1.0",
+         "objects": [{"id": "system_widget_books", "path": "objects/system/widget_books.py"}]},
+        files=[("objects/system/widget_books.py", handler_source)],
+    )
+
+    # Roots in real lookup order: override first, base last.
+    roots = [override_root, base_root]
+    result = object_packages.install_package(
+        "handler-pkg", root=packages_root, base_dir=tmp_path / "data",
+        object_roots=roots)
+    assert result["objects"][0]["status"] == "written"
+
+    assert (base_root / "system" / "widget_books.py").is_file()
+    assert not (override_root / "system" / "widget_books.py").exists()
+
+    sources = {s.object_id: s for s in object_namespace.iter_object_sources(roots)}
+    assert sources["system_widget_books"].kind == "system"
+
+    import object_handlers
+    index = object_handlers.build_index(roots)
+    assert index.get("widgets.record.created") == ["system_widget_books"]
+
+
+def test_an_overridden_object_stays_in_the_override_root_on_upgrade(tmp_path):
+    """The other half: a customized object must not be yanked out of the
+    override root by an upgrade -- that is what overrides are FOR."""
+    packages_root = tmp_path / "packages"
+    base_root = tmp_path / "objects"
+    override_root = tmp_path / "overrides"
+    base_root.mkdir()
+    override_root.mkdir()
+    roots = [override_root, base_root]
+
+    write_package(
+        packages_root, "widget-pkg",
+        {"id": "widget-pkg", "name": "Widget", "version": "0.1.0",
+         "objects": [{"id": "system_widget", "path": "objects/system/widget.py"}]},
+        files=[("objects/system/widget.py", "def GET(request):\n    return {}\n")],
+    )
+    object_packages.install_package("widget-pkg", root=packages_root,
+                                    base_dir=tmp_path / "data", object_roots=roots)
+
+    # An operator customizes it: the object now also lives in overrides.
+    customized = override_root / "system" / "widget.py"
+    customized.parent.mkdir(parents=True, exist_ok=True)
+    customized.write_text("def GET(request):\n    return {'mine': True}\n")
+
+    update_package(
+        packages_root, "widget-pkg",
+        {"id": "widget-pkg", "name": "Widget", "version": "0.2.0",
+         "objects": [{"id": "system_widget", "path": "objects/system/widget.py"}]},
+        files=[("objects/system/widget.py", "def GET(request):\n    return {'v2': True}\n")],
+    )
+    object_packages.install_package("widget-pkg", root=packages_root,
+                                    base_dir=tmp_path / "data", object_roots=roots,
+                                    allow_replace=True)
+    assert customized.is_file()
