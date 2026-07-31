@@ -101,3 +101,21 @@ def test_a_delete_is_not_this_hook_s_business(tmp_path, monkeypatch):
     data_dir = setup_env(tmp_path, monkeypatch)
     existing(data_dir, "s1", "a.b", "x")
     assert hook({"id": "s1", "key": "a.b", "value": "x"}, action="delete") is None
+
+
+def test_the_schema_actually_declares_the_hook():
+    """The gate ships wired, not merely written.
+
+    Every other test here calls the hook directly, which proves its LOGIC
+    and proves nothing about whether the server ever invokes it. Hooks are
+    wired by a `hooks.before_write` declaration in the SCHEMA -- not by
+    naming convention -- so an object called hook_app_settings that no
+    schema points at is a silent no-op that passes its own unit tests.
+    That is exactly how this one first shipped: green tests, and the live
+    box happily accepted a duplicate key thirty seconds after deploy.
+    """
+    import json
+    schema = json.loads(
+        (REPO_ROOT / "packages" / "app-settings" / "schemas"
+         / "app_settings.json").read_text())
+    assert schema["hooks"]["before_write"] == "hook_app_settings"
