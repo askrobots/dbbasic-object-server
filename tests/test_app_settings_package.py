@@ -22,8 +22,11 @@ def test_get_package_normalizes_app_settings_manifest():
 
     assert package["id"] == "app-settings"
     assert package["name"] == "Settings"
-    assert package["version"] == "0.2.0"
-    assert package["objects"] == []
+    assert package["version"] == "0.3.0"
+    # 0.3.0's only object: the gate that makes one-row-per-key true rather
+    # than merely intended (see tests/test_settings_uniqueness.py).
+    assert package["objects"] == [
+        {"id": "hook_app_settings", "path": "objects/hook/app_settings.py"}]
     assert package["seed"] == [{"collection": "ai_prices", "path": "seed/ai_prices.tsv"}]
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
     assert {schema["collection"] for schema in package["schemas"]} == {

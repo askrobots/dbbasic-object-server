@@ -1,12 +1,17 @@
 {
   "id": "app-settings",
   "name": "Settings",
-  "version": "0.2.0",
-  "description": "user_prefs (per-user, owner-scoped settings) and feature_flags (instance-level toggles) per docs/upgrade-and-customization.md Rule 5. Effective flag value = user override (a user_prefs key of \"flag:<name>\") -> instance feature_flags value, resolved by GET /api/flags. Also ai_prices: instance-level, live-editable per-model AI pricing that object_ai's cost recording looks up instead of hardcoding.",
+  "version": "0.3.0",
+  "description": "user_prefs (per-user, owner-scoped settings) and feature_flags (instance-level toggles) per docs/upgrade-and-customization.md Rule 5. Effective flag value = user override (a user_prefs key of \"flag:<name>\") -> instance feature_flags value, resolved by GET /api/flags. Also ai_prices: instance-level, live-editable per-model AI pricing that object_ai's cost recording looks up instead of hardcoding. The hook added in this version enforces ONE ROW PER KEY. app_settings is read by forty-odd objects, each through its own small _setting() helper that scans and returns the FIRST matching row -- a reasonable reader, dangerous only because nothing stopped a second row with the same key from existing. A duplicate does not conflict and does not warn; it simply loses, invisibly, and the operator has no way to see why their change did nothing. That shipped a wrong journal on a live box: an inventory account setting had a stale verification value, a correct one was added beside it, and the next sale credited the stale account -- balanced, and wrong. Same posture as the provenance rule in hook_wallet_entries: stop honouring an invariant in every reader and enforce it at the one write path they share. The 409 names the record that already owns the key, because the operator's next question is always where it IS set.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
-  "objects": [],
+  "objects": [
+    {
+      "id": "hook_app_settings",
+      "path": "objects/hook/app_settings.py"
+    }
+  ],
   "schemas": [
     {
       "collection": "user_prefs",
