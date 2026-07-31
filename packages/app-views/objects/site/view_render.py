@@ -168,6 +168,29 @@ function matchesFilters(record, filters) {
 // Fallback for list blocks that need filters/limit -- options window.dbbasicList
 // does not expose. Fetches the collection itself, filters/sorts/slices
 // client-side, and renders plain rows styled with the shared .listrow classes.
+// What to show for one row when the block picked no fields. NEVER the id:
+// a UUID answers no question a person brings to a list, and "show me my
+// notes" rendering seven UUIDs was a real bug on a real iPad -- every
+// untitled record fell through `title || name || id` to the id. The
+// fallback walks the record for the first human-shaped string instead
+// (body, description, whatever the collection calls it), because a note
+// IS its body, and an id-shaped or date-shaped value is skipped by SHAPE
+// so this needs no per-collection knowledge.
+function rowLabel(r) {
+  const direct = r.title || r.name || r.label || r.subject;
+  if (direct) return String(direct).slice(0, 120);
+  const idish = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const dateish = /^\d{4}-\d{2}-\d{2}/;
+  for (const [key, value] of Object.entries(r)) {
+    if (key === "id" || key.endsWith("_id") || key === "owner_id") continue;
+    if (typeof value !== "string" || !value.trim()) continue;
+    if (idish.test(value.trim()) || dateish.test(value.trim())) continue;
+    const text = value.trim().replace(/\s+/g, " ");
+    return text.length > 120 ? text.slice(0, 117) + "\u2026" : text;
+  }
+  return "(untitled)";
+}
+
 function renderFilteredList(block, mount) {
   async function load() {
     const res = await fetch("/collections/" + encodeURIComponent(block.collection) + "/records?limit=500",
@@ -180,7 +203,7 @@ function renderFilteredList(block, mount) {
     if (block.limit != null) list = list.slice(0, Number(block.limit) || 0);
     mount.innerHTML = list.length
       ? list.map((r) => '<div class="listrow"><div class="body"><div class="rowtitle">'
-          + esc(r.title || r.name || r.id) + "</div></div></div>").join("")
+          + esc(rowLabel(r)) + "</div></div></div>").join("")
       : '<div class="state">Nothing yet.</div>';
   }
   (function sub() {

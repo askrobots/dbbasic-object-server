@@ -1,7 +1,7 @@
 {
   "name": "shell_commands",
   "title": "Shell History",
-  "version": 2,
+  "version": 3,
   "description": "Command history: what was typed and what came back.",
   "fields": [
     {
@@ -36,6 +36,34 @@
       "name": "owner_id",
       "type": "text",
       "label": "Owner"
+    },
+    {
+      "name": "session_id",
+      "type": "text",
+      "help": "Groups the turns of one conversation. Minted by the page at load; the server stamps it on every turn so a session can be listed and resumed."
+    },
+    {
+      "name": "source",
+      "type": "text",
+      "help": "Which surface: shell | talk | api."
+    },
+    {
+      "name": "model",
+      "type": "text"
+    },
+    {
+      "name": "duration_ms",
+      "type": "integer",
+      "help": "Wall time of the provider round(s), for the 'why was that slow' question."
+    },
+    {
+      "name": "tool_calls",
+      "type": "text",
+      "help": "JSON list of tool names the model called this turn."
+    },
+    {
+      "name": "created_at",
+      "type": "datetime"
     }
   ],
   "views": {

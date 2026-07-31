@@ -76,6 +76,9 @@ _HELP = (
 )
 
 _SCRIPT = """
+const SESSION_ID = (crypto.randomUUID ? crypto.randomUUID()
+                    : "s-" + Math.random().toString(36).slice(2));
+
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 const log = document.getElementById("log");
@@ -433,6 +436,7 @@ async function run(input) {
   const [ok, body] = await api("POST", "/api/ai/chat",
     {message: input, model: prefs.ai_model, tools, history: aiHistory.slice(-20),
      attachments: attachIds.length ? attachIds : undefined,
+     session_id: SESSION_ID, source: "shell",
      system: "You are the shell of this user's object server. Answer in plain terminal text " +
              "with no markdown formatting. Be concise. Use your tools when the question is " +
              "about the user's records. " +
@@ -475,7 +479,9 @@ async function run(input) {
     // Only the final assistant text is ever spoken -- never tool-call noise.
     if (voiceOn()) speak(body.reply);
   }
-  record(input, ok ? body.reply : body.error, "ai");
+  // AI turns are recorded by the server inside /api/ai/chat -- stamped
+  // and session-grouped. Command turns (note/link/search) stay client-
+  // written below: they never touch the chat endpoint.
 }
 
 document.getElementById("prompt").addEventListener("submit", (event) => {

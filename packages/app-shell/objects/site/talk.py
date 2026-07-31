@@ -121,6 +121,11 @@ _TALK_ADDENDUM = (
 TALK_SYSTEM = _BASE_CAPABILITIES + _TALK_ADDENDUM
 
 _SCRIPT = """
+// One conversation per page load. The server stamps this on every turn it
+// records, which is what makes a session listable and resumable later.
+const SESSION_ID = (crypto.randomUUID ? crypto.randomUUID()
+                    : "s-" + Math.random().toString(36).slice(2));
+
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 const stage = document.getElementById("stage");
@@ -908,23 +913,53 @@ async function api(method, path, payload) {
   return [res.ok, await res.json()];
 }
 
-async function record(input, output, kind) {
-  api("POST", "/collections/shell_commands/records",
-      {id: crypto.randomUUID(), input, output: String(output).slice(0, 4000),
-       kind, owner_id: OWNER_ID});
-}
-
 async function loadPrefs() {
   const res = await fetch(`/collections/shell_preferences/records/${OWNER_ID}`,
                           {credentials: "same-origin", headers: {accept: "application/json"}});
   if (res.ok) { const body = await res.json(); prefs = body.record || prefs; }
 }
 
+// The 10-second silence problem: a tool-using model legitimately takes
+// that long, and a page that shows a frozen ellipsis for it reads as
+// dead -- "we don't know because after 10 seconds..." is a verbatim
+// user report. Two signals, chosen for a voice-first surface: a short
+// BLIP the moment the utterance is accepted (the ear knows it fired
+// without looking at the screen), and a visible elapsed counter while
+// the model works (a counter that is moving is a page that is alive,
+// and "thinking... 9s" and "stuck" stop being the same picture).
+let thinkingTimer = null;
+function startThinking() {
+  const started = performance.now();
+  capAssistant.textContent = "thinking\\u2026";
+  if (thinkingTimer) clearInterval(thinkingTimer);
+  thinkingTimer = setInterval(() => {
+    const s = Math.round((performance.now() - started) / 1000);
+    if (s >= 2) capAssistant.textContent = "thinking\\u2026 " + s + "s";
+  }, 1000);
+}
+function stopThinking() {
+  if (thinkingTimer) { clearInterval(thinkingTimer); thinkingTimer = null; }
+}
+function blip() {
+  try {
+    const ctx = window.__dbbasicTalkUnlockCtx;
+    if (!ctx || ctx.state !== "running") return;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.08, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.12);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(); osc.stop(ctx.currentTime + 0.13);
+  } catch (e) { /* a missing blip is not an error */ }
+}
+
 async function submitTurn(input) {
   capUser.textContent = input;
   capUser.classList.remove("armed", "active");
   capUser.classList.add("sent");
-  capAssistant.textContent = "\\u2026";
+  blip();
+  startThinking();
   stopListening();
 
   // pref(), not raw prefs.tools -- a shell_preferences record written
@@ -933,8 +968,11 @@ async function submitTurn(input) {
   const tools = String(pref("tools", DEFAULT_TOOLS)).split(",").map((t) => t.trim()).filter(Boolean);
   const [ok, body] = await api("POST", "/api/ai/chat",
     {message: input, model: pref("ai_model", DEFAULT_MODEL), tools, history: aiHistory.slice(-20),
+     session_id: SESSION_ID, source: "talk",
      system: TALK_SYSTEM + " Current local date/time: " + new Date().toString() + "."});
 
+  stopThinking();
+  stopThinking();
   const rawReply = ok ? body.reply : (body.error || "Something went wrong.");
   const replyText = stripViewMarker(rawReply);
   capAssistant.textContent = stripForSpeech(replyText) || replyText;
@@ -953,7 +991,10 @@ async function submitTurn(input) {
     renderCard(replyText);
   }
   speak(replyText);
-  record(input, replyText, "ai");
+  // No client-side history write: the SERVER records every AI turn as
+  // part of /api/ai/chat itself -- stamped, session-grouped, and immune
+  // to this page dying before a fire-and-forget write lands (a real turn
+  // was lost exactly that way).
 }
 
 // Manual send/Enter always submits whatever is in the voice buffer plus

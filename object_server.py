@@ -6992,6 +6992,15 @@ AI_PRICES_COLLECTION = "ai_prices"
 AI_USAGE_COLLECTION = "ai_usage"
 
 
+def _text_field(value) -> str:
+    return str(value if value is not None else "").strip()
+
+
+def _utc_now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 async def _handle_ai_chat(
     send,
     method: str,
@@ -7194,6 +7203,7 @@ async def _handle_ai_chat(
         status, response_payload = future.result(timeout=timeout)
         return {"http_status": status, "response": response_payload}
 
+    turn_started = time.monotonic()
     try:
         result = await asyncio.to_thread(
             object_ai.run_chat,
@@ -7236,6 +7246,36 @@ async def _handle_ai_chat(
     )
     cost_cents = object_ai.compute_cost_cents(tokens_in, tokens_out, price_row)
     usage["cost_cents"] = cost_cents
+
+    # The TURN record is server-authoritative for the same reason the cost
+    # is: the client used to write its own history row after the reply,
+    # fire-and-forget, which lost any turn whose page died first (a real
+    # one vanished that way during live debugging -- billed in ai_usage,
+    # absent from history) and stamped no timestamp at all. The server
+    # writes it here, before the reply is even sent, so history survives
+    # whatever the page does next. session_id is minted by the page and
+    # merely recorded -- grouping is the client's claim, existence is the
+    # server's fact. Best-effort by design: a history write must never
+    # fail a chat that succeeded.
+    turn_record = {
+        "id": object_ids.new_uuid4(),
+        "input": message[:8000],
+        "output": _text_field(result.get("text"))[:20000],
+        "kind": "ai",
+        "owner_id": session.user_id,
+        "session_id": _text_field(payload.get("session_id"))[:64],
+        "source": _text_field(payload.get("source"))[:16] or "api",
+        "model": f"{service}:{model_name}",
+        "duration_ms": str(int((time.monotonic() - turn_started) * 1000)),
+        "tool_calls": json.dumps([c.get("name") for c in
+                                  (result.get("tool_calls") or []) if c.get("name")]),
+        "created_at": _utc_now_iso(),
+    }
+    try:
+        object_records.create_collection_record(
+            "shell_commands", turn_record, base_dir=_data_dir(), actor=session.user_id)
+    except Exception:
+        pass  # the reply matters more than the record of it
 
     usage_record = {
         "id": object_ids.new_uuid4(),

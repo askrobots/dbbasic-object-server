@@ -163,7 +163,9 @@ def test_talk_object_serves_stage_scaffolding_when_signed_in(tmp_path):
     assert 'href="/shell"' in body
     # Same brain: it is the /api/ai/chat call, not a new endpoint.
     assert "/api/ai/chat" in body
-    assert "/collections/shell_commands/records" in body
+    # History is written server-side now; the page carries its session id
+    # instead of a collections URL.
+    assert "session_id: SESSION_ID" in body
     # The talk-mode system prompt marker, plus the base capabilities text
     # copied verbatim from shell.py (proves the two are still in sync).
     assert "You are in voice mode" in body
@@ -310,9 +312,12 @@ def test_talk_does_not_replay_shell_commands_into_model_context():
     assert "loadHistory" not in TALK_SOURCE
     assert "shell_commands/records?limit=1000" not in TALK_SOURCE
     assert "let aiHistory = [];" in TALK_SOURCE
-    # Turns are still recorded to the shared table -- just never replayed
-    # back into the chat call's history array on load.
-    assert "/collections/shell_commands/records" in TALK_SOURCE
+    # Turns are still recorded to the shared table -- but by the SERVER,
+    # inside /api/ai/chat (stamped, session-grouped, immune to the page
+    # dying before a fire-and-forget write). The page itself no longer
+    # touches the collection at all; it just declares its session.
+    assert "/collections/shell_commands/records" not in TALK_SOURCE
+    assert "session_id: SESSION_ID" in TALK_SOURCE
 
     # The only place aiHistory grows is inside submitTurn(), from the turn
     # that was just submitted, not from a fetch of past rows.
