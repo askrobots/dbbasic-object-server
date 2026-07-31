@@ -14,6 +14,8 @@ heartbeats, while a scheduler_runs row says the actual work ran and
 whether it worked.
 """
 
+import pytest
+
 import object_agents
 
 NOW = "2026-07-31T14:00:00Z"
@@ -199,3 +201,79 @@ def test_an_unparseable_stamp_degrades_rather_than_raising():
     assert object_agents.relative_time("not a date", NOW) == "not a date"
     assert object_agents.liveness(
         {"status": "active", "heartbeat_at": "not a date"}, now=NOW) == "never"
+
+
+# --- silence only means something against a schedule --------------------------
+
+def test_a_daily_pass_seven_hours_quiet_is_not_lost():
+    """THE false alarm the live board produced on its first deploy: ten
+    of fourteen passes reported `lost` for the crime of being daily. A
+    cron that fires at 06:55 and last ran seven hours ago is not lost, it
+    is waiting -- and a board that says otherwise is one an operator
+    learns to ignore."""
+    result = fold([run("nightly", "2026-07-31T06:55:00Z")],
+                  tasks=[task("nightly", schedule="55 6 * * *")])
+    assert by_id(result, "nightly")["liveness"] == "live"
+
+
+def test_a_minutely_pass_ten_minutes_quiet_IS_a_problem():
+    """The same silence, the opposite verdict. The schedule is what tells
+    them apart, which is the whole point of judging against cadence."""
+    result = fold([run("minutely", "2026-07-31T13:50:00Z")],
+                  tasks=[task("minutely", schedule="* * * * *")])
+    assert by_id(result, "minutely")["liveness"] in ("stale", "lost")
+
+
+def test_a_daily_pass_genuinely_missing_for_days_is_still_caught():
+    """Cadence-relative must not mean unfalsifiable."""
+    result = fold([run("nightly", "2026-07-20T06:55:00Z")],
+                  tasks=[task("nightly", schedule="55 6 * * *")])
+    assert by_id(result, "nightly")["liveness"] == "lost"
+
+
+def test_a_pass_may_miss_a_firing_or_two_before_anyone_is_told():
+    """Cron drift, a long previous pass and a restart are ordinary. A
+    board that shouts on the first missed beat is noise."""
+    result = fold([run("minutely", "2026-07-31T13:58:00Z")],
+                  tasks=[task("minutely", schedule="* * * * *")])
+    assert by_id(result, "minutely")["liveness"] == "live"
+
+
+def test_the_verdict_carries_what_it_was_judged_by():
+    """"lost" means nothing without knowing the thing was expected
+    minutely rather than monthly -- the same reason a quality score
+    states its method."""
+    result = fold([run("p", "2026-07-31T13:59:00Z")],
+                  tasks=[task("p", schedule="*/10 * * * *")])
+    assert by_id(result, "p")["expected_every"] == 600
+
+
+def test_an_unparseable_schedule_falls_back_to_the_agent_windows():
+    """Not to a guess. A schedule nobody can read is a reason to use the
+    default, not to invent an interval."""
+    assert object_agents.cron_interval_seconds("nonsense") is None
+    assert object_agents.worker_windows("nonsense", stale_seconds=900,
+                                        lost_seconds=3600) == (900, 3600)
+
+
+def test_scheduled_work_is_judged_more_tightly_than_an_agent():
+    """The first version floored these at the AGENT windows and was wrong
+    in the other direction: a minutely pass could go quiet for fifteen
+    minutes and still read `live`. The two cases genuinely differ -- an
+    agent's beat is best-effort ("reasoning for ten minutes writes
+    nothing and is perfectly alive"), while a cron either fired or it did
+    not. Scheduled work can be held to a tighter standard, and should
+    be."""
+    stale, lost = object_agents.worker_windows("* * * * *", stale_seconds=900,
+                                               lost_seconds=3600)
+    assert stale < 900 and lost < 3600
+    assert (stale, lost) == (object_agents.JITTER_STALE_SECONDS,
+                             object_agents.JITTER_LOST_SECONDS)
+
+
+@pytest.mark.parametrize("schedule,expected", [
+    ("* * * * *", 60), ("*/10 * * * *", 600), ("5 * * * *", 3600),
+    ("55 6 * * *", 86400), ("0 3 * * 1", 604800),
+])
+def test_cron_cadence_estimates(schedule, expected):
+    assert object_agents.cron_interval_seconds(schedule) == expected

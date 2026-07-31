@@ -350,6 +350,106 @@ def _shift_iso(stamp, seconds):
 # quiet and an agent that has gone quiet are the same question, and two
 # rules that could drift apart is exactly how one board starts lying.
 
+# --- a schedule is what makes silence mean something --------------------------
+#
+# The first version of the workers panel judged every scheduled pass
+# against the agent windows (15 minutes stale, an hour lost) and the live
+# box immediately reported TEN of fourteen as `lost` -- every daily cron,
+# for the crime of being daily. A pass that runs at 06:55 and last ran
+# seven hours ago is not lost, it is waiting, and a board that says
+# otherwise is one an operator learns to ignore. That is the same
+# cries-wolf failure the customer-funds reconciliation had to design
+# around, arriving from the opposite direction.
+#
+# So silence is judged against the DECLARED INTERVAL. A minutely task
+# quiet for ten minutes is broken; a daily task quiet for ten hours is
+# early. Same evidence, opposite verdicts, and the schedule is what tells
+# them apart.
+
+_CRON_FIELD_PERIODS = (60, 3600, 86400, 2629800, 604800)  # min, hour, dom, mon, dow
+
+
+def cron_interval_seconds(schedule):
+    """Roughly how often a 5-field cron expression fires, in seconds.
+
+    Deliberately approximate: this feeds a staleness multiplier, not a
+    scheduler, and being out by a factor under two changes no verdict.
+    Returns None for anything it does not understand, which is the signal
+    to fall back on the fixed windows rather than to invent a number.
+    """
+    fields = _text(schedule).split()
+    if len(fields) != 5:
+        return None
+
+    minute, hour, dom, month, dow = fields
+
+    def step(field, period):
+        """The period implied by one field, or None when it says nothing."""
+        if field == "*":
+            return None            # "every" -- the field below decides
+        if field.startswith("*/"):
+            try:
+                every = int(field[2:])
+            except ValueError:
+                return None
+            return period * max(1, every)
+        return None                # a fixed value pins the field above
+
+    # Walk from the finest field upward. The first field that is not "*"
+    # and not a step sets the cadence to the NEXT unit up: "5 * * * *"
+    # fires hourly, "55 6 * * *" daily.
+    if minute == "*":
+        base = 60
+    elif (stepped := step(minute, 60)) is not None:
+        base = stepped
+    elif hour == "*":
+        base = 3600
+    elif (stepped := step(hour, 3600)) is not None:
+        base = stepped
+    elif dom == "*" and dow == "*":
+        base = 86400
+    elif dow != "*":
+        base = 604800
+    else:
+        base = 2629800
+    return base
+
+
+#: Absorbs ordinary jitter -- the scheduler polls on a loop, a long pass
+#: delays the next one, a restart skips a beat. Deliberately small: these
+#: are floors for the FASTEST schedules, not a global window.
+JITTER_STALE_SECONDS = 180
+JITTER_LOST_SECONDS = 600
+
+
+def worker_windows(schedule, *, stale_seconds, lost_seconds,
+                   stale_multiple=3, lost_multiple=8):
+    """The (stale, lost) thresholds this schedule should be judged by.
+
+    A pass may miss a couple of firings before anyone is told and several
+    before it is called lost, because cron drift, a long previous pass
+    and a restart are all ordinary.
+
+    The floors are deliberately NOT the agent windows, which was the
+    first version and was wrong in the other direction: it let a minutely
+    pass go quiet for fifteen minutes and still read `live`. The two
+    cases are genuinely different. An agent's heartbeat is best-effort --
+    "an agent reasoning for ten minutes writes nothing and is perfectly
+    alive" is the reason that window is generous. A cron either fired or
+    it did not, and the scheduler is reliable, so scheduled work can and
+    should be judged more tightly than an agent.
+
+    `stale_seconds`/`lost_seconds` remain the answer for a schedule
+    nobody can parse: an unreadable schedule is a reason to fall back,
+    never to invent an interval.
+    """
+    interval = cron_interval_seconds(schedule)
+    if interval is None:
+        return abs(int(stale_seconds)), abs(int(lost_seconds))
+    return (max(JITTER_STALE_SECONDS, interval * stale_multiple),
+            max(JITTER_LOST_SECONDS, interval * lost_multiple))
+
+
 def worker_liveness(scheduler_runs, *, now, tasks=None,
                     stale_seconds=DEFAULT_STALE_SECONDS,
                     lost_seconds=DEFAULT_LOST_SECONDS):
@@ -393,8 +493,12 @@ def worker_liveness(scheduler_runs, *, now, tasks=None,
             "status": "active" if status == "active" else "paused",
             "heartbeat_at": _text(run.get("started_at")),
         }
-        state = liveness(synthetic, now=now, stale_seconds=stale_seconds,
-                         lost_seconds=lost_seconds)
+        # Judged against ITS OWN cadence, not a global window.
+        own_stale, own_lost = worker_windows(
+            task.get("schedule"), stale_seconds=stale_seconds,
+            lost_seconds=lost_seconds)
+        state = liveness(synthetic, now=now, stale_seconds=own_stale,
+                         lost_seconds=own_lost)
         failed = _text(run.get("ok")).lower() in ("false", "0", "no")
         rows.append({
             "object_id": object_id,
@@ -406,6 +510,11 @@ def worker_liveness(scheduler_runs, *, now, tasks=None,
             "duration_ms": _int(run.get("duration_ms")),
             "run_count": _int(task.get("run_count")),
             "liveness": state,
+            # The verdict states what it was judged by, the same way a
+            # quality score states its method: "lost" means nothing
+            # without knowing it was expected minutely rather than
+            # monthly.
+            "expected_every": cron_interval_seconds(_text(task.get("schedule"))),
             # A pass that RAN and THREW is the case a liveness verdict
             # alone would call healthy, so the error rides beside it
             # rather than replacing it: "live, and failing" is a real
