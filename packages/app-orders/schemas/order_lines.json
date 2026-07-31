@@ -77,6 +77,18 @@
       "help": "The shop sold this line knowing it did not have the goods, and said so at checkout. It lives HERE, on the order, because the picker and the packer read the order -- a fact kept only in another app's collection is a fact the warehouse never sees, and the consequence of not seeing it is a short parcel plus a stock ledger driven negative on goods nobody could pick. Written by checkout, read by the shipment builder, which packs what is on the shelf and leaves the rest owed."
     },
     {
+      "name": "discount_bps",
+      "type": "integer",
+      "label": "Discount %",
+      "help": "A negotiated reduction on THIS line, in basis points (1000 = 10%). Not a promotion -- a promo code applies to the whole basket and is rounded once (app-promotions); this comes off one row and prints beside it. Tax is charged on the discounted amount, because a discount on goods reduces the taxable base. A flat per-unit reduction is a negative modifier_cents; the percentage is what nothing else could express."
+    },
+    {
+      "name": "line_discount_cents",
+      "type": "integer",
+      "label": "Discount",
+      "help": "Computed from discount_bps."
+    },
+    {
       "name": "line_total_cents",
       "type": "integer",
       "default": "0",

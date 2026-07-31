@@ -42,6 +42,18 @@
       "label": "Unit Price (cents)"
     },
     {
+      "name": "discount_bps",
+      "type": "integer",
+      "label": "Discount %",
+      "help": "A negotiated reduction on THIS line, in basis points (1000 = 10%). Not a promotion -- a promo code applies to the whole basket and is rounded once (app-promotions); this comes off one row and prints beside it. Tax is charged on the discounted amount, because a discount on goods reduces the taxable base. A flat per-unit reduction is a negative modifier_cents; the percentage is what nothing else could express."
+    },
+    {
+      "name": "line_discount_cents",
+      "type": "integer",
+      "label": "Discount",
+      "help": "Computed from discount_bps."
+    },
+    {
       "name": "line_total_cents",
       "type": "integer",
       "default": "0",

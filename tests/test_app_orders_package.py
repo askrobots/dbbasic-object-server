@@ -315,10 +315,14 @@ def test_order_lines_schema_matches_the_brief():
     # order is the argument: the note and the delta belong to the thing
     # being sold, not to the arithmetic underneath it. v3 adds
     # `backordered` last among the facts about the sale and still ahead of
-    # the arithmetic, for the same reason.
+    # the arithmetic, for the same reason. v4 adds discount_bps in the
+    # same spirit: the rate somebody negotiated is a fact about the sale,
+    # so it sits with the price it reduces, and line_discount_cents joins
+    # the computed block beside the total it produced.
     assert field_names == [
         "id", "order_id", "product_id", "description", "quantity", "unit_price_cents",
         "line_note", "modifier_cents", "backordered",
+        "discount_bps", "line_discount_cents",
         "line_total_cents", "tax_rate_bps", "line_tax_cents", "owner_id", "created_at",
     ]
     by_name = {f["name"]: f for f in schema["fields"]}

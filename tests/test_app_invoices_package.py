@@ -263,8 +263,14 @@ def test_invoices_parity_fields_present():
 def test_invoice_lines_schema_matches_the_brief():
     schema = _invoice_lines_schema()
     field_names = [f["name"] for f in schema["fields"]]
+    # discount_bps sits with the price it reduces -- the rate somebody
+    # negotiated is a fact about the sale, not part of the arithmetic --
+    # and line_discount_cents joins the computed block beside the total
+    # it produced, so an invoice can print what was taken off rather than
+    # only what is left.
     assert field_names == [
         "id", "invoice_id", "description", "quantity", "unit_price_cents",
+        "discount_bps", "line_discount_cents",
         "line_total_cents", "tax_rate_bps", "line_tax_cents", "owner_id", "created_at",
     ]
     by_name = {f["name"]: f for f in schema["fields"]}

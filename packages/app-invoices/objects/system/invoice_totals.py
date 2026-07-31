@@ -58,6 +58,7 @@ from decimal import ROUND_FLOOR, Decimal
 
 import object_record_changes
 import object_finance
+import object_lines
 import object_records
 
 HANDLES = [
@@ -90,19 +91,18 @@ def _to_int(value):
 def _line_amounts(line: dict) -> tuple[int, int]:
     """Return (line_total_cents, line_tax_cents) for one invoice_lines row.
 
-    line_total_cents = floor(quantity * unit_price_cents), Decimal
-    multiplication (never float) so a fractional quantity cannot
-    introduce rounding error before the floor.
-    line_tax_cents = line_total_cents * tax_rate_bps // 10000, plain
-    integer floor division on two already-integer values -- the exact
-    worked arithmetic in plan/vocabulary/20-invoice-spec.md.
+    The arithmetic lives in object_lines, shared with app-orders: the two
+    copies were near enough identical that one was the other plus
+    modifier_cents, and both now subtract a line discount. See that
+    module for the order of operations and why tax is charged on the
+    discounted amount.
     """
-    quantity = Decimal(str(line.get("quantity") or "0").strip() or "0")
-    unit_price_cents = Decimal(str(line.get("unit_price_cents") or "0").strip() or "0")
-    line_total_cents = int((quantity * unit_price_cents).to_integral_value(rounding=ROUND_FLOOR))
-    tax_rate_bps = _to_int(line.get("tax_rate_bps"))
-    line_tax_cents = (line_total_cents * tax_rate_bps) // 10000
-    return line_total_cents, line_tax_cents
+    amounts = object_lines.line_amounts(line)
+    return amounts["line_total_cents"], amounts["line_tax_cents"]
+
+
+def _line_discount(line: dict) -> int:
+    return object_lines.line_amounts(line)["discount_cents"]
 
 
 def _resolve_invoice_id(record_id: str, action: str, base_dir: str) -> str | None:
@@ -151,15 +151,23 @@ def _sync_triggering_line(record_id: str, action: str, base_dir: str) -> None:
         return
 
     line_total_cents, line_tax_cents = _line_amounts(line)
+    line_discount_cents = _line_discount(line)
+    # The discount is STORED beside the total it produced, not left to be
+    # re-derived: an invoice has to be able to print "10% off  -2.00"
+    # next to the line, and a reader who only has the net total cannot
+    # say what was taken off or whether anything was.
     if line_total_cents == _to_int(line.get("line_total_cents")) and \
-            line_tax_cents == _to_int(line.get("line_tax_cents")):
+            line_tax_cents == _to_int(line.get("line_tax_cents")) and \
+            line_discount_cents == _to_int(line.get("line_discount_cents")):
         return
 
     try:
         object_records.update_collection_record(
             "invoice_lines",
             record_id,
-            {"line_total_cents": str(line_total_cents), "line_tax_cents": str(line_tax_cents)},
+            {"line_total_cents": str(line_total_cents),
+             "line_tax_cents": str(line_tax_cents),
+             "line_discount_cents": str(line_discount_cents)},
             base_dir=base_dir,
             actor=ACTOR,
         )
