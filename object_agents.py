@@ -128,9 +128,15 @@ def liveness(agent, *, now, stale_seconds=DEFAULT_STALE_SECONDS,
     if not beat:
         return "never"
 
-    if beat >= _shift_iso(_text(now), -abs(int(stale_seconds))):
+    # Datetimes, not strings: see _utc_naive for why comparing ISO text
+    # across `Z` and `+00:00` silently ages a timestamp.
+    beat_at, right_now = _utc_naive(beat), _utc_naive(now)
+    if beat_at is None or right_now is None:
+        return "never"
+    age = (right_now - beat_at).total_seconds()
+    if age <= abs(int(stale_seconds)):
         return "live"
-    if beat >= _shift_iso(_text(now), -abs(int(lost_seconds))):
+    if age <= abs(int(lost_seconds)):
         return "stale"
     return "lost"
 
@@ -224,6 +230,51 @@ def board(agents, wallet_entries=None, *, now,
     }
 
 
+def _utc_naive(stamp):
+    """Any ISO-8601 form -> a naive UTC datetime, or None.
+
+    The board was only ever fed timestamps the heartbeat action writes,
+    which end in `Z`. The moment it also folded scheduler_runs it met
+    `+00:00`, and TWO things broke at once:
+
+    - `rstrip("Z")` leaves an offset intact, so one side of a subtraction
+      stayed timezone-aware and the other did not: TypeError, live, on a
+      page that had passed every test.
+    - Worse and quieter, the lexicographic comparison this module leans
+      on is WRONG across the two forms. "+" (0x2B) sorts below "Z"
+      (0x5A), so `...14:00:00+00:00` < `...14:00:00Z` -- the same instant
+      reads as older, and a worker that had just run could be reported
+      stale. A test would never catch it while every fixture used one
+      format.
+
+    So every comparison goes through here now, and the answer is a real
+    datetime rather than a string that happens to sort.
+    """
+    from datetime import datetime, timezone
+    import re
+
+    text = _text(stamp)
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    # Python 3.10's fromisoformat accepts only 3 or 6 fractional digits,
+    # and writers in the wild emit whatever they emit. Normalizing the
+    # fraction here rather than trusting it is the difference between a
+    # page that works on 3.12 and one that works.
+    match = re.match(r"^(.*?)\.(\d+)(.*)$", text)
+    if match:
+        head, fraction, tail = match.groups()
+        text = f"{head}.{fraction[:6].ljust(6, '0')}{tail}"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
 def relative_time(stamp, now):
     """"4 hours ago" rather than "2026-07-27T03:12:44Z".
 
@@ -238,16 +289,11 @@ def relative_time(stamp, now):
     coarse: nobody needs "3 hours, 14 minutes, 9 seconds", they need to
     know whether it is minutes or days.
     """
-    from datetime import datetime
-
-    text, current = _text(stamp), _text(now)
-    if not text:
+    if not _text(stamp):
         return "never"
-    try:
-        then = datetime.fromisoformat(text.rstrip("Z"))
-        right_now = datetime.fromisoformat(current.rstrip("Z"))
-    except ValueError:
-        return text
+    then, right_now = _utc_naive(stamp), _utc_naive(now)
+    if then is None or right_now is None:
+        return _text(stamp)
 
     seconds = (right_now - then).total_seconds()
     if seconds < 0:

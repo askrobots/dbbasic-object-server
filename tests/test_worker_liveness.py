@@ -138,3 +138,64 @@ def test_the_liveness_rule_is_the_SAME_one_agents_use():
     agent = object_agents.liveness({"status": "active", "heartbeat_at": silent},
                                    now=NOW)
     assert worker == agent
+
+
+# --- timestamp forms: the bug that only real data had -------------------------
+
+def test_an_offset_aware_stamp_is_not_silently_aged():
+    """THE live bug, and the quiet half of it.
+
+    The board had only ever seen timestamps the heartbeat action writes,
+    which end in `Z`. scheduler_runs writes `+00:00`, and the module's
+    lexicographic ISO comparison is WRONG across the two forms: "+"
+    (0x2B) sorts below "Z" (0x5A), so the same instant in the offset form
+    reads as OLDER. A worker that had just run could be reported stale,
+    and no fixture using one format could ever catch it.
+    """
+    assert "2026-07-31T14:00:00+00:00" < "2026-07-31T14:00:00Z"   # the hazard
+
+    just_ran = object_agents.liveness(
+        {"status": "active", "heartbeat_at": "2026-07-31T13:59:00+00:00"},
+        now=NOW)
+    assert just_ran == "live"
+
+
+def test_the_two_forms_of_the_same_instant_agree():
+    """Agreement is the property, whatever the verdict happens to be --
+    30 minutes past a 15-minute window is legitimately `stale`, and both
+    spellings of that instant must say so identically."""
+    verdicts = {object_agents.liveness(
+        {"status": "active", "heartbeat_at": stamp}, now=NOW)
+        for stamp in ("2026-07-31T13:30:00Z", "2026-07-31T13:30:00+00:00")}
+    assert verdicts == {"stale"}
+
+    fresh = {object_agents.liveness(
+        {"status": "active", "heartbeat_at": stamp}, now=NOW)
+        for stamp in ("2026-07-31T13:59:00Z", "2026-07-31T13:59:00+00:00")}
+    assert fresh == {"live"}
+
+
+def test_a_real_scheduler_runs_stamp_folds(tmp_path=None):
+    """Copied verbatim off the live box, microseconds and all -- the
+    shape that produced 'can't subtract offset-naive and offset-aware
+    datetimes' on a page that had passed every test."""
+    result = fold([run("system_invoice_aging", "2026-07-31T13:59:27.944184+00:00")])
+    row = by_id(result, "system_invoice_aging")
+    assert row["liveness"] == "live"
+    assert row["last_run_ago"].endswith("ago") or row["last_run_ago"] == "just now"
+
+
+def test_an_odd_fractional_precision_still_parses():
+    """Python 3.10's fromisoformat takes only 3 or 6 fractional digits,
+    and writers emit whatever they emit. The droplet runs 3.12 and is
+    lenient; trusting that is how a page works in production and breaks
+    on a developer's machine."""
+    assert object_agents.relative_time("2026-07-31T13:00:00.9+00:00", NOW) \
+        == "1 hour ago" or "minutes ago" in object_agents.relative_time(
+            "2026-07-31T13:00:00.9+00:00", NOW)
+
+
+def test_an_unparseable_stamp_degrades_rather_than_raising():
+    assert object_agents.relative_time("not a date", NOW) == "not a date"
+    assert object_agents.liveness(
+        {"status": "active", "heartbeat_at": "not a date"}, now=NOW) == "never"
