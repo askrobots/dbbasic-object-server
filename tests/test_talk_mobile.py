@@ -169,3 +169,73 @@ def test_the_page_still_encodes_and_compiles(source):
     for value in vars(module).values():
         if isinstance(value, str):
             value.encode("utf-8")
+
+
+# --- the meter must be able to LOSE ---------------------------------------------
+
+def test_the_meter_convicts_itself_of_taking_the_microphone(source):
+    """The deferred start was not enough, and the same iPad proved it:
+    recognition delivered ONE result ("computer"), that proof started the
+    meter, and the meter's stream took the microphone back -- first word
+    on screen, then nothing, the original bug moved one result later.
+
+    The conviction uses the meter's own evidence: RMS above the speech
+    threshold (it can hear voice) while recognition has produced nothing
+    for CONTENTION_MS. On a working platform results flow continuously
+    while you speak, so the signature cannot fire there."""
+    assert "meterContended = true" in source
+    assert "CONTENTION_MS" in source
+    frame = source[source.index("function frame()"):]
+    frame = frame[:frame.index("function stopMeter")]
+    assert "rms >= speechThreshold && now - lastResultTs > CONTENTION_MS" in frame
+
+
+def test_a_convicted_meter_stays_off_for_the_session(source):
+    """Restarting it on the next result would re-steal the microphone one
+    result later, forever, in a loop the user experiences as 'it hears
+    one word per attempt'."""
+    onresult = source[source.index("recognizer.onresult"):]
+    onresult = onresult[:onresult.index("recognizer.onerror")]
+    assert "!meterContended" in onresult
+
+
+def test_conviction_frees_the_mic_and_kicks_the_starved_recognizer(source):
+    frame = source[source.index("function frame()"):]
+    conviction = frame[frame.index("meterContended = true"):]
+    conviction = conviction[:conviction.index("evaluateVAD")]
+    assert "stopMeter();" in conviction
+    assert "stopListening();" in conviction   # onend restarts it, mic now free
+
+
+def test_every_recognition_result_stamps_the_heartbeat(source):
+    """lastResultTs is the evidence the conviction reads; a result that
+    does not stamp it makes an innocent meter convictable."""
+    onresult = source[source.index("recognizer.onresult"):]
+    assert "lastResultTs = performance.now();" in onresult[:220]
+
+
+# --- a misheard wake word must not discard the utterance ------------------------
+
+def test_the_wake_word_tolerates_recognition_mishears(source):
+    """"compture" arrived for "computer" -- on screen, visibly heard --
+    and the exact match then threw away everything said after it. The
+    asymmetry decides the design: a false arm captures a sentence the
+    user SEES (recoverable); a strict miss discards it invisibly (not)."""
+    assert "function matchesWakeWord" in source
+    assert "matchesWakeWord(wordKey(tokens[i]), target)" in source
+
+
+def test_the_tolerance_is_damerau_because_mishears_are_transpositions(source):
+    """"compture" is two adjacent swaps: Damerau distance 2, plain
+    Levenshtein 3. Plain distance would reject the exact observed case
+    this tolerance exists for."""
+    assert "prevPrev[j - 2] + 1" in source
+    assert "a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]" in source
+
+
+def test_short_wake_words_stay_exact(source):
+    """"hey" must not match "they": the budget scales with length and is
+    zero below four letters."""
+    budget = source[source.index("function wakeBudget"):]
+    budget = budget[:budget.index("function matchesWakeWord")]
+    assert "return 0" in budget and "return 2" in budget

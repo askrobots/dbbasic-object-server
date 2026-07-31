@@ -353,12 +353,63 @@ function wordKey(token) {
 
 // If `word` appears as a whole token in `text`, return everything after
 // its first occurrence (joined back with spaces); otherwise null.
+// Bounded edit distance for wake-word tolerance. Recognition mishears:
+// an iPad delivered "compture" for "computer", and an exact match then
+// silently discarded everything the user said after it -- armed forever,
+// capturing nothing, with the transcript ON SCREEN making it look heard.
+// The budget scales with length (short words stay exact: "hey" must not
+// match "they"), and it is capped at 2 because a wake word is a gate, not
+// a search. Worst case of a false arm: the mic captures a sentence the
+// user then sees -- recoverable. Worst case of a strict miss: everything
+// said is thrown away invisibly -- not recoverable, and that asymmetry is
+// the whole argument for leniency here.
+function editDistanceAtMost(a, b, budget) {
+  if (Math.abs(a.length - b.length) > budget) return false;
+  // Damerau (OSA), not plain Levenshtein, and the difference is the
+  // whole point: a transposition costs 1. The observed mishear was
+  // "compture" for "computer" -- two adjacent swaps, Damerau distance 2,
+  // plain distance 3 -- so plain Levenshtein would have rejected the
+  // exact case this function exists for. Swapped letters are what
+  // recognition mishears LOOK like.
+  let prevPrev = null;
+  let prev = [];
+  for (let j = 0; j <= b.length; j++) prev.push(j);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    let best = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let v = Math.min(prev[j] + 1, row[j - 1] + 1, prev[j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        v = Math.min(v, prevPrev[j - 2] + 1);
+      }
+      row.push(v);
+      if (v < best) best = v;
+    }
+    if (best > budget) return false;   // the whole row is over budget
+    prevPrev = prev;
+    prev = row;
+  }
+  return prev[b.length] <= budget;
+}
+
+function wakeBudget(target) {
+  if (target.length >= 7) return 2;
+  if (target.length >= 4) return 1;
+  return 0;
+}
+
+function matchesWakeWord(tokenKey, target) {
+  if (tokenKey === target) return true;
+  return editDistanceAtMost(tokenKey, target, wakeBudget(target));
+}
+
 function findWakeSplit(text, word) {
   const target = word.trim().toLowerCase();
   if (!target) return null;
   const tokens = tokenize(text);
   for (let i = 0; i < tokens.length; i++) {
-    if (wordKey(tokens[i]) === target) return tokens.slice(i + 1).join(" ");
+    if (matchesWakeWord(wordKey(tokens[i]), target)) return tokens.slice(i + 1).join(" ");
   }
   return null;
 }
@@ -510,6 +561,20 @@ let meterRunning = false;
 // Set the first time recognition returns a result. Until then the meter
 // must not open a competing microphone stream.
 let recognitionProven = false;
+// The deferred meter start above is NOT sufficient on its own, and an
+// iPad proved it: recognition delivered ONE result ("computer"), that
+// proof started the meter, and the meter's stream then took the
+// microphone back -- first word on screen, then nothing, which is the
+// original bug moved one result later. So the meter must be able to
+// LOSE, and it convicts itself with its own evidence: if it can hear
+// voice (RMS above the speech threshold) while recognition has produced
+// nothing for CONTENTION_MS, the two are not sharing the microphone --
+// on a working platform, results flow continuously while you speak.
+// Convicted once, it stays off for the session and isFinal endpointing
+// takes over.
+let meterContended = false;
+let lastResultTs = 0;
+const CONTENTION_MS = 2000;
 let micStream = null;
 let audioCtx = null;
 let analyser = null;
@@ -589,6 +654,7 @@ async function startMeter() {
     stream.getTracks().forEach((t) => t.stop()); noteEndpointFallback(); return;
   }
   meterRunning = true;
+  lastResultTs = performance.now();
   micStream = stream;
   audioCtx = new Ctor();
   const source = audioCtx.createMediaStreamSource(micStream);
@@ -626,6 +692,18 @@ async function startMeter() {
         calibrating = false;
       }
     } else {
+      // The contention check runs BEFORE the VAD: the meter hearing
+      // voice while recognition says nothing is proof the microphone is
+      // exclusive and the meter took it. Stopping the meter frees the
+      // mic; stopListening() kicks the starved recognizer, whose onend
+      // handler restarts it fresh -- and this time nothing competes.
+      if (rms >= speechThreshold && now - lastResultTs > CONTENTION_MS) {
+        meterContended = true;
+        stopMeter();
+        noteEndpointFallback();
+        stopListening();
+        return;
+      }
       evaluateVAD(rms, now);
     }
 
@@ -682,10 +760,13 @@ function initMic() {
   // is the single funnel for the wake gate, live caption, and end-word/
   // isFinal submission -- there is no separate "submit" path for voice.
   recognizer.onresult = (event) => {
+    lastResultTs = performance.now();
     // Proof that recognition, not the meter, holds the microphone.
     if (!recognitionProven) {
       recognitionProven = true;
-      if (conversationMode && endpointMode() === "silence") startMeter();
+      if (conversationMode && endpointMode() === "silence" && !meterContended) {
+        startMeter();
+      }
     }
     let text = "";
     for (let i = 0; i < event.results.length; i++) text += event.results[i][0].transcript;

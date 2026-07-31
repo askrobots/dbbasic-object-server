@@ -505,7 +505,11 @@ def test_talk_wake_word_match_is_case_insensitive_word_boundary():
     body = find_split.group(1)
     assert ".toLowerCase()" in body
     assert "tokenize(text)" in body
-    assert "wordKey(tokens[i]) === target" in body  # whole-token compare, not substring
+    # Whole-token compare, not substring -- via matchesWakeWord, which is
+    # the exact match PLUS a bounded Damerau tolerance ("compture" arrived
+    # for "computer" and the strict version invisibly discarded everything
+    # said after it; see tests/test_talk_mobile.py for that contract).
+    assert "matchesWakeWord(wordKey(tokens[i]), target)" in body
 
 
 def test_talk_end_word_tail_match_and_strip():
