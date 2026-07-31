@@ -222,7 +222,7 @@ def test_the_wake_word_tolerates_recognition_mishears(source):
     asymmetry decides the design: a false arm captures a sentence the
     user SEES (recoverable); a strict miss discards it invisibly (not)."""
     assert "function matchesWakeWord" in source
-    assert "matchesWakeWord(wordKey(tokens[i]), target)" in source
+    assert "matchesWakeWord(key, target)" in source
 
 
 def test_the_tolerance_is_damerau_because_mishears_are_transpositions(source):
@@ -239,3 +239,38 @@ def test_short_wake_words_stay_exact(source):
     budget = source[source.index("function wakeBudget"):]
     budget = budget[:budget.index("function matchesWakeWord")]
     assert "return 0" in budget and "return 2" in budget
+
+
+# --- iOS joins segments without spaces ------------------------------------------
+
+def test_result_segments_are_joined_with_spaces(source):
+    """"comptureshowmemynotes", verbatim off the iPad. Chrome includes
+    leading spaces on continuation segments; iOS does not, and the raw
+    concatenation produced one giant token the whitespace tokenizer could
+    never split -- so the wake gate could never match, and every
+    utterance was invisibly discarded WITH the transcript on screen. The
+    round that taught the most: recognition was working the whole time;
+    the page was destroying its output."""
+    onresult = source[source.index("recognizer.onresult"):]
+    onresult = onresult[:onresult.index("recognizer.onerror")]
+    assert 'text += (text ? " " : "") + seg;' in onresult
+    assert "text += event.results[i][0].transcript;" not in onresult
+
+
+def test_the_shell_gets_the_same_join_fix(source):
+    """Same loop, same platform, same bug waiting."""
+    shell = (TALK.parent / "shell.py").read_text()
+    assert 'text += (text ? " " : "") + seg;' in shell
+    assert "text += event.results[i][0].transcript;" not in shell
+
+
+def test_a_fused_wake_word_still_arms_via_its_prefix(source):
+    """Belt beside the braces: if a no-space final still arrives fused,
+    a long token whose PREFIX matches the wake word arms, and the
+    remainder becomes the command -- unspaced, but a model reads
+    unspaced text far better than this page reads a discarded
+    utterance."""
+    split = source[source.index("function findWakeSplit"):]
+    split = split[:split.index("// If `text`")]
+    assert "key.slice(0, len)" in split
+    assert "key.length > target.length + wakeBudget(target)" in split

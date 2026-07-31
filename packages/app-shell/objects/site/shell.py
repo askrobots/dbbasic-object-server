@@ -266,7 +266,17 @@ function initMic() {
     const input = document.querySelector('#prompt input[name="line"]');
     if (!input) return;
     let text = "";
-    for (let i = 0; i < event.results.length; i++) text += event.results[i][0].transcript;
+    // Segments are joined with an explicit space. Chrome includes leading
+    // spaces on continuation segments; iOS does NOT, and concatenating
+    // raw produced "comptureshowmemynotes" from an iPad -- one giant
+    // token the whitespace tokenizer cannot split, so the wake gate could
+    // never match and every utterance was invisibly discarded. Trimming
+    // then joining is correct on both: the tokenizer collapses runs of
+    // whitespace anyway, so a doubled space costs nothing.
+    for (let i = 0; i < event.results.length; i++) {
+      const seg = event.results[i][0].transcript.trim();
+      if (seg) text += (text ? " " : "") + seg;
+    }
     input.value = text;
     if (event.results[event.results.length - 1].isFinal) {
       stopListening();

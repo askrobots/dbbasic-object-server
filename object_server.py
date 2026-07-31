@@ -12214,11 +12214,13 @@ def _normalize_object_response(payload: Any) -> tuple[int, list[tuple[str, str]]
     if isinstance(payload, dict) and payload.get("content_type"):
         status = payload.get("status_code", payload.get("http_status", payload.get("status", 200)))
         headers = [("content-type", str(payload["content_type"]))]
+        headers.extend(_html_cache_headers(str(payload["content_type"])))
         headers.extend(_object_set_cookie_headers(payload))
         return _normalize_status(status), headers, _normalize_body(payload.get("body", b""))
 
     if isinstance(payload, str):
-        return 200, [("content-type", "text/html; charset=utf-8")], payload.encode("utf-8")
+        return 200, [("content-type", "text/html; charset=utf-8"),
+                     ("cache-control", "no-store")], payload.encode("utf-8")
 
     if isinstance(payload, bytes):
         return 200, [("content-type", "application/octet-stream")], payload
@@ -12245,6 +12247,30 @@ def _normalize_object_response(payload: Any) -> tuple[int, list[tuple[str, str]]
 
     body = json.dumps(payload).encode("utf-8")
     return 200, [("content-type", "application/json; charset=utf-8")], body
+
+
+def _html_cache_headers(content_type: str) -> list[tuple[str, str]]:
+    """no-store for object-served HTML pages; nothing for anything else.
+
+    These pages are rendered per request -- the inline script IS the
+    application -- and they shipped with no cache headers at all, which
+    left the browser's heuristic cache in charge. Safari's heuristics bit
+    for real: a fix deployed to /talk, verified live with curl, and an
+    iPad kept reproducing the old bug because it was running the old
+    page. "Did you deploy?" should never be a question the cache gets to
+    answer.
+
+    Deliberately HTML-only. The generative widgets (/style, /list, /form)
+    are separate objects with their own content types, and turning off
+    caching for every asset on every page view is a heavier performance
+    decision than this bug justifies -- the observed failure class is a
+    stale page with stale inline script, so that is what is fixed. An
+    object that takes full header control (the tuple form) is respected
+    and untouched.
+    """
+    if content_type.split(";")[0].strip().lower() == "text/html":
+        return [("cache-control", "no-store")]
+    return []
 
 
 def _object_set_cookie_headers(payload: dict[str, Any]) -> list[tuple[str, str]]:

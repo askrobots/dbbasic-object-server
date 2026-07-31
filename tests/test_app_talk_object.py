@@ -509,7 +509,7 @@ def test_talk_wake_word_match_is_case_insensitive_word_boundary():
     # the exact match PLUS a bounded Damerau tolerance ("compture" arrived
     # for "computer" and the strict version invisibly discarded everything
     # said after it; see tests/test_talk_mobile.py for that contract).
-    assert "matchesWakeWord(wordKey(tokens[i]), target)" in body
+    assert "matchesWakeWord(key, target)" in body
 
 
 def test_talk_end_word_tail_match_and_strip():

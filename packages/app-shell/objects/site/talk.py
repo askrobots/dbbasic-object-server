@@ -409,7 +409,24 @@ function findWakeSplit(text, word) {
   if (!target) return null;
   const tokens = tokenize(text);
   for (let i = 0; i < tokens.length; i++) {
-    if (matchesWakeWord(wordKey(tokens[i]), target)) return tokens.slice(i + 1).join(" ");
+    const key = wordKey(tokens[i]);
+    if (matchesWakeWord(key, target)) return tokens.slice(i + 1).join(" ");
+    // A no-space transcript fuses the wake word onto what follows
+    // ("comptureshowmemynotes"). If a long token's PREFIX matches the
+    // wake word, the remainder of the token is the start of the command
+    // -- unspaced, but the model reads unspaced text far better than
+    // this page reads a discarded utterance. Prefix lengths of the
+    // target and one either side, so a mishear inside the fused prefix
+    // still arms.
+    if (key.length > target.length + wakeBudget(target)) {
+      for (const len of [target.length, target.length + 1, target.length - 1]) {
+        if (len < 3 || len >= key.length) continue;
+        if (matchesWakeWord(key.slice(0, len), target)) {
+          const rest = [key.slice(len)].concat(tokens.slice(i + 1));
+          return rest.join(" ").trim();
+        }
+      }
+    }
   }
   return null;
 }
@@ -769,7 +786,17 @@ function initMic() {
       }
     }
     let text = "";
-    for (let i = 0; i < event.results.length; i++) text += event.results[i][0].transcript;
+    // Segments are joined with an explicit space. Chrome includes leading
+    // spaces on continuation segments; iOS does NOT, and concatenating
+    // raw produced "comptureshowmemynotes" from an iPad -- one giant
+    // token the whitespace tokenizer cannot split, so the wake gate could
+    // never match and every utterance was invisibly discarded. Trimming
+    // then joining is correct on both: the tokenizer collapses runs of
+    // whitespace anyway, so a doubled space costs nothing.
+    for (let i = 0; i < event.results.length; i++) {
+      const seg = event.results[i][0].transcript.trim();
+      if (seg) text += (text ? " " : "") + seg;
+    }
     sessionLive = text;
     const isFinal = event.results[event.results.length - 1].isFinal;
     processTranscript(isFinal);
