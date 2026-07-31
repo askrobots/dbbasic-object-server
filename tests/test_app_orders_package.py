@@ -139,7 +139,7 @@ def test_schema_json_files_are_valid_and_versioned():
     # order and has no SKU, and "oat milk +60c" is that instruction with a
     # price delta, which is why the delta lives on the line rather than in
     # the price book. See tests/test_pickup_service.py.
-    expected_versions = {"orders": 7, "order_lines": 3}
+    expected_versions = {"orders": 8, "order_lines": 3}
     for name in ("orders", "order_lines"):
         payload = json.loads((APP_ORDERS_DIR / "schemas" / f"{name}.json").read_text())
         assert payload["name"] == name

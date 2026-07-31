@@ -1,7 +1,7 @@
 {
   "name": "contacts",
   "title": "Contacts",
-  "version": 6,
+  "version": 7,
   "description": "People: the core CRM record.",
   "fields": [
     {
@@ -194,5 +194,8 @@
       "tags",
       "notes"
     ]
+  },
+  "capabilities": {
+    "attachments": true
   }
 }

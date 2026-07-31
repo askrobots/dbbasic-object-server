@@ -1,8 +1,8 @@
 {
   "id": "app-notes",
   "name": "Notes",
-  "version": "0.4.0",
-  "description": "Quick notes: owner-scoped with public sharing, project links, permalinks, and global search. The /notes/{note_id:uuid} permalink is a seeded 59 detail view (site_view_render) with an owner-aware editable/deletable detail block -- no bespoke per-note page. 0.4.0 deletes the bespoke /notes page object. The page was ~80 lines of chrome around two generator calls, and it is now a seeded VIEW record over one `list` block carrying search, sort, an Add button and an inline create/edit panel -- the same block every other collection index can now use. The page held no business logic, which is precisely why it could be deleted: rules live in the schema, hooks, transitions and permissions, so the API, MCP agents, the websocket and any other client already enforced them without this file existing.",
+  "version": "0.5.0",
+  "description": "Quick notes: owner-scoped with public sharing, project links, permalinks, and global search. The /notes/{note_id:uuid} permalink is a seeded 59 detail view (site_view_render) with an owner-aware editable/deletable detail block -- no bespoke per-note page. 0.4.0 deletes the bespoke /notes page object. The page was ~80 lines of chrome around two generator calls, and it is now a seeded VIEW record over one `list` block carrying search, sort, an Add button and an inline create/edit panel -- the same block every other collection index can now use. The page held no business logic, which is precisely why it could be deleted: rules live in the schema, hooks, transitions and permissions, so the API, MCP agents, the websocket and any other client already enforced them without this file existing. Notes declare capabilities.attachments + shareable: a photo belongs with the note, and handing one note to a colleague is the thing people actually want from notes.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },

@@ -105,7 +105,7 @@ def test_contacts_schema_is_now_version_3_additive_only():
     formula-fields adopter; derived, never client-written).
     """
     schema = _schema("contacts")
-    assert schema["version"] == 6
+    assert schema["version"] == 7
     assert schema["views"]["filter_fields"] == ["lead_status"]
     by_name = {f["name"]: f for f in schema["fields"]}
 

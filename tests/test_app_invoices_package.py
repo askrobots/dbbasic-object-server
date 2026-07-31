@@ -124,7 +124,7 @@ def test_schema_json_files_are_valid_and_versioned():
         # formulas). v3: dunning fields + lifecycle arcs. v4: the portal
         # capability URL (portal_token, read_only) plus view counters, which
         # tell "viewed three times, still unpaid" apart from "never opened".
-        assert payload["version"] == (4 if name == "invoices" else 1)
+        assert payload["version"] == (5 if name == "invoices" else 1)
         assert payload["views"]["list_mode"] == "table"
 
 

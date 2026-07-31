@@ -1,7 +1,7 @@
 {
   "name": "invoices",
   "title": "Invoices",
-  "version": 4,
+  "version": 5,
   "description": "Line-item invoices, quotes, and credit notes. Lines live in invoice_lines; subtotal/tax/total/balance are stamped by the invoice_totals handler, never typed by hand. See plan/vocabulary/20-invoice-spec.md.",
   "fields": [
     {
@@ -343,5 +343,9 @@
       "number",
       "customer_name"
     ]
+  },
+  "capabilities": {
+    "comments": true,
+    "attachments": true
   }
 }

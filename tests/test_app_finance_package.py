@@ -145,8 +145,11 @@ def test_schema_json_files_are_valid_and_versioned():
         elif name == "fin_journals":
             # generated_from (61) + entity_id (65) + hooks.before_write (v4)
             # + totals rollups (v5) + kind standard|adjusting|reversing|closing
-            # (v6, the books spine)
-            assert payload["version"] == 6
+            # (v6, the books spine) + capabilities.comments/attachments
+            # (v7 -- "what is this journal FOR" is the commonest question a
+            # set of books has to answer, and the supporting document and
+            # the reasoning both attach WITHOUT mutating the posted entry)
+            assert payload["version"] == 7
             assert payload["views"]["filter_fields"] == ["status", "kind"]
             assert payload["hooks"] == {"before_write": "hook_fin_journals"}
             assert payload["views"]["list_mode"] == "table"

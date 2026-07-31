@@ -1,7 +1,7 @@
 {
   "name": "projects",
   "title": "Projects",
-  "version": 3,
+  "version": 4,
   "description": "Projects group tasks, notes, and other app records.",
   "fields": [
     {
@@ -67,5 +67,9 @@
       "name",
       "description"
     ]
+  },
+  "capabilities": {
+    "comments": true,
+    "attachments": true
   }
 }

@@ -1,7 +1,7 @@
 {
   "name": "orders",
   "title": "Orders",
-  "version": 7,
+  "version": 8,
   "description": "Sales and purchase orders (doc_type on one shared schema, mirroring app-invoices' doc_type split). Lines live in order_lines; subtotal/tax/total are stamped by the order_totals handler, never typed by hand. Reconciled against a private predecessor-system audit, not part of this repo (its Order+Lines note: 'SO/PO; convert_to_invoice'). v4 carries the two fields a shopper types at checkout -- customer_note and gift_message -- because the packing slip is printed from the ORDER, not from the basket somebody abandoned on the way to it. v5 adds portal_token, the customer's own door: the shop sells to guests, so a buyer has no account to sign into and no way to ask 'where is my order?' without one. It is the same capability-URL shape invoices already use for /pay/{token}, and it is what finally lets a guest start a return. v6 is drop-shipping, and it is five fields rather than a new collection precisely because the shared SO/PO schema was the right call in v1: 'the vendor ships straight to my customer' is a SALE order and a PURCHASE order pointing at each other, which this collection could already almost express. fulfillment_source (stock | dropship, defaulting to stock so nothing existing changes meaning) is the fact every other package needs to know; linked_order_id is the counterpart, written both ways so either end answers on its own; vendor_id is who actually ships it; and ship_to_name/ship_to_address exist for the one case in this whole repo where the counterparty on a document and the destination of its goods are different people -- a drop-ship PO addressed to a vendor whose parcel goes to our customer. Margin needs no field at all, because both orders already carry money. v7 is TIME, and it is the whole of what a food business needed that a parcel business did not (plan/pickup-and-counter-service-spec.md): everything about the MONEY was already built and almost nothing about the time was, so this collection could say `shipped` and `delivered` and had no way at all to say 'ready at 6:15'. fulfillment_method (shipping | pickup | delivery | counter, defaulting to shipping so nothing existing changes meaning) is the field every downstream behaviour keys off. requested_at and promised_at are deliberately TWO fields -- what the customer asked for and what the business committed to -- because collapsing them hides every capacity failure the shop ever had. ready_at and collected_at are stamped as they happen and never predicted. The status enum grows preparing/ready/collected rather than reusing shipped/delivered, because a status a customer sees must use the customer's word and 'your order has shipped' about a sandwich is the kind of detail that makes software look borrowed; which subset of the ladder applies is decided by fulfillment_method IN THE OBJECTS, because an enum cannot condition on another field -- the same note shipments already carries for its inbound and outbound ladders.",
   "fields": [
     {
@@ -415,5 +415,9 @@
       "number",
       "customer_name"
     ]
+  },
+  "capabilities": {
+    "comments": true,
+    "attachments": true
   }
 }

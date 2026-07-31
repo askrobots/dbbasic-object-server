@@ -28,9 +28,21 @@ import json
 # Page-unique layout only; palette, chrome, and inputs come from /style, so
 # Talk reskins with the active theme like every other page.
 _STYLE = """
-.talkwrap { display: flex; flex-direction: column; min-height: calc(100vh - 3.5rem); }
-.stage { flex: 0 0 85vh; height: 85vh; display: flex; align-items: center; justify-content: center;
-         padding: 1rem; overflow: hidden; }
+/* The page must FIT the viewport: the mic, the captions and the text box
+   are one control surface, and a layout where you scroll between the nav
+   and the input is one you cannot operate. The stage takes what is left
+   after the fixed-height rows rather than claiming 85vh of its own --
+   which is what pushed the input off-screen on a tall tablet.
+   dvh where supported (iOS Safari's toolbars shrink the visible area and
+   100vh lies about it); -webkit-fill-available for older iPadOS that has
+   neither dvh nor svh; plain vh last for everything else. */
+.talkwrap { display: flex; flex-direction: column;
+            height: calc(100vh - 3.5rem);
+            height: -webkit-fill-available;
+            height: calc(100dvh - 3.5rem);
+            max-height: calc(100dvh - 3.5rem); overflow: hidden; }
+.stage { flex: 1 1 auto; min-height: 0; display: flex; align-items: center;
+         justify-content: center; padding: 1rem; overflow: hidden; }
 .stage .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-md);
                padding: 2rem; max-width: 640px; max-height: 100%; overflow-y: auto;
                font-size: 1.4rem; line-height: 1.5; text-align: center; }
@@ -41,6 +53,7 @@ _STYLE = """
 .stageframe { width: 100%; height: 100%; border: 1px solid var(--line); border-radius: var(--radius-md); }
 .bar { border-top: 1px solid var(--line); padding: 0.75rem 1rem; display: flex; flex-direction: column; gap: 0.5rem; }
 .captions { min-height: 2.6rem; font-size: 0.95rem; }
+.endpointhint { font-size: 0.78rem; opacity: 0.75; padding: 0 0.2rem 0.2rem; }
 .cap.user { color: var(--muted); }
 .cap.assistant { color: var(--text); font-weight: 600; }
 .controls { display: flex; align-items: center; gap: 0.75rem; }
@@ -456,7 +469,10 @@ function processTranscript(isFinal) {
   if (isFinal) {
     buffer = active;
     sessionLive = "";
-    if (endpoint === "word" && !ew) {
+    // `silence` mode with no working meter has no other way to end an
+    // utterance, so isFinal becomes the endpoint. Without this the mode
+    // is a dead end on any device where the mic cannot be opened twice.
+    if ((endpoint === "word" && !ew) || (endpoint === "silence" && !meterRunning)) {
       // No end word configured for word mode: fall back to the original
       // isFinal-triggered submit, debounced so a recognizer that fires
       // several quick finals in a row (common near silence) only submits
@@ -482,6 +498,15 @@ const MIN_SPEECH_THRESHOLD = 0.015;
 const CALIBRATION_MS = 800;
 const SPEECH_HOLD_MS = 150;
 
+// Did the VAD meter actually come up? On iOS the microphone is EXCLUSIVE:
+// SpeechRecognition and getUserMedia contend for it, so the second one to
+// ask simply fails. Silence endpointing depends entirely on that second
+// stream, and when it is absent nothing in `silence` mode ever submits --
+// the user speaks, sees their words, and has to tap the mic again to make
+// anything happen. Reported from an older iPad, and the fallback below is
+// the fix: fall back to the recognizer's own isFinal, which every browser
+// that supports recognition at all still gives us.
+let meterRunning = false;
 let micStream = null;
 let audioCtx = null;
 let analyser = null;
@@ -494,6 +519,20 @@ let calibrationSamples = [];
 let utteranceStarted = false;
 let silenceStartTs = null;
 let speechHoldStart = null;
+
+// Absent capability, stated -- never a stub that pretends to work. The
+// hint is the only way a user can tell "it is waiting for me to stop
+// talking" from "it is waiting for me to tap".
+function noteEndpointFallback() {
+  meterRunning = false;
+  const hint = document.getElementById("endpointhint");
+  if (hint && endpointMode() === "silence") {
+    hint.textContent = "No level meter on this device, so it sends when it "
+      + "hears you finish rather than after a silence.";
+    hint.hidden = false;
+  }
+}
+
 
 function updateMeterVisual(rms) {
   const ring = document.getElementById("miclevel");
@@ -533,14 +572,20 @@ function evaluateVAD(rms, now) {
 }
 
 async function startMeter() {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+  meterRunning = false;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    noteEndpointFallback(); return;
+  }
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({audio: true});
-  } catch (e) { return; }
+  } catch (e) { noteEndpointFallback(); return; }
   if (!conversationMode) { stream.getTracks().forEach((t) => t.stop()); return; }
   const Ctor = window.AudioContext || window.webkitAudioContext;
-  if (!Ctor) { stream.getTracks().forEach((t) => t.stop()); return; }
+  if (!Ctor) {
+    stream.getTracks().forEach((t) => t.stop()); noteEndpointFallback(); return;
+  }
+  meterRunning = true;
   micStream = stream;
   audioCtx = new Ctor();
   const source = audioCtx.createMediaStreamSource(micStream);
@@ -653,6 +698,12 @@ function initMic() {
   };
 
   mic.addEventListener("click", () => {
+    // iOS will not speak or play audio that was not started by a user
+    // gesture, and a reply arrives asynchronously long after this click.
+    // Priming both engines HERE -- inside the gesture -- is what makes the
+    // later programmatic speak() audible. Silent by construction: an empty
+    // utterance and a zero-length resume.
+    primeAudioForIOS();
     conversationMode = !conversationMode;
     mic.classList.toggle("on", conversationMode);
     mic.textContent = conversationMode ? "listening…" : "mic";
@@ -670,6 +721,36 @@ function initMic() {
     }
   });
 }
+
+// One-time unlock, inside a user gesture. Safari on iOS refuses both
+// speechSynthesis and HTMLAudioElement.play() outside one, and gives no
+// error worth reading when it refuses -- the reply simply never becomes
+// sound, which is exactly what an older iPad reported.
+let audioPrimed = false;
+function primeAudioForIOS() {
+  if (audioPrimed) return;
+  audioPrimed = true;
+  try {
+    if (window.speechSynthesis) {
+      const warm = new SpeechSynthesisUtterance("");
+      warm.volume = 0;
+      window.speechSynthesis.speak(warm);
+      // getVoices() is empty until the engine loads on iOS; asking inside
+      // the gesture is what populates it in time for hasLocalVoice().
+      window.speechSynthesis.getVoices();
+    }
+  } catch (e) { /* nothing to unlock */ }
+  try {
+    const Ctor = window.AudioContext || window.webkitAudioContext;
+    if (Ctor) {
+      const ctx = new Ctor();
+      if (ctx.state === "suspended" && ctx.resume) ctx.resume();
+      // Kept open deliberately: closing it re-locks playback on iOS.
+      window.__dbbasicTalkUnlockCtx = ctx;
+    }
+  } catch (e) { /* nothing to unlock */ }
+}
+
 
 async function api(method, path, payload) {
   const res = await fetch(path, {
@@ -767,6 +848,7 @@ def GET(request):
 <div id="capUser" class="cap user"></div>
 <div id="capAssistant" class="cap assistant"></div>
 </div>
+<div id="endpointhint" class="endpointhint" hidden></div>
 <div class="controls">
 <div class="micwrap">
 <button type="button" id="mic" hidden aria-label="toggle conversation mode">mic</button>
