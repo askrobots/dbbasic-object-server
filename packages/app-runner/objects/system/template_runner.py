@@ -109,6 +109,20 @@ def _setting(base, key, default):
 #                                 "provider_cost_cents", "provider_job_id"}
 # The whole contract. A handler that needs more than this is trying to own
 # something the engine owns.
+#
+# ASYNC handlers are a PAIR in ASYNC_HANDLERS: (submit, poll).
+#
+#   submit(run, base, timeout) -> {"provider_job_id", "error"}
+#   poll(run, base, timeout)   -> {"done": bool, ...the sync shape when done}
+#
+# The engine, not the handler, owns what that means: a submit that
+# returns a job id moves the run to `running` and RETURNS, leaving the
+# pass free; later passes poll. A Sora job takes minutes and q9 budgets
+# thirty, so executing it inline would block the batch and eventually
+# collide with the sweeper writing off a job that is legitimately still
+# running. Short handlers (echo, ai_text) stay inline -- the engine
+# supports both shapes and the handler declares which it is by which
+# registry it appears in.
 
 def _handle_echo(run, base, timeout):
     """The rendered body straight back. Free, instant, and the handler
@@ -202,6 +216,11 @@ HANDLERS = {
     "ai_text": _handle_ai_text,
 }
 
+#: name -> (submit, poll). Empty until a media handler lands; the engine
+#: below is what that handler will plug into, and it is tested with a
+#: stand-in so the money rule is proven before a provider rides on it.
+ASYNC_HANDLERS = {}
+
 
 # === the engine ==============================================================
 
@@ -252,6 +271,103 @@ def _claim(base, run):
          "claimed_at": _now(), "heartbeat_at": _now()},
         base_dir=base, actor=ACTOR,
         expected_rev=object_records.compute_record_rev(run))
+
+
+def _submit_one(base, run, timeout, pair):
+    """Claim a run, hand it to the provider, and leave it `running`.
+
+    The pass ends here. Nothing is settled, because nothing has finished
+    -- and the hold placed at queue time stays exactly where it is, which
+    is the whole reason a hold exists rather than a charge on completion.
+    """
+    run_id = _text(run.get("id"))
+    submit, _poll = pair
+    try:
+        _claim(base, run)
+    except object_records.VersionConflictError:
+        return {"run_id": run_id, "handler": _text(run.get("handler")),
+                "status": "lost_claim", "settlement": "not ours", "error": ""}
+
+    try:
+        outcome = submit(run, base, timeout)
+    except Exception as exc:
+        outcome = {"provider_job_id": "",
+                   "error": f"Submission crashed: {str(exc)[:300]}"}
+
+    job_id = _text(outcome.get("provider_job_id"))
+    if not job_id:
+        # Nothing reached the provider, so nothing was spent: this settles
+        # as an ordinary failure and the hold comes back in full.
+        settled = _settle(base, run, succeeded=False)
+        object_records.update_collection_record(
+            RUNS, run_id,
+            {"status": "failed",
+             "error": _text(outcome.get("error")) or "Submission returned no job id.",
+             "finished_at": _now(), "heartbeat_at": _now()},
+            base_dir=base, actor=ACTOR)
+        return {"run_id": run_id, "handler": _text(run.get("handler")),
+                "status": "failed", "settlement": settled,
+                "error": _text(outcome.get("error"))[:160]}
+
+    # THE ORDERING THAT MATTERS: the job id is written before anything
+    # else can happen to this run. Once a provider is holding the job,
+    # the id is the only evidence that money may have been spent, and
+    # poll_disposition reads it to refuse to abandon the run. A crash
+    # between the call and this write is the one case that loses the
+    # evidence, which is why submit returns the id rather than writing
+    # it -- the window is as small as it can be made.
+    object_records.update_collection_record(
+        RUNS, run_id,
+        {"status": object_template_runs.RUNNING_STATUS,
+         "provider_job_id": job_id, "heartbeat_at": _now()},
+        base_dir=base, actor=ACTOR)
+    return {"run_id": run_id, "handler": _text(run.get("handler")),
+            "status": "running", "settlement": "held", "error": "",
+            "provider_job_id": job_id}
+
+
+def _poll_one(base, run, timeout, pair):
+    """Ask the provider whether a running job is done.
+
+    Not done is not an error: it touches the heartbeat and returns, which
+    is what stops the sweeper writing off a job that is legitimately
+    still running. That heartbeat is the entire reason
+    runner.stale_seconds must exceed the POLL interval rather than the
+    job duration.
+    """
+    run_id = _text(run.get("id"))
+    _submit, poll = pair
+    try:
+        outcome = poll(run, base, timeout)
+    except Exception as exc:
+        # A failed poll is not a failed job. The provider still has it,
+        # so touch the heartbeat and try again next pass; only
+        # max_run_seconds ends this loop, and it ends it at a human.
+        object_records.update_collection_record(
+            RUNS, run_id, {"heartbeat_at": _now()}, base_dir=base, actor=ACTOR)
+        return {"run_id": run_id, "handler": _text(run.get("handler")),
+                "status": "running", "settlement": "held",
+                "error": f"Poll failed, still running: {str(exc)[:160]}"}
+
+    if not outcome.get("done"):
+        object_records.update_collection_record(
+            RUNS, run_id, {"heartbeat_at": _now()}, base_dir=base, actor=ACTOR)
+        return {"run_id": run_id, "handler": _text(run.get("handler")),
+                "status": "running", "settlement": "held", "error": ""}
+
+    settled = _settle(base, run, succeeded=bool(outcome.get("ok")))
+    final = "succeeded" if outcome.get("ok") else "failed"
+    object_records.update_collection_record(
+        RUNS, run_id,
+        {"status": final,
+         "output": _text(outcome.get("output"))[:20000],
+         "error": _text(outcome.get("error"))[:2000],
+         "provider_cost_cents": str(_int(outcome.get("provider_cost_cents"))),
+         "finished_at": _now(), "heartbeat_at": _now()},
+        base_dir=base, actor=ACTOR)
+    return {"run_id": run_id, "handler": _text(run.get("handler")),
+            "status": final, "settlement": settled,
+            "error": _text(outcome.get("error"))[:160]}
 
 
 def _execute_one(base, run, timeout):
@@ -337,7 +453,23 @@ def EVENT(request):
                      if _text(row.get("status")) == "queued"),
                     key=lambda row: _text(row.get("created_at")))
 
-    results = [_execute_one(base, run, timeout) for run in queued[:batch]]
+    results = []
+    for run in queued[:batch]:
+        pair = ASYNC_HANDLERS.get(_text(run.get("handler")))
+        results.append(_submit_one(base, run, timeout, pair) if pair
+                       else _execute_one(base, run, timeout))
+
+    # Then poll everything already at the provider. These are NOT new
+    # claims -- the run is already ours -- so they are reported
+    # separately and never counted as work this pass started.
+    polled = []
+    for run in runs:
+        if _text(run.get("status")) != object_template_runs.RUNNING_STATUS:
+            continue
+        pair = ASYNC_HANDLERS.get(_text(run.get("handler")))
+        if pair is None:
+            continue          # handler uninstalled; the sweeper will escalate
+        polled.append(_poll_one(base, run, timeout, pair))
     # `claimed` counts runs this pass actually OWNED and executed. A lost
     # claim is another pass's run, and counting it here would report two
     # passes as having done the same work -- the exact confusion the
@@ -346,6 +478,7 @@ def EVENT(request):
     lost = len(results) - len(executed)
     return {"ok": True, "claimed": len(executed), "lost_claims": lost,
             "queued_remaining": max(0, len(queued) - len(results)),
+            "polled": len(polled), "poll_results": polled,
             "results": results}
 
 

@@ -60,6 +60,22 @@ import re
 # spend. A retry is a NEW run, with a new hold, started by a person.
 TERMINAL_STATUSES = ("succeeded", "failed", "abandoned")
 
+# `running` sits between claimed and terminal: the provider has the job,
+# we have a provider_job_id, and no pass is executing anything. It is
+# owned but idle, which is why it needs its own status rather than
+# stretching `claimed` to cover it.
+RUNNING_STATUS = "running"
+
+# The one state a machine must not resolve. A submitted job whose outcome
+# we never learned is money that MAY already be spent at the provider:
+# releasing the hold gives away what we paid, and charging bills a
+# customer for something they may never have received. Both are wrong and
+# the box genuinely cannot tell which, so it stops and asks. Deliberately
+# NOT in TERMINAL_STATUSES -- that tuple is what drives the sweeper's
+# automatic hold release, and the whole point is that this one is not
+# released automatically.
+NEEDS_REVIEW_STATUS = "needs_review"
+
 HOLD_MARKER = "template_run/{run_id}/hold"
 RELEASE_MARKER = "template_run/{run_id}/release"
 CHARGE_MARKER = "template_run/{run_id}/charge"
@@ -261,6 +277,58 @@ def outstanding_holds(wallet_entries):
                 run_id = parts[1]
                 held[run_id] = held.get(run_id, 0) + _int(row.get("amount_minor"))
     return {run_id: -total for run_id, total in held.items() if total != 0}
+
+
+def poll_disposition(run, *, now, stale_seconds, max_run_seconds):
+    """What should be done with this run right now? Pure; no clock.
+
+    The money rule for asynchronous jobs lives here, in one place, so the
+    sweeper and the runner cannot disagree about it:
+
+    - **claimed, heartbeat stopped, no provider_job_id** -> "abandon".
+      Nothing was submitted, so nothing was spent, and the hold is
+      released in full. This is the original sweeper behaviour and it
+      stays exactly right for the case it was written for.
+
+    - **running (or claimed WITH a provider_job_id), heartbeat stopped**
+      -> "poll". NOT abandoned. The provider is holding the job and can
+      simply be asked, so a dead worker is not a lost job -- and crucially
+      the hold is NOT released, because a submitted job may already have
+      cost everything. This is the case the original sweeper got actively
+      wrong for media.
+
+    - **running past max_run_seconds** -> "review". Polling has not
+      resolved it for longer than any job should take, so it stops being
+      a machine's decision. The hold stays put.
+
+    - anything else -> None, leave it alone.
+
+    A claimed run that carries a provider_job_id is treated as running
+    even if the status write never landed: the id is the evidence that a
+    call was made, and evidence outranks a status field that a crash may
+    have prevented.
+    """
+    status = _text(run.get("status"))
+    if status in TERMINAL_STATUSES or status == NEEDS_REVIEW_STATUS:
+        return None
+
+    submitted = bool(_text(run.get("provider_job_id")))
+    beat = _text(run.get("heartbeat_at")) or _text(run.get("claimed_at"))
+
+    if status == RUNNING_STATUS or (status == "claimed" and submitted):
+        started = _text(run.get("claimed_at")) or beat
+        if started:
+            deadline = _shift_iso(started, abs(int(max_run_seconds)))
+            if _text(now) > deadline:
+                return "review"
+        return "poll"
+
+    if status == "claimed":
+        if not beat:
+            return "abandon"
+        if beat < _shift_iso(_text(now), -abs(int(stale_seconds))):
+            return "abandon"
+    return None
 
 
 def is_stale(run, *, now, stale_seconds):

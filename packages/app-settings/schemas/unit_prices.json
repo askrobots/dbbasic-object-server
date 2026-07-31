@@ -1,0 +1,16 @@
+{
+  "collection": "unit_prices",
+  "label": "Unit Prices",
+  "fields": [
+    {"name": "id", "type": "text"},
+    {"name": "kind", "type": "enum", "enum": ["image", "video", "audio"], "required": true},
+    {"name": "provider", "type": "text"},
+    {"name": "model", "type": "text"},
+    {"name": "quality", "type": "text"},
+    {"name": "size", "type": "text"},
+    {"name": "unit_price_cents", "type": "integer", "required": true},
+    {"name": "unit", "type": "text"},
+    {"name": "notes", "type": "text"},
+    {"name": "effective_date", "type": "date"}
+  ]
+}

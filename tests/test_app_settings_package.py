@@ -22,18 +22,22 @@ def test_get_package_normalizes_app_settings_manifest():
 
     assert package["id"] == "app-settings"
     assert package["name"] == "Settings"
-    assert package["version"] == "0.3.0"
+    assert package["version"] == "0.4.0"
     # 0.3.0's only object: the gate that makes one-row-per-key true rather
     # than merely intended (see tests/test_settings_uniqueness.py).
     assert package["objects"] == [
         {"id": "hook_app_settings", "path": "objects/hook/app_settings.py"}]
-    assert package["seed"] == [{"collection": "ai_prices", "path": "seed/ai_prices.tsv"}]
+    assert package["seed"] == [
+        {"collection": "ai_prices", "path": "seed/ai_prices.tsv"},
+        # Media cannot be priced as a token rate; see object_unit_prices.
+        {"collection": "unit_prices", "path": "seed/unit_prices.tsv"}]
     assert package["permissions"] == [{"path": "permissions/rules.json"}]
     assert {schema["collection"] for schema in package["schemas"]} == {
         "user_prefs",
         "feature_flags",
         "ai_prices",
         "app_settings",  # server-wide per-app config (payments.* first)
+        "unit_prices",   # per-image / per-second media prices
     }
 
 
@@ -55,6 +59,7 @@ def test_dry_run_app_settings_package_is_safe(tmp_path):
         "feature_flags",
         "ai_prices",
         "app_settings",  # server-wide per-app config (payments.* first)
+        "unit_prices",   # per-image / per-second media prices
     }
 
 

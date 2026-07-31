@@ -39,6 +39,11 @@ ACTOR = "system_run_sweeper"
 RUNS = "template_runs"
 
 STALE_SETTING = "runner.stale_seconds"
+MAX_RUN_SETTING = "runner.max_run_seconds"
+# Deliberately generous: this is not "how long should a job take" but
+# "how long before a machine gives up deciding and asks a person". Sora
+# budgets thirty minutes; an hour leaves room for a provider queue.
+DEFAULT_MAX_RUN_SECONDS = 3600
 DEFAULT_STALE_SECONDS = 900
 
 
@@ -92,33 +97,62 @@ def EVENT(request):
     except Exception:
         entries = []
 
-    swept = []
+    max_run_seconds = max(stale_seconds, _int(_setting(base, MAX_RUN_SETTING,
+                                                       DEFAULT_MAX_RUN_SECONDS),
+                                              DEFAULT_MAX_RUN_SECONDS))
+
+    swept, review = [], []
     # STEP 1 -- decide. Writing off a run is a COMPARE-AND-SET, because the
     # sweeper races the runner it is sweeping: a runner that heartbeats or
     # finishes between our staleness read and our write has changed the
     # row, so our rev no longer matches and we correctly lose. Without the
     # precondition this pass could write off a run that was completing and
     # hand back money for work that succeeded.
+    #
+    # WHICH decision is object_template_runs.poll_disposition's, not this
+    # loop's, because the same rule has to bind the runner too. The rule
+    # that matters: a run carrying a provider_job_id is NEVER abandoned.
+    # Abandoning is what releases the hold, and a job the provider is
+    # already holding may already have cost everything -- handing the
+    # money back on a timer would be paying for it ourselves. Such a run
+    # is polled instead (the provider can simply be asked), and if polling
+    # never resolves it, it stops for a person.
     for run in runs:
-        if not object_template_runs.is_stale(run, now=now,
-                                             stale_seconds=stale_seconds):
-            continue
+        disposition = object_template_runs.poll_disposition(
+            run, now=now, stale_seconds=stale_seconds,
+            max_run_seconds=max_run_seconds)
+        if disposition not in ("abandon", "review"):
+            continue                  # "poll" belongs to the runner, not here
         run_id = _text(run.get("id"))
+        if disposition == "abandon":
+            changes = {
+                "status": "abandoned",
+                "error": (f"Abandoned: no heartbeat for over {stale_seconds}s "
+                          f"and nothing was submitted to a provider, so "
+                          f"nothing was spent. The hold is released in full. "
+                          f"NOT retried -- a retry is a new run, started by a "
+                          f"person."),
+                "finished_at": now,
+            }
+        else:
+            changes = {
+                "status": object_template_runs.NEEDS_REVIEW_STATUS,
+                "error": (f"Submitted to the provider (job "
+                          f"{_text(run.get('provider_job_id')) or 'unknown'}) "
+                          f"and still unresolved after {max_run_seconds}s. "
+                          f"The hold is deliberately NOT released: this job "
+                          f"may already have been charged, so releasing would "
+                          f"give away what we paid and charging would bill for "
+                          f"work that may never have arrived. A person decides."),
+            }
         try:
             object_records.update_collection_record(
-                RUNS, run_id,
-                {"status": "abandoned",
-                 "error": (f"Abandoned: no heartbeat for over {stale_seconds}s. "
-                           f"NOT retried -- the provider call may already have "
-                           f"been made; check provider_job_id before starting "
-                           f"a new run."),
-                 "finished_at": now},
-                base_dir=base, actor=ACTOR,
+                RUNS, run_id, changes, base_dir=base, actor=ACTOR,
                 expected_rev=object_records.compute_record_rev(run))
         except object_records.VersionConflictError:
             # It moved while we were looking at it -- alive after all.
             continue
-        swept.append(run_id)
+        (swept if disposition == "abandon" else review).append(run_id)
 
     # STEP 2 -- pay back, driven by STATE rather than by "did step 1 just
     # run". Every terminal run whose hold has not been released gets it
@@ -143,7 +177,9 @@ def EVENT(request):
         released.append(run_id)
 
     return {"ok": True, "swept": len(swept), "runs": swept,
-            "holds_released": released, "stale_seconds": stale_seconds}
+            "needs_review": review,
+            "holds_released": released, "stale_seconds": stale_seconds,
+            "max_run_seconds": max_run_seconds}
 
 
 POST = EVENT

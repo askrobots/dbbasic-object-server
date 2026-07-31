@@ -1,8 +1,8 @@
 {
   "id": "app-settings",
   "name": "Settings",
-  "version": "0.3.0",
-  "description": "user_prefs (per-user, owner-scoped settings) and feature_flags (instance-level toggles) per docs/upgrade-and-customization.md Rule 5. Effective flag value = user override (a user_prefs key of \"flag:<name>\") -> instance feature_flags value, resolved by GET /api/flags. Also ai_prices: instance-level, live-editable per-model AI pricing that object_ai's cost recording looks up instead of hardcoding. The hook added in this version enforces ONE ROW PER KEY. app_settings is read by forty-odd objects, each through its own small _setting() helper that scans and returns the FIRST matching row -- a reasonable reader, dangerous only because nothing stopped a second row with the same key from existing. A duplicate does not conflict and does not warn; it simply loses, invisibly, and the operator has no way to see why their change did nothing. That shipped a wrong journal on a live box: an inventory account setting had a stale verification value, a correct one was added beside it, and the next sale credited the stale account -- balanced, and wrong. Same posture as the provenance rule in hook_wallet_entries: stop honouring an invariant in every reader and enforce it at the one write path they share. The 409 names the record that already owns the key, because the operator's next question is always where it IS set.",
+  "version": "0.4.0",
+  "description": "user_prefs (per-user, owner-scoped settings) and feature_flags (instance-level toggles) per docs/upgrade-and-customization.md Rule 5. Effective flag value = user override (a user_prefs key of \"flag:<name>\") -> instance feature_flags value, resolved by GET /api/flags. Also ai_prices: instance-level, live-editable per-model AI pricing that object_ai's cost recording looks up instead of hardcoding. The hook added in this version enforces ONE ROW PER KEY. app_settings is read by forty-odd objects, each through its own small _setting() helper that scans and returns the FIRST matching row -- a reasonable reader, dangerous only because nothing stopped a second row with the same key from existing. A duplicate does not conflict and does not warn; it simply loses, invisibly, and the operator has no way to see why their change did nothing. That shipped a wrong journal on a live box: an inventory account setting had a stale verification value, a correct one was added beside it, and the next sale credited the stale account -- balanced, and wrong. Same posture as the provenance rule in hook_wallet_entries: stop honouring an invariant in every reader and enforce it at the one write path they share. The 409 names the record that already owns the key, because the operator's next question is always where it IS set. 0.4.0 adds unit_prices, which exists because ai_prices CANNOT express media pricing: a token has a rate (per-million in, per-million out) and an image has a PRICE -- (model, quality, size) -> cents per image, and video is (model, size) -> cents per second. There is no arithmetic that turns gpt-image-2 at 1024x1024 into the same model at 1536x1024; they are different products on a published table. So object_unit_prices looks a row up and REFUSES when there is none, rather than interpolating or falling back to a cheaper neighbour, either of which quotes a price the provider will not honour. The quote must also exist BEFORE the call, because a media run is held against the wallet at submission: an unpriced model is a run that cannot be held, and must be refused at submission rather than discovered after a 12-second sora-2-pro job has already cost six dollars. A blank dimension is a wildcard so a provider charging one price for every size need not enumerate them, and an exact row always beats a wildcard so a specific price can be added later without deleting the catch-all.",
   "compatibility": {
     "dbbasic_object_server": ">=0.1.0"
   },
@@ -28,6 +28,10 @@
     {
       "collection": "app_settings",
       "path": "schemas/app_settings.json"
+    },
+    {
+      "collection": "unit_prices",
+      "path": "schemas/unit_prices.json"
     }
   ],
   "permissions": [
@@ -39,6 +43,10 @@
     {
       "collection": "ai_prices",
       "path": "seed/ai_prices.tsv"
+    },
+    {
+      "collection": "unit_prices",
+      "path": "seed/unit_prices.tsv"
     }
   ],
   "migrations": []
