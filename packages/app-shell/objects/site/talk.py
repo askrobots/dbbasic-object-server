@@ -507,6 +507,9 @@ const SPEECH_HOLD_MS = 150;
 // the fix: fall back to the recognizer's own isFinal, which every browser
 // that supports recognition at all still gives us.
 let meterRunning = false;
+// Set the first time recognition returns a result. Until then the meter
+// must not open a competing microphone stream.
+let recognitionProven = false;
 let micStream = null;
 let audioCtx = null;
 let analyser = null;
@@ -679,6 +682,11 @@ function initMic() {
   // is the single funnel for the wake gate, live caption, and end-word/
   // isFinal submission -- there is no separate "submit" path for voice.
   recognizer.onresult = (event) => {
+    // Proof that recognition, not the meter, holds the microphone.
+    if (!recognitionProven) {
+      recognitionProven = true;
+      if (conversationMode && endpointMode() === "silence") startMeter();
+    }
     let text = "";
     for (let i = 0; i < event.results.length; i++) text += event.results[i][0].transcript;
     sessionLive = text;
@@ -697,6 +705,24 @@ function initMic() {
     if (conversationMode && !speaking) startListening();
   };
 
+  // If recognition has produced nothing at all a few seconds after the
+  // mic went on, the device has not given us speech recognition -- say so
+  // instead of leaving a listening button that will never do anything.
+  let provenTimer = null;
+  function watchForRecognition() {
+    if (provenTimer) clearTimeout(provenTimer);
+    provenTimer = setTimeout(() => {
+      provenTimer = null;
+      if (!conversationMode || recognitionProven) return;
+      const hint = document.getElementById("endpointhint");
+      if (hint) {
+        hint.textContent = "This browser is not returning speech recognition."
+          + " Type below instead \u2014 the mic cannot hear you here.";
+        hint.hidden = false;
+      }
+    }, 6000);
+  }
+
   mic.addEventListener("click", () => {
     // iOS will not speak or play audio that was not started by a user
     // gesture, and a reply arrives asynchronously long after this click.
@@ -710,9 +736,22 @@ function initMic() {
     if (conversationMode) {
       resetTalkState();
       updateCaptionArmed();
+      // Recognition FIRST, and alone. The level meter opens a SECOND
+      // microphone stream, and on iOS the microphone is exclusive -- two
+      // consumers means one of them silently gets nothing. Starting both
+      // together is what stopped an iPad showing any transcript at all:
+      // the ring animated, proving the meter had won the mic, while
+      // recognition sat starved and produced no results.
+      //
+      // Recognition is ESSENTIAL and the meter is a nicety, so the meter
+      // waits until recognition has proven it holds the mic by delivering
+      // a result. No user-agent sniffing: the device tells us which it
+      // gave us, and a platform where both work starts the meter a
+      // fraction of a second later than before.
       startListening();
-      startMeter();
+      watchForRecognition();
     } else {
+      recognitionProven = false;
       stopListening();
       stopMeter();
       resetTalkState();

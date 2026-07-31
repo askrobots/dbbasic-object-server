@@ -33,6 +33,46 @@ def source():
     return TALK.read_text()
 
 
+# --- 0. the meter must never starve recognition ---------------------------------
+
+def test_the_meter_does_not_start_alongside_recognition(source):
+    """THE regression, and the sharper version of the original bug.
+
+    The level meter opens a SECOND microphone stream. On iOS the mic is
+    exclusive, so two consumers means one silently gets nothing -- and
+    when the meter won, the ring animated while recognition sat starved
+    and no transcript appeared at all. Recognition is ESSENTIAL; the
+    meter is a nicety. Starting them together is the bug.
+    """
+    click = source[source.index('mic.addEventListener("click"'):]
+    handler = click[:click.index("} else {")]
+    assert "startListening();" in handler
+    assert "startMeter()" not in handler, \
+        "the meter must not start in the same breath as recognition"
+
+
+def test_the_meter_starts_only_once_recognition_has_proven_itself(source):
+    """The device tells us which consumer it gave the microphone to; no
+    user-agent sniffing required. A first result IS the proof."""
+    onresult = source[source.index("recognizer.onresult = (event) =>"):]
+    onresult = onresult[:onresult.index("recognizer.onerror")]
+    assert "recognitionProven = true" in onresult
+    assert "startMeter()" in onresult
+
+
+def test_a_device_that_returns_no_recognition_says_so(source):
+    """A listening button that will never do anything is worse than one
+    that admits it cannot hear -- the user can then just type."""
+    assert "watchForRecognition" in source
+    assert "not returning speech recognition" in source
+
+
+def test_the_proof_resets_when_listening_stops(source):
+    """Otherwise the next session starts the meter immediately and
+    reintroduces the contention."""
+    assert "recognitionProven = false" in source
+
+
 # --- 1. endpointing without a level meter ---------------------------------------
 
 def test_silence_mode_falls_back_to_isFinal_when_the_meter_is_absent(source):
