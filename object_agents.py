@@ -281,3 +281,102 @@ def _shift_iso(stamp, seconds):
     shifted = parsed + timedelta(seconds=seconds)
     out = shifted.isoformat()
     return out + "Z" if stamp.endswith("Z") else out
+
+
+# === the box's own workers =====================================================
+#
+# The board above answers "are the external agents alive". Nobody was
+# asking the same question of THIS server's scheduled work, and the
+# answer was already on disk: every scheduled execution writes a
+# scheduler_runs row (object_id, started_at, ok, duration_ms, error), so
+# "did the runner pass run in the last minute" has been answerable all
+# along -- just never surfaced.
+#
+# So this is a fold, not a new heartbeat. Adding a writer that stamped
+# "the daemon is alive" beside a log that already proves it would be a
+# second, weaker account of the same fact: a heartbeat says a process
+# reached the line that writes heartbeats, while a scheduler_runs row
+# says the actual work ran and whether it worked. The evidence that
+# already exists is the better evidence.
+#
+# The liveness verdict deliberately reuses `liveness()` above, by handing
+# it a synthetic agent shaped like a registry row. A worker that has gone
+# quiet and an agent that has gone quiet are the same question, and two
+# rules that could drift apart is exactly how one board starts lying.
+
+def worker_liveness(scheduler_runs, *, now, tasks=None,
+                    stale_seconds=DEFAULT_STALE_SECONDS,
+                    lost_seconds=DEFAULT_LOST_SECONDS):
+    """Fold scheduler_runs into one liveness row per scheduled object.
+
+    `tasks` (the scheduler's declared tasks, each {object_id, schedule,
+    status}) is optional but changes the answer in one important way: a
+    task declared and NEVER run is `never`, which no amount of reading
+    the run log alone could tell you -- an object that has never run has
+    no rows, and a fold over rows cannot see an absence. That is the
+    failure this is most likely to catch: a pass somebody scheduled that
+    has been silently doing nothing since the day it was added.
+
+    Pure: no clock, no I/O.
+    """
+    latest = {}
+    for row in scheduler_runs or ():
+        object_id = _text(row.get("object_id"))
+        if not object_id:
+            continue
+        started = _text(row.get("started_at"))
+        current = latest.get(object_id)
+        if current is None or started > _text(current.get("started_at")):
+            latest[object_id] = row
+
+    declared = {}
+    for task in tasks or ():
+        object_id = _text(task.get("object_id"))
+        if object_id:
+            declared[object_id] = task
+
+    rows = []
+    for object_id in sorted(set(latest) | set(declared)):
+        run = latest.get(object_id) or {}
+        task = declared.get(object_id) or {}
+        # A task an operator switched off is not silent, it is off --
+        # the same distinction liveness() draws for a paused agent, and
+        # the same reason it must not be rendered as a problem.
+        status = _text(task.get("status")) or "active"
+        synthetic = {
+            "status": "active" if status == "active" else "paused",
+            "heartbeat_at": _text(run.get("started_at")),
+        }
+        state = liveness(synthetic, now=now, stale_seconds=stale_seconds,
+                         lost_seconds=lost_seconds)
+        failed = _text(run.get("ok")).lower() in ("false", "0", "no")
+        rows.append({
+            "object_id": object_id,
+            "schedule": _text(task.get("schedule")),
+            "description": _text(task.get("description")),
+            "status": status,
+            "last_run_at": _text(run.get("started_at")),
+            "last_run_ago": relative_time(run.get("started_at"), now),
+            "duration_ms": _int(run.get("duration_ms")),
+            "run_count": _int(task.get("run_count")),
+            "liveness": state,
+            # A pass that RAN and THREW is the case a liveness verdict
+            # alone would call healthy, so the error rides beside it
+            # rather than replacing it: "live, and failing" is a real
+            # and much worse state than "lost".
+            "last_error": _text(run.get("error")),
+            "failing": failed or bool(_text(run.get("error"))),
+        })
+
+    rows.sort(key=lambda row: (_LIVENESS_RANK.get(row["liveness"], 50),
+                               not row["failing"], row["object_id"]))
+    counts = {}
+    for row in rows:
+        counts[row["liveness"]] = counts.get(row["liveness"], 0) + 1
+    return {
+        "workers": rows,
+        "counts": counts,
+        "live": counts.get("live", 0),
+        "total": len(rows),
+        "failing": [row["object_id"] for row in rows if row["failing"]],
+    }

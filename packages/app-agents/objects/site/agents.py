@@ -41,9 +41,11 @@ import os
 from datetime import datetime, timezone
 
 import object_agents
+import object_state
 import object_records
 
 REGISTRY = "agent_registry"
+SCHEDULER_RUNS = "scheduler_runs"
 FEED = "feed_posts"
 SETTINGS_COLLECTION = "app_settings"
 STALE_KEY = "agents.stale_seconds"
@@ -83,6 +85,18 @@ _STYLE = """
             padding: 0 .4rem; margin-right: .4rem; }
 .ag .note { border-left: 3px solid var(--line, #55556a); padding: .1rem 0 .1rem .7rem;
             margin: .7rem 0 1.1rem; font-size: .86rem; opacity: .85; }
+.ag table.workers { width: 100%; border-collapse: collapse; font-size: .86rem; }
+.ag table.workers th, .ag table.workers td {
+    text-align: left; padding: .35rem .5rem;
+    border-bottom: 1px solid var(--line, #38384a); vertical-align: top; }
+.ag table.workers th { font-weight: 600; opacity: .8; }
+.ag .pill { font-size: .7rem; text-transform: uppercase; letter-spacing: .05em;
+            border: 1px solid var(--line, #55556a); border-radius: 10px;
+            padding: 0 .45rem; }
+.ag .pill.live { color: var(--accent, #b5713a); border-color: var(--accent, #b5713a); }
+.ag .pill.stale { color: #c9a227; border-color: #c9a227; }
+.ag .pill.lost, .ag .pill.never { color: #d05a5a; border-color: #d05a5a; }
+.ag .workererr { color: #d05a5a; font-size: .78rem; margin-top: .2rem; }
 """
 
 
@@ -119,6 +133,30 @@ def _setting(base, key, default):
     return default
 
 
+def _scheduled_tasks(base):
+    """The scheduler's declared tasks, read from its object state.
+
+    Degrades to [] when the scheduler has never been written -- a box
+    with no scheduled work is not a broken box, and the workers panel
+    simply has nothing to show.
+    """
+    try:
+        state = object_state.get_object_state("scheduler", base)
+    except Exception:
+        return []
+    tasks = []
+    for key, value in (state or {}).items():
+        if not str(key).startswith("task_"):
+            continue
+        try:
+            task = json.loads(value) if isinstance(value, str) else value
+        except (ValueError, TypeError):
+            continue
+        if isinstance(task, dict):
+            tasks.append(task)
+    return tasks
+
+
 def report(*, base=None, now=None):
     """One fold, two surfaces."""
     base = _base_dir() if base is None else base
@@ -126,6 +164,23 @@ def report(*, base=None, now=None):
 
     fold = object_agents.board(
         _rows(REGISTRY, base), _rows("wallet_entries", base), now=now,
+        stale_seconds=_setting(base, STALE_KEY,
+                               object_agents.DEFAULT_STALE_SECONDS),
+        lost_seconds=_setting(base, LOST_KEY,
+                              object_agents.DEFAULT_LOST_SECONDS))
+
+    # The box's own scheduled work, folded from the run log rather than
+    # from a heartbeat somebody would have to remember to send. Every
+    # scheduled execution already writes a scheduler_runs row, so the
+    # evidence exists; nothing was applying a liveness verdict to it.
+    #
+    # The declared tasks come from the scheduler's own state, and they
+    # matter for exactly one case the run log cannot report: a task that
+    # has NEVER run has no rows at all, and an absence is invisible to a
+    # fold over presences. That is the pass silently doing nothing since
+    # the day it was added -- the failure most worth catching here.
+    fold["workers"] = object_agents.worker_liveness(
+        _rows(SCHEDULER_RUNS, base), tasks=_scheduled_tasks(base), now=now,
         stale_seconds=_setting(base, STALE_KEY,
                                object_agents.DEFAULT_STALE_SECONDS),
         lost_seconds=_setting(base, LOST_KEY,
@@ -236,6 +291,33 @@ def _feed_html(fold):
     return f'<ul class="feed">{items}</ul>'
 
 
+def _worker_rows(fold):
+    workers = fold.get("workers", {}).get("workers", [])
+    if not workers:
+        return ('<p class="muted">Nothing is scheduled on this server yet.</p>')
+    out = []
+    for row in workers:
+        state = _esc(row["liveness"])
+        when = _esc(row["last_run_ago"]) or "never"
+        schedule = _esc(row["schedule"]) or "&mdash;"
+        # "live, and failing" is a worse state than "lost" and the one a
+        # liveness badge alone would render as healthy, so the error gets
+        # its own line rather than a colour.
+        error = (f'<div class="workererr">last run failed: '
+                 f'{_esc(row["last_error"][:160])}</div>'
+                 if row["failing"] else "")
+        out.append(
+            f'<tr class="w-{state}">'
+            f'<td><code>{_esc(row["object_id"])}</code>{error}</td>'
+            f'<td><code>{schedule}</code></td>'
+            f'<td><span class="pill {state}">{state}</span></td>'
+            f'<td>{when}</td>'
+            f'</tr>')
+    return ('<table class="workers"><thead><tr><th>Scheduled object</th>'
+            '<th>Schedule</th><th>State</th><th>Last run</th></tr></thead>'
+            f'<tbody>{"".join(out)}</tbody></table>')
+
+
 def _page(fold):
     cards = "".join(_card(row) for row in fold["agents"])
     caps = (", ".join(_esc(tag) for tag in fold["capabilities"])
@@ -262,6 +344,19 @@ so "when did it last change a record" cannot answer "is it still there" —
 which is the only reason this collection exists. Everything else about an
 agent is already recorded: what it did is the
 <a href="/activity">change log</a>, who it is, is its user.</p>
+
+<h2>This server's own work</h2>
+<p>The scheduled passes this box runs for itself, and whether they are
+still running. This is <strong>folded from the run log, not from a
+heartbeat</strong>: every scheduled execution already writes a
+<code>scheduler_runs</code> row, and a row saying the work ran is better
+evidence than a process saying it is alive.</p>
+{_worker_rows(fold)}
+<p class="muted">A task that has <em>never</em> run is shown from the
+scheduler's declared tasks rather than the log, because an object with no
+rows is invisible to a fold over rows — and a pass that has quietly done
+nothing since the day it was added is exactly the failure worth
+catching.</p>
 
 <h2>Capabilities on this server</h2>
 <p>{caps}</p>
