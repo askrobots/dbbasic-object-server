@@ -107,45 +107,68 @@ def render_talk_html():
     return module.GET({"_identity": {"user_id": "dan"}})["body"]
 
 
+# FUNCTION-scoped, matching the house e2e convention (conftest.py's own
+# `page` fixture) and not incidentally: a module-scoped page was tried
+# first here and it leaked. A timer armed near the end of one test
+# (the stability endpointer, ~1.4s) was still pending when that test
+# returned, fired mid-WAY THROUGH THE NEXT TEST, and submitted a stale
+# utterance that made an unrelated assertion fail in a way that looked
+# exactly like the guard it was supposed to be proving. One page per
+# test is slightly slower and is the only way this suite's own timers
+# cannot contaminate each other -- the failure mode this harness exists
+# to catch, caught in itself.
 @pytest.fixture(scope="module")
-def talk_page():
+def talk_browser():
     from playwright.sync_api import sync_playwright
-
-    html = render_talk_html()
     with sync_playwright() as pw:
         browser = pw.webkit.launch()
-        ctx = browser.new_context(viewport={"width": 810, "height": 1080})
-        page = ctx.new_page()
-        page.add_init_script(FAKE_VOICE)
-
-        state = {"chat_calls": [], "reply": "Here are your notes.",
-                 "errors": []}
-        page.on("pageerror", lambda e: state["errors"].append(str(e)))
-
-        def route_all(route):
-            url = route.request.url
-            if url.endswith("/talk") or "/talk?" in url:
-                route.fulfill(status=200, content_type="text/html; charset=utf-8", body=html)
-            elif "/api/ai/chat" in url:
-                state["chat_calls"].append(json.loads(route.request.post_data or "{}"))
-                route.fulfill(status=200, content_type="application/json",
-                              body=json.dumps({"status": "ok", "reply": state["reply"],
-                                               "tool_calls": []}))
-            elif "/api/tts" in url:
-                route.fulfill(status=200, content_type="audio/wav", body=SILENT_WAV)
-            elif "shell_preferences" in url:
-                route.fulfill(status=200, content_type="application/json",
-                              body=json.dumps({"record": {"id": "dan", "talk_tts": "server"}}))
-            elif "shell_commands" in url:
-                route.fulfill(status=200, content_type="application/json",
-                              body=json.dumps({"records": []}))
-            else:
-                route.fulfill(status=200, content_type="application/json", body="{}")
-
-        page.route("**/*", route_all)
-        page.goto("http://talk.test/talk", wait_until="networkidle")
-        yield page, state
+        yield browser
         browser.close()
+
+
+@pytest.fixture
+def talk_page(talk_browser):
+    html = render_talk_html()
+    ctx = talk_browser.new_context(viewport={"width": 810, "height": 1080})
+    page = ctx.new_page()
+    page.add_init_script(FAKE_VOICE)
+
+    state = {"chat_calls": [], "reply": "Here are your notes.",
+             "errors": []}
+    page.on("pageerror", lambda e: state["errors"].append(str(e)))
+
+    def route_all(route):
+        url = route.request.url
+        if url.endswith("/talk") or "/talk?" in url:
+            route.fulfill(status=200, content_type="text/html; charset=utf-8", body=html)
+        elif "/api/ai/chat" in url:
+            # NEVER time.sleep() here to simulate network latency: a
+            # sync-API route handler runs on Playwright's one shared
+            # dispatch thread, and blocking it stalls every OTHER
+            # in-flight call too -- including whatever a concurrency
+            # test fires "shortly after". Race conditions in this
+            # harness are proven by firing calls in the SAME JS tick
+            # (see test_a_turn_in_flight_blocks_a_second_submit), never
+            # by an artificial server-side delay.
+            state["chat_calls"].append(json.loads(route.request.post_data or "{}"))
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps({"status": "ok", "reply": state["reply"],
+                                           "tool_calls": []}))
+        elif "/api/tts" in url:
+            route.fulfill(status=200, content_type="audio/wav", body=SILENT_WAV)
+        elif "shell_preferences" in url:
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps({"record": {"id": "dan", "talk_tts": "server"}}))
+        elif "shell_commands" in url:
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps({"records": []}))
+        else:
+            route.fulfill(status=200, content_type="application/json", body="{}")
+
+    page.route("**/*", route_all)
+    page.goto("http://talk.test/talk", wait_until="networkidle")
+    yield page, state
+    ctx.close()
 
 
 def fresh_turn(page, state):
@@ -331,3 +354,87 @@ def test_talk_prefers_its_own_model_when_set(talk_page):
         assert state["chat_calls"][0]["model"] == "anthropic:claude-haiku-4-5"
     finally:
         page.evaluate("() => { delete prefs.talk_model; }")
+
+
+def test_a_turn_in_flight_blocks_a_second_submit(talk_page):
+    """The real bug, off a real session: "showed me my notes" and "show
+    me my notes" reached the server ONE SECOND apart -- two provider
+    calls billed for one utterance, the reply spoken twice. Nothing
+    serialized the paths that can produce an utterance (voice
+    endpointer, manual send), so a second one arriving while the first
+    is still in flight was never refused.
+
+    Both calls fire in ONE evaluate, back to back, with no wait between
+    them -- deliberately not an artificial network delay (a Python-side
+    time.sleep() inside a sync-API route handler blocks Playwright's one
+    shared dispatch thread, which stalls every OTHER call including the
+    "second" one, and the two land far enough apart that the guard's
+    absence goes unnoticed; that false pass is what this comment now
+    warns off). submitTurn is async but sets the guard synchronously
+    before its first await, so two calls in the same JS tick already
+    race for real -- no delay required.
+
+    Calling finalizeVoiceSubmit directly, twice, isolates the guarantee
+    from the choreography of WHICH timer or recognizer instance produced
+    the duplicate -- that cause matters less than the guarantee holding
+    regardless of cause."""
+    page, state = talk_page
+    fresh_turn(page, state)
+    page.evaluate("""() => {
+      finalizeVoiceSubmit('show me my notes');
+      finalizeVoiceSubmit('show me my notes');
+    }""")
+    page.wait_for_timeout(400)
+    assert len(state["chat_calls"]) == 1, state["chat_calls"]
+
+
+def test_a_failed_turn_releases_the_guard_for_the_next_one(talk_page):
+    """The guard must not survive its own failure -- a dropped connection
+    on turn one must not wedge the page shut for the rest of the
+    session."""
+    page, state = talk_page
+    fresh_turn(page, state)
+
+    def fail_once(route):
+        route.abort()
+    page.route("**/api/ai/chat", fail_once, times=1)
+    page.evaluate("() => finalizeVoiceSubmit('this one fails')")
+    page.wait_for_timeout(400)
+
+    page.evaluate("() => finalizeVoiceSubmit('this one should work')")
+    page.wait_for_timeout(400)
+    assert len(state["chat_calls"]) == 1
+    assert state["chat_calls"][0]["message"] == "this one should work"
+
+
+def test_playback_waits_for_the_microphone_to_actually_release(talk_page):
+    """Dan's own diagnosis, verbatim: "listening while talking, maybe not
+    allowed." The mic and speaker share one audio session on iOS, and
+    recognizer.stop() is a REQUEST -- teardown finishes asynchronously,
+    signalled by onend. Starting playback before that finishes can play
+    into a still-recording session and come out silent, with no error
+    anywhere. speak() must wait for the release, not race it."""
+    page, state = talk_page
+    fresh_turn(page, state)
+    page.evaluate("() => { window.__recoStarts = 0; }")
+
+    say(page, "computer say something", final=True)
+    page.wait_for_timeout(1200)
+
+    plays = page.evaluate("() => window.__plays")
+    assert plays, "server TTS never played"
+
+
+def test_stop_listening_and_wait_resolves_even_if_onend_never_fires(talk_page):
+    """The safety timeout: a recognizer that was never actually listening
+    (stop() on an idle recognizer) must not hang speak() forever."""
+    page, state = talk_page
+    fresh_turn(page, state)
+    resolved = page.evaluate("""async () => {
+      const r = window.__recos[window.__recos.length - 1];
+      if (r && r.onend) { r.stop = () => {}; }   // stop() that fires nothing
+      const started = performance.now();
+      await stopListeningAndWaitForRelease();
+      return performance.now() - started;
+    }""")
+    assert resolved < 1000   # bounded by the safety timeout, not hung

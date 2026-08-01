@@ -270,10 +270,10 @@ function hasLocalVoice() {
 // and as the fallback when "server"/"auto" server TTS fails. Carries the
 // exact same speaking-flag/listen-pause contract as the server path below:
 // set before speaking, cleared and resumed only once the utterance ends.
-function speakBrowser(text) {
+async function speakBrowser(text) {
   if (!window.speechSynthesis) { speaking = false; resumeListeningIfNeeded(); return; }
   speaking = true;
-  stopListening();
+  await stopListeningAndWaitForRelease();
   window.speechSynthesis.cancel();
   const utter = new SpeechSynthesisUtterance(text);
   const voice = pickVoice();
@@ -303,7 +303,7 @@ async function speak(text) {
   }
 
   speaking = true;
-  stopListening();
+  await stopListeningAndWaitForRelease();
   try {
     const res = await fetch("/api/tts", {
       method: "POST", credentials: "same-origin",
@@ -822,6 +822,35 @@ function stopListening() {
   if (recognizer) { try { recognizer.stop(); } catch (e) { /* already stopped */ } }
 }
 
+// The mic and the speaker share ONE audio session on iOS, and
+// recognizer.stop() is a REQUEST, not an instant release -- teardown
+// completes asynchronously and onend fires later. Starting playback
+// before that teardown finishes was Dan's own diagnosis: "listening
+// while talking, maybe not allowed" -- iOS can leave the session
+// configured for recording through the transition, and audio played
+// into a still-recording session can come out silent or ducked to
+// nothing, with no error anywhere to say so. speak() now WAITS for the
+// release rather than racing it.
+let _listeningStoppedWaiters = [];
+function _drainListeningStopped() {
+  const waiters = _listeningStoppedWaiters;
+  _listeningStoppedWaiters = [];
+  waiters.forEach((resolve) => resolve());
+}
+function stopListeningAndWaitForRelease() {
+  stopListening();
+  if (!recognizer) return Promise.resolve();
+  return new Promise((resolve) => {
+    // A safety net, not the expected path: some browsers/recognizer
+    // states never fire onend for a stop() that was already a no-op
+    // (already stopped, never started). Real iOS teardown is much
+    // faster than this; it only pays the timeout when there was
+    // nothing to wait for in the first place.
+    const timer = setTimeout(resolve, 400);
+    _listeningStoppedWaiters.push(() => { clearTimeout(timer); resolve(); });
+  });
+}
+
 function startListening() {
   if (!recognizer || listening || speaking) return;
   listening = true;
@@ -873,6 +902,7 @@ function initMic() {
   };
   recognizer.onerror = () => { listening = false; };
   recognizer.onend = () => {
+    _drainListeningStopped();
     // CRITICAL: stop recognition before playing TTS (done in speak()) and
     // only resume after playback ends -- if mode is still on AND we are
     // not currently speaking, restart here too, so a recognizer that ends
@@ -1040,7 +1070,20 @@ function blip() {
   } catch (e) { /* a missing blip is not an error */ }
 }
 
+// Every path that can produce an utterance -- the voice endpointer
+// (VAD, stability backstop, isFinal debounce) and the manual send/Enter
+// handler -- funnels here. Nothing serialized them, and a real session
+// proved it: "showed me my notes" and "show me my notes" reached the
+// server ONE SECOND apart, two provider calls billed for one utterance,
+// the reply spoken twice. Cause not fully isolated (a stale recognizer
+// instance surviving its own onend restart is the leading suspect), but
+// the fix does not need the cause: a turn already in flight must simply
+// refuse a second one, for ANY reason it might arrive.
+let turnInFlight = false;
+
 async function submitTurn(input) {
+  if (turnInFlight) return;   // a second utterance chasing the first is dropped, not queued
+  turnInFlight = true;
   capUser.textContent = input;
   capUser.classList.remove("armed", "active");
   capUser.classList.add("sent");
@@ -1048,18 +1091,25 @@ async function submitTurn(input) {
   startThinking();
   stopListening();
 
-  // pref(), not raw prefs.tools -- a shell_preferences record written
-  // before this field existed in the schema won't have it, and
-  // undefined.split() would throw here and silently kill the turn.
-  const tools = String(pref("tools", DEFAULT_TOOLS)).split(",").map((t) => t.trim()).filter(Boolean);
-  const [ok, body] = await api("POST", "/api/ai/chat",
-    {message: input,
-     model: String(pref("talk_model", "")).trim() || pref("ai_model", DEFAULT_MODEL),
-     tools, history: aiHistory.slice(-20),
-     session_id: SESSION_ID, source: "talk",
-     system: TALK_SYSTEM + " Current local date/time: " + new Date().toString() + "."});
+  let ok, body;
+  try {
+    // pref(), not raw prefs.tools -- a shell_preferences record written
+    // before this field existed in the schema won't have it, and
+    // undefined.split() would throw here and silently kill the turn.
+    const tools = String(pref("tools", DEFAULT_TOOLS)).split(",").map((t) => t.trim()).filter(Boolean);
+    [ok, body] = await api("POST", "/api/ai/chat",
+      {message: input,
+       model: String(pref("talk_model", "")).trim() || pref("ai_model", DEFAULT_MODEL),
+       tools, history: aiHistory.slice(-20),
+       session_id: SESSION_ID, source: "talk",
+       system: TALK_SYSTEM + " Current local date/time: " + new Date().toString() + "."});
+  } finally {
+    // Cleared before the reply renders, not after: a fetch that throws
+    // must release the gate too, or one failed turn wedges the page shut
+    // for the rest of the session.
+    turnInFlight = false;
+  }
 
-  stopThinking();
   stopThinking();
   // An empty SUCCESS is the worst reply a voice surface can relay: the
   // round-trip happened, nothing is shown, nothing is spoken, and the

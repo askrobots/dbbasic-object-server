@@ -7260,7 +7260,17 @@ async def _handle_ai_chat(
     turn_record = {
         "id": object_ids.new_uuid4(),
         "input": message[:8000],
-        "output": _text_field(result.get("text"))[:20000],
+        # run_chat's key is "reply" -- "text" was a straight typo, live
+        # since this write was added, and every source-presence test
+        # passed anyway because none of them checked the RECORDED VALUE,
+        # only that the strings existed somewhere in the file. Every
+        # turn recorded before this fix has output == "" regardless of
+        # what the model actually said; the reply the USER saw was
+        # correct the whole time (the HTTP response spreads **result
+        # directly), so this was invisible everywhere except the log
+        # meant to make turns inspectable -- exactly where a session
+        # review found it.
+        "output": _text_field(result.get("reply"))[:20000],
         "kind": "ai",
         "owner_id": session.user_id,
         "session_id": _text_field(payload.get("session_id"))[:64],

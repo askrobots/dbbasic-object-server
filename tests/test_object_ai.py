@@ -567,3 +567,85 @@ def test_ai_chat_endpoint_requires_flag_and_session(tmp_path, monkeypatch):
         "/api/ai/chat", method="POST", body=json.dumps({"message": "hi"}).encode()
     )
     assert status == 401
+
+
+def test_ai_chat_endpoint_records_the_actual_reply_text(tmp_path, monkeypatch):
+    """The bug a session review caught, live: every server-recorded turn
+    had output == "" regardless of what the model said, because the
+    write read result.get("text") and run_chat's key is "reply". The
+    HTTP response spreads **result directly, so the client always saw
+    the correct reply -- this was invisible everywhere except the
+    history the server-side write exists specifically to make
+    inspectable, and it went unnoticed for as long as it did because
+    every source-presence test checked that "shell_commands" and
+    "created_at" appeared in the file, never the recorded VALUE. This
+    reads the row back and checks the text, not the source.
+    """
+    data_dir = tmp_path / "data"
+    schema_file = data_dir / "schemas" / "shell_commands.json"
+    schema_file.parent.mkdir(parents=True, exist_ok=True)
+    schema_file.write_text(json.dumps({"fields": [
+        {"name": "id"}, {"name": "input", "type": "text"},
+        {"name": "output", "type": "text"}, {"name": "kind", "type": "text"},
+        {"name": "owner_id", "type": "text"}, {"name": "session_id", "type": "text"},
+        {"name": "source", "type": "text"}, {"name": "model", "type": "text"},
+        {"name": "duration_ms", "type": "int"}, {"name": "tool_calls", "type": "text"},
+        {"name": "created_at", "type": "datetime"},   # NOT read_only, matching the real schema
+    ]}))
+    (data_dir / "schemas" / "ai_usage.json").write_text(json.dumps({"fields": [
+        {"name": "id"}, {"name": "owner_id", "type": "text"},
+        {"name": "provider", "type": "text", "required": True},
+        {"name": "model", "type": "text", "required": True},
+        {"name": "tokens_in", "type": "int", "required": True},
+        {"name": "tokens_out", "type": "int", "required": True},
+        {"name": "cost_cents", "type": "int"},
+        {"name": "created_at", "type": "datetime", "read_only": True},
+    ]}))
+
+    monkeypatch.setenv(object_server.DATA_DIR_ENV, str(data_dir))
+    monkeypatch.setenv(object_server.AI_CHAT_ENABLED_ENV, "true")
+    enable_admin_token(monkeypatch)
+    token, _ = create_identity_session({"user_id": "dan"})
+    bearer = [("authorization", f"Bearer {token}")]
+
+    request(
+        "/identity/users/dan/service-keys", method="PUT",
+        body=json.dumps({"service": "anthropic", "key": "sk-test-1"}).encode(),
+        headers=bearer + [("content-type", "application/json")],
+    )
+
+    status, body = anthropic_text_response("Here are your 8 notes on screen, sorted newest first.")
+
+    def fake_transport(request_obj, timeout=None):
+        class FakeResponse:
+            def __init__(self):
+                self.status = status
+            def read(self):
+                return body
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+        return FakeResponse()
+
+    monkeypatch.setattr(object_server.urllib.request, "urlopen", fake_transport)
+
+    resp_status, _, chat = request(
+        "/api/ai/chat", method="POST",
+        body=json.dumps({"message": "show me my notes",
+                         "model": "anthropic:claude-haiku-4-5", "tools": [],
+                         "session_id": "s-test-1", "source": "talk"}).encode(),
+        headers=bearer + [("content-type", "application/json")],
+    )
+    assert resp_status == 200, chat
+    assert chat["reply"] == "Here are your 8 notes on screen, sorted newest first."
+
+    rows = object_records.read_collection_records("shell_commands", base_dir=data_dir)
+    assert len(rows) == 1, rows
+    row = rows[0]
+    assert row["input"] == "show me my notes"
+    # THE assertion the bug would have failed.
+    assert row["output"] == "Here are your 8 notes on screen, sorted newest first."
+    assert row["session_id"] == "s-test-1"
+    assert row["source"] == "talk"
+    assert row["created_at"]

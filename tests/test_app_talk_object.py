@@ -188,9 +188,16 @@ def test_talk_source_pauses_recognition_around_tts_playback():
     speak_fn = re.search(r"async function speak\(text\) \{(.*?)\n\}\n", TALK_SOURCE, re.S)
     assert speak_fn, "speak() not found in talk.py"
     body = speak_fn.group(1)
-    # speaking flips true and recognition stops before either playback path.
+    # speaking flips true and recognition RELEASE IS AWAITED before either
+    # playback path -- not merely requested. iOS shares one audio session
+    # between mic and speaker, and recognizer.stop() is a request whose
+    # teardown completes asynchronously (onend); starting playback before
+    # that finishes can play into a still-recording session and come out
+    # silent, with no error anywhere -- Dan's own diagnosis of an iPad
+    # that spoke on desktop but not there, verbatim: "listening while
+    # talking, maybe not allowed."
     assert body.index("speaking = true") < body.index('await player.play()')
-    assert body.index("stopListening();") < body.index('await player.play()')
+    assert body.index("await stopListeningAndWaitForRelease();") < body.index('await player.play()')
     # Both the server-TTS path and the speechSynthesis fallback clear
     # `speaking` and resume listening once playback actually ends.
     assert "speaking = false; resumeListeningIfNeeded();" in body or (
@@ -761,11 +768,13 @@ def test_talk_speak_browser_sets_and_clears_speaking_flag():
     """The browser-voice path must uphold the same recognition-pause
     contract as the server path: set `speaking` and stop listening before
     the utterance, clear it and resume only once the utterance ends."""
-    fn = re.search(r"function speakBrowser\(text\) \{(.*?)\n\}\n", TALK_SOURCE, re.S)
+    fn = re.search(r"async function speakBrowser\(text\) \{(.*?)\n\}\n", TALK_SOURCE, re.S)
     assert fn, "speakBrowser() not found in talk.py"
     body = fn.group(1)
     assert "speaking = true;" in body
-    assert "stopListening();" in body
+    # Awaits the real mic release, same as the server-TTS path, and for
+    # the same iOS shared-audio-session reason.
+    assert "await stopListeningAndWaitForRelease();" in body
     assert "speaking = false; resumeListeningIfNeeded();" in body
     assert body.index("speaking = true;") < body.index("window.speechSynthesis.speak(utter);")
     assert "utter.addEventListener(\"end\"," in body
@@ -801,7 +810,7 @@ def test_talk_voice_picking_behaves_correctly_under_node(tmp_path):
     html = _render_talk_html()
     script = _extract_inline_script(html)
     start = script.index("const PREFERRED_VOICE_RE")
-    end = script.index("function speakBrowser(text)")
+    end = script.index("async function speakBrowser(text)")
     helpers = script[start:end]
 
     probe = (
