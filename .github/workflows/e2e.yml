@@ -31,16 +31,23 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install uvicorn websockets pytest pytest-playwright
 
-      - name: Install Chromium
-        # Retried like docker.yml's compose pull: this downloads browser
-        # binaries from Playwright's CDN, which times out on GitHub
-        # runners often enough to red-X main for reasons that have
-        # nothing to do with the commit. Three attempts with backoff; a
-        # real install failure still fails all three and reports normally.
+      - name: Install browsers
+        # Chromium drives test_generated_ui.py; WebKit drives
+        # test_talk_voice.py specifically because it is the iPad's real
+        # engine family -- that choice is load-bearing (it is what let
+        # the harness catch iOS-only failures: the exclusive-microphone
+        # theft, the gesture-locked audio element) and switching it to
+        # Chromium to dodge an install gap would throw away the reason
+        # the file exists. Retried like docker.yml's compose pull: this
+        # downloads browser binaries from Playwright's CDN, which times
+        # out on GitHub runners often enough to red-X main for reasons
+        # that have nothing to do with the commit. Three attempts with
+        # backoff; a real install failure still fails all three and
+        # reports normally.
         run: |
           for attempt in 1 2 3; do
-            echo "::group::playwright install chromium (attempt ${attempt})"
-            if python -m playwright install --with-deps chromium; then
+            echo "::group::playwright install chromium webkit (attempt ${attempt})"
+            if python -m playwright install --with-deps chromium webkit; then
               echo "::endgroup::"
               exit 0
             fi
