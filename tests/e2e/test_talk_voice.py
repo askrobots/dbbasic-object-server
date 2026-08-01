@@ -118,12 +118,22 @@ def render_talk_html():
 # cannot contaminate each other -- the failure mode this harness exists
 # to catch, caught in itself.
 @pytest.fixture(scope="module")
-def talk_browser():
-    from playwright.sync_api import sync_playwright
-    with sync_playwright() as pw:
-        browser = pw.webkit.launch()
-        yield browser
-        browser.close()
+def talk_browser(playwright):
+    # `playwright` is pytest-playwright's OWN session-scoped fixture, not
+    # a name we chose -- and using it instead of a hand-rolled
+    # `sync_playwright()` context is not a style preference, it is what
+    # makes this file coexist with test_generated_ui.py in one pytest
+    # session. That file uses the plugin's page/context/browser fixtures,
+    # which means the plugin already owns a Playwright driver for the
+    # process by the time this fixture runs. A second, independent
+    # `sync_playwright()` call collided with it -- passed locally (this
+    # file run alone), failed in CI (both files in the same `pytest -m
+    # e2e tests/e2e` invocation, exactly how the workflow runs it) with
+    # "Sync API inside the asyncio loop". One driver, reused via the
+    # fixture the plugin already provides, has no such collision.
+    browser = playwright.webkit.launch()
+    yield browser
+    browser.close()
 
 
 @pytest.fixture
