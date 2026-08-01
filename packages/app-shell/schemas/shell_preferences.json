@@ -1,7 +1,7 @@
 {
   "name": "shell_preferences",
   "title": "Shell Preferences",
-  "version": 5,
+  "version": 6,
   "description": "Per-user shell settings; the record id is the user id.",
   "fields": [
     {
@@ -74,6 +74,28 @@
       "help": "Which engine speaks AI replies: auto prefers an on-device browser voice when one is available and falls back to the server otherwise, server always uses server TTS (with a browser fallback on failure), browser always uses the browser's own speechSynthesis"
     },
     {
+      "name": "talk_tts_engine",
+      "type": "enum",
+      "label": "Server Voice Quality",
+      "default": "local",
+      "enum": [
+        "local",
+        "openai"
+      ],
+      "help": "Only matters when Voice Engine is server or auto-falling-back: local is free and always available (espeak-ng in production); openai is a real cloud voice, clearer and more natural, but costs real money per reply and requires an OpenAI key under your account's service keys"
+    },
+    {
+      "name": "talk_stt_engine",
+      "type": "enum",
+      "label": "Speech Recognition",
+      "default": "browser",
+      "enum": [
+        "browser",
+        "openai"
+      ],
+      "help": "browser uses your browser's built-in speech recognition (free, but silently unavailable on some browsers, e.g. Firefox); openai records real audio and transcribes it on the server via your own OpenAI key -- costs a small real amount per utterance, and only supports push-to-talk (tap to start, tap to stop), not continuous wake-word listening"
+    },
+    {
       "name": "talk_model",
       "type": "text",
       "help": "Model for the Talk surface only; blank falls back to ai_model. Exists because voice tolerates latency far worse than a terminal: a fast model that answers in 3 seconds beats a smarter one that leaves 10 seconds of silence."
@@ -89,7 +111,9 @@
         "talk_end_word",
         "talk_endpoint",
         "talk_silence_ms",
-        "talk_tts"
+        "talk_tts",
+        "talk_tts_engine",
+        "talk_stt_engine"
       ]
     }
   },

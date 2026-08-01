@@ -75,6 +75,7 @@ import object_realtime
 import object_schemas
 import object_search
 import object_service_keys
+import object_stt
 import object_tts
 import object_user_files
 import object_site_routes
@@ -731,6 +732,10 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
 
         if path == http_api_contract.TTS_PATH:
             await _handle_tts(send, method, body, headers)
+            return
+
+        if path == http_api_contract.STT_PATH:
+            await _handle_stt(send, method, body, headers)
             return
 
         if path == http_api_contract.READ_PATH:
@@ -7335,6 +7340,9 @@ def _env_float(name: str, default: float) -> float:
 
 TTS_ENABLED_ENV = "DBBASIC_ENABLE_TTS"
 TTS_MAX_CHARS = 800
+TTS_CLOUD_TIMEOUT_ENV = "DBBASIC_TTS_CLOUD_TIMEOUT_SECONDS"
+DEFAULT_TTS_CLOUD_TIMEOUT_SECONDS = 30.0
+TTS_ENGINES = ("local", "openai")
 
 
 async def _handle_tts(
@@ -7350,6 +7358,14 @@ async def _handle_tts(
     check every authenticated POST here uses. Successful audio is cached
     to disk (object_tts.cache_path) so a repeated line costs one
     synthesis, not one per request.
+
+    Two engines, chosen per request via the "engine" field ("local", the
+    default, or "openai"): local shells out to whatever's on the box
+    (espeak-ng in production, robotic but free and always available);
+    openai calls the caller's own stored key against a real cloud TTS
+    model for a real per-call cost. Neither silently falls back to the
+    other -- a caller who asked for cloud quality and hits a provider
+    error should see that error, not a surprise robot voice.
     """
     if method != "POST":
         await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
@@ -7402,6 +7418,55 @@ async def _handle_tts(
         await _send_json(send, {"status": "error", "error": "voice must be a string"}, status=400)
         return
 
+    engine = payload.get("engine") or "local"
+    if engine not in TTS_ENGINES:
+        await _send_json(
+            send,
+            {"status": "error", "error": f"engine must be one of {TTS_ENGINES}"},
+            status=400,
+        )
+        return
+
+    if engine == "openai":
+        key = object_service_keys.get_service_key(session.user_id, "openai", base_dir=_data_dir())
+        if key is None:
+            await _send_json(
+                send,
+                {
+                    "status": "error",
+                    "error": (
+                        "No openai key stored. Set one with "
+                        f"PUT /identity/users/{session.user_id}/service-keys."
+                    ),
+                },
+                status=400,
+            )
+            return
+
+        timeout = _env_float(TTS_CLOUD_TIMEOUT_ENV, DEFAULT_TTS_CLOUD_TIMEOUT_SECONDS)
+
+        def send_http(url: str, request_headers, request_body: bytes) -> tuple[int, bytes]:
+            request = urllib.request.Request(
+                url, data=request_body, method="POST", headers=dict(request_headers)
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    return response.status, response.read()
+            except urllib.error.HTTPError as exc:
+                return exc.code, exc.read()
+
+        try:
+            audio, content_type, _from_cache = await asyncio.to_thread(
+                object_tts.synthesize_cloud, text, voice, key,
+                send_http=send_http, base_dir=_data_dir(),
+            )
+        except object_tts.TTSProviderError as exc:
+            await _send_json(send, {"status": "error", "error": str(exc)}, status=502)
+            return
+
+        await _send_bytes(send, audio, content_type=content_type)
+        return
+
     try:
         audio, _from_cache = await asyncio.to_thread(
             object_tts.synthesize, text, voice, base_dir=_data_dir()
@@ -7417,6 +7482,110 @@ async def _handle_tts(
         return
 
     await _send_bytes(send, audio, content_type="audio/wav")
+
+
+STT_ENABLED_ENV = "DBBASIC_ENABLE_STT"
+STT_MAX_BYTES = 10_000_000
+STT_TIMEOUT_ENV = "DBBASIC_STT_TIMEOUT_SECONDS"
+DEFAULT_STT_TIMEOUT_SECONDS = 30.0
+DEFAULT_STT_CONTENT_TYPE = "audio/webm"
+
+
+async def _handle_stt(
+    send,
+    method: str,
+    body: bytes,
+    headers: dict[str, str],
+) -> None:
+    """Transcribe one recorded audio clip through OpenAI's cloud STT.
+
+    Mirrors _handle_tts's gating exactly (feature flag, session, the same
+    cross-origin cookie check). There is no local-engine path here to fall
+    back to -- see object_stt.py's docstring for why: voice input in this
+    codebase is otherwise 100% browser-native SpeechRecognition, which
+    never reaches the server at all. This is the "not on device"
+    alternative, for browsers/devices that lack that API entirely.
+
+    The request body is the raw audio bytes themselves (whatever
+    MediaRecorder produced client-side), not JSON -- the client's own
+    Content-Type header says what format it is.
+    """
+    if method != "POST":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    if not _env_enabled(STT_ENABLED_ENV):
+        await _send_json(
+            send,
+            {"status": "error", "error": f"STT is disabled. Set {STT_ENABLED_ENV}=true."},
+            status=403,
+        )
+        return
+
+    session = _current_identity_session(headers)
+    if session is None:
+        await _send_json(
+            send, {"status": "error", "error": "STT requires a signed-in session."}, status=401
+        )
+        return
+
+    cookie_token = _session_cookie_token(headers)
+    if cookie_token and not _authorization_token(headers) and not _cookie_request_origin_allowed(headers):
+        await _send_json(
+            send,
+            {"status": "error", "error": "Cross-origin cookie writes are not allowed."},
+            status=403,
+        )
+        return
+
+    if not body:
+        await _send_json(send, {"status": "error", "error": "audio body is required"}, status=400)
+        return
+    if len(body) > STT_MAX_BYTES:
+        await _send_json(
+            send,
+            {"status": "error", "error": f"audio exceeds {STT_MAX_BYTES} bytes"},
+            status=413,
+        )
+        return
+
+    key = object_service_keys.get_service_key(session.user_id, "openai", base_dir=_data_dir())
+    if key is None:
+        await _send_json(
+            send,
+            {
+                "status": "error",
+                "error": (
+                    "No openai key stored. Set one with "
+                    f"PUT /identity/users/{session.user_id}/service-keys."
+                ),
+            },
+            status=400,
+        )
+        return
+
+    content_type = (headers.get("content-type") or DEFAULT_STT_CONTENT_TYPE).strip()
+    timeout = _env_float(STT_TIMEOUT_ENV, DEFAULT_STT_TIMEOUT_SECONDS)
+
+    def send_http(url: str, request_headers, request_body: bytes) -> tuple[int, bytes]:
+        request = urllib.request.Request(
+            url, data=request_body, method="POST", headers=dict(request_headers)
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.status, response.read()
+        except urllib.error.HTTPError as exc:
+            return exc.code, exc.read()
+
+    try:
+        text = await asyncio.to_thread(
+            object_stt.transcribe_cloud, body, content_type, key, send_http=send_http,
+        )
+    except object_stt.STTProviderError as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=502)
+        return
+
+    await _send_json(send, {"status": "ok", "text": text})
 
 
 READER_ENABLED_ENV = "DBBASIC_ENABLE_READER"

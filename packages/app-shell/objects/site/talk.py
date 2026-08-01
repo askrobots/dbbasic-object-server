@@ -138,7 +138,8 @@ const capAssistant = document.getElementById("capAssistant");
 let prefs = {id: OWNER_ID, ai_model: "anthropic:claude-sonnet-5",
              tools: "global_search,list_collections,list_records,get_record,create_record,update_record,read_page",
              talk_wake_word: "computer", talk_end_word: "over",
-             talk_endpoint: "silence", talk_silence_ms: "1400", talk_tts: "auto"};
+             talk_endpoint: "silence", talk_silence_ms: "1400", talk_tts: "auto",
+             talk_tts_engine: "local", talk_stt_engine: "browser"};
 let aiHistory = [];
 const TTS_MAX_CHARS = 800;
 const VIEWS_PATH_RE = /\\/views\\/[A-Za-z0-9_-]+/;
@@ -157,6 +158,8 @@ const DEFAULT_SILENCE_MS = 1400;
 const DEFAULT_TOOLS = "global_search,list_collections,list_records,get_record,create_record,update_record,read_page";
 const DEFAULT_MODEL = "anthropic:claude-sonnet-5";
 const DEFAULT_TALK_TTS = "auto";
+const DEFAULT_TALK_TTS_ENGINE = "local";
+const DEFAULT_TALK_STT_ENGINE = "browser";
 
 function pref(name, fallback) {
   const v = prefs[name];
@@ -171,6 +174,19 @@ function endpointMode() {
 function talkTtsMode() {
   const m = String(pref("talk_tts", DEFAULT_TALK_TTS)).trim();
   return (m === "server" || m === "browser") ? m : DEFAULT_TALK_TTS;
+}
+function talkTtsEngine() {
+  const m = String(pref("talk_tts_engine", DEFAULT_TALK_TTS_ENGINE)).trim();
+  return m === "openai" ? "openai" : DEFAULT_TALK_TTS_ENGINE;
+}
+// "openai" here is deliberately opt-in only, never an automatic fallback
+// for browsers lacking SpeechRecognition -- a Firefox user who never
+// touched this setting and has no stored OpenAI key must keep seeing
+// today's exact behavior (mic hidden), not a confusing "no key stored"
+// error from a feature they never asked for. See initMic()/initCloudMic().
+function talkSttEngine() {
+  const m = String(pref("talk_stt_engine", DEFAULT_TALK_STT_ENGINE)).trim();
+  return m === "openai" ? "openai" : DEFAULT_TALK_STT_ENGINE;
 }
 function silenceMs() {
   const n = Number(pref("talk_silence_ms", DEFAULT_SILENCE_MS));
@@ -307,8 +323,8 @@ async function speak(text) {
   try {
     const res = await fetch("/api/tts", {
       method: "POST", credentials: "same-origin",
-      headers: {"content-type": "application/json", accept: "audio/wav"},
-      body: JSON.stringify({text: spoken}),
+      headers: {"content-type": "application/json", accept: "audio/*"},
+      body: JSON.stringify({text: spoken, engine: talkTtsEngine()}),
     });
     if (!res.ok) throw new Error("tts endpoint failed");
     const url = URL.createObjectURL(await res.blob());
@@ -864,8 +880,29 @@ function resumeListeningIfNeeded() {
 function initMic() {
   const mic = document.getElementById("mic");
   const ring = document.getElementById("miclevel");
-  if (!SpeechRecognitionCtor || !mic) {
-    if (mic) mic.hidden = true;
+  if (!mic) return;
+
+  // talk_stt_engine "openai" is an explicit opt-in (see talkSttEngine's
+  // comment) -- it never silently activates for a browser that merely
+  // lacks SpeechRecognition, so someone who never touched this setting
+  // keeps seeing exactly today's behavior either way.
+  if (talkSttEngine() === "openai") {
+    if (!navigator.mediaDevices || !window.MediaRecorder) {
+      mic.hidden = true;
+      if (ring) ring.hidden = true;
+      return;
+    }
+    mic.hidden = false;
+    // No live level meter here: it is driven by SpeechRecognition's own
+    // partial-result timing (see startMeter's callers), which push-to-talk
+    // cloud capture has no equivalent signal for.
+    if (ring) ring.hidden = true;
+    initCloudMic(mic);
+    return;
+  }
+
+  if (!SpeechRecognitionCtor) {
+    mic.hidden = true;
     if (ring) ring.hidden = true;
     return;
   }
@@ -971,6 +1008,103 @@ function initMic() {
       capUser.classList.remove("armed", "active", "sent");
     }
   });
+}
+
+// Cloud STT is push-to-talk, not continuous wake-word listening: one tap
+// starts a real MediaRecorder capture, a second tap stops it and uploads
+// the clip to /api/stt for transcription. Raw audio has no equivalent to
+// SpeechRecognition's interimResults, so there is no live partial
+// transcript to drive a wake word, a VAD silence endpoint, or a
+// continuous conversation mode the way the browser path has -- building
+// real audio-level VAD to replicate that is separate, real work (see
+// bench/README.md's ASR section). This is deliberately a smaller, honest
+// feature: it promises only "record what you say between two taps,
+// transcribe it, send it" -- and unlike SpeechRecognition, it works on
+// every browser with a microphone, including ones the Web Speech API
+// never supported (Firefox).
+let cloudRecorder = null;
+let cloudChunks = [];
+let cloudStream = null;
+let cloudRecording = false;
+
+function initCloudMic(mic) {
+  mic.addEventListener("click", async () => {
+    primeAudioForIOS();
+    if (cloudRecording) { stopCloudRecording(); return; }
+    await startCloudRecording(mic);
+  });
+}
+
+function showEndpointHint(message) {
+  const hint = document.getElementById("endpointhint");
+  if (hint) { hint.textContent = message; hint.hidden = false; }
+}
+
+async function startCloudRecording(mic) {
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({audio: true});
+  } catch (e) {
+    showEndpointHint("Microphone access was denied or unavailable.");
+    return;
+  }
+  const candidates = ["audio/webm", "audio/mp4", "audio/ogg"];
+  const mimeType = window.MediaRecorder && MediaRecorder.isTypeSupported
+    ? candidates.find((t) => MediaRecorder.isTypeSupported(t))
+    : undefined;
+  try {
+    cloudRecorder = mimeType ? new MediaRecorder(stream, {mimeType}) : new MediaRecorder(stream);
+  } catch (e) {
+    stream.getTracks().forEach((t) => t.stop());
+    showEndpointHint("This browser cannot record audio for cloud speech recognition.");
+    return;
+  }
+  cloudStream = stream;
+  cloudChunks = [];
+  cloudRecorder.ondataavailable = (e) => { if (e.data && e.data.size) cloudChunks.push(e.data); };
+  cloudRecorder.onstop = () => onCloudRecordingStopped(mic);
+  cloudRecorder.start();
+  cloudRecording = true;
+  mic.classList.add("on");
+  mic.textContent = "recording… tap to stop";
+  capUser.textContent = "";
+  capUser.classList.add("armed");
+}
+
+function stopCloudRecording() {
+  if (cloudRecorder && cloudRecorder.state !== "inactive") cloudRecorder.stop();
+  cloudRecording = false;
+}
+
+async function onCloudRecordingStopped(mic) {
+  if (cloudStream) { cloudStream.getTracks().forEach((t) => t.stop()); cloudStream = null; }
+  mic.classList.remove("on");
+  mic.textContent = "transcribing…";
+  const blobType = (cloudRecorder && cloudRecorder.mimeType) || "audio/webm";
+  const blob = new Blob(cloudChunks, {type: blobType});
+  cloudChunks = [];
+  if (!blob.size) {
+    mic.textContent = "mic";
+    return;
+  }
+  try {
+    const res = await fetch("/api/stt", {
+      method: "POST", credentials: "same-origin",
+      headers: {"content-type": blobType, accept: "application/json"},
+      body: blob,
+    });
+    const data = await res.json().catch(() => ({}));
+    mic.textContent = "mic";
+    if (!res.ok || data.status !== "ok" || typeof data.text !== "string") {
+      showEndpointHint(data.error || "Transcription failed.");
+      return;
+    }
+    const text = data.text.trim();
+    if (text) submitTurn(text);
+  } catch (e) {
+    mic.textContent = "mic";
+    showEndpointHint("Transcription request failed.");
+  }
 }
 
 // One-time unlock, inside a user gesture. Safari on iOS refuses both

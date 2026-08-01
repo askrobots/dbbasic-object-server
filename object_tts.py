@@ -7,15 +7,28 @@ through a shell string, so there is no injection surface no matter what
 the caller sends. Results are cached on disk keyed by engine, voice, and
 text, so a repeated phrase (a common shell reply, a stock error message)
 costs one synthesis instead of one per request.
+
+A second, unrelated path lives here too: ``synthesize_cloud``, which calls
+OpenAI's dedicated TTS API instead of a local engine. It exists because the
+local engines above are a real "not on device" gap -- ``say`` only runs on
+macOS (explicitly dev-only, see ``synthesize``'s docstring) and the
+production droplet only ever has ``espeak-ng``, which is intelligible but
+robotic. Confirmed live before building this: a real ``gpt-4o-mini-tts``
+call, played back and round-tripped through OpenAI's own transcription API,
+came back essentially word-for-word. Callers choose between the two paths;
+neither silently falls back to the other, matching how this codebase
+surfaces provider gaps elsewhere (object_ai.py) rather than hiding them.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Callable, Mapping
 
 from object_versions import DEFAULT_DATA_DIR
 
@@ -23,9 +36,23 @@ TTS_CACHE_DIR = "tts-cache"
 DEFAULT_TIMEOUT_SECONDS = 10.0
 ENGINE_CANDIDATES = ("espeak-ng", "espeak", "say")
 
+OPENAI_TTS_URL = "https://api.openai.com/v1/audio/speech"
+DEFAULT_CLOUD_MODEL = "gpt-4o-mini-tts"
+DEFAULT_CLOUD_VOICE = "alloy"
+CLOUD_CONTENT_TYPE = "audio/mpeg"
+
+# send_http(url, headers, body_bytes) -> (status, response_bytes) -- the same
+# shape object_ai.run_chat's caller injects, so the server owns the timeout
+# and thread and tests run without a network.
+SendHttp = Callable[[str, Mapping[str, str], bytes], tuple[int, bytes]]
+
 
 class TTSEngineNotFoundError(RuntimeError):
     """Raised when no supported speech engine is installed."""
+
+
+class TTSProviderError(RuntimeError):
+    """Raised when a cloud TTS call fails (bad key, rate limit, bad request)."""
 
 
 class TTSSynthesisError(RuntimeError):
@@ -51,15 +78,22 @@ def cache_path(
     text: str,
     *,
     base_dir: Path | str = DEFAULT_DATA_DIR,
+    model: str | None = None,
 ) -> Path:
-    """Return the cache file for one (engine, voice, text) triple.
+    """Return the cache file for one (engine, voice, text[, model]) tuple.
 
     The key hashes the engine name rather than its resolved path, so the
     cache stays valid across machines where the binary lives somewhere
     else. No eviction in v1 -- the cache only grows; operators wanting a
     bound should prune ``data/tts-cache`` on a schedule of their choosing.
+
+    ``model`` only ever comes from the cloud path (different OpenAI TTS
+    models sound different and cost different amounts) -- omitted, it
+    leaves local-engine cache keys byte-identical to before this existed.
     """
     key = f"{engine}|{voice or ''}|{text}"
+    if model:
+        key += f"|{model}"
     digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
     return Path(base_dir) / TTS_CACHE_DIR / f"{digest}.wav"
 
@@ -97,6 +131,45 @@ def synthesize(
 
     _write_cache(cached, audio)
     return audio, False
+
+
+def synthesize_cloud(
+    text: str,
+    voice: str | None,
+    api_key: str,
+    *,
+    send_http: SendHttp,
+    model: str = DEFAULT_CLOUD_MODEL,
+    base_dir: Path | str = DEFAULT_DATA_DIR,
+) -> tuple[bytes, str, bool]:
+    """Return (audio_bytes, content_type, from_cache) via OpenAI's TTS API.
+
+    Raises TTSProviderError on any non-2xx response; callers map that to
+    an HTTP status the same way the local-engine errors already are.
+    """
+    cached = cache_path("openai", voice, text, base_dir=base_dir, model=model)
+    if cached.is_file():
+        return cached.read_bytes(), CLOUD_CONTENT_TYPE, True
+
+    payload = {"model": model, "input": text, "voice": voice or DEFAULT_CLOUD_VOICE}
+    headers = {"authorization": f"Bearer {api_key}", "content-type": "application/json"}
+    status, body = send_http(OPENAI_TTS_URL, headers, json.dumps(payload).encode("utf-8"))
+    if status >= 400:
+        raise TTSProviderError(_provider_error_detail(status, body))
+
+    _write_cache(cached, body)
+    return body, CLOUD_CONTENT_TYPE, False
+
+
+def _provider_error_detail(status: int, body: bytes) -> str:
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return f"Provider error (HTTP {status})"
+    detail = payload.get("error")
+    if isinstance(detail, dict):
+        detail = detail.get("message") or json.dumps(detail)
+    return f"Provider error (HTTP {status}): {str(detail)[:300]}"
 
 
 def _synthesize_espeak(

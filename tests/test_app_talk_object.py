@@ -485,7 +485,7 @@ def test_talk_prefs_reads_go_through_pref_helper_not_raw_field_access():
 
 
 def test_talk_schema_bumped_with_radio_protocol_fields():
-    assert SHELL_PREFS_SCHEMA["version"] == 5   # +talk_model (voice wants fast)
+    assert SHELL_PREFS_SCHEMA["version"] == 6   # +talk_tts_engine, +talk_stt_engine
 
     fields = {f["name"]: f for f in SHELL_PREFS_SCHEMA["fields"]}
     assert fields["talk_wake_word"]["default"] == "computer"
@@ -501,6 +501,26 @@ def test_talk_schema_bumped_with_radio_protocol_fields():
     assert 'talk_end_word: "over"' in TALK_SOURCE
     assert 'talk_endpoint: "silence"' in TALK_SOURCE
     assert 'talk_silence_ms: "1400"' in TALK_SOURCE
+
+
+def test_talk_cloud_voice_prefs_default_off():
+    fields = {f["name"]: f for f in SHELL_PREFS_SCHEMA["fields"]}
+    # Both default to the free, local, zero-behavior-change option -- a
+    # user who never opens settings must see EXACTLY today's behavior.
+    assert fields["talk_tts_engine"]["type"] == "enum"
+    assert fields["talk_tts_engine"]["default"] == "local"
+    assert set(fields["talk_tts_engine"]["enum"]) == {"local", "openai"}
+    assert fields["talk_stt_engine"]["type"] == "enum"
+    assert fields["talk_stt_engine"]["default"] == "browser"
+    assert set(fields["talk_stt_engine"]["enum"]) == {"browser", "openai"}
+
+    assert 'talk_tts_engine: "local"' in TALK_SOURCE
+    assert 'talk_stt_engine: "browser"' in TALK_SOURCE
+
+    # The settings form must actually surface both, or they're invisible.
+    default_form_fields = SHELL_PREFS_SCHEMA["forms"]["default"]["fields"]
+    assert "talk_tts_engine" in default_form_fields
+    assert "talk_stt_engine" in default_form_fields
 
 
 def test_talk_wake_word_gating_discards_until_heard():
