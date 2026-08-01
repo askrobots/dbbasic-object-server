@@ -354,6 +354,44 @@ def test_compute_cost_cents_sums_before_flooring():
     assert object_ai.compute_cost_cents(644, 1024, price_row) == 0
 
 
+def test_openai_request_sets_reasoning_effort_none_for_gpt_5_6_family_with_tools():
+    # OpenAI's own error, hit live: "Function tools with reasoning_effort
+    # are not supported for gpt-5.6-luna in /v1/chat/completions ... set
+    # reasoning_effort to 'none'." Scoped to the 5.6 family specifically --
+    # gpt-5/gpt-5-mini already work with tools under their own default and
+    # must NOT get this override.
+    captured_bodies = []
+
+    def send_http(url, headers, body):
+        captured_bodies.append(json.loads(body))
+        return openai_text_response_with_usage("ok", prompt_tokens=5, completion_tokens=2)
+
+    tools = [{"type": "function", "function": {"name": "noop", "parameters": {}}}]
+
+    object_ai.run_chat(
+        send_http=send_http, dispatch_tool=lambda name, arguments: {},
+        service="openai", model="gpt-5.6-luna", key="sk-test",
+        message="hello", tools=tools,
+    )
+    assert captured_bodies[-1]["reasoning_effort"] == "none"
+
+    captured_bodies.clear()
+    object_ai.run_chat(
+        send_http=send_http, dispatch_tool=lambda name, arguments: {},
+        service="openai", model="gpt-5-mini", key="sk-test",
+        message="hello", tools=tools,
+    )
+    assert "reasoning_effort" not in captured_bodies[-1]
+
+    captured_bodies.clear()
+    object_ai.run_chat(
+        send_http=send_http, dispatch_tool=lambda name, arguments: {},
+        service="openai", model="gpt-5.6-luna", key="sk-test",
+        message="hello", tools=None,
+    )
+    assert "reasoning_effort" not in captured_bodies[-1]
+
+
 def test_run_chat_openai_usage_shape_feeds_cost_math():
     def send_http(url, headers, body):
         return openai_text_response_with_usage(

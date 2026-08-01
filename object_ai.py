@@ -30,6 +30,14 @@ OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 
 SUPPORTED_SERVICES = ("anthropic", "openai")
 
+# The gpt-5.6 family defaults to a non-"none" reasoning_effort that OpenAI's
+# /v1/chat/completions rejects outright when tools are also present ("Function
+# tools with reasoning_effort are not supported ... set reasoning_effort to
+# 'none'" -- their error, not ours). Older models (gpt-5, gpt-5-mini, ...)
+# already work fine with tools under their own default, so this is scoped to
+# the specific family that needs it rather than applied to every OpenAI call.
+_REASONING_EFFORT_NONE_MODELS = ("gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol")
+
 # send_http(url, headers, body_bytes) -> (status, response_bytes)
 SendHttp = Callable[[str, Mapping[str, str], bytes], tuple[int, bytes]]
 # dispatch_tool(name, arguments) -> {"http_status": int, "response": Any}
@@ -394,6 +402,8 @@ class _OpenAIProvider:
         }
         if self.tools:
             payload["tools"] = self.tools
+            if self.model in _REASONING_EFFORT_NONE_MODELS:
+                payload["reasoning_effort"] = "none"
         headers = {
             "authorization": f"Bearer {self.key}",
             "content-type": "application/json",
