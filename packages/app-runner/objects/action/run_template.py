@@ -34,6 +34,36 @@ right now. (The runner re-checks at execution -- a key can be deleted
 between queue and run -- but that failure is the rare race, not the
 normal path.)
 
+## One execution model, not two (task_id)
+
+q9 (askrobots) has a SEPARATE model, `tasks.Work`, for "a template was run
+in service of this task": task + template + worker + status + result, its
+own row, its own history. This runner does not get a second one. `task_id`
+on template_runs is the only piece Work had that this runner did not:
+everything else Work would have needed -- a status machine, an idempotent
+settlement, staleness detection, async submit/poll, an escalation path for
+a run stuck between "submitted" and "resolved" -- template_runs already
+has, built and proven under real money before this field existed. Work
+had none of that; its billing lived in a THIRD, disconnected model
+(`integrations.APILog`) that had to be kept in sync by hand. Here it is
+the same row.
+
+Multiple attempts against one task are just multiple runs sharing a
+task_id -- the append-only doctrine applies exactly as it does everywhere
+else in this codebase: "how many times has this been attempted" is a
+fold over rows, not a stored counter. The task's detail page renders that
+fold with the same `related` block every other one-to-many relationship
+in this system uses (order -> order_lines, invoice -> invoice_lines);
+nothing new was built to show it.
+
+Deliberately absent: nothing here mutates task.status when a run
+succeeds. A Design Review producing a report is not the same claim as
+"this task is finished" -- that is a human's call, or an agent's,
+looking at the run's own output, exactly the same "the server notices,
+the person decides" posture system_reorder_check takes with its
+suggestions. Automatic status transitions are a door left open, not one
+walked through here.
+
 ## Ordering, and the crash between the two writes
 
 The hold is written BEFORE the run row. If the crash lands between them,
@@ -147,6 +177,31 @@ def POST(request):
         return {"status": 404,
                 "error": f"There is no template {template_id!r} on this server."}
 
+    # --- the optional task link -----------------------------------------------
+    #
+    # A run is in service of a task, or it is not -- most are not (a SWOT
+    # from the shell, a one-off from Talk). When it is, ownership is
+    # checked HERE, at queue time, the same "refused while somebody is
+    # looking" posture the capability-boundary checks below already use:
+    # attaching a run to a task the caller cannot see would let them
+    # infer the task exists (its id, its status) through what the run
+    # settles against. Same posture as the attachments capability, which
+    # gates a file to the record it is attached to the same way.
+    task_id = _text(request.get("task_id"))
+    if task_id:
+        try:
+            task = object_records.get_collection_record(
+                "tasks", task_id, base_dir=base)
+        except Exception:
+            task = None
+        if task is None:
+            return {"status": 404,
+                    "error": f"There is no task {task_id!r} on this server."}
+        is_admin = bool(identity.get("is_admin")) or "admin" in (identity.get("roles") or [])
+        if not is_admin and _text(task.get("owner_id")) != user_id:
+            return {"status": 403,
+                    "error": "You can only run a template against a task you own."}
+
     form_data = request.get("form_data")
     if isinstance(form_data, str):
         try:
@@ -228,6 +283,7 @@ def POST(request):
     record = {
         "id": run_id,
         **stamped,
+        "task_id": task_id,
         "status": "queued",
         "idempotency_key": object_ids.new_uuid4(),
         "wallet_id": wallet_id,

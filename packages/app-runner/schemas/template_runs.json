@@ -1,7 +1,7 @@
 {
   "name": "template_runs",
   "title": "Template Runs",
-  "version": 1,
+  "version": 2,
   "storage": "append",
   "description": "One job: a template somebody pressed Run on, the terms it ran under, and what happened. THE TERMS ARE STAMPED AT QUEUE TIME -- handler, rendered body, model, price -- copied from the template at the moment of submission, because a template is edited constantly (that is what makes it a template) and a user reading last month's run history must read what last month actually cost, not what this month's prices would have made it cost (docs/logic-decisions.md #1). Even the rendered body is stamped rather than re-rendered at execution, because rendering reads the template and by execution time the template may say something else. THE MONEY IS HOLD / RELEASE / ORDINARY-DEBIT, written to wallet_entries and never to this row: a hold (negative) goes on at queue time THROUGH the wallet gate, so the moment the gate is asked is the moment money is committed and a user with five cents cannot queue four hundred runs; settlement releases the hold in full and charges an ordinary debit for the stamped price on success, or releases alone on failure -- the user pays nothing for a run that did not do the thing, whatever it cost US at the provider (provider_cost_cents records our side, so margin is a fold rather than a mystery). Settlement is idempotent by provenance marker (template_run/<id>/release), checked against the ENTRIES rather than against status here, because the crash this guards is precisely the one between writing money and updating status. THE HARD CONSTRAINT THIS SCHEMA EXISTS TO STATE: a stale claimed run is marked abandoned, its hold is released, and it is NEVER RETRIED AUTOMATICALLY. The provider call is not idempotent and is not ours -- a run claimed, executed and interrupted before the answer was recorded may or may not have been billed by the provider, and automatically re-running it risks paying twice for one job. Automatic retry of a paid non-idempotent call looks like robustness and is an unbounded spend; a retry is a NEW run, with a new hold, started by a person who can see what happened. status is a declared state machine (queued -> claimed -> succeeded | failed; queued/claimed -> abandoned) so /flow renders it and the transition rules bind every writer; there is no update grant on this collection at all, so the only hands that move a run are the runner and the sweeper, in process.",
   "fields": [
@@ -18,6 +18,15 @@
         "display_field": "name"
       },
       "help": "Which template was run. A pointer for navigation only: every term that matters is stamped below, so deleting or rewriting the template changes nothing about this row."
+    },
+    {
+      "name": "task_id",
+      "type": "relation",
+      "relation": {
+        "collection": "tasks"
+      },
+      "label": "Task",
+      "help": "Optional. When a run is in service of a task, this is the task -- and it is the ONLY thing q9's separate tasks.Work model was for that this runner did not already have. Optional, not required: most runs (a SWOT from the shell, a one-off from Talk) have no task at all, and a template runner that could only run FROM a task would be a regression from what shipped before this field existed."
     },
     {
       "name": "template_name",

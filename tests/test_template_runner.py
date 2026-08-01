@@ -563,3 +563,136 @@ def test_the_sweeper_repairs_a_hold_a_crash_left_behind(data_dir):
     again = run_object("system_run_sweeper", {"now": "2026-07-26T13:00:00Z"})
     assert again["holds_released"] == []
     assert balance(data_dir) == 200
+
+
+# --- task_id: one execution model, not a second one (q9's tasks.Work) ----------
+
+def seed_task(data_dir, task_id="task-1", owner="dan", **fields):
+    stage_collection(data_dir, "app-tasks", "tasks")
+    row = {"id": task_id, "title": "Review the homepage", "owner_id": owner}
+    row.update(fields)
+    return object_records.create_collection_record("tasks", row, base_dir=data_dir)
+
+
+def test_a_run_can_be_queued_against_a_task_the_caller_owns(data_dir):
+    seed_template(data_dir)
+    seed_wallet(data_dir, 200)
+    seed_task(data_dir, owner="dan")
+
+    queued = queue(data_dir, task_id="task-1")
+    assert queued["ok"] is True
+
+    run = object_records.read_collection_records("template_runs",
+                                                 base_dir=data_dir)[0]
+    assert run["task_id"] == "task-1"
+
+
+def test_task_id_is_entirely_optional_and_unchanged_by_default(data_dir):
+    """The regression that would matter most: a template runner that
+    could only run FROM a task would break every ad-hoc run (a SWOT from
+    the shell, a one-off from Talk) that has nothing to do with one."""
+    seed_template(data_dir)
+    seed_wallet(data_dir, 200)
+
+    queued = queue(data_dir)   # no task_id at all
+    assert queued["ok"] is True
+    run = object_records.read_collection_records("template_runs",
+                                                 base_dir=data_dir)[0]
+    assert run["task_id"] == ""
+
+
+def test_a_run_cannot_be_linked_to_a_task_that_does_not_exist(data_dir):
+    seed_template(data_dir)
+    seed_wallet(data_dir, 200)
+
+    result = queue(data_dir, task_id="no-such-task")
+    assert result["status"] == 404
+    assert object_records.read_collection_records("template_runs",
+                                                  base_dir=data_dir) == []
+
+
+def test_a_run_cannot_be_linked_to_someone_elses_task(data_dir):
+    """Refused at queue time, same 'refused while somebody is looking'
+    posture as the capability-boundary checks beside it -- letting the
+    link through would leak a stranger's task existence and status
+    through what the run settles against."""
+    seed_template(data_dir)
+    seed_wallet(data_dir, 200)
+    seed_task(data_dir, task_id="not-mine", owner="mallory")
+
+    result = queue(data_dir, task_id="not-mine")
+    assert result["status"] == 403
+    assert object_records.read_collection_records("template_runs",
+                                                  base_dir=data_dir) == []
+    # And nothing was held either -- the check runs before the hold.
+    assert balance(data_dir) == 200
+
+
+def test_an_admin_can_link_a_run_to_anyones_task(data_dir):
+    seed_template(data_dir)
+    seed_task(data_dir, task_id="someones", owner="mallory")
+    # The admin's OWN wallet holds the money -- linking to someone else's
+    # task changes whose task this serves, never who pays for it.
+    seed_wallet(data_dir, 200, wallet_id="w-ops", owner="ops")
+
+    result = queue(data_dir, task_id="someones",
+                   **{"_identity": {"user_id": "ops", "is_admin": True}})
+    assert result["ok"] is True, result
+
+
+def test_multiple_attempts_against_one_task_are_just_multiple_runs(data_dir):
+    """No second history collection -- q9's Work stored attempts in its
+    own rows; here it is a fold over template_runs sharing a task_id,
+    the same doctrine as every other one-to-many relationship in this
+    system."""
+    seed_template(data_dir)
+    seed_wallet(data_dir, 200)
+    seed_task(data_dir, owner="dan")
+
+    queue(data_dir, task_id="task-1")
+    queue(data_dir, task_id="task-1")
+
+    runs = [r for r in object_records.read_collection_records(
+                "template_runs", base_dir=data_dir)
+            if r.get("task_id") == "task-1"]
+    assert len(runs) == 2
+
+
+def test_a_run_never_mutates_the_tasks_own_status(data_dir):
+    """Deliberate. A run succeeding is not the same claim as 'this task
+    is finished' -- that is a human's call, or an agent's, looking at
+    the run's own output. Same 'the server notices, the person decides'
+    posture as system_reorder_check's suggestions."""
+    seed_template(data_dir)
+    seed_wallet(data_dir, 200)
+    seed_task(data_dir, owner="dan", status="open")
+
+    queue(data_dir, task_id="task-1")
+
+    task = object_records.get_collection_record("tasks", "task-1",
+                                                base_dir=data_dir)
+    assert task["status"] == "open"
+
+
+def test_the_task_detail_view_renders_the_runs_related_to_it():
+    """No new UI: the same `related` block order->order_lines already
+    uses, so a task's attempt history costs zero new client code."""
+    import csv
+    seed = (REPO_ROOT / "packages" / "app-tasks" / "seed" / "views.tsv")
+    rows = list(csv.DictReader(seed.read_text().splitlines(), delimiter="\t"))
+    detail = next(r for r in rows if r["id"] == "view_tasks_detail")
+    blocks = json.loads(detail["blocks"])
+    related = next((b for b in blocks if b.get("kind") == "related"), None)
+    assert related is not None, "no related block on the task detail view"
+    assert related["collection"] == "template_runs"
+    assert related["fk_field"] == "task_id"
+    assert related["match"] == "$record_id"
+
+
+def test_the_schema_declares_task_id_as_a_relation_to_tasks():
+    schema = json.loads((REPO_ROOT / "packages" / "app-runner" / "schemas"
+                         / "template_runs.json").read_text())
+    field = next(f for f in schema["fields"] if f["name"] == "task_id")
+    assert field["type"] == "relation"
+    assert field["relation"]["collection"] == "tasks"
+    assert schema["version"] >= 2
