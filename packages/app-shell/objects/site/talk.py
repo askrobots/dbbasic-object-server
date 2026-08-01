@@ -279,6 +279,7 @@ function speakBrowser(text) {
   const voice = pickVoice();
   if (voice) utter.voice = voice;
   utter.addEventListener("end", () => { speaking = false; resumeListeningIfNeeded(); });
+  utter.addEventListener("error", () => { speaking = false; resumeListeningIfNeeded(); });
   window.speechSynthesis.speak(utter);
 }
 
@@ -322,11 +323,22 @@ async function speak(text) {
     const player = sharedTtsAudio();
     player.pause();
     player.src = url;
-    player.onended = () => {
+    // EVERY exit clears `speaking`, not just the happy one. It gates the
+    // mic restart AND the transcript-stability submit, so a playback that
+    // ends without an `ended` event -- a bad WAV, a decode error, an
+    // interrupted element -- used to leave the page deaf and mute
+    // forever: mic never resumed, submits silently blocked, and nothing
+    // on screen said why. Found by the harness, whose spied play() never
+    // completed, which is exactly the shape of a real playback failure.
+    const done = () => {
+      player.onended = player.onerror = player.onstalled = null;
       URL.revokeObjectURL(url);
       speaking = false;
       resumeListeningIfNeeded();
     };
+    player.onended = done;
+    player.onerror = done;
+    player.onstalled = done;
     await player.play();
   } catch (e) {
     speakBrowser(spoken);
@@ -357,6 +369,7 @@ let buffer = "";
 let sessionLive = "";
 let armed = true;
 let finalDebounceTimer = null;
+let stabilityTimer = null;
 
 function tokenize(text) {
   return String(text ?? "").trim().split(/\\s+/).filter(Boolean);
@@ -511,6 +524,7 @@ function bufferHasContent() {
 // to the same submitTurn() the text box and Enter use.
 function finalizeVoiceSubmit(text) {
   if (finalDebounceTimer) { clearTimeout(finalDebounceTimer); finalDebounceTimer = null; }
+  if (stabilityTimer) { clearTimeout(stabilityTimer); stabilityTimer = null; }
   const clean = String(text ?? "").trim();
   resetTalkState();
   if (!clean) { if (conversationMode) updateCaptionArmed(); return; }
@@ -538,23 +552,26 @@ function processTranscript(isFinal) {
   const combinedRaw = ((buffer ? buffer + " " : "") + sessionLive).trim();
   const w = wakeWord();
 
+  // The split runs on EVERY event, not once at arming. Recognition
+  // transcripts are cumulative -- each interim restates the utterance
+  // from the beginning -- so a split applied only at arm time is undone
+  // by the very next event, and the wake word rides into the submitted
+  // command. Not hypothetical: the server's recorded turns include
+  // "Show me my notes computer show me my notes", the wake word twice,
+  // from exactly this. Splitting per event is idempotent: once buffer
+  // holds only command text, findWakeSplit finds nothing and passes it
+  // through untouched.
+  const split = w ? findWakeSplit(combinedRaw, w) : null;
   if (armed) {
-    if (w) {
-      const split = findWakeSplit(combinedRaw, w);
-      if (split === null) {
-        updateCaptionArmed();
-        if (isFinal) sessionLive = "";
-        return;
-      }
-      armed = false;
-      buffer = "";
-      sessionLive = split;
-    } else {
-      armed = false; // empty wake word: capture everything while the mic is on
+    if (w && split === null) {
+      updateCaptionArmed();
+      if (isFinal) sessionLive = "";
+      return;
     }
+    armed = false;   // empty wake word: capture everything while the mic is on
   }
 
-  const active = ((buffer ? buffer + " " : "") + sessionLive).trim();
+  const active = (split !== null ? split : combinedRaw).trim();
   updateCaptionActive(active);
 
   const endpoint = endpointMode();
@@ -562,6 +579,26 @@ function processTranscript(isFinal) {
   if (ew && (endpoint === "word" || endpoint === "silence")) {
     const stripped = tailMatchesEndWord(active, ew);
     if (stripped !== null) { finalizeVoiceSubmit(stripped); return; }
+  }
+
+  // TRANSCRIPT-STABILITY endpointing: on a device where the level meter
+  // cannot run (the iPad's exclusive microphone), end-of-utterance used
+  // to wait for iOS to volunteer an isFinal -- which it does 2-6 seconds
+  // after you stop, sometimes never. But the recognizer's own interims
+  // ARE a silence detector: while you speak the text keeps changing, and
+  // when it stops changing for the silence window, you have finished.
+  // Same signal the RMS meter derived from amplitude, taken from the
+  // transcript instead -- no second microphone stream, no contention.
+  if (!armed && endpointMode() === "silence" && !meterRunning && active) {
+    if (stabilityTimer) clearTimeout(stabilityTimer);
+    // Close over THIS event's already-split text. Rebuilding from the
+    // raw sessionLive here would resurrect the wake word the split just
+    // removed -- the timer is reset by every event, so the latest
+    // event's `active` is by definition the whole utterance so far.
+    stabilityTimer = setTimeout(() => {
+      stabilityTimer = null;
+      if (active && conversationMode && !speaking) finalizeVoiceSubmit(active);
+    }, silenceMs());
   }
 
   if (isFinal) {
@@ -579,7 +616,7 @@ function processTranscript(isFinal) {
       finalDebounceTimer = setTimeout(() => {
         finalDebounceTimer = null;
         finalizeVoiceSubmit(buffer);
-      }, 800);
+      }, 300);
     }
   }
 }
@@ -1009,7 +1046,9 @@ async function submitTurn(input) {
   // undefined.split() would throw here and silently kill the turn.
   const tools = String(pref("tools", DEFAULT_TOOLS)).split(",").map((t) => t.trim()).filter(Boolean);
   const [ok, body] = await api("POST", "/api/ai/chat",
-    {message: input, model: pref("ai_model", DEFAULT_MODEL), tools, history: aiHistory.slice(-20),
+    {message: input,
+     model: String(pref("talk_model", "")).trim() || pref("ai_model", DEFAULT_MODEL),
+     tools, history: aiHistory.slice(-20),
      session_id: SESSION_ID, source: "talk",
      system: TALK_SYSTEM + " Current local date/time: " + new Date().toString() + "."});
 

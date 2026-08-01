@@ -478,7 +478,7 @@ def test_talk_prefs_reads_go_through_pref_helper_not_raw_field_access():
 
 
 def test_talk_schema_bumped_with_radio_protocol_fields():
-    assert SHELL_PREFS_SCHEMA["version"] == 4
+    assert SHELL_PREFS_SCHEMA["version"] == 5   # +talk_model (voice wants fast)
 
     fields = {f["name"]: f for f in SHELL_PREFS_SCHEMA["fields"]}
     assert fields["talk_wake_word"]["default"] == "computer"
@@ -504,7 +504,10 @@ def test_talk_wake_word_gating_discards_until_heard():
     assert "findWakeSplit(combinedRaw, w)" in body
     # Nothing found yet -> stays armed and shows the dim hint, does not fold
     # into the active buffer.
-    assert "if (split === null) {" in body
+    # Per-event splitting: cumulative interims restate the wake word
+    # every event, so the split runs every event too (the recorded turn
+    # "Show me my notes computer show me my notes" is the old behaviour).
+    assert "if (w && split === null) {" in body
     assert "updateCaptionArmed();" in body
 
     armed_caption = re.search(r"function updateCaptionArmed\(\) \{(.*?)\n\}", TALK_SOURCE, re.S)
@@ -550,7 +553,7 @@ def test_talk_empty_wake_word_captures_everything():
     process = re.search(r"function processTranscript\(isFinal\) \{(.*?)\n\}\n", TALK_SOURCE, re.S)
     assert process
     body = process.group(1)
-    assert "armed = false; // empty wake word: capture everything while the mic is on" in body
+    assert "armed = false;   // empty wake word: capture everything while the mic is on" in body
 
 
 def test_talk_empty_end_word_falls_back_to_debounced_isfinal():
@@ -559,7 +562,7 @@ def test_talk_empty_end_word_falls_back_to_debounced_isfinal():
     body = process.group(1)
     assert 'endpoint === "word" && !ew' in body
     assert "setTimeout(() => {" in body
-    assert "}, 800);" in body
+    assert "}, 300);" in body   # short: stability endpointing owns the long wait now
     assert "finalizeVoiceSubmit(buffer);" in body
 
 

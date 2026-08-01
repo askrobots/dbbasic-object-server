@@ -78,13 +78,20 @@ HTMLMediaElement.prototype.play = function () {
   window.__plays.push(this.src ? this.src.slice(0, 40) : "(no src)");
   const p = realPlay.apply(this);
   if (p && p.catch) p.catch(() => {});
+  // A spied play never really plays, so it must really END -- otherwise
+  // the page's `speaking` flag sticks and blocks everything after the
+  // first reply, which is exactly the stuck state the page now guards.
+  setTimeout(() => this.dispatchEvent(new Event("ended")), 40);
   return Promise.resolve();
 };
 // speechSynthesis exists headless but must be observable too.
 window.__spoken = [];
 if (window.speechSynthesis) {
   const realSpeak = window.speechSynthesis.speak.bind(window.speechSynthesis);
-  window.speechSynthesis.speak = (u) => { window.__spoken.push(u.text); };
+  window.speechSynthesis.speak = (u) => {
+    window.__spoken.push(u.text);
+    setTimeout(() => u.dispatchEvent(new Event("end")), 20);
+  };
 }
 """
 
@@ -240,3 +247,50 @@ def test_interim_results_render_a_live_caption(talk_page):
     # finish it so the module-scoped page is not left mid-utterance
     say(page, "computer make a note", final=True)
     page.wait_for_timeout(1300)
+
+
+def test_an_utterance_submits_even_if_a_final_never_comes(talk_page):
+    """THE latency fix, and the regression it repairs. With the meter
+    convicted, end-of-utterance waited on iOS volunteering an isFinal --
+    2-6 seconds after you stop, sometimes never, and strictly WORSE than
+    the meter it replaced. The recognizer's interims are themselves a
+    silence detector: text that stops changing IS the silence. Here the
+    device sends interims only, never a final, and the turn still fires
+    after the silence window."""
+    page, state = talk_page
+    fresh_turn(page, state)
+    say(page, "computer what time is it", final=False)   # interim only
+    page.wait_for_timeout(2100)                          # silence window (1400ms) + margin
+    assert len(state["chat_calls"]) == 1, "no submit without a final"
+    assert state["chat_calls"][0]["message"] == "what time is it"
+
+
+def test_continued_speech_keeps_postponing_the_submit(talk_page):
+    """Stability means STABLE: as long as the interim keeps growing, the
+    timer must keep resetting -- otherwise mid-sentence pauses truncate."""
+    page, state = talk_page
+    fresh_turn(page, state)
+    say(page, "computer remind me", final=False)
+    page.wait_for_timeout(700)
+    say(page, "computer remind me to call the supplier", final=False)
+    page.wait_for_timeout(700)          # 1400ms since FIRST, 700 since latest
+    assert state["chat_calls"] == []    # still talking; must not have fired
+    page.wait_for_timeout(1100)         # now quiet past the window
+    assert len(state["chat_calls"]) == 1
+    assert state["chat_calls"][0]["message"] == "remind me to call the supplier"
+
+
+def test_talk_prefers_its_own_model_when_set(talk_page):
+    """Voice tolerates latency far worse than a terminal: a fast model
+    that answers in 3 seconds beats a smarter one that leaves 10 seconds
+    of silence. talk_model overrides ai_model for this surface only."""
+    page, state = talk_page
+    page.evaluate("() => { prefs.talk_model = 'anthropic:claude-haiku-4-5'; }")
+    try:
+        fresh_turn(page, state)
+        say(page, "computer hello", final=True)
+        page.wait_for_timeout(900)
+        assert state["chat_calls"], "turn did not fire"
+        assert state["chat_calls"][0]["model"] == "anthropic:claude-haiku-4-5"
+    finally:
+        page.evaluate("() => { delete prefs.talk_model; }")

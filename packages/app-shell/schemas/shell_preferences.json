@@ -1,7 +1,7 @@
 {
   "name": "shell_preferences",
   "title": "Shell Preferences",
-  "version": 4,
+  "version": 5,
   "description": "Per-user shell settings; the record id is the user id.",
   "fields": [
     {
@@ -47,7 +47,11 @@
       "type": "enum",
       "label": "Talk Endpoint Mode",
       "default": "silence",
-      "enum": ["silence", "word", "manual"],
+      "enum": [
+        "silence",
+        "word",
+        "manual"
+      ],
       "help": "How Talk decides an utterance is finished: silence (VAD), word (end word only), or manual (button/Enter only)"
     },
     {
@@ -62,15 +66,40 @@
       "type": "enum",
       "label": "Voice Engine",
       "default": "auto",
-      "enum": ["auto", "server", "browser"],
+      "enum": [
+        "auto",
+        "server",
+        "browser"
+      ],
       "help": "Which engine speaks AI replies: auto prefers an on-device browser voice when one is available and falls back to the server otherwise, server always uses server TTS (with a browser fallback on failure), browser always uses the browser's own speechSynthesis"
+    },
+    {
+      "name": "talk_model",
+      "type": "text",
+      "help": "Model for the Talk surface only; blank falls back to ai_model. Exists because voice tolerates latency far worse than a terminal: a fast model that answers in 3 seconds beats a smarter one that leaves 10 seconds of silence."
     }
   ],
   "forms": {
-    "default": {"fields": ["ai_model", "tools", "voice_enabled", "talk_wake_word", "talk_end_word", "talk_endpoint", "talk_silence_ms", "talk_tts"]}
+    "default": {
+      "fields": [
+        "ai_model",
+        "tools",
+        "voice_enabled",
+        "talk_wake_word",
+        "talk_end_word",
+        "talk_endpoint",
+        "talk_silence_ms",
+        "talk_tts"
+      ]
+    }
   },
   "views": {
     "list_mode": "table",
-    "list_fields": ["ai_model", "tools", "voice_enabled", "talk_endpoint"]
+    "list_fields": [
+      "ai_model",
+      "tools",
+      "voice_enabled",
+      "talk_endpoint"
+    ]
   }
 }
