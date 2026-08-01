@@ -23,3 +23,10 @@ venv/
 # collision). See packages-private/README.md.
 /packages-private/*
 !/packages-private/README.md
+
+# The model/voice benchmark: real results worth keeping and possibly
+# publishing, deliberately outside version control -- it is a research
+# tool that reads real usage history and calls real paid providers, not
+# a shipped feature, and its output (timestamped JSON, drafts) has no
+# business in a public repo's history.
+/bench/

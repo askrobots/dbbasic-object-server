@@ -342,6 +342,18 @@ def test_compute_cost_cents_exact_integer_math():
     assert object_ai.compute_cost_cents(1000, 1000, None) is None
 
 
+def test_compute_cost_cents_sums_before_flooring():
+    # A cheap-model price row (gpt-5-mini's real rate): flooring each side
+    # separately before summing would give 0 + 0 = 0c for this call even
+    # though the true combined cost is ~1.06c -- real money silently
+    # recorded as free. Summing first and flooring once catches it.
+    price_row = {"input_per_million_cents": 25, "output_per_million_cents": 200}
+    assert object_ai.compute_cost_cents(36_428, 734, price_row) == 1
+    # A call whose combined cost genuinely is sub-cent still floors to 0 --
+    # that's correct integer-cent accounting, not the bug.
+    assert object_ai.compute_cost_cents(644, 1024, price_row) == 0
+
+
 def test_run_chat_openai_usage_shape_feeds_cost_math():
     def send_http(url, headers, body):
         return openai_text_response_with_usage(

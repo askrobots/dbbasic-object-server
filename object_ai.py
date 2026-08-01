@@ -464,15 +464,19 @@ def compute_cost_cents(
 ) -> int | None:
     """Integer-cent cost for a turn, or None when there is no price row.
 
-    Money math stays in integer cents throughout: each side is
-    ``tokens * per_million_cents // 1_000_000`` (integer division), summed
-    after rounding down separately -- never a float division on money.
+    Money math stays in integer cents throughout: sum the raw
+    tokens*per_million_cents products for both sides first, then floor
+    once -- never a float division on money. Flooring each side
+    separately before summing (the previous approach) silently
+    undercounts cheap models: e.g. gpt-5-mini at 25c/M input, 200c/M
+    output floors a 36,428-token call to 0+0=0c even though the combined
+    cost is a real ~1c.
     """
     if price_row is None:
         return None
     input_rate = int(price_row.get("input_per_million_cents") or 0)
     output_rate = int(price_row.get("output_per_million_cents") or 0)
-    return (tokens_in * input_rate // 1_000_000) + (tokens_out * output_rate // 1_000_000)
+    return (tokens_in * input_rate + tokens_out * output_rate) // 1_000_000
 
 
 def _json_or_error(status: int, body: bytes) -> dict[str, Any]:
