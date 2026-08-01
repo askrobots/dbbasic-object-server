@@ -293,3 +293,19 @@ def test_an_empty_reply_becomes_words_rather_than_silence(source):
     """A successful round-trip with empty text looks exactly like a hang
     on a voice surface. The recorded turn (out: "") is real."""
     assert 'body.reply || "I came back empty' in source
+
+
+def test_server_tts_reuses_one_gesture_unlocked_audio_element(source):
+    """"i didn't hear it talk", with the server voice configured and the
+    WAV verified good. iOS licenses programmatic play() only on an
+    element that has already played inside a user gesture -- `new
+    Audio(url)` per reply is born locked, its play() rejects, and the
+    fallback is speechSynthesis... which the mute switch silences. One
+    persistent element, played silent during the mic tap, reused for
+    every reply."""
+    assert "function sharedTtsAudio()" in source
+    assert "new Audio(url)" not in source
+    prime = source[source.index("function primeAudioForIOS"):]
+    prime = prime[:prime.index("async function api")]
+    assert "sharedTtsAudio()" in prime
+    assert "data:audio/wav;base64," in prime

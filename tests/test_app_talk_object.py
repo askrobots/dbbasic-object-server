@@ -189,8 +189,8 @@ def test_talk_source_pauses_recognition_around_tts_playback():
     assert speak_fn, "speak() not found in talk.py"
     body = speak_fn.group(1)
     # speaking flips true and recognition stops before either playback path.
-    assert body.index("speaking = true") < body.index('await currentAudio.play()')
-    assert body.index("stopListening();") < body.index('await currentAudio.play()')
+    assert body.index("speaking = true") < body.index('await player.play()')
+    assert body.index("stopListening();") < body.index('await player.play()')
     # Both the server-TTS path and the speechSynthesis fallback clear
     # `speaking` and resume listening once playback actually ends.
     assert "speaking = false; resumeListeningIfNeeded();" in body or (

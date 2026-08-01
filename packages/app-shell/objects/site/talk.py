@@ -242,7 +242,6 @@ function viewPathFromToolCalls(toolCalls) {
   return null;
 }
 
-let currentAudio = null;
 let speaking = false;
 
 // Voice picking for the browser speechSynthesis engine: prefer a
@@ -312,14 +311,23 @@ async function speak(text) {
     });
     if (!res.ok) throw new Error("tts endpoint failed");
     const url = URL.createObjectURL(await res.blob());
-    if (currentAudio) currentAudio.pause();
-    currentAudio = new Audio(url);
-    currentAudio.addEventListener("ended", () => {
+    // The SAME element every time, never a fresh one. iOS allows play()
+    // outside a user gesture only on an element that has already played
+    // inside one -- primeAudioForIOS() plays this element silent during
+    // the mic tap, and changing src afterwards keeps the unlock. `new
+    // Audio(url)` here was born locked, its play() rejected, and the
+    // catch fell back to speechSynthesis... which the mute switch
+    // silences. Server voice configured, server WAV fetched, and still
+    // no sound: this line is why.
+    const player = sharedTtsAudio();
+    player.pause();
+    player.src = url;
+    player.onended = () => {
       URL.revokeObjectURL(url);
       speaking = false;
       resumeListeningIfNeeded();
-    });
-    await currentAudio.play();
+    };
+    await player.play();
   } catch (e) {
     speakBrowser(spoken);
   }
@@ -895,6 +903,12 @@ function initMic() {
 // speechSynthesis and HTMLAudioElement.play() outside one, and gives no
 // error worth reading when it refuses -- the reply simply never becomes
 // sound, which is exactly what an older iPad reported.
+let ttsAudioEl = null;
+function sharedTtsAudio() {
+  if (!ttsAudioEl) ttsAudioEl = new Audio();
+  return ttsAudioEl;
+}
+
 let audioPrimed = false;
 function primeAudioForIOS() {
   if (audioPrimed) return;
@@ -908,6 +922,17 @@ function primeAudioForIOS() {
       // the gesture is what populates it in time for hasLocalVoice().
       window.speechSynthesis.getVoices();
     }
+  } catch (e) { /* nothing to unlock */ }
+  try {
+    // Unlock the ONE audio element every server-TTS reply will reuse: a
+    // zero-length silent play inside the gesture is what licenses every
+    // later programmatic play() on the same element.
+    const player = sharedTtsAudio();
+    player.muted = true;
+    player.src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAIlYAAESsAAACABAAZGF0YQAAAAA=";
+    const attempt = player.play();
+    if (attempt && attempt.catch) attempt.catch(() => {});
+    setTimeout(() => { player.muted = false; }, 150);
   } catch (e) { /* nothing to unlock */ }
   try {
     const Ctor = window.AudioContext || window.webkitAudioContext;
