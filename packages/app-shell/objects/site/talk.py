@@ -54,6 +54,7 @@ _STYLE = """
 .bar { border-top: 1px solid var(--line); padding: 0.75rem 1rem; display: flex; flex-direction: column; gap: 0.5rem; }
 .captions { min-height: 2.6rem; font-size: 0.95rem; }
 .endpointhint { font-size: 0.78rem; opacity: 0.75; padding: 0 0.2rem 0.2rem; }
+#sessionpick { max-width: 11rem; font-size: 0.78rem; opacity: 0.85; }
 .cap.user { color: var(--muted); }
 .cap.assistant { color: var(--text); font-weight: 600; }
 .controls { display: flex; align-items: center; gap: 0.75rem; }
@@ -123,8 +124,11 @@ TALK_SYSTEM = _BASE_CAPABILITIES + _TALK_ADDENDUM
 _SCRIPT = """
 // One conversation per page load. The server stamps this on every turn it
 // records, which is what makes a session listable and resumable later.
-const SESSION_ID = (crypto.randomUUID ? crypto.randomUUID()
-                    : "s-" + Math.random().toString(36).slice(2));
+let SESSION_ID = freshSessionId();
+function freshSessionId() {
+  return crypto.randomUUID ? crypto.randomUUID()
+       : "s-" + Math.random().toString(36).slice(2);
+}
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
@@ -1016,6 +1020,95 @@ document.getElementById("prompt").addEventListener("submit", (event) => {
 });
 initMic();
 loadPrefs();
+
+
+// === sessions =================================================================
+//
+// The same fold the shell does over the server-recorded turns, with one
+// deliberate difference: Talk NEVER auto-resumes. A voice page that
+// silently reloads twenty old turns into model context changes what the
+// next answer means without the user hearing anything change -- resume
+// here is a hand action on the picker, always. (The shell auto-resumes
+// inside a 30-minute window; eyes can see a restored transcript, ears
+// cannot.)
+let sessions = [];
+
+function foldSessions(rows) {
+  const by = {};
+  for (const row of rows) {
+    const sid = row.session_id || "";
+    if (!sid) continue;
+    (by[sid] = by[sid] || []).push(row);
+  }
+  return Object.entries(by).map(([id, rs]) => {
+    rs.sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
+    const first = rs.find((r) => r.input) || rs[0];
+    return {id, rows: rs, count: rs.length,
+            title: String((first && first.input) || "(untitled)").slice(0, 40),
+            last: String(rs[rs.length - 1].created_at || "")};
+  }).sort((a, b) => b.last.localeCompare(a.last)).slice(0, 10);
+}
+
+function agoShort(iso) {
+  const ms = Date.now() - Date.parse(iso || 0);
+  if (!isFinite(ms) || ms < 0) return "";
+  const m = Math.round(ms / 60000);
+  if (m < 1) return "now";
+  if (m < 60) return m + "m";
+  const h = Math.round(m / 60);
+  if (h < 24) return h + "h";
+  return Math.round(h / 24) + "d";
+}
+
+function renderSessionPicker() {
+  const sel = document.getElementById("sessionpick");
+  if (!sel) return;
+  const opts = ['<option value="__new">\u2795 new session</option>'];
+  for (const s of sessions) {
+    const label = s.title + (s.last ? " \u2014 " + agoShort(s.last) : "");
+    opts.push('<option value="' + esc(s.id) + '"'
+              + (s.id === SESSION_ID ? " selected" : "") + ">"
+              + esc(label) + "</option>");
+  }
+  sel.innerHTML = opts.join("");
+  if (!sessions.some((s) => s.id === SESSION_ID)) sel.value = "__new";
+}
+
+async function loadSessions() {
+  const res = await fetch("/collections/shell_commands/records?limit=1000",
+                          {credentials: "same-origin", headers: {accept: "application/json"}});
+  if (!res.ok) return;
+  sessions = foldSessions((await res.json()).records || []);
+  renderSessionPicker();
+
+  const sel = document.getElementById("sessionpick");
+  if (sel) sel.addEventListener("change", () => {
+    if (sel.value === "__new") {
+      SESSION_ID = freshSessionId();
+      aiHistory = [];
+      capAssistant.textContent = "new session";
+      renderSessionPicker();
+      return;
+    }
+    const s = sessions.find((x) => x.id === sel.value);
+    if (!s) return;
+    SESSION_ID = s.id;
+    aiHistory = [];
+    for (const row of s.rows.slice(-10)) {
+      if (row.kind === "ai" && row.output) {
+        aiHistory.push({role: "user", content: row.input});
+        aiHistory.push({role: "assistant", content: row.output});
+      }
+    }
+    // Say what just happened, on the surface the user is actually using:
+    // the context changed, and a voice page must not do that silently.
+    capAssistant.textContent = "resumed \u201c" + s.title + "\u201d ("
+      + s.count + " turns)";
+    renderSessionPicker();
+  });
+}
+loadSessions();
+
 """
 
 
@@ -1046,6 +1139,8 @@ def GET(request):
 <input name="line" placeholder="or type..." autofocus>
 <button type="submit" class="btn primary" aria-label="send">send</button>
 </form>
+<select id="sessionpick" aria-label="conversation">
+<option value="__new">&#10133; new session</option></select>
 <a class="backlink" href="/shell">back to shell</a>
 </div>
 </div>

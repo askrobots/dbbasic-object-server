@@ -88,7 +88,7 @@ def test_shell_still_records_its_non_ai_commands():
 @pytest.mark.parametrize("page,source_tag", [("talk", '"talk"'), ("shell", '"shell"')])
 def test_the_clients_mint_and_send_a_session_id(page, source_tag):
     source = (REPO / f"packages/app-shell/objects/site/{page}.py").read_text()
-    assert "const SESSION_ID" in source
+    assert "let SESSION_ID = freshSessionId()" in source
     assert "session_id: SESSION_ID" in source
     assert f"source: {source_tag}" in source
 

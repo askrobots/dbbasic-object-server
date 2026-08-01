@@ -28,6 +28,8 @@ _STYLE = """
 form#prompt { display: flex; gap: 0.5rem; border-top: 1px solid var(--line);
               padding-top: 0.75rem; }
 form#prompt input { flex: 1; font-family: var(--font-mono); }
+#sessbar { border-top: 1px solid var(--line); padding: 0.3rem 0.6rem; }
+#sessbar select { max-width: 100%; font-size: 0.8rem; opacity: 0.85; }
 #attachbar { display: flex; gap: 0.4rem; flex-wrap: wrap; padding: 0.3rem 0.6rem;
   border-top: 1px solid var(--line); font-size: 0.8rem; }
 #attachbar .chip { border: 1px solid var(--line); border-radius: 10px;
@@ -76,8 +78,11 @@ _HELP = (
 )
 
 _SCRIPT = """
-const SESSION_ID = (crypto.randomUUID ? crypto.randomUUID()
-                    : "s-" + Math.random().toString(36).slice(2));
+let SESSION_ID = freshSessionId();
+function freshSessionId() {
+  return crypto.randomUUID ? crypto.randomUUID()
+       : "s-" + Math.random().toString(36).slice(2);
+}
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
@@ -315,12 +320,68 @@ async function loadPrefs() {
   if (res.ok) { const body = await res.json(); prefs = body.record || prefs; }
 }
 
-async function loadHistory() {
-  const res = await fetch("/collections/shell_commands/records?limit=1000",
-                          {credentials: "same-origin", headers: {accept: "application/json"}});
-  if (!res.ok) return;
-  const body = await res.json();
-  for (const row of (body.records || []).slice(-30)) {
+// === sessions =================================================================
+//
+// A session is a FOLD over the server-recorded turns (grouped by the
+// session_id the server stamps on every /api/ai/chat turn), not a second
+// table -- q9's QuerySession kept messages as one growing JSON blob per
+// row and derived its title in three duplicated places; here the title
+// is simply the first input, computed in exactly one. The q9 behaviours
+// worth keeping ARE kept: resume the latest conversation automatically
+// when it is fresh (their 30-minute window), deep-link with ?session=,
+// mark the current one, and exactly ONE way to start a new session --
+// their own dropdown had two differently-wired "new" affordances, which
+// the port audit flagged as the thing not to copy.
+let sessions = [];
+const RESUME_WINDOW_MS = 30 * 60 * 1000;
+
+function foldSessions(rows) {
+  const by = {};
+  for (const row of rows) {
+    const sid = row.session_id || "";
+    if (!sid) continue;         // pre-session history stays queryable, not replayed
+    (by[sid] = by[sid] || []).push(row);
+  }
+  return Object.entries(by).map(([id, rs]) => {
+    rs.sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")));
+    const first = rs.find((r) => r.input) || rs[0];
+    return {id, rows: rs, count: rs.length,
+            title: String((first && first.input) || "(untitled)").slice(0, 40),
+            last: String(rs[rs.length - 1].created_at || "")};
+  }).sort((a, b) => b.last.localeCompare(a.last)).slice(0, 10);
+}
+
+function agoShort(iso) {
+  const ms = Date.now() - Date.parse(iso || 0);
+  if (!isFinite(ms) || ms < 0) return "";
+  const m = Math.round(ms / 60000);
+  if (m < 1) return "now";
+  if (m < 60) return m + "m";
+  const h = Math.round(m / 60);
+  if (h < 24) return h + "h";
+  return Math.round(h / 24) + "d";
+}
+
+function renderSessionPicker() {
+  const sel = document.getElementById("sessionpick");
+  if (!sel) return;
+  const opts = ['<option value="__new">\u2795 new session</option>'];
+  for (const s of sessions) {
+    const label = s.title + (s.last ? " \u2014 " + agoShort(s.last) : "");
+    opts.push('<option value="' + esc(s.id) + '"'
+              + (s.id === SESSION_ID ? " selected" : "") + ">"
+              + esc(label) + "</option>");
+  }
+  sel.innerHTML = opts.join("");
+  if (!sessions.some((s) => s.id === SESSION_ID)) sel.value = "__new";
+}
+
+function adoptSession(s) {
+  SESSION_ID = s.id;
+  aiHistory = [];
+  const log = document.getElementById("log");
+  if (log) log.innerHTML = "";
+  for (const row of s.rows.slice(-30)) {
     const out = entry(row.input);
     finish(out, row.output || "", {markdown: row.kind === "ai"});
     if (row.kind === "ai" && row.output) {
@@ -328,6 +389,38 @@ async function loadHistory() {
       aiHistory.push({role: "assistant", content: row.output});
     }
   }
+  renderSessionPicker();
+}
+
+async function loadHistory() {
+  const res = await fetch("/collections/shell_commands/records?limit=1000",
+                          {credentials: "same-origin", headers: {accept: "application/json"}});
+  if (!res.ok) return;
+  const rows = (await res.json()).records || [];
+  sessions = foldSessions(rows);
+
+  const wanted = new URLSearchParams(location.search).get("session");
+  const deep = wanted && sessions.find((s) => s.id === wanted);
+  const latest = sessions[0];
+  const fresh = latest && (Date.now() - Date.parse(latest.last || 0) < RESUME_WINDOW_MS);
+  if (deep) adoptSession(deep);
+  else if (fresh) adoptSession(latest);   // q9's lazy resume, same window
+  else renderSessionPicker();
+
+  const sel = document.getElementById("sessionpick");
+  if (sel) sel.addEventListener("change", () => {
+    if (sel.value === "__new") {
+      SESSION_ID = freshSessionId();
+      aiHistory = [];
+      const log = document.getElementById("log");
+      if (log) log.innerHTML = '<div class="entry"><div class="out">new session</div></div>';
+      history.replaceState(null, "", location.pathname);
+      renderSessionPicker();
+    } else {
+      const s = sessions.find((x) => x.id === sel.value);
+      if (s) { adoptSession(s); history.replaceState(null, "", "?session=" + s.id); }
+    }
+  });
 }
 
 async function savePrefs(changes) {
@@ -578,6 +671,8 @@ def GET(request):
         body = """
 <div id="log"><div class="entry"><div class="out">type /help for commands, or just talk</div></div></div>
 <div id="attachbar" hidden></div>
+<div id="sessbar"><select id="sessionpick" aria-label="conversation">
+<option value="__new">&#10133; new session</option></select></div>
 <form id="prompt" autocomplete="off">
 <input name="line" placeholder="&gt;_" autofocus>
 <button type="submit" class="btn primary" aria-label="send">send</button>

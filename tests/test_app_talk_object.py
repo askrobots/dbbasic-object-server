@@ -308,25 +308,34 @@ def test_talk_falls_back_to_tool_calls_for_the_view_path():
 # unaffected.
 
 
-def test_talk_does_not_replay_shell_commands_into_model_context():
+def test_talk_never_auto_resumes_a_session():
+    """Talk reads shell_commands now -- but only to BUILD the session
+    picker. Restoring old turns into model context is a hand action on
+    the picker, never an automatic on load: a voice page that silently
+    reloads twenty turns changes what the next answer means without the
+    user hearing anything change. (The shell auto-resumes inside a
+    30-minute window; eyes can see a restored transcript, ears cannot.)"""
     assert "loadHistory" not in TALK_SOURCE
-    assert "shell_commands/records?limit=1000" not in TALK_SOURCE
     assert "let aiHistory = [];" in TALK_SOURCE
-    # Turns are still recorded to the shared table -- but by the SERVER,
-    # inside /api/ai/chat (stamped, session-grouped, immune to the page
-    # dying before a fire-and-forget write). The page itself no longer
-    # touches the collection at all; it just declares its session.
-    assert "/collections/shell_commands/records" not in TALK_SOURCE
+    load = TALK_SOURCE[TALK_SOURCE.index("async function loadSessions"):]
+    load = load[:load.index("loadSessions();")]
+    before_handler = load[:load.index('addEventListener("change"')]
+    assert "aiHistory.push" not in before_handler
+    # Turn WRITES are the server's inside /api/ai/chat; the page only
+    # reads, to fold the picker, and declares its session on each call.
     assert "session_id: SESSION_ID" in TALK_SOURCE
 
-    # The only place aiHistory grows is inside submitTurn(), from the turn
-    # that was just submitted, not from a fetch of past rows.
+    # aiHistory grows in exactly two places: submitTurn (the turn just
+    # made) and the picker's change handler (an explicit resume).
     submit_turn = re.search(r"async function submitTurn\(input\) \{(.*?)\n\}", TALK_SOURCE, re.S)
     assert submit_turn, "submitTurn() not found in talk.py"
     push_sites = [m.start() for m in re.finditer(r"aiHistory\.push\(", TALK_SOURCE)]
-    assert len(push_sites) == 2
+    assert len(push_sites) == 4   # 2 in submitTurn, 2 in the resume handler
+    handler_at = TALK_SOURCE.index('addEventListener("change"')
     for site in push_sites:
-        assert submit_turn.start() < site < submit_turn.end()
+        inside_submit = submit_turn.start() < site < submit_turn.end()
+        inside_resume = site > handler_at
+        assert inside_submit or inside_resume, site
 
 
 def test_talk_object_no_longer_calls_loadhistory_on_page_load():

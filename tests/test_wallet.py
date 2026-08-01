@@ -158,11 +158,25 @@ def test_the_monthly_cap_stops_a_runaway(tmp_path, monkeypatch):
     # The real runaway shape: an auto top-up already happened this month,
     # then metering drained the wallet back below the threshold. Without a
     # cap the pass would top up again, and again, following the bug down.
+    # The test's calendar is DERIVED from the wall clock, because it has
+    # no choice: the cap fold counts seeded entries by their created_at
+    # month, and created_at is computed at write time -- deliberately
+    # unwritable by any caller, this test included. Hardcoding
+    # "2026-07-25" here held only during July 2026: at the first month
+    # rollover the seed landed in August, the July fold saw nothing, and
+    # the "cap reached" path silently became the "already attempted"
+    # skip. A test about a calendar window must run in the month its
+    # records actually carry.
+    from datetime import datetime, timezone
+    # UTC, not local: created_at is stamped in UTC, and for a few hours
+    # around every month boundary the two disagree about what month it
+    # is -- which is precisely when this test first failed.
+    period = datetime.now(timezone.utc).strftime("%Y-%m")
     entry(data_dir, "w1", 2000, kind="auto_topup", eid="e1",
-          generated_from="auto_topup/w1/2026-07/2000")
+          generated_from=f"auto_topup/w1/{period}/2000")
     entry(data_dir, "w1", -1800, kind="debit", eid="e2")   # balance now 200
 
-    result = replenish({"today": "2026-07-25"})
+    result = replenish({"today": f"{period}-25"})
     capped = [r for r in result["results"] if r.get("skipped") == "monthly cap reached"]
     assert capped, result
     assert capped[0]["capped_at_minor"] == 3000
