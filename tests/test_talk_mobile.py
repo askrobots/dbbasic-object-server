@@ -274,3 +274,22 @@ def test_a_fused_wake_word_still_arms_via_its_prefix(source):
     split = split[:split.index("// If `text`")]
     assert "key.slice(0, len)" in split
     assert "key.length > target.length + wakeBudget(target)" in split
+
+
+# --- a knock is not a question --------------------------------------------------
+
+def test_the_bare_wake_word_is_never_submitted(source):
+    """"Computer", alone, reached the API on a live iPad: a 2.4-second
+    provider round-trip that answered "" -- money and silence for a turn
+    nobody asked. The check is fuzzy like the gate, so a misheard bare
+    "compture" is swallowed too."""
+    finalize = source[source.index("function finalizeVoiceSubmit"):]
+    finalize = finalize[:finalize.index("function processTranscript")]
+    assert "matchesWakeWord(wordKey(only[0])" in finalize
+    assert finalize.index("matchesWakeWord") < finalize.index("submitTurn(clean)")
+
+
+def test_an_empty_reply_becomes_words_rather_than_silence(source):
+    """A successful round-trip with empty text looks exactly like a hang
+    on a voice surface. The recorded turn (out: "") is real."""
+    assert 'body.reply || "I came back empty' in source

@@ -506,6 +506,19 @@ function finalizeVoiceSubmit(text) {
   const clean = String(text ?? "").trim();
   resetTalkState();
   if (!clean) { if (conversationMode) updateCaptionArmed(); return; }
+  // The wake word ALONE is a knock, not a question. One leaked through a
+  // gate seam on an iPad and bought a 2.4-second provider round-trip
+  // that answered "" -- money and silence for a turn nobody asked. The
+  // check is fuzzy like the gate itself, so a misheard bare "compture"
+  // is also swallowed.
+  const w = wakeWord();
+  if (w) {
+    const only = tokenize(clean);
+    if (only.length === 1 && matchesWakeWord(wordKey(only[0]), w.toLowerCase())) {
+      if (conversationMode) updateCaptionArmed();
+      return;
+    }
+  }
   submitTurn(clean);
 }
 
@@ -977,7 +990,13 @@ async function submitTurn(input) {
 
   stopThinking();
   stopThinking();
-  const rawReply = ok ? body.reply : (body.error || "Something went wrong.");
+  // An empty SUCCESS is the worst reply a voice surface can relay: the
+  // round-trip happened, nothing is shown, nothing is spoken, and the
+  // user is left staring at a page that looks exactly like a hang. Turn
+  // it into words -- one really did come back empty, recorded as out:""
+  // on the server.
+  const rawReply = ok ? (body.reply || "I came back empty \u2014 ask me again?")
+                      : (body.error || "Something went wrong.");
   const replyText = stripViewMarker(rawReply);
   capAssistant.textContent = stripForSpeech(replyText) || replyText;
 
