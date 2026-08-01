@@ -669,12 +669,14 @@ def test_talk_meter_stream_released_when_conversation_mode_turns_off():
     # The OFF path must still release the stream from here -- that is what
     # this test is for, and the privacy indicator depends on it.
     assert "stopMeter();" in body
-    # The ON path deliberately does NOT start the meter any more: it opens
-    # a second microphone stream, and on iOS the mic is exclusive, so
-    # starting it beside recognition starved recognition and no transcript
-    # appeared at all. It now starts only once recognition has proven it
-    # holds the mic (see tests/test_talk_mobile.py).
-    assert "startMeter();" not in body
+    # The ON path starts the meter AT THE CLICK -- deliberately, again,
+    # after the deferred design killed desktop endpointing (a meter
+    # started mid-speech calibrates on the voice itself). The iOS
+    # exclusive-mic theft is handled by the conviction instead, and the
+    # conviction flag gates the restart (see tests/test_talk_mobile.py's
+    # design history note).
+    assert "startMeter()" in body
+    assert "!meterContended" in body
 
 
 def test_talk_endpoint_mode_helper_validates_and_defaults():

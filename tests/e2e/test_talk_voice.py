@@ -249,6 +249,43 @@ def test_interim_results_render_a_live_caption(talk_page):
     page.wait_for_timeout(1300)
 
 
+def test_desktop_with_a_dead_vad_still_submits(talk_page):
+    """THE iMac regression, encoded. On desktop the meter RUNS -- and a
+    meter started mid-speech calibrates on the voice itself, so its VAD
+    never fires: transcript on screen, listening forever, nothing sent,
+    no turn recorded (verified against the live box's shell_commands).
+    The stability endpointer must backstop even a running meter, because
+    a mis-calibrated one fails SILENT and the stalling transcript is the
+    one signal it cannot fake.
+
+    Here the meter is simulated as running-but-useless, which is exactly
+    what a bad calibration is."""
+    page, state = talk_page
+    fresh_turn(page, state)
+    page.evaluate("() => { meterRunning = true; }")
+    try:
+        say(page, "computer list my tasks", final=False)   # interims only
+        page.wait_for_timeout(2500)                        # window + meter margin
+        assert len(state["chat_calls"]) == 1, "backstop did not fire past the meter"
+        assert state["chat_calls"][0]["message"] == "list my tasks"
+    finally:
+        page.evaluate("() => { meterRunning = false; }")
+
+
+def test_the_meter_starts_at_the_click_so_it_calibrates_in_silence(talk_page):
+    """The root cause, pinned at the source level: calibration measures
+    the noise floor, so it must run BEFORE speech. Deferring the meter to
+    the first recognition result put calibration mid-utterance and
+    taught the threshold the user's own voice."""
+    source = TALK.read_text()
+    click = source[source.index('mic.addEventListener("click"'):]
+    handler = click[:click.index("} else {")]
+    assert "startMeter()" in handler
+    onresult = source[source.index("recognizer.onresult"):]
+    onresult = onresult[:onresult.index("recognizer.onerror")]
+    assert "startMeter()" not in onresult
+
+
 def test_an_utterance_submits_even_if_a_final_never_comes(talk_page):
     """THE latency fix, and the regression it repairs. With the meter
     convicted, end-of-utterance waited on iOS volunteering an isFinal --

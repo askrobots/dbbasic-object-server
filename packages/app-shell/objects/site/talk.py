@@ -589,7 +589,13 @@ function processTranscript(isFinal) {
   // when it stops changing for the silence window, you have finished.
   // Same signal the RMS meter derived from amplitude, taken from the
   // transcript instead -- no second microphone stream, no contention.
-  if (!armed && endpointMode() === "silence" && !meterRunning && active) {
+  // Backstop even when the meter runs: a mis-calibrated meter (started
+  // mid-speech, threshold learned from the voice itself) fails SILENT --
+  // no error, no submit, ever. The transcript stalling is evidence the
+  // meter cannot fake, so this fires a beat after the VAD would have; a
+  // healthy VAD always wins first, and finalizeVoiceSubmit clears both
+  // timers so the loser never double-fires.
+  if (!armed && endpointMode() === "silence" && active) {
     if (stabilityTimer) clearTimeout(stabilityTimer);
     // Close over THIS event's already-split text. Rebuilding from the
     // raw sessionLive here would resurrect the wake word the split just
@@ -598,7 +604,7 @@ function processTranscript(isFinal) {
     stabilityTimer = setTimeout(() => {
       stabilityTimer = null;
       if (active && conversationMode && !speaking) finalizeVoiceSubmit(active);
-    }, silenceMs());
+    }, silenceMs() + (meterRunning ? 500 : 0));
   }
 
   if (isFinal) {
@@ -845,13 +851,9 @@ function initMic() {
   // isFinal submission -- there is no separate "submit" path for voice.
   recognizer.onresult = (event) => {
     lastResultTs = performance.now();
-    // Proof that recognition, not the meter, holds the microphone.
-    if (!recognitionProven) {
-      recognitionProven = true;
-      if (conversationMode && endpointMode() === "silence" && !meterContended) {
-        startMeter();
-      }
-    }
+    // Feeds the contention verdict and the no-recognition hint; the
+    // meter no longer waits on this (it must calibrate BEFORE speech).
+    recognitionProven = true;
     let text = "";
     // Segments are joined with an explicit space. Chrome includes leading
     // spaces on continuation segments; iOS does NOT, and concatenating
@@ -911,19 +913,24 @@ function initMic() {
     if (conversationMode) {
       resetTalkState();
       updateCaptionArmed();
-      // Recognition FIRST, and alone. The level meter opens a SECOND
-      // microphone stream, and on iOS the microphone is exclusive -- two
-      // consumers means one of them silently gets nothing. Starting both
-      // together is what stopped an iPad showing any transcript at all:
-      // the ring animated, proving the meter had won the mic, while
-      // recognition sat starved and produced no results.
+      // Recognition and the meter BOTH start here, and the ordering war
+      // between them is settled by evidence, not scheduling. History of
+      // this line: starting both stole the mic from recognition on iOS
+      // (exclusive microphone -- ring animated, no transcript), so the
+      // meter was deferred until recognition's first result. That fix
+      // broke every DESKTOP: a meter started mid-speech CALIBRATES ON
+      // SPEECH, sets its threshold at 3x the user's own voice, and the
+      // VAD never fires again -- transcript on screen, listening
+      // forever, nothing sent. Calibration must happen in the pre-speech
+      // silence, which means the meter must start at the click.
       //
-      // Recognition is ESSENTIAL and the meter is a nicety, so the meter
-      // waits until recognition has proven it holds the mic by delivering
-      // a result. No user-agent sniffing: the device tells us which it
-      // gave us, and a platform where both work starts the meter a
-      // fraction of a second later than before.
+      // The iOS case is owned by the CONVICTION instead: a meter that
+      // can hear voice while recognition produces nothing for two
+      // seconds took the microphone, and is stopped for the session --
+      // recognition restarts and the stability endpointer takes over.
+      // Each platform loses the component it cannot support, on proof.
       startListening();
+      if (endpointMode() === "silence" && !meterContended) startMeter();
       watchForRecognition();
     } else {
       recognitionProven = false;

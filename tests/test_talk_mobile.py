@@ -33,31 +33,39 @@ def source():
     return TALK.read_text()
 
 
-# --- 0. the meter must never starve recognition ---------------------------------
+# --- 0. meter vs recognition: settled by evidence, not scheduling ---------------
+#
+# Three designs, each disproven by a real machine. (1) Start both at the
+# click: iOS's exclusive microphone let the meter starve recognition --
+# ring animating, no transcript ever. (2) Defer the meter until
+# recognition's first result: the meter then calibrated MID-SPEECH,
+# learned the user's own voice as the noise floor, and every desktop's
+# VAD went dead -- transcript on screen, listening forever, nothing
+# sent. (3) Current: both start at the click so calibration happens in
+# the pre-speech silence; the iOS theft is detected by the CONVICTION
+# (meter hears voice, recognition silent for 2s) and the convicted meter
+# stays off for the session; and the transcript-stability endpointer
+# backstops EVERYTHING, because a mis-calibrated meter fails silent and
+# a stalling transcript is the one signal it cannot fake.
 
-def test_the_meter_does_not_start_alongside_recognition(source):
-    """THE regression, and the sharper version of the original bug.
-
-    The level meter opens a SECOND microphone stream. On iOS the mic is
-    exclusive, so two consumers means one silently gets nothing -- and
-    when the meter won, the ring animated while recognition sat starved
-    and no transcript appeared at all. Recognition is ESSENTIAL; the
-    meter is a nicety. Starting them together is the bug.
-    """
+def test_the_meter_starts_at_the_click_not_on_first_result(source):
+    """Calibration measures the noise floor; it must run BEFORE speech.
+    Design (2) put it after the first result -- mid-utterance -- and
+    silently killed every desktop's endpointing."""
     click = source[source.index('mic.addEventListener("click"'):]
     handler = click[:click.index("} else {")]
-    assert "startListening();" in handler
-    assert "startMeter()" not in handler, \
-        "the meter must not start in the same breath as recognition"
-
-
-def test_the_meter_starts_only_once_recognition_has_proven_itself(source):
-    """The device tells us which consumer it gave the microphone to; no
-    user-agent sniffing required. A first result IS the proof."""
-    onresult = source[source.index("recognizer.onresult = (event) =>"):]
+    assert "startMeter()" in handler
+    onresult = source[source.index("recognizer.onresult"):]
     onresult = onresult[:onresult.index("recognizer.onerror")]
-    assert "recognitionProven = true" in onresult
-    assert "startMeter()" in onresult
+    assert "startMeter()" not in onresult
+
+
+def test_a_convicted_meter_is_not_restarted_by_the_next_click(source):
+    """Conviction is per-session: re-opening the stream on the next mic
+    tap would re-steal the microphone one utterance later, forever."""
+    click = source[source.index('mic.addEventListener("click"'):]
+    handler = click[:click.index("} else {")]
+    assert "!meterContended" in handler
 
 
 def test_a_device_that_returns_no_recognition_says_so(source):
@@ -188,15 +196,6 @@ def test_the_meter_convicts_itself_of_taking_the_microphone(source):
     frame = source[source.index("function frame()"):]
     frame = frame[:frame.index("function stopMeter")]
     assert "rms >= speechThreshold && now - lastResultTs > CONTENTION_MS" in frame
-
-
-def test_a_convicted_meter_stays_off_for_the_session(source):
-    """Restarting it on the next result would re-steal the microphone one
-    result later, forever, in a loop the user experiences as 'it hears
-    one word per attempt'."""
-    onresult = source[source.index("recognizer.onresult"):]
-    onresult = onresult[:onresult.index("recognizer.onerror")]
-    assert "!meterContended" in onresult
 
 
 def test_conviction_frees_the_mic_and_kicks_the_starved_recognizer(source):
