@@ -346,12 +346,16 @@ def test_the_public_tier_is_only_the_pages_a_visitor_should_meet():
     `notarizations` list in the same manifest is deliberately not on this
     tier: reading the whole log is a different question from checking one
     digest you were already given.
+
+    `docs` is the plainest case of all: developer documentation behind a
+    sign-in is not documentation. app-docs grants `public` execute on all
+    three of its page objects and `public` read on doc_pages to match.
     """
     public = {entry["id"]
               for manifest in _manifests().values()
               for entry in manifest.get("nav") or []
               if entry.get("surface") == "public"}
-    assert public == {"home", "shop", "privacy", "notary"}
+    assert public == {"home", "shop", "privacy", "notary", "docs"}
 
 
 def test_app_nav_declares_its_own_front_door():

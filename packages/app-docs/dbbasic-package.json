@@ -1,0 +1,57 @@
+{
+  "id": "app-docs",
+  "name": "Docs",
+  "version": "0.1.0",
+  "description": "A public, unauthenticated documentation website at /docs and /docs/{slug}: a left sidebar grouped by category with a client-side search box, a readable content pane rendered through the shared /markdown renderer, an auto-generated on-this-page table of contents per guide, and prev/next navigation through the guide order (by nav_order). Bespoke pages in the app-shell/talk.py style, not the generic view_render block system -- a guide site is a distinct UX shape from record CRUD. The doc_pages records themselves are seeded content, not something visitors write, so every rule is a plain public read/execute grant with no is_public field or row_filter.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": ["app-theme"],
+  "objects": [
+    {
+      "id": "site_docs_nav",
+      "path": "objects/site/docs_nav.py"
+    },
+    {
+      "id": "site_docs_index",
+      "path": "objects/site/docs_index.py"
+    },
+    {
+      "id": "site_docs_detail",
+      "path": "objects/site/docs_detail.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "doc_pages",
+      "path": "schemas/doc_pages.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "site_routes",
+      "path": "seed/site_routes.tsv"
+    },
+    {
+      "collection": "doc_pages",
+      "path": "seed/doc_pages.tsv"
+    }
+  ],
+  "migrations": [],
+  "nav": [
+    {
+      "id": "docs",
+      "label": "Docs",
+      "path": "/docs",
+      "blurb": "Public guides for building on the object server",
+      "surface": "public",
+      "group": "Publishing",
+      "order": 220
+    }
+  ]
+}

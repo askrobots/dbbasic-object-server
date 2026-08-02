@@ -1,0 +1,69 @@
+{
+  "name": "doc_pages",
+  "title": "Doc Pages",
+  "version": 1,
+  "description": "One guide per record for the public /docs documentation site. nav_order is a text field holding a numeric string -- the same convention site_routes uses for priority -- so ordering stays a plain sortable string rather than a second numeric type. Seeded content: visitors only ever read these through /docs and /docs/{slug}.",
+  "fields": [
+    {
+      "name": "id"
+    },
+    {
+      "name": "title",
+      "type": "text",
+      "required": true,
+      "label": "Title",
+      "validation": {
+        "min_length": 1,
+        "max_length": 200
+      }
+    },
+    {
+      "name": "category",
+      "type": "text",
+      "label": "Category",
+      "help": "Groups this page under a heading in the sidebar"
+    },
+    {
+      "name": "nav_order",
+      "type": "text",
+      "label": "Nav Order",
+      "default": "100",
+      "help": "Numeric string; pages sort ascending by this value within their category and across the prev/next sequence"
+    },
+    {
+      "name": "summary",
+      "type": "text",
+      "label": "Summary",
+      "help": "One line shown in search results and previews"
+    },
+    {
+      "name": "content",
+      "type": "textarea",
+      "required": true,
+      "label": "Content",
+      "validation": {
+        "min_length": 1
+      },
+      "help": "Markdown, rendered through the shared /markdown renderer"
+    }
+  ],
+  "forms": {
+    "default": {
+      "fields": [
+        "title",
+        "category",
+        "nav_order",
+        "summary",
+        "content"
+      ]
+    }
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": [
+      "title",
+      "category",
+      "nav_order"
+    ]
+  }
+}

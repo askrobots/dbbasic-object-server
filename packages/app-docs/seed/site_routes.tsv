@@ -1,0 +1,3 @@
+id	pattern	object_id	priority
+route_docs_detail	/docs/{slug}	site_docs_detail	10
+route_docs_index	/docs	site_docs_index	20

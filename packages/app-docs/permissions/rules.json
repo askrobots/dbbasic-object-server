@@ -1,0 +1,32 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["read"],
+      "collection": "doc_pages",
+      "reason": "the documentation site is entirely public; every doc page is readable by anyone"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_docs_nav",
+      "reason": "the shared sidebar/search/header script is a public static script, same as the other /style-adjacent generators"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_docs_index",
+      "reason": "the /docs landing page is public, no sign-in"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_docs_detail",
+      "reason": "/docs/{slug} guide pages are public, no sign-in"
+    }
+  ]
+}
