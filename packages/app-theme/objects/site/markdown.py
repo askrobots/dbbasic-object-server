@@ -14,8 +14,10 @@ copies were written in the same session before this one was noticed.
 Real block-level markdown now, not just inline transforms: headings (# -
 ######), fenced code blocks (```lang ... ```), blockquotes (>), ordered
 and unordered lists (no nesting -- see below), horizontal rules, and GFM
-tables, on top of the inline set (bold, italic, inline code, autolinked
-URLs). This codebase's stated posture (see object_reader.py) is stdlib/
+tables, on top of the inline set (bold, italic, inline code, bracket
+links with an http(s)/relative/#/mailto href allowlist, autolinked bare
+URLs). Hard-wrapped continuation lines inside a list item rejoin their
+bullet, matching how paragraphs already rejoin their own wrapped lines. This codebase's stated posture (see object_reader.py) is stdlib/
 no-new-dependency on the server; the client-side JS here is unbundled
 vanilla JS with no npm/build step at all, so a hand-rolled parser matches
 how every other renderer in this codebase is built (forms, lists, detail
@@ -45,12 +47,32 @@ _JS = r"""
   // that has ALREADY been through block-level recognition. Order matters:
   // inline code first (so `**not bold**` inside backticks is not touched
   // by the bold/italic passes that run after it).
+  // Only these href shapes may become real links -- everything else (most
+  // importantly javascript:) stays inert escaped text. The input was
+  // escaped first, so quotes in an href arrive as &quot; and cannot break
+  // out of the attribute.
+  const SAFE_HREF_RE = /^(https?:\/\/|\/|#|mailto:)/i;
+
   function renderInline(text) {
     let html = esc(text);
     html = html.replace(/`([^`\n]+)`/g, "<code>$1</code>");
     html = html.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
     html = html.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
-    html = html.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+    // [text](href) before the bare-URL pass, so the pass below never eats
+    // the href out of a bracket link's parentheses first.
+    html = html.replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, (match, label, href) => {
+      if (!SAFE_HREF_RE.test(href)) return match;
+      const external = /^https?:\/\//i.test(href);
+      const extra = external ? ' target="_blank" rel="noopener"' : "";
+      return '<a href="' + href + '"' + extra + ">" + label + "</a>";
+    });
+    // Bare URLs -- but not one already sitting inside an href="..."
+    // attribute or an anchor's text from the pass above (preceded by " or
+    // >). Written as capture-and-restore, not lookbehind, so the whole
+    // script still parses on older WebKit (pre-16.4 Safari has no
+    // lookbehind, and one bad regex literal kills the file at load).
+    html = html.replace(/(^|[^">])(https?:\/\/[^\s<]+)/g,
+      (match, pre, url) => pre + '<a href="' + url + '" target="_blank" rel="noopener">' + url + "</a>");
     return html;
   }
 
@@ -142,7 +164,10 @@ _JS = r"""
       }
       if (blockquote.length) flushBlockquote();
 
-      const ul = line.match(/^[-*+]\s+(.*)$/);
+      // Leading whitespace tolerated on markers: a nested "  - " line
+      // becomes its own top-level bullet (the documented wrong-but-lossless
+      // behavior), instead of falling through to the continuation branch.
+      const ul = line.match(/^\s*[-*+]\s+(.*)$/);
       if (ul) {
         flushParagraph(); flushBlockquote();
         if (listType && listType !== "ul") flushList();
@@ -152,12 +177,21 @@ _JS = r"""
         continue;
       }
 
-      const ol = line.match(/^\d+\.\s+(.*)$/);
+      const ol = line.match(/^\s*\d+\.\s+(.*)$/);
       if (ol) {
         flushParagraph(); flushBlockquote();
         if (listType && listType !== "ol") flushList();
         listType = "ol";
         listItems.push(ol[1]);
+        i++;
+        continue;
+      }
+      // A hard-wrapped continuation of the previous bullet: indented,
+      // non-empty, not itself a marker (checked above). Without this, a
+      // source wrapped at a fixed column breaks every long bullet into a
+      // bullet plus a stray paragraph.
+      if (listType && /^\s+\S/.test(line)) {
+        listItems[listItems.length - 1] += " " + line.trim();
         i++;
         continue;
       }

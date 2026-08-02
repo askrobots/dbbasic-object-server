@@ -127,3 +127,56 @@ def test_empty_and_none_input_does_not_throw(tmp_path):
     result = subprocess.run([node, str(probe_path)], capture_output=True, text=True)
     assert result.returncode == 0, f"node probe failed:\n{result.stderr}"
     assert json.loads(result.stdout) == ["", ""]
+
+
+def test_bracket_links_render_with_href_allowlist(tmp_path):
+    [internal, external, anchor, mail, hostile] = _render(
+        "See the [deployment guide](/docs/single-vm-deployment) for more.",
+        "Read [the spec](https://example.com/spec).",
+        "Jump to [setup](#setup).",
+        "Mail [us](mailto:hi@example.com).",
+        "Click [here](javascript:alert(1)) now.",
+        tmp_path=tmp_path,
+    )
+    # Relative links stay in-tab; external links open in a new one.
+    assert '<a href="/docs/single-vm-deployment">deployment guide</a>' in internal
+    assert "target" not in internal
+    assert '<a href="https://example.com/spec" target="_blank" rel="noopener">the spec</a>' in external
+    assert '<a href="#setup">setup</a>' in anchor
+    assert '<a href="mailto:hi@example.com">us</a>' in mail
+    # A javascript: href never becomes a link -- the literal text survives,
+    # escaped, exactly as written.
+    assert "<a" not in hostile
+    assert "[here](javascript:alert(1))" in hostile
+
+
+def test_bracket_link_href_is_not_double_linked_by_the_autolink_pass(tmp_path):
+    [html] = _render("A [labeled link](https://example.com/x) in prose.", tmp_path=tmp_path)
+    # Exactly one anchor: the bare-URL pass must not wrap the href that the
+    # bracket-link pass already put inside href="...".
+    assert html.count("<a ") == 1
+    assert html.count("</a>") == 1
+    assert ">labeled link</a>" in html
+
+
+def test_hard_wrapped_list_items_rejoin_their_bullet(tmp_path):
+    [html] = _render(
+        "- A small VM (a $5 droplet is plenty) running Debian 12 or Ubuntu\n"
+        "  22.04+, with root or `sudo`.\n"
+        "- Second bullet.",
+        tmp_path=tmp_path,
+    )
+    # One list, two items -- the wrapped line rejoined the first bullet
+    # instead of escaping into a stray paragraph.
+    assert html.count("<li>") == 2
+    assert "<p>" not in html
+    assert "Ubuntu 22.04+, with root or <code>sudo</code>." in html
+
+
+def test_indented_nested_bullet_stays_a_bullet_not_a_continuation(tmp_path):
+    [html] = _render("- parent\n  - nested\n- sibling", tmp_path=tmp_path)
+    # The documented wrong-but-lossless behavior: a nested marker becomes
+    # its own top-level bullet; it must never be glued into the parent as
+    # literal "- nested" text.
+    assert html.count("<li>") == 3
+    assert "parent -" not in html
