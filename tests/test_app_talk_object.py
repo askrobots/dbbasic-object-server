@@ -539,6 +539,85 @@ def test_talk_cloud_voice_url_override():
     assert stt_fn and 'urlOverride("stt", ["browser", "openai"])' in stt_fn.group(1)
 
 
+def test_talk_auto_mode_reliably_reaches_openai_engine(tmp_path):
+    """Behavioral, not source-string: a real live test hit exactly this --
+    "?tts=openai" set, still heard an espeak voice -- because "auto" mode
+    used to prefer ANY browser-native speechSynthesis voice over the
+    server unconditionally, before ever consulting the engine choice.
+    Executes the actual talkTtsMode/talkTtsEngine/urlOverride functions
+    under node with a handful of real scenarios, not a string match.
+    """
+    node = shutil.which("node")
+    if not node:
+        return
+
+    # Pull each function verbatim (brace-counted scan to its own closing
+    # brace) rather than hand-copying logic into the test -- a future edit
+    # to talk.py is what this test must catch, not a frozen duplicate of it.
+    def extract_function(name):
+        start = TALK_SOURCE.index(f"function {name}(")
+        depth = 0
+        i = TALK_SOURCE.index("{", start)
+        for j in range(i, len(TALK_SOURCE)):
+            if TALK_SOURCE[j] == "{":
+                depth += 1
+            elif TALK_SOURCE[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    return TALK_SOURCE[start : j + 1]
+        raise AssertionError(f"unbalanced braces extracting {name}()")
+
+    functions = "\n".join(
+        extract_function(name) for name in
+        ("urlOverride", "talkTtsEngine", "talkSttEngine", "talkTtsMode")
+    )
+
+    probe = f"""
+const DEFAULT_TALK_TTS = "auto";
+const DEFAULT_TALK_TTS_ENGINE = "local";
+const DEFAULT_TALK_STT_ENGINE = "browser";
+let prefs = {{}};
+let location = {{search: ""}};
+function pref(name, fallback) {{
+  const v = prefs[name];
+  return v === undefined || v === null ? fallback : v;
+}}
+{functions}
+
+const results = [];
+// 1. Nobody touched anything: unchanged "auto" behavior (browser wins).
+prefs = {{}}; location = {{search: ""}};
+results.push(["default", talkTtsMode(), talkTtsEngine()]);
+
+// 2. The persisted-setting case: talk_tts_engine=openai, mode left at
+//    auto -- must now resolve to "server", not silently stay "auto".
+prefs = {{talk_tts_engine: "openai"}}; location = {{search: ""}};
+results.push(["persisted-openai", talkTtsMode(), talkTtsEngine()]);
+
+// 3. The exact bug reported live: no persisted settings, only a
+//    "?tts=openai" URL override -- must also resolve to "server".
+prefs = {{}}; location = {{search: "?tts=openai"}};
+results.push(["url-override", talkTtsMode(), talkTtsEngine()]);
+
+// 4. Explicit "browser" mode is never overridden by engine choice --
+//    it is an unconditional "always the browser's own voice" setting.
+prefs = {{talk_tts: "browser", talk_tts_engine: "openai"}}; location = {{search: ""}};
+results.push(["explicit-browser-mode", talkTtsMode(), talkTtsEngine()]);
+
+console.log(JSON.stringify(results));
+"""
+    probe_path = tmp_path / "talk_tts_mode_probe.js"
+    probe_path.write_text(probe)
+    result = subprocess.run([node, str(probe_path)], capture_output=True, text=True)
+    assert result.returncode == 0, f"node probe failed:\n{result.stderr}"
+    outcomes = dict((row[0], (row[1], row[2])) for row in json.loads(result.stdout))
+
+    assert outcomes["default"] == ("auto", "local")
+    assert outcomes["persisted-openai"] == ("server", "openai")
+    assert outcomes["url-override"] == ("server", "openai")
+    assert outcomes["explicit-browser-mode"] == ("browser", "openai")
+
+
 def test_talk_wake_word_gating_discards_until_heard():
     process = re.search(r"function processTranscript\(isFinal\) \{(.*?)\n\}\n", TALK_SOURCE, re.S)
     assert process, "processTranscript() not found in talk.py"

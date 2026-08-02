@@ -173,7 +173,17 @@ function endpointMode() {
 }
 function talkTtsMode() {
   const m = String(pref("talk_tts", DEFAULT_TALK_TTS)).trim();
-  return (m === "server" || m === "browser") ? m : DEFAULT_TALK_TTS;
+  const mode = (m === "server" || m === "browser") ? m : DEFAULT_TALK_TTS;
+  // A resolved engine of "openai" -- from settings OR a ?tts= URL
+  // override -- is an explicit request to hear the cloud voice. "auto"
+  // otherwise prefers ANY browser-native speechSynthesis voice over the
+  // server, and on many setups (Chrome on Linux, notably) that native
+  // voice is ITSELF backed by espeak -- indistinguishable by ear from
+  // this server's own local engine. Without this check, choosing openai
+  // (or passing ?tts=openai) would silently do nothing whenever the
+  // browser had any local voice at all: exactly what one live test hit.
+  if (mode === "auto" && talkTtsEngine() === "openai") return "server";
+  return mode;
 }
 // ?tts=openai|local and ?stt=openai|browser override the stored preference
 // for THIS page load only -- nothing is saved back to shell_preferences.

@@ -82,7 +82,7 @@
         "local",
         "openai"
       ],
-      "help": "Only matters when Voice Engine is server or auto-falling-back: local is free and always available (espeak-ng in production); openai is a real cloud voice, clearer and more natural, but costs real money per reply and requires an OpenAI key under your account's service keys"
+      "help": "Ignored if Voice Engine is set to browser (that always uses your browser's own voice). Under server or auto, local is free and always available (espeak-ng in production); openai is a real cloud voice, clearer and more natural -- choosing it overrides auto's browser-voice preference too, so you reliably hear it -- but costs real money per reply and requires an OpenAI key under your account's service keys"
     },
     {
       "name": "talk_stt_engine",
