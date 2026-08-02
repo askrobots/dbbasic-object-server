@@ -620,6 +620,85 @@ console.log(JSON.stringify(results));
     assert outcomes["explicit-browser-mode"] == ("browser", "openai")
 
 
+def test_reader_context_note_grounds_followups_in_real_links(tmp_path):
+    """Behavioral: a real live session hit exactly this -- read_page
+    fetched Techmeme, the model summarized it in prose with no link
+    numbers, and the next turn ("go to that story about Astra") had no
+    real href to resolve against because only the model's own prose
+    survives in conversation history, never a tool's actual result.
+    readerContextNote() re-grounds the NEXT turn in the real (capped)
+    link list from object_ai.py's new tool_calls[].result echo.
+    """
+    node = shutil.which("node")
+    if not node:
+        return
+
+    match = re.search(r"function readerContextNote\(\) \{(.*?)\n\}", TALK_SOURCE, re.S)
+    assert match, "readerContextNote() not found in talk.py"
+
+    probe = f"""
+let lastReaderPage = null;
+function readerContextNote() {{{match.group(1)}\n}}
+
+const results = {{}};
+results.noPage = readerContextNote();
+
+lastReaderPage = {{
+  title: "Techmeme", final_url: "https://techmeme.com",
+  links: [
+    {{n: 1, label: "OpenAI announces Astra", href: "https://example.com/astra"}},
+    {{n: 2, label: "Other story", href: "https://example.com/other"}},
+  ],
+}};
+results.withPage = readerContextNote();
+
+lastReaderPage = {{title: "Empty page", final_url: "https://example.com", links: []}};
+results.noLinks = readerContextNote();
+
+console.log(JSON.stringify(results));
+"""
+    probe_path = tmp_path / "reader_context_note_probe.js"
+    probe_path.write_text(probe)
+    result = subprocess.run([node, str(probe_path)], capture_output=True, text=True)
+    assert result.returncode == 0, f"node probe failed:\n{result.stderr}"
+    outcomes = json.loads(result.stdout)
+
+    assert outcomes["noPage"] == ""
+    assert outcomes["noLinks"] == ""
+    assert "Techmeme" in outcomes["withPage"]
+    assert "https://techmeme.com" in outcomes["withPage"]
+    assert "OpenAI announces Astra" in outcomes["withPage"]
+    assert "https://example.com/astra" in outcomes["withPage"]
+    assert "Other story" in outcomes["withPage"]
+
+
+def test_talk_captures_reader_result_and_resets_it_with_session():
+    # The capture: a read_page tool call's echoed result (object_ai.py's
+    # new tool_calls[].result) becomes lastReaderPage for the NEXT turn.
+    assert (
+        'const readerCall = (body.tool_calls || []).find((c) => c.name === "read_page" && c.result);'
+        in TALK_SOURCE
+    )
+    assert "if (readerCall) lastReaderPage = readerCall.result;" in TALK_SOURCE
+
+    # The reset: switching sessions must not carry a PREVIOUS session's
+    # read page into a different conversation's context.
+    reset_sites = [
+        m.start() for m in re.finditer(r"aiHistory = \[\];", TALK_SOURCE)
+    ]
+    # One is the top-level declaration-adjacent initial value; the other
+    # two are the "new session" / "resume a session" handlers, and both
+    # must reset lastReaderPage right alongside aiHistory.
+    assert len(reset_sites) >= 2
+    for site in reset_sites:
+        nearby = TALK_SOURCE[site : site + 120]
+        if TALK_SOURCE[max(0, site - 4) : site] == "let ":
+            continue  # the initial declaration, not a reset handler
+        assert "lastReaderPage = null;" in nearby, (
+            f"an aiHistory reset near offset {site} does not also reset lastReaderPage"
+        )
+
+
 def test_talk_page_has_cloud_voice_toggle_button():
     assert '<button type="button" id="cloudvoice" class="backlink" hidden>cloud voice: off</button>' in TALK_SOURCE
     assert "#cloudvoice { background: none; border: none;" in TALK_SOURCE

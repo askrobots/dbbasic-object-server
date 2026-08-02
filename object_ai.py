@@ -102,6 +102,43 @@ def mcp_tools_as_provider_tools(
     return tools
 
 
+# read_page's real links (with real hrefs) are exactly the kind of precise
+# fact a model's own restated prose loses -- conversation history only ever
+# carries the model's text, never a tool's actual result, so "go to that
+# story" on a LATER turn had nothing but the model's own possibly-vague
+# summary to resolve against. Caught live: a real Talk session fetched
+# Techmeme, summarized it in prose with no link numbers at all (voice
+# mode's "keep it short" instruction won against "cite link numbers" on a
+# link-heavy page), and the very next turn had no way back to the actual
+# article. Echoing the real link list back to the caller here -- capped,
+# so a link-heavy page can't balloon every subsequent turn's context size
+# once a caller starts re-injecting it -- lets a later turn ground a
+# reference in real hrefs instead of the model's own memory of what it
+# said. Scoped to read_page only: most tools' results are either already
+# small (a single record) or not the kind of thing a later turn needs to
+# resolve a vague reference against.
+READER_LINKS_ECHO_CAP = 40
+
+
+def _tool_result_summary(name: str, response: Any) -> dict[str, Any] | None:
+    """A bounded, caller-facing echo of read_page's real result, or None
+    for every other tool (including a read_page call that returned no
+    usable links). Not persisted server-side -- the caller (Talk) owns
+    carrying this forward on later turns, the same way it already owns
+    aiHistory; the server stays stateless about chats either way.
+    """
+    if name != "read_page" or not isinstance(response, dict):
+        return None
+    links = response.get("links")
+    if not isinstance(links, list) or not links:
+        return None
+    return {
+        "final_url": response.get("final_url"),
+        "title": response.get("title"),
+        "links": links[:READER_LINKS_ECHO_CAP],
+    }
+
+
 def run_chat(
     *,
     send_http: SendHttp,
@@ -160,13 +197,15 @@ def run_chat(
         results = []
         for call in parsed["tool_calls"]:
             result = dispatch_tool(call["name"], call["arguments"])
-            tool_log.append(
-                {
-                    "name": call["name"],
-                    "arguments": call["arguments"],
-                    "http_status": result.get("http_status"),
-                }
-            )
+            entry = {
+                "name": call["name"],
+                "arguments": call["arguments"],
+                "http_status": result.get("http_status"),
+            }
+            summary = _tool_result_summary(call["name"], result.get("response"))
+            if summary is not None:
+                entry["result"] = summary
+            tool_log.append(entry)
             results.append((call, result))
         provider.add_tool_results(parsed, results)
 

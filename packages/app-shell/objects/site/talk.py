@@ -145,6 +145,31 @@ let prefs = {id: OWNER_ID, ai_model: "anthropic:claude-sonnet-5",
              talk_endpoint: "silence", talk_silence_ms: "1400", talk_tts: "auto",
              talk_tts_engine: "local", talk_stt_engine: "browser"};
 let aiHistory = [];
+// The real link data from the most recent read_page call -- {final_url,
+// title, links: [{n, label, href}]} or null. Conversation history
+// (aiHistory) only ever carries the model's own prose, never a tool's
+// actual result, so a page's real hrefs used to vanish the instant the
+// model finished replying -- a later "go to that story" had nothing but
+// the model's own memory of what it said to resolve against, which broke
+// completely on any page where voice mode's brevity instruction won over
+// citing link numbers (a busy news homepage, for instance). Replaced
+// wholesale by the next read_page call; otherwise persists for the rest
+// of the session, same as aiHistory.
+let lastReaderPage = null;
+
+// Grounding text appended to the system prompt every turn while
+// lastReaderPage is set -- real hrefs and labels the model can resolve a
+// vague reference against ("go to that story"), not just its own memory
+// of a summary it gave several turns ago. Empty string (a no-op append)
+// once no page has been read yet, or after a session reset.
+function readerContextNote() {
+  if (!lastReaderPage || !Array.isArray(lastReaderPage.links) || !lastReaderPage.links.length) return "";
+  const list = lastReaderPage.links.map((l) => l.n + ". " + l.label + " (" + l.href + ")").join(" ");
+  return " The last web page you read was '" + (lastReaderPage.title || lastReaderPage.final_url)
+    + "' (" + lastReaderPage.final_url + "). Its links, in case the user asks to open one or refers "
+    + "to something on that page: " + list;
+}
+
 const TTS_MAX_CHARS = 800;
 const VIEWS_PATH_RE = /\\/views\\/[A-Za-z0-9_-]+/;
 
@@ -1301,7 +1326,7 @@ async function submitTurn(input) {
        model: String(pref("talk_model", "")).trim() || pref("ai_model", DEFAULT_MODEL),
        tools, history: aiHistory.slice(-20),
        session_id: SESSION_ID, source: "talk",
-       system: TALK_SYSTEM + " Current local date/time: " + new Date().toString() + "."});
+       system: TALK_SYSTEM + " Current local date/time: " + new Date().toString() + "." + readerContextNote()});
   } finally {
     // Cleared before the reply renders, not after: a fetch that throws
     // must release the gate too, or one failed turn wedges the page shut
@@ -1323,6 +1348,12 @@ async function submitTurn(input) {
   if (ok) {
     aiHistory.push({role: "user", content: input});
     aiHistory.push({role: "assistant", content: body.reply});
+    // Same "tool calls are ground truth" reasoning as the view marker
+    // below: a read_page call's real result (not the model's prose about
+    // it) is what a LATER turn needs to resolve "open that link"/"go to
+    // that story" against. See lastReaderPage's own comment.
+    const readerCall = (body.tool_calls || []).find((c) => c.name === "read_page" && c.result);
+    if (readerCall) lastReaderPage = readerCall.result;
     // Tool calls are ground truth for what was actually created/updated this
     // turn; the [[view:id]] marker is the model retyping an id and can typo or
     // hallucinate it (pointing the stage at a phantom view). So trust the tool
@@ -1435,6 +1466,7 @@ async function loadSessions() {
     if (sel.value === "__new") {
       SESSION_ID = freshSessionId();
       aiHistory = [];
+      lastReaderPage = null;
       capAssistant.textContent = "new session";
       renderSessionPicker();
       return;
@@ -1443,6 +1475,7 @@ async function loadSessions() {
     if (!s) return;
     SESSION_ID = s.id;
     aiHistory = [];
+    lastReaderPage = null;
     for (const row of s.rows.slice(-10)) {
       if (row.kind === "ai" && row.output) {
         aiHistory.push({role: "user", content: row.input});

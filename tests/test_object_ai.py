@@ -135,6 +135,84 @@ def test_run_chat_loops_through_tool_calls():
     assert followup[-1]["content"][0]["type"] == "tool_result"
 
 
+def test_read_page_tool_calls_echo_real_links_other_tools_do_not():
+    """The bug this fixes: only the model's own restated prose survives
+    into a later turn's history, never a tool's actual result -- so a
+    read_page call's real hrefs were lost the moment the model finished
+    replying, and a later "go to that story" had nothing but the model's
+    memory of its own summary to resolve against. tool_calls now echoes
+    read_page's real (capped) link list back to the caller; every other
+    tool's entry is unchanged, since most results are either already
+    small or not the kind of thing a later turn needs to resolve a vague
+    reference against.
+    """
+    responses = [
+        anthropic_tool_response("read_page", {"url": "https://techmeme.com"}),
+        anthropic_text_response("TechMeme is showing top tech news."),
+    ]
+
+    def send_http(url, headers, body):
+        return responses.pop(0)
+
+    def dispatch_tool(name, arguments):
+        return {
+            "http_status": 200,
+            "response": {
+                "title": "Techmeme",
+                "text": "...",
+                "final_url": "https://techmeme.com",
+                "links": [{"n": i, "label": f"Story {i}", "href": f"https://example.com/{i}"}
+                          for i in range(1, 50)],
+            },
+        }
+
+    result = object_ai.run_chat(
+        send_http=send_http, dispatch_tool=dispatch_tool,
+        service="anthropic", model="claude-haiku-4-5", key="sk-test",
+        message="read techmeme",
+        tools=object_ai.mcp_tools_as_provider_tools(["read_page"], object_mcp.TOOLS, service="anthropic"),
+    )
+
+    [call] = result["tool_calls"]
+    assert call["name"] == "read_page"
+    assert call["result"]["final_url"] == "https://techmeme.com"
+    assert call["result"]["title"] == "Techmeme"
+    # Capped, not the full 49 -- a link-heavy page must not balloon every
+    # later turn's context once a caller starts re-injecting this.
+    assert len(call["result"]["links"]) == object_ai.READER_LINKS_ECHO_CAP
+    assert call["result"]["links"][0] == {"n": 1, "label": "Story 1", "href": "https://example.com/1"}
+
+
+def test_non_read_page_tool_calls_never_get_a_result_echo():
+    responses = [
+        anthropic_tool_response("global_search", {"query": "flywheel"}),
+        anthropic_text_response("Found one note."),
+    ]
+
+    def send_http(url, headers, body):
+        return responses.pop(0)
+
+    def dispatch_tool(name, arguments):
+        return {"http_status": 200, "response": {"results": {"notes": [{"id": "n1"}]}}}
+
+    result = object_ai.run_chat(
+        send_http=send_http, dispatch_tool=dispatch_tool,
+        service="anthropic", model="claude-haiku-4-5", key="sk-test",
+        message="find flywheel notes",
+        tools=object_ai.mcp_tools_as_provider_tools(["global_search"], object_mcp.TOOLS, service="anthropic"),
+    )
+    assert result["tool_calls"] == [
+        {"name": "global_search", "arguments": {"query": "flywheel"}, "http_status": 200}
+    ]
+
+
+def test_tool_result_summary_ignores_read_page_calls_with_no_links():
+    assert object_ai._tool_result_summary("read_page", {"title": "x", "links": []}) is None
+    assert object_ai._tool_result_summary("read_page", {"title": "x"}) is None
+    assert object_ai._tool_result_summary("read_page", "not a dict") is None
+    assert object_ai._tool_result_summary("global_search", {"links": [{"n": 1}]}) is None
+
+
 def test_run_chat_resumes_from_history():
     requests_seen = []
 
