@@ -27,6 +27,23 @@ _JS = r"""
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
     (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
   const human = (n) => n.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+
+  // Escape first, then a safe, minimal subset of markdown -- the same
+  // transform view_render.py's standalone "markdown" block applies,
+  // shared here so any textarea field shown read-only (a note, an
+  // article, any long-form field) gets it too. Without this, a
+  // multi-line value collapsed into one run-together line (plain text in
+  // a <span>, no paragraph breaks) and literal "**bold**" syntax showed
+  // as literal asterisks -- found while trying to publish a real article
+  // and it displaying as one unreadable line.
+  function lightMarkdown(text) {
+    let html = esc(text);
+    html = html.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+    html = html.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+    html = html.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+    html = html.replace(/\n/g, "<br>");
+    return html;
+  }
   const qs = (m) => typeof m === "string" ? document.querySelector(m) : m;
 
   async function api(method, path, body) {
@@ -160,6 +177,10 @@ _JS = r"""
       return '<select name="' + name + '"' + req + '>' + opts + '</select>';
     }
     if (readOnly) {
+      if (t === "textarea") {
+        return v ? '<div class="detailvalue textareavalue">' + lightMarkdown(v) + '</div>'
+                 : '<span class="detailvalue empty">—</span>';
+      }
       const text = isMoneyField(f) ? moneyText(v) : readOnlyText(t, v);
       return '<span class="detailvalue' + (isMoneyField(f) ? ' money' : '') + '">' + esc(text) + '</span>';
     }

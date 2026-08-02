@@ -10,6 +10,8 @@ object_site_routes.py / object_server.py's site routing).
 
 import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 from test_object_server import (
@@ -145,6 +147,69 @@ def test_form_read_only_skips_fields_absent_from_the_record():
     it just skips a field missing from the record."""
     source = _form_source()
     assert "if (!(f.name in record)) continue;" in source
+
+
+def test_form_read_only_textarea_renders_light_markdown_not_one_collapsed_line(tmp_path):
+    """Behavioral, not source-text: found while trying to publish a real
+    article -- a textarea field shown read-only went through plain
+    esc(text) inside a <span>, so multi-line content collapsed into one
+    run-together line (HTML whitespace collapsing) and literal "**bold**"
+    syntax showed as literal asterisks. Executes the real lightMarkdown()
+    function and the readOnly branch of control() under node.
+    """
+    node = shutil.which("node")
+    if not node:
+        return
+
+    source = _form_source()
+
+    def extract_function(name):
+        start = source.index(f"function {name}(")
+        depth = 0
+        i = source.index("{", start)
+        for j in range(i, len(source)):
+            if source[j] == "{":
+                depth += 1
+            elif source[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    return source[start : j + 1]
+        raise AssertionError(f"unbalanced braces extracting {name}()")
+
+    esc_line = re.search(r"const esc = .*?;\n", source, re.S)
+    assert esc_line, "esc() not found in form.py"
+
+    probe = f"""
+{esc_line.group(0)}
+{extract_function("lightMarkdown")}
+
+const multiline = lightMarkdown("First paragraph.\\n\\nSecond paragraph with **bold** and *italic*.\\nhttps://example.com/page");
+const xss = lightMarkdown("<script>alert(1)</script>");
+console.log(JSON.stringify({{multiline, xss}}));
+"""
+    probe_path = tmp_path / "light_markdown_probe.js"
+    probe_path.write_text(probe)
+    result = subprocess.run([node, str(probe_path)], capture_output=True, text=True)
+    assert result.returncode == 0, f"node probe failed:\n{result.stderr}"
+    outcome = json.loads(result.stdout)
+
+    assert "First paragraph.<br><br>Second paragraph" in outcome["multiline"]
+    assert "<strong>bold</strong>" in outcome["multiline"]
+    assert "<em>italic</em>" in outcome["multiline"]
+    assert '<a href="https://example.com/page" target="_blank" rel="noopener">' in outcome["multiline"]
+    # Escaped FIRST, markdown applied second -- a real <script> tag in the
+    # field never becomes one, same guarantee view_render.py's standalone
+    # markdown block already makes.
+    assert "<script>" not in outcome["xss"]
+    assert "&lt;script&gt;" in outcome["xss"]
+
+    # The readOnly branch must route textarea through lightMarkdown in a
+    # block element (not the plain-text <span> every other field type
+    # gets, which is exactly what collapsed real article content).
+    assert (
+        "if (t === \"textarea\") {\n"
+        "        return v ? '<div class=\"detailvalue textareavalue\">' + lightMarkdown(v) + '</div>'"
+    ) in source
 
 
 def test_view_render_detail_block_is_a_thin_mount_wrapper():

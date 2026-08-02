@@ -396,6 +396,11 @@ footer.app { margin-top: 2.5rem; color: var(--muted); font-size: 0.78rem; }
 /* Money fields (integer cents rendered in whole units by /form's read-only
    renderer) -- tabular figures so columns of amounts line up. */
 .detailvalue.money { font-variant-numeric: tabular-nums; }
+/* Read-only textarea fields (notes, articles, any long-form field) get
+   the same light-markdown treatment as a standalone markdown view block --
+   matching line-height so paragraphs read the same wherever they appear. */
+.textareavalue { line-height: 1.6; }
+.textareavalue a { color: var(--accent-strong); }
 /* Owner-aware Edit/Delete affordances on a detail block (59 Stage-6
    extension) -- shown only to the record's owner by window.dbbasicDetail. */
 .detailtools { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.75rem; }
