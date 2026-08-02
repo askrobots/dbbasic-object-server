@@ -28,21 +28,20 @@ _JS = r"""
     (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
   const human = (n) => n.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
-  // Escape first, then a safe, minimal subset of markdown -- the same
-  // transform view_render.py's standalone "markdown" block applies,
-  // shared here so any textarea field shown read-only (a note, an
-  // article, any long-form field) gets it too. Without this, a
-  // multi-line value collapsed into one run-together line (plain text in
-  // a <span>, no paragraph breaks) and literal "**bold**" syntax showed
-  // as literal asterisks -- found while trying to publish a real article
-  // and it displaying as one unreadable line.
-  function lightMarkdown(text) {
-    let html = esc(text);
-    html = html.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
-    html = html.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
-    html = html.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
-    html = html.replace(/\n/g, "<br>");
-    return html;
+  // Real markdown for read-only textarea fields (a note, an article, any
+  // long-form field) -- delegates to the ONE shared renderer at /markdown
+  // (window.dbbasicMarkdown, see markdown.py) rather than keeping a
+  // second copy here. This file used to carry its own light regex
+  // subset; without it a multi-line value collapsed into one
+  // run-together line (plain text in a <span>, no paragraph breaks) and
+  // literal "**bold**" syntax showed as literal asterisks -- found while
+  // trying to publish a real article. Falls back to a bare escape (never
+  // raw innerHTML of untrusted text) if a page loads /form without
+  // /markdown, same "fails silent when a widget isn't loaded" posture
+  // detail.py already uses for window.dbbasicForm itself.
+  function textareaHtml(text) {
+    if (window.dbbasicMarkdown) return window.dbbasicMarkdown(text);
+    return esc(text).replace(/\n/g, "<br>");
   }
   const qs = (m) => typeof m === "string" ? document.querySelector(m) : m;
 
@@ -178,7 +177,7 @@ _JS = r"""
     }
     if (readOnly) {
       if (t === "textarea") {
-        return v ? '<div class="detailvalue textareavalue">' + lightMarkdown(v) + '</div>'
+        return v ? '<div class="detailvalue textareavalue">' + textareaHtml(v) + '</div>'
                  : '<span class="detailvalue empty">—</span>';
       }
       const text = isMoneyField(f) ? moneyText(v) : readOnlyText(t, v);

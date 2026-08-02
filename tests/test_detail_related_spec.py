@@ -149,13 +149,16 @@ def test_form_read_only_skips_fields_absent_from_the_record():
     assert "if (!(f.name in record)) continue;" in source
 
 
-def test_form_read_only_textarea_renders_light_markdown_not_one_collapsed_line(tmp_path):
+def test_form_read_only_textarea_delegates_to_shared_markdown_renderer(tmp_path):
     """Behavioral, not source-text: found while trying to publish a real
     article -- a textarea field shown read-only went through plain
     esc(text) inside a <span>, so multi-line content collapsed into one
-    run-together line (HTML whitespace collapsing) and literal "**bold**"
-    syntax showed as literal asterisks. Executes the real lightMarkdown()
-    function and the readOnly branch of control() under node.
+    run-together line and literal "**bold**" syntax showed as literal
+    asterisks. The fix delegates to the ONE shared renderer at /markdown
+    (window.dbbasicMarkdown, tested on its own merits in
+    test_markdown_object.py) rather than a second copy of markdown logic
+    living in this file -- this test only needs to prove the delegation
+    and its safe fallback, not re-verify markdown itself.
     """
     node = shutil.which("node")
     if not node:
@@ -181,35 +184,105 @@ def test_form_read_only_textarea_renders_light_markdown_not_one_collapsed_line(t
 
     probe = f"""
 {esc_line.group(0)}
-{extract_function("lightMarkdown")}
+{extract_function("textareaHtml")}
 
-const multiline = lightMarkdown("First paragraph.\\n\\nSecond paragraph with **bold** and *italic*.\\nhttps://example.com/page");
-const xss = lightMarkdown("<script>alert(1)</script>");
-console.log(JSON.stringify({{multiline, xss}}));
+global.window = {{dbbasicMarkdown: (t) => "MARKDOWN:" + t}};
+const delegated = textareaHtml("hello");
+
+global.window = {{}};
+const fallback = textareaHtml("line one\\nline two <script>alert(1)</script>");
+
+console.log(JSON.stringify({{delegated, fallback}}));
 """
-    probe_path = tmp_path / "light_markdown_probe.js"
+    probe_path = tmp_path / "textarea_html_probe.js"
     probe_path.write_text(probe)
     result = subprocess.run([node, str(probe_path)], capture_output=True, text=True)
     assert result.returncode == 0, f"node probe failed:\n{result.stderr}"
     outcome = json.loads(result.stdout)
 
-    assert "First paragraph.<br><br>Second paragraph" in outcome["multiline"]
-    assert "<strong>bold</strong>" in outcome["multiline"]
-    assert "<em>italic</em>" in outcome["multiline"]
-    assert '<a href="https://example.com/page" target="_blank" rel="noopener">' in outcome["multiline"]
-    # Escaped FIRST, markdown applied second -- a real <script> tag in the
-    # field never becomes one, same guarantee view_render.py's standalone
-    # markdown block already makes.
-    assert "<script>" not in outcome["xss"]
-    assert "&lt;script&gt;" in outcome["xss"]
+    # window.dbbasicMarkdown present -> delegate to it, verbatim.
+    assert outcome["delegated"] == "MARKDOWN:hello"
+    # window.dbbasicMarkdown absent (a page loaded /form without /markdown)
+    # -> a safe bare-escape fallback, never raw innerHTML of untrusted text.
+    assert "<script>" not in outcome["fallback"]
+    assert "&lt;script&gt;" in outcome["fallback"]
+    assert "line one<br>line two" in outcome["fallback"]
 
-    # The readOnly branch must route textarea through lightMarkdown in a
+    # The readOnly branch must route textarea through textareaHtml in a
     # block element (not the plain-text <span> every other field type
     # gets, which is exactly what collapsed real article content).
     assert (
         "if (t === \"textarea\") {\n"
-        "        return v ? '<div class=\"detailvalue textareavalue\">' + lightMarkdown(v) + '</div>'"
+        "        return v ? '<div class=\"detailvalue textareavalue\">' + textareaHtml(v) + '</div>'"
     ) in source
+
+
+def test_view_render_page_loads_markdown_script():
+    """The standalone "markdown" block and /form's textarea rendering
+    both delegate to window.dbbasicMarkdown -- the page wrapper this file
+    emits must actually load /markdown, or both call sites silently fall
+    back to a bare escape instead of real markdown."""
+    source = _view_render_source()
+    assert '<script src="/markdown"></script>' in source
+    # Must load before /form -- not strictly required by either renderer
+    # (both check window.dbbasicMarkdown defensively), but loading it
+    # first is the intent and catches a reordering that would make the
+    # timing accidentally matter.
+    markdown_idx = source.index('<script src="/markdown">')
+    form_idx = source.index('<script src="/form">')
+    assert markdown_idx < form_idx
+
+
+def test_view_render_markdown_block_delegates_to_shared_renderer(tmp_path):
+    node = shutil.which("node")
+    if not node:
+        return
+
+    source = _view_render_source()
+
+    def extract_function(name):
+        start = source.index(f"function {name}(")
+        depth = 0
+        i = source.index("{", start)
+        for j in range(i, len(source)):
+            if source[j] == "{":
+                depth += 1
+            elif source[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    return source[start : j + 1]
+        raise AssertionError(f"unbalanced braces extracting {name}()")
+
+    esc_line = re.search(r"const esc = .*?;\n", source, re.S)
+    assert esc_line, "esc() not found in view_render.py"
+
+    probe = f"""
+{esc_line.group(0)}
+{extract_function("renderMarkdown")}
+
+let capturedHtml = null;
+const mount = {{set innerHTML(v) {{ capturedHtml = v; }}}};
+
+global.window = {{dbbasicMarkdown: (t) => "MARKDOWN:" + t}};
+renderMarkdown({{text: "hello"}}, mount);
+const delegated = capturedHtml;
+
+global.window = {{}};
+renderMarkdown({{text: "line one\\nline two <script>alert(1)</script>"}}, mount);
+const fallback = capturedHtml;
+
+console.log(JSON.stringify({{delegated, fallback}}));
+"""
+    probe_path = tmp_path / "render_markdown_probe.js"
+    probe_path.write_text(probe)
+    result = subprocess.run([node, str(probe_path)], capture_output=True, text=True)
+    assert result.returncode == 0, f"node probe failed:\n{result.stderr}"
+    outcome = json.loads(result.stdout)
+
+    assert outcome["delegated"] == '<div class="markdownblock">MARKDOWN:hello</div>'
+    assert "<script>" not in outcome["fallback"]
+    assert "&lt;script&gt;" in outcome["fallback"]
+    assert "line one<br>line two" in outcome["fallback"]
 
 
 def test_view_render_detail_block_is_a_thin_mount_wrapper():

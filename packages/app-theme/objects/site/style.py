@@ -396,11 +396,52 @@ footer.app { margin-top: 2.5rem; color: var(--muted); font-size: 0.78rem; }
 /* Money fields (integer cents rendered in whole units by /form's read-only
    renderer) -- tabular figures so columns of amounts line up. */
 .detailvalue.money { font-variant-numeric: tabular-nums; }
-/* Read-only textarea fields (notes, articles, any long-form field) get
-   the same light-markdown treatment as a standalone markdown view block --
-   matching line-height so paragraphs read the same wherever they appear. */
-.textareavalue { line-height: 1.6; }
-.textareavalue a { color: var(--accent-strong); }
+/* Read-only textarea fields (notes, articles, any long-form field) and
+   view_render.py's standalone "markdown" block both render through the
+   ONE shared parser at /markdown (window.dbbasicMarkdown) -- real
+   headings, lists, blockquotes, code, tables now, not just paragraphs --
+   so both classes share one rule set here rather than each page
+   restyling the same element shapes on its own. */
+.textareavalue, .markdownblock { line-height: 1.6; }
+.textareavalue a, .markdownblock a { color: var(--accent-strong); }
+.textareavalue h1, .textareavalue h2, .textareavalue h3,
+.textareavalue h4, .textareavalue h5, .textareavalue h6,
+.markdownblock h1, .markdownblock h2, .markdownblock h3,
+.markdownblock h4, .markdownblock h5, .markdownblock h6 {
+  margin: 1rem 0 0.5rem; line-height: 1.3;
+}
+.textareavalue h1:first-child, .markdownblock h1:first-child,
+.textareavalue h2:first-child, .markdownblock h2:first-child,
+.textareavalue h3:first-child, .markdownblock h3:first-child { margin-top: 0; }
+.textareavalue p, .markdownblock p { margin: 0 0 0.85rem; }
+.textareavalue p:last-child, .markdownblock p:last-child { margin-bottom: 0; }
+.textareavalue ul, .textareavalue ol, .markdownblock ul, .markdownblock ol {
+  margin: 0 0 0.85rem; padding-left: 1.5rem;
+}
+.textareavalue li, .markdownblock li { margin: 0.2rem 0; }
+.textareavalue blockquote, .markdownblock blockquote {
+  margin: 0 0 0.85rem; padding: 0.25rem 0 0.25rem 0.85rem;
+  border-left: 3px solid var(--line); color: var(--muted);
+}
+.textareavalue code, .markdownblock code {
+  background: var(--panel-2); color: var(--accent-strong);
+  padding: 1px 5px; border-radius: 3px; font-size: 0.9em;
+}
+.textareavalue pre, .markdownblock pre {
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius-md);
+  padding: 0.75rem; overflow-x: auto; margin: 0 0 0.85rem;
+}
+.textareavalue pre code, .markdownblock pre code {
+  background: none; padding: 0; border-radius: 0; font-size: 0.85rem;
+}
+.textareavalue table, .markdownblock table {
+  border-collapse: collapse; width: 100%; margin: 0 0 0.85rem; font-size: 0.9rem;
+}
+.textareavalue th, .textareavalue td, .markdownblock th, .markdownblock td {
+  border: 1px solid var(--line); padding: 0.4rem 0.6rem; text-align: left;
+}
+.textareavalue th, .markdownblock th { background: var(--panel-2); }
+.textareavalue hr, .markdownblock hr { border: none; border-top: 1px solid var(--line); margin: 1rem 0; }
 /* Owner-aware Edit/Delete affordances on a detail block (59 Stage-6
    extension) -- shown only to the record's owner by window.dbbasicDetail. */
 .detailtools { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.75rem; }

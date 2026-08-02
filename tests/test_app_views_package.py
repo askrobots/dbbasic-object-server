@@ -259,12 +259,13 @@ def test_renderer_source_covers_the_closed_block_vocabulary():
     assert "Invalid blocks JSON" in source
 
 
-def test_renderer_markdown_block_escapes_before_formatting():
-    """The markdown block must escape ALL html first, then apply
-    bold/italic/links/line-breaks on the already-escaped text -- never
-    innerHTML the raw block text. Assert the order directly on the JS
-    source, matching how other site-object tests assert on generated
-    script text.
+def test_renderer_markdown_block_delegates_to_shared_renderer_and_never_raw_innerhtmls():
+    """The markdown block delegates to the ONE shared renderer at
+    /markdown (window.dbbasicMarkdown, in markdown.py -- escapes ALL html
+    first, then applies markdown on the already-escaped text) rather than
+    formatting block.text itself. Assert the delegation directly on the
+    JS source, and that block.text is never innerHTML'd raw regardless of
+    whether window.dbbasicMarkdown happens to be loaded.
     """
     source = (APP_VIEWS_DIR / "objects" / "site" / "view_render.py").read_text()
 
@@ -274,15 +275,10 @@ def test_renderer_markdown_block_escapes_before_formatting():
     assert match, "renderMarkdown function not found in view_render.py"
     body = match.group(1)
 
-    esc_pos = body.index("esc(block.text)")
-    bold_pos = body.index("<strong>")
-    italic_pos = body.index("<em>")
-    link_pos = body.index('target="_blank"')
-    br_pos = body.index("<br>")
-
-    # Escaping happens first; every formatting transform runs on the
-    # already-escaped string, never on raw block.text.
-    assert esc_pos < bold_pos < italic_pos < link_pos < br_pos
+    assert "window.dbbasicMarkdown" in body
+    assert "window.dbbasicMarkdown(block.text)" in body
+    # The no-/markdown-loaded fallback still escapes -- never a raw pass-through.
+    assert "esc(block.text)" in body
     assert "innerHTML = block.text" not in source
     assert "innerHTML = mount.textContent" not in source
 

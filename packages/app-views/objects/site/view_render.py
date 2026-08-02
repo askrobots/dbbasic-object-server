@@ -543,14 +543,18 @@ function renderAggregate(block, mount) {
   load();
 }
 
-// Safe subset: escape ALL html first, then apply bold/italic/links/line
-// breaks on the escaped text. Never innerHTML the raw block text.
+// Delegates to the ONE shared renderer at /markdown (window.dbbasicMarkdown,
+// see markdown.py) rather than keeping a second copy of the same escape-
+// first, safe-subset transform here. Falls back to a bare escape (never
+// raw innerHTML of untrusted block text) if a page somehow loads this
+// without /markdown -- the page wrapper always includes it (see the
+// script tags this file itself emits), but block.text is still untrusted
+// content either way, so the fallback stays safe even without the real
+// parser.
 function renderMarkdown(block, mount) {
-  let html = esc(block.text);
-  html = html.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
-  html = html.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
-  html = html.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
-  html = html.replace(/\n/g, "<br>");
+  const html = window.dbbasicMarkdown
+    ? window.dbbasicMarkdown(block.text)
+    : esc(block.text).replace(/\n/g, "<br>");
   mount.innerHTML = '<div class="markdownblock">' + html + "</div>";
 }
 
@@ -850,6 +854,7 @@ def GET(request):
 {header_html}
 <div class="blocks" id="blocks"><div class="state">loading&hellip;</div></div>
 </div>
+<script src="/markdown"></script>
 <script src="/list"></script>
 <script src="/form"></script>
 <script src="/detail"></script>
