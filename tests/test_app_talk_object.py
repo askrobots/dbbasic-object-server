@@ -523,6 +523,22 @@ def test_talk_cloud_voice_prefs_default_off():
     assert "talk_stt_engine" in default_form_fields
 
 
+def test_talk_cloud_voice_url_override():
+    # "/talk?stt=openai" (or ?tts=openai) tries cloud voice for one page
+    # load without touching settings or persisting anything -- both reader
+    # functions must consult the URL before falling back to the stored
+    # preference.
+    override = re.search(r"function urlOverride\(param, allowed\) \{(.*?)\n\}", TALK_SOURCE, re.S)
+    assert override, "urlOverride() not found in talk.py"
+    assert "URLSearchParams(location.search)" in override.group(1)
+
+    tts_fn = re.search(r"function talkTtsEngine\(\) \{(.*?)\n\}", TALK_SOURCE, re.S)
+    assert tts_fn and 'urlOverride("tts", ["local", "openai"])' in tts_fn.group(1)
+
+    stt_fn = re.search(r"function talkSttEngine\(\) \{(.*?)\n\}", TALK_SOURCE, re.S)
+    assert stt_fn and 'urlOverride("stt", ["browser", "openai"])' in stt_fn.group(1)
+
+
 def test_talk_wake_word_gating_discards_until_heard():
     process = re.search(r"function processTranscript\(isFinal\) \{(.*?)\n\}\n", TALK_SOURCE, re.S)
     assert process, "processTranscript() not found in talk.py"

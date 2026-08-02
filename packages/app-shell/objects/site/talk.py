@@ -175,16 +175,30 @@ function talkTtsMode() {
   const m = String(pref("talk_tts", DEFAULT_TALK_TTS)).trim();
   return (m === "server" || m === "browser") ? m : DEFAULT_TALK_TTS;
 }
+// ?tts=openai|local and ?stt=openai|browser override the stored preference
+// for THIS page load only -- nothing is saved back to shell_preferences.
+// Exists so a link (e.g. "/talk?stt=openai") can be tried or shared
+// without visiting settings first; the stored preference underneath is
+// exactly what a plain "/talk" load still honors.
+function urlOverride(param, allowed) {
+  const v = new URLSearchParams(location.search).get(param);
+  return allowed.includes(v) ? v : null;
+}
 function talkTtsEngine() {
+  const override = urlOverride("tts", ["local", "openai"]);
+  if (override) return override;
   const m = String(pref("talk_tts_engine", DEFAULT_TALK_TTS_ENGINE)).trim();
   return m === "openai" ? "openai" : DEFAULT_TALK_TTS_ENGINE;
 }
 // "openai" here is deliberately opt-in only, never an automatic fallback
 // for browsers lacking SpeechRecognition -- a Firefox user who never
-// touched this setting and has no stored OpenAI key must keep seeing
-// today's exact behavior (mic hidden), not a confusing "no key stored"
-// error from a feature they never asked for. See initMic()/initCloudMic().
+// touched this setting (or the URL override) and has no stored OpenAI key
+// must keep seeing today's exact behavior (mic hidden), not a confusing
+// "no key stored" error from a feature they never asked for. See
+// initMic()/initCloudMic().
 function talkSttEngine() {
+  const override = urlOverride("stt", ["browser", "openai"]);
+  if (override) return override;
   const m = String(pref("talk_stt_engine", DEFAULT_TALK_STT_ENGINE)).trim();
   return m === "openai" ? "openai" : DEFAULT_TALK_STT_ENGINE;
 }
