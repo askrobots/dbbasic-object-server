@@ -52,6 +52,16 @@ server) lives in the **write-only identity vault**, `object_service_keys`
   (See [`backup-restore.md`](backup-restore.md); a package must never undo this by copying a secret
   into a record it *does* back up.)
 
+**Concrete example**: the AI chat, cloud TTS, and cloud STT features
+(`docs/shell-and-ai.md`) all read from this vault, not the env file — a
+user's own `anthropic` and/or `openai` key, set via `PUT
+/identity/users/{you}/service-keys`. One stored `openai` key covers chat,
+`POST /api/tts` with `engine: "openai"`, and `POST /api/stt` — no separate
+signup per feature. This is also why those features are per-user opt-in
+rather than deployment-wide: `DBBASIC_ENABLE_AI_CHAT`/`_TTS`/`_STT` in the
+env file only unlock the *capability*; each user still needs their own
+stored key before any of it does anything for them.
+
 ## How a secret gets written (it is not a record write)
 
 The vault has its own door, deliberately separate from the generic record API:

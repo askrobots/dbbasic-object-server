@@ -1508,6 +1508,60 @@ without a stored key for the model's service get a pointed 400. Timeout
 per provider round: `DBBASIC_AI_TIMEOUT_SECONDS` (default 60); default
 model: `DBBASIC_AI_DEFAULT_MODEL`.
 
+## Text-to-Speech
+
+```http
+POST /api/tts
+Authorization: Bearer <session-token>   (or the session cookie)
+
+{"text": "one note matches", "voice": "en-us", "engine": "local"}
+```
+
+Response: audio bytes (`audio/wav` for `engine: "local"`, `audio/mpeg` for
+`engine: "openai"`) on success, or `{"status": "error", "error"}` on
+failure. `engine` is optional (`"local"` default, or `"openai"` — uses the
+caller's stored `openai` service key, no engine ever silently falls back
+to the other). Requires `DBBASIC_ENABLE_TTS=true` and a signed-in session.
+`text` capped at 800 characters (413 beyond). `DBBASIC_TTS_CLOUD_TIMEOUT_SECONDS`
+bounds the cloud path (default 30). See `docs/shell-and-ai.md`'s "Voice"
+section for engine details and caching.
+
+## Speech-to-Text
+
+```http
+POST /api/stt
+Authorization: Bearer <session-token>   (or the session cookie)
+Content-Type: audio/webm
+
+<raw audio bytes>
+```
+
+Response: `{"status": "ok", "text": "..."}` or the usual error shape. Body
+is raw audio bytes (not JSON) in whatever format `Content-Type` says.
+Cloud-only — no local engine — calls OpenAI's transcription API with the
+caller's stored `openai` service key. Requires `DBBASIC_ENABLE_STT=true`
+(off by default even when TTS is on: this costs money per utterance, not
+per occasional reply) and a signed-in session. Capped at 10MB per clip
+(413 beyond). `DBBASIC_STT_TIMEOUT_SECONDS` bounds the call (default 30).
+
+## Reader
+
+```http
+POST /api/read
+Authorization: Bearer <session-token>   (or the session cookie)
+
+{"url": "https://example.com/article"}
+```
+
+Response: `{"status": "ok", "title", "text", "links": [{n, label, href}],
+"final_url", "truncated"}` or the usual error shape. Fetches server-side,
+strips HTML to readable text, numbers links in document order. SSRF-hardened
+(every hostname, including redirect hops, resolved and checked before the
+socket opens; `http`/`https` only; fails closed on any resolution
+ambiguity) — see `object_reader.py`. Requires `DBBASIC_ENABLE_READER=true`
+and a signed-in session. Also offered as the `read_page` MCP tool for
+`/api/ai/chat` — see `docs/shell-and-ai.md`'s "Reading the Web" section.
+
 ## Backups
 
 Runtime backups are tar/gzip archives of the whole data directory. They

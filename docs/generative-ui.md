@@ -78,6 +78,36 @@ detail. Composed detail pages are `views` records with a `detail` block plus
 `related` child blocks; the view renderer
 (`app-views/objects/site/view_render.py`) assembles them.
 
+A `textarea`-type field shown read-only gets a safe, minimal markdown
+subset (bold, italic, links, paragraph breaks) — the same transform the
+standalone `markdown` block below applies — instead of plain escaped text
+in a `<span>`, which used to collapse multi-line content into one
+run-together line.
+
+## Other view block kinds
+
+Beyond `list`/`form`/`detail`/`related`, a view's `blocks` array can also
+declare:
+
+- **`markdown`** — a block of static prose baked directly into the view
+  definition (`{kind: "markdown", text: "..."}`), the same escape-first,
+  safe-subset renderer as the textarea treatment above.
+- **`reader`** — `{kind: "reader", url: "..."}` fetches a URL through the
+  flag-gated, signed-in-only `POST /api/read` and renders title + body text
+  + a numbered link list. See [`shell-and-ai.md`](shell-and-ai.md)'s
+  "Reading the Web" section for the SSRF posture and the voice-navigation
+  loop this backs.
+- **`count`** / **`aggregate`** — live stat cards over a collection (row
+  count, or a sum of numeric/`_cents` fields, with an optional
+  balanced/not-balanced badge for double-entry-style checks).
+- **`thread`** — sugar for a comment/reply thread capability.
+- **`object`** — mounts an arbitrary object's own rendered output inline.
+
+Every kind subscribes to its source collection and re-renders live, the
+same as `list`/`related`. An unrecognized kind (or one missing a required
+field) renders a small "unsupported" placeholder card rather than breaking
+the page.
+
 ## Why this is the point
 
 Adding an app is a schema file. The list, the table, the board, the toggle,

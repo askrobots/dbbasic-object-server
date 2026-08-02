@@ -126,7 +126,7 @@ an image rebuild:
   rebuilding and redeploying the image. Under Coolify this is a normal
   git-push-to-deploy flow: push to the branch Coolify watches, it rebuilds
   the image, runs the health check, and cuts over.
-- **Object, schema, and package edits** made live through the admin HTTP API
+- **Object, schema, and record edits made live through the admin HTTP API**
   (the same API described in the root `README.md` and
   `docs/single-vm-deployment.md`) land directly on the persistent volumes.
   They take effect on the next request, with no image rebuild and no
@@ -135,6 +135,20 @@ an image rebuild:
 This is the reason the volume split above exists: redeploying the image
 never touches `/data/objects` or `/data/state`, so in-flight object work
 survives ordinary code deploys.
+
+**A `packages/<name>/` change (in git) needs BOTH steps, not either/or.**
+An image rebuild brings the new `packages/` source into the image, but
+`/data/objects` and `/data/state/schemas` are the persistent volumes the
+running container actually serves from — the same separate-copy split
+`docs/single-vm-deployment.md`'s Upgrade section documents for the bare-VM
+case, and the entrypoint does not auto-sync it. After the new image is
+live, still call `POST /packages/{id}/install` (`{"allow_replace": true}`,
+admin-token gated) for the changed package, confirm
+`install.objects[].status` says `"updated"`, and expect the object module
+cache to need the container's next natural restart (or force one) to pick
+it up. Skipping this step is a silent no-op exactly like the bare-VM case:
+new image, tests green, health check passes, and the container keeps
+serving the old package code with no error anywhere.
 
 ## First Boot: the Admin Token
 

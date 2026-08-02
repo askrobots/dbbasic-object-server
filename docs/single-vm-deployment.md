@@ -166,6 +166,20 @@ DBBASIC_ENABLE_SOURCE_WRITES=false
 DBBASIC_ENABLE_FILE_WRITES=false
 DBBASIC_ENABLE_PACKAGE_INSTALLS=false
 DBBASIC_ENABLE_PACKAGE_RESTORE=false
+# AI chat, voice, and reader -- each is its own flag; enabling AI chat does
+# NOT enable TTS/STT/reader. Each also needs a per-user provider key stored
+# via PUT /identity/users/{id}/service-keys before it does anything -- see
+# docs/shell-and-ai.md and docs/secrets-and-credentials.md.
+DBBASIC_ENABLE_AI_CHAT=false
+DBBASIC_AI_TIMEOUT_SECONDS=60
+DBBASIC_AI_DEFAULT_MODEL=anthropic:claude-haiku-4-5
+DBBASIC_ENABLE_TTS=false
+DBBASIC_TTS_CLOUD_TIMEOUT_SECONDS=30
+# STT costs real money on every utterance (not just occasional replies
+# like TTS) -- leave this off even where TTS is on unless you mean it.
+DBBASIC_ENABLE_STT=false
+DBBASIC_STT_TIMEOUT_SECONDS=30
+DBBASIC_ENABLE_READER=false
 DBBASIC_ADMIN_TOKEN=replace-with-a-generated-token
 DBBASIC_MAX_REQUEST_BYTES=1048576
 DBBASIC_MAX_OBJECT_FILE_BYTES=1048576
@@ -192,6 +206,15 @@ DBBASIC_EVENT_KEEP_SECONDS=604800
 DBBASIC_LOG_MAX_BYTES=10485760
 DBBASIC_LOG_COMPRESS_ROTATED=true
 DBBASIC_LOG_KEEP_ROTATED=32
+# Other feature gates worth knowing exist -- off by default, turn on what
+# you actually use rather than everything at once.
+DBBASIC_ENABLE_USER_FILES=false
+DBBASIC_ENABLE_REALTIME=false
+DBBASIC_ENABLE_SITE_ROUTES=false
+DBBASIC_ENABLE_FEED=false
+DBBASIC_ENABLE_FILTERING=false
+DBBASIC_ENABLE_CONCURRENCY=false
+DBBASIC_ENABLE_SESSION_ADMIN_GATES=false
 ```
 
 Generate a local token on the VM:
@@ -536,8 +559,12 @@ sudo journalctl --disk-usage
 
 ## Upgrade
 
-For a staging VM that already follows this layout, a normal server-code upgrade
-should be small and repeatable:
+**Two different things live at `/opt` and two different things get served
+at `/var/lib` — know which one you changed before declaring a deploy done.**
+
+Core server modules (`object_server.py`, `object_ai.py`, and every other
+`.py` at the repo root) are imported directly from
+`/opt/dbbasic-object-server` — the steps below are complete for these:
 
 ```bash
 cd /opt/dbbasic-object-server
@@ -545,6 +572,44 @@ sudo -u dbbasic git pull --ff-only
 sudo -u dbbasic .venv/bin/python -m pip install -e '.[server]'
 sudo systemctl restart dbbasic-object-server
 ```
+
+**Anything under `packages/<name>/` (objects, schemas, seed data) is
+different.** The running server reads these from a separately *installed*
+copy at `/var/lib/dbbasic-object-server/objects/` and
+`/var/lib/dbbasic-object-server/data/schemas/` — `git pull` alone never
+syncs into it, no matter how many times you restart. A `git pull`-only
+"deploy" of a `packages/` change is a silent no-op: the commit lands, the
+tests pass, the service restarts clean, and the live server keeps running
+the old code with no error anywhere. After the `git pull` above, also run:
+
+```bash
+curl -s -X POST https://dbbasic.example.com/packages/app-shell/install \
+  -H "Authorization: Token $DBBASIC_ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"allow_replace": true}'
+```
+
+(swap `app-shell` for whichever package changed; `DBBASIC_ENABLE_PACKAGE_INSTALLS`
+must be `true`). Check the response's `install.objects[].status` — `"updated"`
+means a real change landed, `"unchanged"` means nothing to sync. A schema-only
+change can also go straight to `PUT /admin/schemas/{collection}` with the
+updated schema JSON, same admin-token gate. Either way, **restart the
+service afterward** — object modules are cached in the running process, so
+even a correctly-installed file has no effect until the next restart clears
+that cache:
+
+```bash
+sudo systemctl restart dbbasic-object-server
+```
+
+To confirm a `packages/` deploy actually landed rather than trusting the
+install response alone, diff the live file against the source directly:
+
+```bash
+diff /var/lib/dbbasic-object-server/objects/site/<name>.py \
+     /opt/dbbasic-object-server/packages/<pkg>/objects/site/<name>.py
+```
+
+A non-empty diff means the install step (or the restart) didn't happen yet.
 
 Then verify the local service, filesystem layout, public proxy, and deployed
 commit:
@@ -561,10 +626,12 @@ sudo systemctl is-active dbbasic-object-server caddy
 sudo -u dbbasic git rev-parse --short HEAD
 ```
 
-If the upgrade only changes live objects under
-`/var/lib/dbbasic-object-server/objects`, the server should not need a git
-deploy. That is the object loop: edit one object, run it, inspect state/logs,
-and keep the version trail.
+If the upgrade only changes live objects that were edited **directly**
+under `/var/lib/dbbasic-object-server/objects` (not via a `packages/` git
+change), the server should not need a git deploy at all. That is the
+object loop: edit one object, run it, inspect state/logs, and keep the
+version trail. This is a third, separate path from both cases above — it
+never touches `/opt` or git at all.
 
 ## HTTPS Proxy
 
