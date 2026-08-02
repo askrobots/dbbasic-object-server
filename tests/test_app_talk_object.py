@@ -349,8 +349,10 @@ def test_talk_object_no_longer_calls_loadhistory_on_page_load():
     html = _render_talk_html()
     script = _extract_inline_script(html)
     assert "loadHistory" not in script
-    assert "initMic();" in script
-    assert "loadPrefs();" in script
+    # initMic() must run AFTER loadPrefs() resolves, not as two independent
+    # standalone calls -- see test_talk_init_order_loads_prefs_before_deciding_mic_path
+    # for why the ordering itself is load-bearing, not just style.
+    assert "loadPrefs().then(() => { initMic(); initCloudVoiceToggle(); });" in script
 
 
 def test_shell_replay_into_model_context_is_unaffected():
@@ -616,6 +618,141 @@ console.log(JSON.stringify(results));
     assert outcomes["persisted-openai"] == ("server", "openai")
     assert outcomes["url-override"] == ("server", "openai")
     assert outcomes["explicit-browser-mode"] == ("browser", "openai")
+
+
+def test_talk_page_has_cloud_voice_toggle_button():
+    assert '<button type="button" id="cloudvoice" class="backlink" hidden>cloud voice: off</button>' in TALK_SOURCE
+    assert "#cloudvoice { background: none; border: none;" in TALK_SOURCE
+
+
+def test_talk_init_order_loads_prefs_before_deciding_mic_path():
+    # The real bug this guards: initMic() decides browser-vs-cloud ONCE,
+    # synchronously, at load -- calling it before loadPrefs() resolves
+    # means it always saw the shipped defaults, never the real stored
+    # talk_stt_engine, so settings-based cloud STT could never activate
+    # (only a ?stt= URL override, which doesn't depend on prefs, ever
+    # could). initCloudVoiceToggle() has the identical dependency for its
+    # initial label.
+    assert "loadPrefs().then(() => { initMic(); initCloudVoiceToggle(); });" in TALK_SOURCE
+    assert re.search(r"^initMic\(\);\s*$", TALK_SOURCE, re.M) is None, (
+        "initMic() must not be called standalone before loadPrefs() resolves"
+    )
+
+
+def test_talk_cloud_voice_toggle_resolves_and_saves_both_engines_together(tmp_path):
+    """Behavioral: executes the real resolvedCloudVoiceOn()/initCloudVoiceToggle()
+    functions under node with a fake DOM/fetch, not a source-text match --
+    clicking the toggle must flip BOTH talk_tts_engine and talk_stt_engine
+    together (the whole point is one switch for "this mode", not two
+    settings to remember), persist them via the real savePrefs()/api()
+    call shape, and land on a query-string-free URL afterward so a stale
+    ?stt=/?tts= link can never look like the toggle silently did nothing.
+    """
+    node = shutil.which("node")
+    if not node:
+        return
+
+    def extract_function(name):
+        start = TALK_SOURCE.index(f"function {name}(")
+        depth = 0
+        i = TALK_SOURCE.index("{", start)
+        for j in range(i, len(TALK_SOURCE)):
+            if TALK_SOURCE[j] == "{":
+                depth += 1
+            elif TALK_SOURCE[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    return TALK_SOURCE[start : j + 1]
+        raise AssertionError(f"unbalanced braces extracting {name}()")
+
+    def extract_async_function(name):
+        start = TALK_SOURCE.index(f"async function {name}(")
+        depth = 0
+        i = TALK_SOURCE.index("{", start)
+        for j in range(i, len(TALK_SOURCE)):
+            if TALK_SOURCE[j] == "{":
+                depth += 1
+            elif TALK_SOURCE[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    return TALK_SOURCE[start : j + 1]
+        raise AssertionError(f"unbalanced braces extracting {name}()")
+
+    functions = "\n".join([
+        extract_function("urlOverride"),
+        extract_function("talkTtsEngine"),
+        extract_function("talkSttEngine"),
+        extract_function("resolvedCloudVoiceOn"),
+        extract_async_function("api"),
+        extract_async_function("savePrefs"),
+        extract_function("initCloudVoiceToggle"),
+    ])
+
+    probe = f"""
+const DEFAULT_TALK_TTS_ENGINE = "local";
+const DEFAULT_TALK_STT_ENGINE = "browser";
+const OWNER_ID = "dan";
+let prefs = {{talk_tts_engine: "local", talk_stt_engine: "browser"}};
+let location = {{search: "", pathname: "/talk", href: "/talk"}};
+function pref(name, fallback) {{
+  const v = prefs[name];
+  return v === undefined || v === null ? fallback : v;
+}}
+
+const putCalls = [];
+function fetch(path, opts) {{
+  const body = opts.body ? JSON.parse(opts.body) : undefined;
+  putCalls.push({{method: opts.method, path, body}});
+  return Promise.resolve({{ok: true, json: () => Promise.resolve({{status: "ok"}})}});
+}}
+
+class FakeButton {{
+  constructor() {{ this.hidden = true; this.textContent = ""; this.disabled = false; this._handlers = {{}}; }}
+  addEventListener(name, fn) {{ this._handlers[name] = fn; }}
+  click() {{ return this._handlers["click"](); }}
+}}
+const btn = new FakeButton();
+const document = {{getElementById: (id) => id === "cloudvoice" ? btn : null}};
+
+{functions}
+
+const results = {{}};
+initCloudVoiceToggle();
+results.initialHidden = btn.hidden;
+results.initialText = btn.textContent;
+
+(async () => {{
+  await btn.click();
+  results.afterClickText = btn.textContent;
+  results.putCalls = putCalls;
+  results.finalHref = location.href;
+  results.finalPrefs = prefs;
+  console.log(JSON.stringify(results));
+}})();
+"""
+    probe_path = tmp_path / "talk_cloud_toggle_probe.js"
+    probe_path.write_text(probe)
+    result = subprocess.run([node, str(probe_path)], capture_output=True, text=True)
+    assert result.returncode == 0, f"node probe failed:\n{result.stderr}"
+    outcome = json.loads(result.stdout)
+
+    assert outcome["initialHidden"] is False
+    assert outcome["initialText"] == "cloud voice: off"
+
+    put_calls = outcome["putCalls"]
+    assert len(put_calls) == 1
+    call = put_calls[0]
+    assert call["method"] == "PUT"
+    assert call["path"] == "/collections/shell_preferences/records/dan"
+    # Both engines flip TOGETHER in one call -- not two separate saves a
+    # user could half-apply.
+    assert call["body"] == {"talk_tts_engine": "openai", "talk_stt_engine": "openai"}
+
+    assert outcome["finalPrefs"]["talk_tts_engine"] == "openai"
+    assert outcome["finalPrefs"]["talk_stt_engine"] == "openai"
+    # Lands on a clean, query-string-free URL -- no leftover ?tts=/?stt=
+    # that could make the freshly-saved preference look inert.
+    assert outcome["finalHref"] == "/talk"
 
 
 def test_talk_wake_word_gating_discards_until_heard():

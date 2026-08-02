@@ -69,6 +69,10 @@ _STYLE = """
 form#prompt { flex: 1; display: flex; gap: 0.5rem; }
 form#prompt input { flex: 1; }
 .backlink { color: var(--muted); font-size: 0.82rem; white-space: nowrap; }
+/* #cloudvoice is a <button> wearing .backlink's look, not an <a> --
+   strip the browser's default button chrome so it reads as the same
+   plain inline text control as the "back to shell" link beside it. */
+#cloudvoice { background: none; border: none; padding: 0; font: inherit; cursor: pointer; }
 /* Caption states: armed (waiting for the wake word), active (live capture
    or the assistant's reply), sent (what was just submitted, muted). */
 .cap.user.armed { font-style: italic; opacity: 0.7; }
@@ -1193,6 +1197,43 @@ async function loadPrefs() {
   if (res.ok) { const body = await res.json(); prefs = body.record || prefs; }
 }
 
+async function savePrefs(changes) {
+  Object.assign(prefs, changes);
+  const [ok] = await api("PUT", `/collections/shell_preferences/records/${OWNER_ID}`, changes);
+  if (!ok) await api("POST", "/collections/shell_preferences/records", prefs);
+}
+
+// One combined switch for both engines together -- talk_tts_engine and
+// talk_stt_engine are separate prefs (fine-grained control still lives in
+// the settings form), but "get back to this mode" means the SAME
+// push-to-talk-plus-cloud-voice combination just tried, not two things to
+// remember to flip separately.
+function resolvedCloudVoiceOn() {
+  return talkTtsEngine() === "openai" && talkSttEngine() === "openai";
+}
+
+function initCloudVoiceToggle() {
+  const btn = document.getElementById("cloudvoice");
+  if (!btn) return;
+  btn.hidden = false;
+  btn.textContent = resolvedCloudVoiceOn() ? "cloud voice: on" : "cloud voice: off";
+  btn.addEventListener("click", async () => {
+    const turningOn = !resolvedCloudVoiceOn();
+    btn.disabled = true;
+    btn.textContent = "saving…";
+    await savePrefs({
+      talk_tts_engine: turningOn ? "openai" : "local",
+      talk_stt_engine: turningOn ? "openai" : "browser",
+    });
+    // A clean reload, no ?tts=/?stt= -- the freshly-saved preference is
+    // the only source of truth for the next load. Without this, a page
+    // reached via a "?stt=openai" link could look like the toggle did
+    // nothing (still "on" from the URL) or, worse, silently keep forcing
+    // cloud back on after the user just explicitly turned it off.
+    location.href = location.pathname;
+  });
+}
+
 // The 10-second silence problem: a tool-using model legitimately takes
 // that long, and a page that shows a frozen ellipsis for it reads as
 // dead -- "we don't know because after 10 seconds..." is a verbatim
@@ -1316,8 +1357,18 @@ document.getElementById("prompt").addEventListener("submit", (event) => {
   if (!input) { if (conversationMode) updateCaptionArmed(); return; }
   submitTurn(input);
 });
-initMic();
-loadPrefs();
+// initMic()'s job is deciding WHICH mic implementation to wire up at all
+// (browser SpeechRecognition vs. cloud push-to-talk) -- a one-time,
+// load-bearing decision, unlike wakeWord()/endpointMode()/etc., which are
+// read live and repeatedly deep into an already-running conversation
+// (loadPrefs() has always finished long before a user starts talking).
+// Calling it before loadPrefs() resolves used to mean it ALWAYS saw the
+// hardcoded defaults, never the real stored talk_stt_engine -- a real bug
+// (settings-based cloud STT could never activate, only a ?stt= URL
+// override could, since that alone doesn't depend on prefs). initCloudVoiceToggle()
+// has the same real dependency, for the same reason: its initial label
+// must reflect what's actually stored, not the shipped default.
+loadPrefs().then(() => { initMic(); initCloudVoiceToggle(); });
 
 
 // === sessions =================================================================
@@ -1439,6 +1490,7 @@ def GET(request):
 </form>
 <select id="sessionpick" aria-label="conversation">
 <option value="__new">&#10133; new session</option></select>
+<button type="button" id="cloudvoice" class="backlink" hidden>cloud voice: off</button>
 <a class="backlink" href="/shell">back to shell</a>
 </div>
 </div>
