@@ -72,7 +72,7 @@ form#prompt input { flex: 1; }
 /* #cloudvoice is a <button> wearing .backlink's look, not an <a> --
    strip the browser's default button chrome so it reads as the same
    plain inline text control as the "back to shell" link beside it. */
-#cloudvoice { background: none; border: none; padding: 0; font: inherit; cursor: pointer; }
+#cloudvoice, #headphonestoggle { background: none; border: none; padding: 0; font: inherit; cursor: pointer; }
 /* Caption states: armed (waiting for the wake word), active (live capture
    or the assistant's reply), sent (what was just submitted, muted). */
 .cap.user.armed { font-style: italic; opacity: 0.7; }
@@ -347,8 +347,8 @@ async function speakBrowser(text) {
   const utter = new SpeechSynthesisUtterance(text);
   const voice = pickVoice();
   if (voice) utter.voice = voice;
-  utter.addEventListener("end", () => { speaking = false; resumeListeningIfNeeded(); });
-  utter.addEventListener("error", () => { speaking = false; resumeListeningIfNeeded(); });
+  utter.addEventListener("end", stopSpeaking);
+  utter.addEventListener("error", stopSpeaking);
   window.speechSynthesis.speak(utter);
 }
 
@@ -392,6 +392,7 @@ async function speak(text) {
     const player = sharedTtsAudio();
     player.pause();
     player.src = url;
+    currentTtsObjectUrl = url;
     // EVERY exit clears `speaking`, not just the happy one. It gates the
     // mic restart AND the transcript-stability submit, so a playback that
     // ends without an `ended` event -- a bad WAV, a decode error, an
@@ -399,19 +400,37 @@ async function speak(text) {
     // forever: mic never resumed, submits silently blocked, and nothing
     // on screen said why. Found by the harness, whose spied play() never
     // completed, which is exactly the shape of a real playback failure.
-    const done = () => {
-      player.onended = player.onerror = player.onstalled = null;
-      URL.revokeObjectURL(url);
-      speaking = false;
-      resumeListeningIfNeeded();
-    };
-    player.onended = done;
-    player.onerror = done;
-    player.onstalled = done;
+    player.onended = stopSpeaking;
+    player.onerror = stopSpeaking;
+    player.onstalled = stopSpeaking;
     await player.play();
   } catch (e) {
     speakBrowser(spoken);
   }
+}
+
+// The object URL a cloud-TTS playback is currently using, or null --
+// tracked at module scope (not just inside speak()'s closure) so
+// stopSpeaking() can revoke it even when called from OUTSIDE a normal
+// playback-ended event, i.e. an interrupt.
+let currentTtsObjectUrl = null;
+
+// Shared end-of-speech cleanup, whether playback finished naturally (an
+// "ended"/"error"/"stalled" event) or was interrupted deliberately
+// (headphones mode's VAD hearing the user start talking mid-reply -- see
+// startHeadphonesMode below). Every exit clears `speaking`, not just the
+// happy one: a playback that never fires its own end event used to leave
+// the page deaf and mute forever (mic never resumed, submits silently
+// blocked). Safe to call when nothing is actually playing (window.speechSynthesis.cancel()
+// and player.pause() are no-ops in that case).
+function stopSpeaking() {
+  const player = sharedTtsAudio();
+  player.onended = player.onerror = player.onstalled = null;
+  player.pause();
+  if (currentTtsObjectUrl) { URL.revokeObjectURL(currentTtsObjectUrl); currentTtsObjectUrl = null; }
+  if (window.speechSynthesis) window.speechSynthesis.cancel();
+  speaking = false;
+  resumeListeningIfNeeded();
 }
 
 // Conversation-mode mic: the button toggles a mode, not a single listen.
@@ -1063,26 +1082,43 @@ function initMic() {
   });
 }
 
-// Cloud STT is push-to-talk, not continuous wake-word listening: one tap
-// starts a real MediaRecorder capture, a second tap stops it and uploads
-// the clip to /api/stt for transcription. Raw audio has no equivalent to
+// Cloud STT is push-to-talk by default: one tap starts a real
+// MediaRecorder capture, a second tap stops it and uploads the clip to
+// /api/stt for transcription. Raw audio has no equivalent to
 // SpeechRecognition's interimResults, so there is no live partial
-// transcript to drive a wake word, a VAD silence endpoint, or a
-// continuous conversation mode the way the browser path has -- building
-// real audio-level VAD to replicate that is separate, real work (see
-// bench/README.md's ASR section). This is deliberately a smaller, honest
-// feature: it promises only "record what you say between two taps,
-// transcribe it, send it" -- and unlike SpeechRecognition, it works on
-// every browser with a microphone, including ones the Web Speech API
+// transcript to drive a wake word or continuous conversation the way the
+// browser path has for free. This is deliberately a smaller, honest
+// feature on speakers: it promises only "record what you say between two
+// taps, transcribe it, send it" -- and unlike SpeechRecognition, it works
+// on every browser with a microphone, including ones the Web Speech API
 // never supported (Firefox).
+//
+// talk_headphones_mode (see startHeadphonesMode below) is the exception:
+// with headphones on, the mic physically cannot hear the assistant's own
+// voice, so the "one tap per utterance" safety rail push-to-talk needs on
+// speakers becomes pure friction instead of a real problem to guard
+// against. That mode builds real audio-level VAD (the same
+// amplitude-analysis technique the browser path's silence endpoint
+// already uses, pointed at a MediaRecorder loop instead of
+// SpeechRecognition's text buffer) for genuinely hands-free,
+// no-tap-needed listening -- including staying live WHILE the assistant
+// is speaking, so starting to talk mid-reply interrupts it.
 let cloudRecorder = null;
 let cloudChunks = [];
 let cloudStream = null;
 let cloudRecording = false;
 
+function talkHeadphonesMode() {
+  return String(pref("talk_headphones_mode", "false")).trim() === "true";
+}
+
 function initCloudMic(mic) {
   mic.addEventListener("click", async () => {
     primeAudioForIOS();
+    if (talkHeadphonesMode()) {
+      if (headphonesArmed) stopHeadphonesMode(mic); else await startHeadphonesMode(mic);
+      return;
+    }
     if (cloudRecording) { stopCloudRecording(); return; }
     await startCloudRecording(mic);
   });
@@ -1158,6 +1194,218 @@ async function onCloudRecordingStopped(mic) {
     mic.textContent = "mic";
     showEndpointHint("Transcription request failed.");
   }
+}
+
+// ---- Headphones mode: continuous, hands-free cloud STT --------------------
+//
+// One tap arms it; the mic stays open and listening until a second tap
+// disarms it -- no per-utterance tap. Silence-segmented the same way the
+// browser path's VAD is (calibrate ambient noise briefly, then watch for
+// a speech-then-silence cycle), just pointed at a MediaRecorder loop
+// (stop the current segment, upload+transcribe it, immediately start the
+// next one) instead of SpeechRecognition's own text buffer. Deliberately
+// a SEPARATE, independent state machine from the browser path's meter
+// code above (evaluateVAD/startMeter/etc.) rather than a shared one: that
+// code is tightly coupled to SpeechRecognition-specific state
+// (conversationMode, armed, lastResultTs, wake-word buffering) that
+// doesn't apply here, and forcing a shared implementation would have
+// meant threading cloud-vs-browser branches through code that's already
+// dense with iPad-specific hard-won fixes -- not worth the risk of
+// breaking that path to save writing a second, smaller VAD loop.
+//
+// The one genuinely new thing this mode does versus push-to-talk: it
+// keeps recording WHILE the assistant is speaking, and interrupts
+// playback (stopSpeaking()) the moment it hears real speech during that
+// window -- safe specifically because headphones mean the mic can't be
+// hearing the assistant's own voice, so any detected speech is real.
+let headphonesArmed = false;
+let headphonesStream = null;
+let headphonesRecorder = null;
+let headphonesChunks = [];
+let headphonesAudioCtx = null;
+let headphonesAnalyser = null;
+let headphonesCalibrating = false;
+let headphonesCalibrationStart = 0;
+let headphonesCalibrationSamples = [];
+let headphonesSpeechThreshold = MIN_SPEECH_THRESHOLD;
+let headphonesUtteranceStarted = false;
+let headphonesSilenceStartTs = null;
+let headphonesSpeechHoldStart = null;
+let headphonesRafId = null;
+// Guards the ENTIRE finish-a-segment sequence (stop -> read chunks ->
+// clear -> start next -> upload -> transcribe -> submit), not just the
+// network part: headphonesChunks is one shared array reused across
+// segments, and two overlapping finishes racing to read/clear it would
+// corrupt each other's audio. The cost is real but bounded: back-to-back
+// utterances faster than one full transcribe round-trip apart get
+// recorded into the same segment and submitted together, rather than
+// split -- simple and correct beats a fully pipelined multi-segment
+// system for what this is.
+let headphonesSegmentPending = false;
+
+function headphonesRms(analyser, data) {
+  analyser.getByteTimeDomainData(data);
+  let sumSquares = 0;
+  for (let i = 0; i < data.length; i++) {
+    const v = (data[i] - 128) / 128;
+    sumSquares += v * v;
+  }
+  return Math.sqrt(sumSquares / data.length);
+}
+
+async function startHeadphonesMode(mic) {
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({audio: true});
+  } catch (e) {
+    showEndpointHint("Microphone access was denied or unavailable.");
+    return;
+  }
+  const Ctor = window.AudioContext || window.webkitAudioContext;
+  if (!Ctor || !window.MediaRecorder) {
+    stream.getTracks().forEach((t) => t.stop());
+    showEndpointHint("This browser cannot run headphones mode.");
+    return;
+  }
+
+  headphonesArmed = true;
+  headphonesStream = stream;
+  headphonesAudioCtx = new Ctor();
+  const source = headphonesAudioCtx.createMediaStreamSource(stream);
+  headphonesAnalyser = headphonesAudioCtx.createAnalyser();
+  headphonesAnalyser.fftSize = 512;
+  source.connect(headphonesAnalyser);
+  const data = new Uint8Array(headphonesAnalyser.fftSize);
+
+  headphonesCalibrating = true;
+  headphonesCalibrationStart = performance.now();
+  headphonesCalibrationSamples = [];
+  headphonesUtteranceStarted = false;
+  headphonesSilenceStartTs = null;
+  headphonesSpeechHoldStart = null;
+
+  mic.classList.add("on");
+  mic.textContent = "listening (headphones)… tap to stop";
+  capUser.textContent = "";
+  capUser.classList.add("armed");
+
+  startHeadphonesSegment();
+
+  function frame() {
+    if (!headphonesAnalyser) return; // disarmed mid-flight
+    const rms = headphonesRms(headphonesAnalyser, data);
+    const now = performance.now();
+
+    if (headphonesCalibrating) {
+      headphonesCalibrationSamples.push(rms);
+      if (now - headphonesCalibrationStart >= CALIBRATION_MS) {
+        const avg = headphonesCalibrationSamples.reduce((a, b) => a + b, 0) / headphonesCalibrationSamples.length;
+        headphonesSpeechThreshold = Math.max(avg * 3, MIN_SPEECH_THRESHOLD);
+        headphonesCalibrating = false;
+      }
+    } else {
+      const above = rms >= headphonesSpeechThreshold;
+      if (above) {
+        // The headline behavior: real speech heard while the assistant is
+        // still talking is the interrupt itself, not a signal to ignore.
+        if (speaking) stopSpeaking();
+        headphonesSilenceStartTs = null;
+        if (headphonesSpeechHoldStart === null) headphonesSpeechHoldStart = now;
+        if (!headphonesUtteranceStarted && now - headphonesSpeechHoldStart >= SPEECH_HOLD_MS) {
+          headphonesUtteranceStarted = true;
+          capUser.classList.remove("armed");
+          capUser.classList.add("active");
+          capUser.textContent = "listening…";
+        }
+      } else {
+        headphonesSpeechHoldStart = null;
+        if (headphonesUtteranceStarted && !headphonesSegmentPending) {
+          if (headphonesSilenceStartTs === null) {
+            headphonesSilenceStartTs = now;
+          } else if (now - headphonesSilenceStartTs >= silenceMs()) {
+            headphonesSilenceStartTs = null;
+            headphonesUtteranceStarted = false;
+            finishHeadphonesSegment();
+          }
+        }
+      }
+    }
+    headphonesRafId = requestAnimationFrame(frame);
+  }
+  headphonesRafId = requestAnimationFrame(frame);
+}
+
+function startHeadphonesSegment() {
+  if (!headphonesStream) return;
+  const candidates = ["audio/webm", "audio/mp4", "audio/ogg"];
+  const mimeType = window.MediaRecorder && MediaRecorder.isTypeSupported
+    ? candidates.find((t) => MediaRecorder.isTypeSupported(t))
+    : undefined;
+  try {
+    headphonesRecorder = mimeType
+      ? new MediaRecorder(headphonesStream, {mimeType})
+      : new MediaRecorder(headphonesStream);
+  } catch (e) {
+    stopHeadphonesMode(document.getElementById("mic"));
+    showEndpointHint("This browser cannot record audio for headphones mode.");
+    return;
+  }
+  headphonesChunks = [];
+  headphonesRecorder.ondataavailable = (e) => { if (e.data && e.data.size) headphonesChunks.push(e.data); };
+  headphonesRecorder.start();
+}
+
+async function finishHeadphonesSegment() {
+  if (!headphonesRecorder || headphonesRecorder.state === "inactive") return;
+  headphonesSegmentPending = true;
+  try {
+    const recorder = headphonesRecorder;
+    const blobType = recorder.mimeType || "audio/webm";
+    const stopped = new Promise((resolve) => { recorder.onstop = resolve; });
+    recorder.stop();
+    await stopped;
+    const blob = new Blob(headphonesChunks, {type: blobType});
+    headphonesChunks = [];
+
+    // Arm the NEXT segment immediately -- "always listening" must not
+    // have a gap while this segment's transcription is still in flight.
+    if (headphonesArmed) startHeadphonesSegment();
+
+    if (!blob.size) return;
+    const res = await fetch("/api/stt", {
+      method: "POST", credentials: "same-origin",
+      headers: {"content-type": blobType, accept: "application/json"},
+      body: blob,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.status !== "ok" || typeof data.text !== "string") {
+      showEndpointHint(data.error || "Transcription failed.");
+      return;
+    }
+    const text = data.text.trim();
+    if (text) submitTurn(text);
+  } catch (e) {
+    showEndpointHint("Transcription request failed.");
+  } finally {
+    headphonesSegmentPending = false;
+  }
+}
+
+function stopHeadphonesMode(mic) {
+  headphonesArmed = false;
+  if (headphonesRafId) cancelAnimationFrame(headphonesRafId);
+  headphonesRafId = null;
+  headphonesAnalyser = null;
+  if (headphonesAudioCtx) { headphonesAudioCtx.close(); headphonesAudioCtx = null; }
+  if (headphonesRecorder && headphonesRecorder.state !== "inactive") headphonesRecorder.stop();
+  headphonesRecorder = null;
+  if (headphonesStream) { headphonesStream.getTracks().forEach((t) => t.stop()); headphonesStream = null; }
+  headphonesUtteranceStarted = false;
+  headphonesSilenceStartTs = null;
+  headphonesSpeechHoldStart = null;
+  if (mic) { mic.classList.remove("on"); mic.textContent = "mic"; }
+  capUser.textContent = "";
+  capUser.classList.remove("armed", "active", "sent");
 }
 
 // One-time unlock, inside a user gesture. Safari on iOS refuses both
@@ -1256,6 +1504,28 @@ function initCloudVoiceToggle() {
     // nothing (still "on" from the URL) or, worse, silently keep forcing
     // cloud back on after the user just explicitly turned it off.
     location.href = location.pathname;
+  });
+}
+
+// Only meaningful under cloud speech recognition (talk_stt_engine ===
+// "openai") -- hidden otherwise rather than shown inert, same as the mic
+// button itself is conditionally shown. Unlike the cloud-voice toggle
+// above, this one does NOT reload the page: it only changes behavior
+// INSIDE initCloudMic's already-wired click handler (talkHeadphonesMode()
+// is read fresh on every tap), never which top-level mic implementation
+// initMic() chose at load, so there's nothing that needs re-initializing.
+function initHeadphonesToggle() {
+  const btn = document.getElementById("headphonestoggle");
+  if (!btn || talkSttEngine() !== "openai") return;
+  btn.hidden = false;
+  btn.textContent = talkHeadphonesMode() ? "headphones: on" : "headphones: off";
+  btn.addEventListener("click", async () => {
+    const turningOn = !talkHeadphonesMode();
+    btn.disabled = true;
+    btn.textContent = "saving…";
+    await savePrefs({talk_headphones_mode: turningOn ? "true" : "false"});
+    btn.textContent = turningOn ? "headphones: on" : "headphones: off";
+    btn.disabled = false;
   });
 }
 
@@ -1399,7 +1669,7 @@ document.getElementById("prompt").addEventListener("submit", (event) => {
 // override could, since that alone doesn't depend on prefs). initCloudVoiceToggle()
 // has the same real dependency, for the same reason: its initial label
 // must reflect what's actually stored, not the shipped default.
-loadPrefs().then(() => { initMic(); initCloudVoiceToggle(); });
+loadPrefs().then(() => { initMic(); initCloudVoiceToggle(); initHeadphonesToggle(); });
 
 
 // === sessions =================================================================
@@ -1467,6 +1737,7 @@ async function loadSessions() {
       SESSION_ID = freshSessionId();
       aiHistory = [];
       lastReaderPage = null;
+      if (headphonesArmed) stopHeadphonesMode(document.getElementById("mic"));
       capAssistant.textContent = "new session";
       renderSessionPicker();
       return;
@@ -1476,6 +1747,7 @@ async function loadSessions() {
     SESSION_ID = s.id;
     aiHistory = [];
     lastReaderPage = null;
+    if (headphonesArmed) stopHeadphonesMode(document.getElementById("mic"));
     for (const row of s.rows.slice(-10)) {
       if (row.kind === "ai" && row.output) {
         aiHistory.push({role: "user", content: row.input});
@@ -1524,6 +1796,7 @@ def GET(request):
 <select id="sessionpick" aria-label="conversation">
 <option value="__new">&#10133; new session</option></select>
 <button type="button" id="cloudvoice" class="backlink" hidden>cloud voice: off</button>
+<button type="button" id="headphonestoggle" class="backlink" hidden>headphones: off</button>
 <a class="backlink" href="/shell">back to shell</a>
 </div>
 </div>

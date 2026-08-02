@@ -1,7 +1,7 @@
 {
   "name": "shell_preferences",
   "title": "Shell Preferences",
-  "version": 6,
+  "version": 7,
   "description": "Per-user shell settings; the record id is the user id.",
   "fields": [
     {
@@ -93,7 +93,14 @@
         "browser",
         "openai"
       ],
-      "help": "browser uses your browser's built-in speech recognition (free, but silently unavailable on some browsers, e.g. Firefox); openai records real audio and transcribes it on the server via your own OpenAI key -- costs a small real amount per utterance, and only supports push-to-talk (tap to start, tap to stop), not continuous wake-word listening"
+      "help": "browser uses your browser's built-in speech recognition (free, but silently unavailable on some browsers, e.g. Firefox); openai records real audio and transcribes it on the server via your own OpenAI key -- costs a small real amount per utterance. Push-to-talk (tap to start, tap to stop) by default; see Headphones Mode for continuous, no-tap listening"
+    },
+    {
+      "name": "talk_headphones_mode",
+      "type": "boolean",
+      "label": "Headphones Mode",
+      "default": "false",
+      "help": "Only applies when Speech Recognition is set to openai. Push-to-talk normally requires a tap per utterance because starting a new recording while the assistant is talking would pick up its own voice through the speaker; with headphones on, the mic can't hear that at all, so this arms genuinely hands-free listening instead -- one tap turns it on, the mic stays live (including while the assistant is replying, so talking interrupts it), and a second tap turns it off. Turning this on without headphones will pick up the assistant's own voice and produce bad transcriptions"
     },
     {
       "name": "talk_model",
@@ -113,7 +120,8 @@
         "talk_silence_ms",
         "talk_tts",
         "talk_tts_engine",
-        "talk_stt_engine"
+        "talk_stt_engine",
+        "talk_headphones_mode"
       ]
     }
   },

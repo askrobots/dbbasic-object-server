@@ -198,12 +198,18 @@ def test_talk_source_pauses_recognition_around_tts_playback():
     # talking, maybe not allowed."
     assert body.index("speaking = true") < body.index('await player.play()')
     assert body.index("await stopListeningAndWaitForRelease();") < body.index('await player.play()')
-    # Both the server-TTS path and the speechSynthesis fallback clear
-    # `speaking` and resume listening once playback actually ends.
-    assert "speaking = false; resumeListeningIfNeeded();" in body or (
-        "speaking = false;" in body and "resumeListeningIfNeeded();" in body
-    )
-    assert body.count("resumeListeningIfNeeded()") >= 2
+    # Both the server-TTS path and the speechSynthesis fallback route
+    # playback-completion through the ONE shared stopSpeaking() (see
+    # test_talk_stop_speaking_is_shared_by_natural_end_and_interrupt for
+    # its actual cleanup behavior) rather than each duplicating
+    # `speaking = false; resumeListeningIfNeeded();` inline -- that
+    # duplication is exactly what would let a natural end and a
+    # deliberate interrupt (headphones mode) drift apart.
+    assert "player.onended = stopSpeaking;" in body
+    assert "player.onerror = stopSpeaking;" in body
+    assert "player.onstalled = stopSpeaking;" in body
+    assert "speaking = false;" in TALK_SOURCE
+    assert "resumeListeningIfNeeded();" in TALK_SOURCE
 
     # startListening() itself refuses to start while speaking, and the
     # recognizer's own onend only auto-restarts when not speaking.
@@ -352,7 +358,7 @@ def test_talk_object_no_longer_calls_loadhistory_on_page_load():
     # initMic() must run AFTER loadPrefs() resolves, not as two independent
     # standalone calls -- see test_talk_init_order_loads_prefs_before_deciding_mic_path
     # for why the ordering itself is load-bearing, not just style.
-    assert "loadPrefs().then(() => { initMic(); initCloudVoiceToggle(); });" in script
+    assert "loadPrefs().then(() => { initMic(); initCloudVoiceToggle(); initHeadphonesToggle(); });" in script
 
 
 def test_shell_replay_into_model_context_is_unaffected():
@@ -487,7 +493,7 @@ def test_talk_prefs_reads_go_through_pref_helper_not_raw_field_access():
 
 
 def test_talk_schema_bumped_with_radio_protocol_fields():
-    assert SHELL_PREFS_SCHEMA["version"] == 6   # +talk_tts_engine, +talk_stt_engine
+    assert SHELL_PREFS_SCHEMA["version"] == 7   # +talk_tts_engine, +talk_stt_engine, +talk_headphones_mode
 
     fields = {f["name"]: f for f in SHELL_PREFS_SCHEMA["fields"]}
     assert fields["talk_wake_word"]["default"] == "computer"
@@ -701,7 +707,7 @@ def test_talk_captures_reader_result_and_resets_it_with_session():
 
 def test_talk_page_has_cloud_voice_toggle_button():
     assert '<button type="button" id="cloudvoice" class="backlink" hidden>cloud voice: off</button>' in TALK_SOURCE
-    assert "#cloudvoice { background: none; border: none;" in TALK_SOURCE
+    assert "#cloudvoice, #headphonestoggle { background: none; border: none;" in TALK_SOURCE
 
 
 def test_talk_init_order_loads_prefs_before_deciding_mic_path():
@@ -712,7 +718,7 @@ def test_talk_init_order_loads_prefs_before_deciding_mic_path():
     # (only a ?stt= URL override, which doesn't depend on prefs, ever
     # could). initCloudVoiceToggle() has the identical dependency for its
     # initial label.
-    assert "loadPrefs().then(() => { initMic(); initCloudVoiceToggle(); });" in TALK_SOURCE
+    assert "loadPrefs().then(() => { initMic(); initCloudVoiceToggle(); initHeadphonesToggle(); });" in TALK_SOURCE
     assert re.search(r"^initMic\(\);\s*$", TALK_SOURCE, re.M) is None, (
         "initMic() must not be called standalone before loadPrefs() resolves"
     )
@@ -832,6 +838,254 @@ results.initialText = btn.textContent;
     # Lands on a clean, query-string-free URL -- no leftover ?tts=/?stt=
     # that could make the freshly-saved preference look inert.
     assert outcome["finalHref"] == "/talk"
+
+
+def test_talk_headphones_mode_pref_defaults_off():
+    fields = {f["name"]: f for f in SHELL_PREFS_SCHEMA["fields"]}
+    assert fields["talk_headphones_mode"]["type"] == "boolean"
+    assert fields["talk_headphones_mode"]["default"] == "false"
+    default_form_fields = SHELL_PREFS_SCHEMA["forms"]["default"]["fields"]
+    assert "talk_headphones_mode" in default_form_fields
+
+    assert 'function talkHeadphonesMode() {' in TALK_SOURCE
+    assert 'String(pref("talk_headphones_mode", "false")).trim() === "true"' in TALK_SOURCE
+
+
+def test_talk_headphones_mode_wired_into_cloud_mic_click_handler():
+    fn = re.search(r"function initCloudMic\(mic\) \{(.*?)\n\}\n", TALK_SOURCE, re.S)
+    assert fn, "initCloudMic() not found in talk.py"
+    body = fn.group(1)
+    assert "if (talkHeadphonesMode()) {" in body
+    assert "if (headphonesArmed) stopHeadphonesMode(mic); else await startHeadphonesMode(mic);" in body
+
+
+def test_talk_headphones_mode_interrupts_speech_not_just_ignores_it():
+    """The one genuinely new behavior versus push-to-talk: real speech
+    detected WHILE the assistant is talking must interrupt it (safe only
+    because headphones mean the mic can't be hearing the assistant's own
+    voice), not be silently dropped or queued."""
+    frame = re.search(r"function frame\(\) \{(.*?)\n  \}\n  headphonesRafId", TALK_SOURCE, re.S)
+    assert frame, "headphones mode's frame() loop not found in talk.py"
+    body = frame.group(1)
+    assert "if (speaking) stopSpeaking();" in body
+
+
+def test_talk_headphones_mode_rms_matches_the_browser_paths_technique(tmp_path):
+    """Not a shared function (see the comment above headphonesRms in
+    talk.py for why: the browser path's meter is tightly coupled to
+    SpeechRecognition-specific state), but the same amplitude-analysis
+    math -- getByteTimeDomainData -> normalize to [-1, 1] -> RMS."""
+    node = shutil.which("node")
+    if not node:
+        return
+
+    match = re.search(r"function headphonesRms\(analyser, data\) \{(.*?)\n\}", TALK_SOURCE, re.S)
+    assert match, "headphonesRms() not found in talk.py"
+
+    probe = f"""
+function headphonesRms(analyser, data) {{{match.group(1)}\n}}
+
+const silent = {{getByteTimeDomainData: (arr) => arr.fill(128)}};
+const loud = {{getByteTimeDomainData: (arr) => {{ for (let i = 0; i < arr.length; i++) arr[i] = i % 2 === 0 ? 0 : 255; }}}};
+
+console.log(JSON.stringify({{
+  silent: headphonesRms(silent, new Uint8Array(8)),
+  loud: headphonesRms(loud, new Uint8Array(8)),
+}}));
+"""
+    probe_path = tmp_path / "rms_probe.js"
+    probe_path.write_text(probe)
+    result = subprocess.run([node, str(probe_path)], capture_output=True, text=True)
+    assert result.returncode == 0, f"node probe failed:\n{result.stderr}"
+    outcome = json.loads(result.stdout)
+    assert outcome["silent"] == 0
+    assert outcome["loud"] > 0.9
+
+
+def test_talk_headphones_mode_resets_alongside_session_switches():
+    # A previous session's live, armed headphones mode must not survive a
+    # session switch -- it holds an open mic stream that belongs to the
+    # conversation that just ended.
+    reset_sites = [
+        m.start() for m in re.finditer(r"lastReaderPage = null;", TALK_SOURCE)
+    ]
+    handler_sites = [
+        site for site in reset_sites
+        if TALK_SOURCE[max(0, site - 4) : site] != "let "
+    ]
+    assert len(handler_sites) >= 2, "expected at least the new-session and resume-session handlers"
+    for site in handler_sites:
+        nearby = TALK_SOURCE[site : site + 200]
+        assert "if (headphonesArmed) stopHeadphonesMode(document.getElementById(\"mic\"));" in nearby
+
+
+def test_talk_page_has_headphones_toggle_button():
+    assert '<button type="button" id="headphonestoggle" class="backlink" hidden>headphones: off</button>' in TALK_SOURCE
+    assert "#cloudvoice, #headphonestoggle { background: none;" in TALK_SOURCE
+
+
+def test_talk_headphones_toggle_hidden_unless_cloud_stt_and_saves_live_without_reload(tmp_path):
+    """Behavioral: unlike the cloud-voice toggle (which reloads, since it
+    changes which mic implementation initMic() wires up), this one must
+    NOT reload -- it only changes behavior read fresh on each tap inside
+    the already-running initCloudMic click handler."""
+    node = shutil.which("node")
+    if not node:
+        return
+
+    def extract_function(name):
+        start = TALK_SOURCE.index(f"function {name}(")
+        depth = 0
+        i = TALK_SOURCE.index("{", start)
+        for j in range(i, len(TALK_SOURCE)):
+            if TALK_SOURCE[j] == "{":
+                depth += 1
+            elif TALK_SOURCE[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    return TALK_SOURCE[start : j + 1]
+        raise AssertionError(f"unbalanced braces extracting {name}()")
+
+    def extract_async_function(name):
+        start = TALK_SOURCE.index(f"async function {name}(")
+        depth = 0
+        i = TALK_SOURCE.index("{", start)
+        for j in range(i, len(TALK_SOURCE)):
+            if TALK_SOURCE[j] == "{":
+                depth += 1
+            elif TALK_SOURCE[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    return TALK_SOURCE[start : j + 1]
+        raise AssertionError(f"unbalanced braces extracting {name}()")
+
+    functions = "\n".join([
+        extract_function("urlOverride"),
+        extract_function("talkSttEngine"),
+        extract_function("talkHeadphonesMode"),
+        extract_async_function("api"),
+        extract_async_function("savePrefs"),
+        extract_function("initHeadphonesToggle"),
+    ])
+
+    probe = f"""
+const DEFAULT_TALK_STT_ENGINE = "browser";
+const OWNER_ID = "dan";
+let prefs = {{talk_stt_engine: "browser"}};
+let location = {{search: ""}};
+function pref(name, fallback) {{
+  const v = prefs[name];
+  return v === undefined || v === null ? fallback : v;
+}}
+const putCalls = [];
+function fetch(path, opts) {{
+  putCalls.push({{path, body: JSON.parse(opts.body)}});
+  return Promise.resolve({{ok: true, json: () => Promise.resolve({{status: "ok"}})}});
+}}
+class FakeButton {{
+  constructor() {{ this.hidden = true; this.textContent = ""; this.disabled = false; this._handlers = {{}}; }}
+  addEventListener(name, fn) {{ this._handlers[name] = fn; }}
+  click() {{ return this._handlers["click"](); }}
+}}
+const btn = new FakeButton();
+const document = {{getElementById: (id) => id === "headphonestoggle" ? btn : null}};
+
+{functions}
+
+const results = {{}};
+initHeadphonesToggle();
+results.hiddenWhenBrowserStt = btn.hidden;
+
+prefs = {{talk_stt_engine: "openai", talk_headphones_mode: "false"}};
+initHeadphonesToggle();
+results.shownWhenCloudStt = btn.hidden;
+results.initialText = btn.textContent;
+
+(async () => {{
+  await btn.click();
+  results.afterClickText = btn.textContent;
+  results.putCalls = putCalls;
+  results.finalPrefs = prefs;
+  console.log(JSON.stringify(results));
+}})();
+"""
+    probe_path = tmp_path / "headphones_toggle_probe.js"
+    probe_path.write_text(probe)
+    result = subprocess.run([node, str(probe_path)], capture_output=True, text=True)
+    assert result.returncode == 0, f"node probe failed:\n{result.stderr}"
+    outcome = json.loads(result.stdout)
+
+    assert outcome["hiddenWhenBrowserStt"] is True
+    assert outcome["shownWhenCloudStt"] is False
+    assert outcome["initialText"] == "headphones: off"
+    assert outcome["afterClickText"] == "headphones: on"
+    assert outcome["putCalls"] == [
+        {"path": "/collections/shell_preferences/records/dan", "body": {"talk_headphones_mode": "true"}}
+    ]
+    assert outcome["finalPrefs"]["talk_headphones_mode"] == "true"
+
+
+def test_talk_stop_speaking_is_shared_by_natural_end_and_interrupt(tmp_path):
+    """Behavioral: stopSpeaking() must be reachable both as a normal
+    playback-ended handler AND as a deliberate interrupt call from
+    outside speak() -- executes the real function under node against a
+    fake Audio element and fake speechSynthesis.
+    """
+    node = shutil.which("node")
+    if not node:
+        return
+
+    def extract_function(name):
+        start = TALK_SOURCE.index(f"function {name}(")
+        depth = 0
+        i = TALK_SOURCE.index("{", start)
+        for j in range(i, len(TALK_SOURCE)):
+            if TALK_SOURCE[j] == "{":
+                depth += 1
+            elif TALK_SOURCE[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    return TALK_SOURCE[start : j + 1]
+        raise AssertionError(f"unbalanced braces extracting {name}()")
+
+    probe = f"""
+let speaking = true;
+let currentTtsObjectUrl = "blob:fake-url";
+let revoked = null;
+let cancelled = false;
+let resumeCalled = false;
+function resumeListeningIfNeeded() {{ resumeCalled = true; }}
+const URL = {{revokeObjectURL: (u) => {{ revoked = u; }}}};
+const fakePlayer = {{onended: "x", onerror: "x", onstalled: "x", paused: false, pause() {{ this.paused = true; }}}};
+function sharedTtsAudio() {{ return fakePlayer; }}
+const window = {{speechSynthesis: {{cancel: () => {{ cancelled = true; }}}}}};
+
+{extract_function("stopSpeaking")}
+
+stopSpeaking();
+console.log(JSON.stringify({{
+  speaking, revoked, cancelled, resumeCalled,
+  playerPaused: fakePlayer.paused,
+  handlersCleared: fakePlayer.onended === null && fakePlayer.onerror === null && fakePlayer.onstalled === null,
+}}));
+"""
+    probe_path = tmp_path / "stop_speaking_probe.js"
+    probe_path.write_text(probe)
+    result = subprocess.run([node, str(probe_path)], capture_output=True, text=True)
+    assert result.returncode == 0, f"node probe failed:\n{result.stderr}"
+    outcome = json.loads(result.stdout)
+
+    assert outcome["speaking"] is False
+    assert outcome["revoked"] == "blob:fake-url"
+    assert outcome["cancelled"] is True
+    assert outcome["resumeCalled"] is True
+    assert outcome["playerPaused"] is True
+    assert outcome["handlersCleared"] is True
+
+    # Both call sites must actually use it -- a duplicate inline cleanup
+    # anywhere would mean an interrupt and a natural end could drift apart.
+    assert "player.onended = stopSpeaking;" in TALK_SOURCE
+    assert "utter.addEventListener(\"end\", stopSpeaking);" in TALK_SOURCE
 
 
 def test_talk_wake_word_gating_discards_until_heard():
