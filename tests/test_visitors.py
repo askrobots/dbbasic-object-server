@@ -9,6 +9,7 @@ misleads precisely when somebody is relying on it.
 """
 
 import pathlib
+from datetime import datetime, timezone
 
 from conftest import stage_collection
 
@@ -23,6 +24,12 @@ ANALYTICS_OBJECTS = REPO_ROOT / "packages" / "app-analytics" / "objects"
 RUNTIME = python_object_runtime.PythonObjectRuntime()
 
 BROWSER = "Mozilla/5.0 (Macintosh) AppleWebKit/537.36 Chrome/128 Safari/537.36"
+
+# The fixtures below are pinned to one day, so the window has to be pinned
+# to the same day. Letting `summarize` default `now` to the real clock made
+# these tests pass for the week after they were written and fail every day
+# after that -- the rows simply aged out of the 7-day window.
+NOW = datetime(2026, 7, 26, 12, 0, tzinfo=timezone.utc)
 
 
 def view(ip, path="/", *, status=200, ua=BROWSER, owner="false",
@@ -139,7 +146,7 @@ def test_the_three_kinds_are_counted_apart():
             view("9.9.9.9", "/wp-login.php", status=404),
             view("8.8.8.8", "/xmlrpc.php", status=404),
             view("3.3.3.3", "/orders", owner="true")]
-    summary = object_visitors.summarize(rows, days=7)
+    summary = object_visitors.summarize(rows, now=NOW, days=7)
 
     assert summary["totals"]["visitor"]["unique"] == 2
     assert summary["totals"]["visitor"]["views"] == 3
@@ -150,15 +157,13 @@ def test_the_three_kinds_are_counted_apart():
 def test_a_returning_visitor_is_one_visitor():
     rows = [view("1.1.1.1", "/shop", at=f"2026-07-26T{h:02d}:00:00Z",
                  referrer="https://news.example") for h in (9, 10, 11)]
-    summary = object_visitors.summarize(rows, days=7)
+    summary = object_visitors.summarize(rows, now=NOW, days=7)
     assert summary["totals"]["visitor"]["unique"] == 1
     assert summary["totals"]["visitor"]["views"] == 3
 
 
 def test_today_is_broken_down_by_hour():
-    import datetime
-
-    now = datetime.datetime(2026, 7, 26, 23, 0, tzinfo=datetime.timezone.utc)
+    now = NOW.replace(hour=23)
     ref = "https://news.example"
     rows = [view("1.1.1.1", "/shop", at="2026-07-26T09:30:00Z", referrer=ref),
             view("2.2.2.2", "/shop", at="2026-07-26T09:45:00Z", referrer=ref),
@@ -172,12 +177,9 @@ def test_today_is_broken_down_by_hour():
 
 def test_the_window_is_a_full_run_of_days_including_empty_ones():
     """A day with no visitors is information; a gap in the series is not."""
-    import datetime
-
-    now = datetime.datetime(2026, 7, 26, 12, 0, tzinfo=datetime.timezone.utc)
     rows = [view("1.1.1.1", "/shop", at="2026-07-24T09:00:00Z",
                  referrer="https://news.example")]
-    summary = object_visitors.summarize(rows, now=now, days=7)
+    summary = object_visitors.summarize(rows, now=NOW, days=7)
 
     assert [row["bucket"] for row in summary["days"]] == [
         f"2026-07-{day}" for day in range(20, 27)]
@@ -185,11 +187,8 @@ def test_the_window_is_a_full_run_of_days_including_empty_ones():
 
 
 def test_traffic_older_than_the_window_is_excluded():
-    import datetime
-
-    now = datetime.datetime(2026, 7, 26, 12, 0, tzinfo=datetime.timezone.utc)
     rows = [view("1.1.1.1", "/shop", at="2026-06-01T09:00:00Z")]
-    summary = object_visitors.summarize(rows, now=now, days=7)
+    summary = object_visitors.summarize(rows, now=NOW, days=7)
     assert sum(row["views"] for row in summary["days"]) == 0
 
 
@@ -198,7 +197,7 @@ def test_referrers_answer_where_did_they_come_from():
     rows = [view("1.1.1.1", "/shop", referrer="https://news.example/thread"),
             view("2.2.2.2", "/shop", referrer="https://news.example/thread"),
             view("3.3.3.3", "/shop"), view("3.3.3.3", "/orders")]
-    summary = object_visitors.summarize(rows, days=7)
+    summary = object_visitors.summarize(rows, now=NOW, days=7)
 
     top = summary["referrers"][0]
     assert top["referrer"] == "https://news.example/thread" and top["visitors"] == 2
@@ -208,7 +207,7 @@ def test_referrers_answer_where_did_they_come_from():
 def test_bot_referrers_never_pollute_the_list():
     rows = [view("9.9.9.9", "/wp-login.php", status=404,
                  referrer="https://spam.example")]
-    summary = object_visitors.summarize(rows, days=7)
+    summary = object_visitors.summarize(rows, now=NOW, days=7)
     assert summary["referrers"] == []
 
 
@@ -217,12 +216,12 @@ def test_landing_pages_are_what_visitors_actually_opened():
     rows = [view("1.1.1.1", "/shop", referrer=ref),
             view("2.2.2.2", "/shop", referrer=ref),
             view("1.1.1.1", "/collections/notes/records", referrer=ref)]
-    summary = object_visitors.summarize(rows, days=7)
+    summary = object_visitors.summarize(rows, now=NOW, days=7)
     assert summary["landing"][0] == {"path": "/shop", "visitors": 2}
 
 
 def test_an_empty_log_is_a_clean_zero_not_a_crash():
-    summary = object_visitors.summarize([], days=7)
+    summary = object_visitors.summarize([], now=NOW, days=7)
     assert summary["totals"]["visitor"]["unique"] == 0
     assert len(summary["days"]) == 7
 
