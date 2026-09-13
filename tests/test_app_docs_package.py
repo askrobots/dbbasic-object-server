@@ -71,6 +71,19 @@ def test_routes_seed_detail_and_index_with_articles_style_priorities():
     assert int(detail["priority"]) < int(index["priority"])
 
 
+def test_routes_seed_pins_the_script_objects_for_prefixed_hosts():
+    """/docs/{slug} matches on every host as a route record, but the two
+    scripts the page loads (/docs-nav, /markdown) were convention-only, so on
+    a site_hosts domain with its own prefix they resolved to {prefix}_docs_nav
+    and {prefix}_markdown, 404ed, and the page sat on "Loading..." forever.
+    Route rows make them resolve wherever the docs page itself does."""
+    by_id = {r["id"]: r for r in _seed_rows("site_routes")}
+    assert by_id["route_docs_nav"]["pattern"] == "/docs-nav"
+    assert by_id["route_docs_nav"]["object_id"] == "site_docs_nav"
+    assert by_id["route_docs_markdown"]["pattern"] == "/markdown"
+    assert by_id["route_docs_markdown"]["object_id"] == "site_markdown"
+
+
 def test_permissions_make_every_surface_public():
     payload = json.loads((APP_DOCS_DIR / "permissions" / "rules.json").read_text())
     rules = payload["rules"]
