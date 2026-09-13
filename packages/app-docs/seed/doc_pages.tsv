@@ -73,13 +73,18 @@ sites with one identity store and one audit trail.
 ## Current boundaries, plainly
 
 - One VM; no cluster correctness claims.
-- Realtime is polling today; websocket push is the next platform slice.
-- No background-job runtime yet (PDF extraction, thumbnails, scheduled
-  AI work wait on it).
+- Realtime push is live over one permission-filtered websocket (`/ws`);
+  the durable event log remains as the poll fallback.
+- A background-job runtime exists (`app-runner`, plus the daemon's
+  scheduler and queue); what it lacks is handlers for long media work
+  such as PDF extraction and thumbnails.
 - Untrusted arbitrary code execution is not offered; object writes are
-  operator/admin actions.
+  operator/admin actions, and the worker pool isolates processes without
+  CPU or memory limits.
 - Open signup and password reset flows are not built; identities are
   operator-created today.
+- Permission enforcement is opt-in per deployment rather than the shipped
+  default (staging runs with it on).
 
 The direction on each is recorded in status. The rule for
 new capability is unchanged: it must pass the same permission engine,
