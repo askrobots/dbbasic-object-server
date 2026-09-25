@@ -7238,9 +7238,12 @@ async def _webdav_propfind(send, dav_headers, user_id, kind, name, body) -> None
     wanted = object_webdav.parse_propfind(body)
     folder = _webdav_folder(dav_headers, user_id)
     folder_time = _webdav_folder_modified(folder)
+    # the files quota, so a desktop shows real free space rather than its disk's
+    used = object_user_files.usage_bytes(user_id, base_dir=_data_dir())
+    quota = _env_int(USER_FILES_QUOTA_ENV, DEFAULT_USER_FILES_QUOTA)
     files_entry = (
         object_webdav.href(object_webdav.FILES_FOLDER, folder=True),
-        object_webdav.folder_props(object_webdav.FILES_FOLDER, folder_time),
+        object_webdav.folder_props(object_webdav.FILES_FOLDER, folder_time, used=used, available=quota - used),
     )
     file_entries = [
         (object_webdav.href(object_webdav.FILES_FOLDER, f.name), object_webdav.file_props(f))

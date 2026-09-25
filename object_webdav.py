@@ -57,6 +57,10 @@ LIVE_PROPS = (
     "getetag",
 )
 
+# Answered only when asked for by name (RFC 4331 says quota properties
+# should stay out of allprop): what a desktop shows as the folder's free space.
+ON_REQUEST_PROPS = frozenset({"quota-used-bytes", "quota-available-bytes"})
+
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
 
@@ -265,14 +269,20 @@ def href(*segments: str, folder: bool = False) -> str:
     return path
 
 
-def folder_props(name: str, modified: float) -> dict[str, str | None]:
-    return {
+def folder_props(
+    name: str, modified: float, *, used: int | None = None, available: int | None = None
+) -> dict[str, str | None]:
+    props: dict[str, str | None] = {
         "displayname": escape(name),
         "resourcetype": "<D:collection/>",
         "getlastmodified": http_date(modified),
         "creationdate": iso_date(modified),
         "getcontenttype": "httpd/unix-directory",
     }
+    if used is not None and available is not None:
+        props["quota-used-bytes"] = str(used)
+        props["quota-available-bytes"] = str(max(0, available))
+    return props
 
 
 def file_props(f: DavFile) -> dict[str, str | None]:
@@ -298,7 +308,7 @@ def multistatus(
     for target, props in responses:
         out.append(f"<D:response><D:href>{escape(target)}</D:href>")
         if wanted is None:
-            found = [(DAV_NS, k) for k in props]
+            found = [(DAV_NS, k) for k in props if k not in ON_REQUEST_PROPS]
             missing: list[tuple[str, str]] = []
         else:
             found = [w for w in wanted if w[0] == DAV_NS and w[1] in props]

@@ -417,3 +417,22 @@ def test_someone_elses_public_file_is_not_in_your_folder(tmp_path, monkeypatch):
     assert status == 200  # dan may read it...
     assert names_in(listing(dan)) == ["files"]  # ...but it is not in his folder
     assert "flyer.pdf" in names_in(listing(eve))
+
+
+def test_the_folder_reports_the_files_quota_as_its_free_space(tmp_path, monkeypatch):
+    """Without it a desktop shows its own disk's free space (davfs2 said
+    508 GiB on a desk with a 100MB quota), and a copy fails part way."""
+    data_dir = dav_env(tmp_path, monkeypatch)
+    monkeypatch.setenv(object_server.USER_FILES_QUOTA_ENV, "1000")
+    token = key_for(data_dir)
+    dav("/dav/files/a.bin", token, method="PUT", body=b"x" * 300)
+    body = (
+        b'<?xml version="1.0"?><D:propfind xmlns:D="DAV:"><D:prop>'
+        b"<D:quota-available-bytes/><D:quota-used-bytes/></D:prop></D:propfind>"
+    )
+    status, _, xml = dav("/dav/files/", token, method="PROPFIND", body=body, headers=[("depth", "0")])
+    assert status == 207
+    assert b"<D:quota-used-bytes>300</D:quota-used-bytes>" in xml
+    assert b"<D:quota-available-bytes>700</D:quota-available-bytes>" in xml
+    assert b"quota" not in listing(token, depth="0").encode()  # not in allprop
+
