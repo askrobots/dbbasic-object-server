@@ -8893,9 +8893,13 @@ async def _handle_collection_record_create(
     # which silently breaks every owner-scoped rule and owner-gated transition
     # on that record. Admin-token writes (no session) keep any explicit
     # owner_id so seeding and migration can set ownership deliberately.
-    session = _current_identity_session(headers)
-    if session is not None and session.user_id and _collection_has_owner_field(collection):
-        record_payload = {**record_payload, "owner_id": session.user_id}
+    # A per-user API key (the agent and script path) is that user as much as
+    # a session is: it owns what it creates too. Before, only sessions were
+    # stamped, so a record an API key created kept whatever owner_id the
+    # client sent -- or none, leaving it outside its owner's own rules.
+    owner = _signed_in_user_id(headers)
+    if owner and _collection_has_owner_field(collection):
+        record_payload = {**record_payload, "owner_id": owner}
 
     hooked = await _apply_before_write_hook(
         send,
@@ -12209,6 +12213,19 @@ def _read_records_or_empty(collection: str) -> list[dict[str, str]]:
         ValueError,
     ):
         return []
+
+
+def _signed_in_user_id(headers: dict[str, str]) -> str | None:
+    """The user a request acts as when it is signed in as a person: a session
+    (cookie or token) or one of their API keys. None for the admin token (an
+    operator, who may set owner_id deliberately), trusted headers, or nobody."""
+    session = _current_identity_session(headers)
+    if session is not None and session.user_id:
+        return session.user_id
+    token = _authorization_token(headers)
+    if token and token.startswith(object_api_keys.TOKEN_PREFIX):
+        return object_api_keys.resolve_api_key(token, base_dir=_data_dir()) or None
+    return None
 
 
 def _current_identity_session(headers: dict[str, str]) -> object_identity.IdentitySession | None:

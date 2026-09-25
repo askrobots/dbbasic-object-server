@@ -1,0 +1,35 @@
+{
+  "id": "app-sites",
+  "name": "Sites",
+  "version": "0.1.0",
+  "description": "Websites made elsewhere (Webmaster, any static site builder) published as records: one site_pages record per page (site, slug, title, html), owned by whoever published it, served at /s/{site} and /s/{site}/{page}. The HTML is the author's, so every page is served sandboxed (Content-Security-Policy: sandbox without allow-same-origin): its scripts run in an opaque origin and can never read this server's session cookie or call its API as the visitor. A page shows when it is public or the visitor owns it; nothing else is rendered. No front door in the nav (nav_optional): each published site is its own place, reached at /s/{site}.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": [],
+  "objects": [
+    {
+      "id": "site_sites_page",
+      "path": "objects/site/sites_page.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "site_pages",
+      "path": "schemas/site_pages.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "site_routes",
+      "path": "seed/site_routes.tsv"
+    }
+  ],
+  "migrations": [],
+  "nav_optional": true
+}

@@ -1,0 +1,3 @@
+id	pattern	object_id	priority
+route_sites_page	/s/{site}/{page}	site_sites_page	10
+route_sites_home	/s/{site}	site_sites_page	20

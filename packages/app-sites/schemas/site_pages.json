@@ -1,0 +1,21 @@
+{
+  "name": "site_pages",
+  "title": "Site Pages",
+  "version": 1,
+  "description": "One published page of a website: its site name and page slug make its address (/s/{site}/{slug}; slug index is /s/{site}), html is the whole page as its builder exported it. The author's HTML is never trusted by the server: it is served sandboxed by site_sites_page.",
+  "fields": [
+    {"name": "id"},
+    {"name": "site", "type": "text", "required": true, "label": "Site",
+     "help": "lowercase letters, digits and hyphens",
+     "validation": {"min_length": 1, "max_length": 40, "pattern": "^[a-z0-9][a-z0-9-]*$"}},
+    {"name": "slug", "type": "text", "required": true, "label": "Page", "default": "index",
+     "help": "the page's address in the site; index is the home page",
+     "validation": {"min_length": 1, "max_length": 80, "pattern": "^[a-z0-9][a-z0-9-]*$"}},
+    {"name": "title", "type": "text", "label": "Title", "validation": {"max_length": 200}},
+    {"name": "html", "type": "text", "required": true, "label": "HTML",
+     "validation": {"max_length": 2000000}},
+    {"name": "is_public", "type": "boolean", "default": "false", "label": "Public",
+     "help": "anyone can see it; otherwise only you"},
+    {"name": "owner_id", "type": "text", "label": "Owner"}
+  ]
+}

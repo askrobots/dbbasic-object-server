@@ -1,0 +1,27 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "site_pages",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "you publish, change and remove your own pages"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["read"],
+      "collection": "site_pages",
+      "row_filter": {"is_public": "true"},
+      "reason": "a page marked public is readable by anyone"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_sites_page",
+      "reason": "the page server itself decides per page: public, or the owner's"
+    }
+  ]
+}
