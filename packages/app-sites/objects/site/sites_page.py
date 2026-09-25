@@ -18,7 +18,10 @@ so it is never trusted:
 
 Links between pages: a builder exports "about.html"; published under
 /s/{site}/ the page slug is "about", and /s/{site}/about.html is accepted
-too (the ".html" is dropped), so relative links keep working.
+too (the ".html" is dropped), so relative links keep working. The site's
+bare address /s/{site} redirects to /s/{site}/index: from there a relative
+"about.html" is /s/{site}/about.html, where from /s/{site} a browser would
+resolve it to /s/about.html (tried: the home page's menu led nowhere).
 """
 
 import html as html_lib
@@ -68,6 +71,9 @@ def find_page(site, slug, user_id, rows):
 
 def GET(request):
     site = str(request.get("site") or "").strip().lower()
+    if "page" not in request and _NAME_RE.fullmatch(site):
+        # the site's home: send the browser into the site's own folder
+        return (302, {"location": f"/s/{site}/index", "cache-control": "no-cache"}, "")
     page = str(request.get("page") or "index").strip().lower()
     if page.endswith(".html"):
         page = page[: -len(".html")]

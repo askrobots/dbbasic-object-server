@@ -67,8 +67,13 @@ def test_pages_are_served_sandboxed_without_same_origin(monkeypatch):
     assert headers["x-content-type-options"] == "nosniff"
 
 
-def test_the_site_home_is_its_index_page(monkeypatch):
-    status, _, body = _get(monkeypatch, {"site": "bakery"})
+def test_the_site_home_goes_to_its_index_page(monkeypatch):
+    """/s/bakery redirects into the site's folder, so the index page's
+    relative links ("about.html") resolve inside the site (from /s/bakery a
+    browser would send them to /s/about.html)."""
+    status, headers, _ = _get(monkeypatch, {"site": "bakery"})
+    assert status == 302 and headers["location"] == "/s/bakery/index"
+    status, _, body = _get(monkeypatch, {"site": "bakery", "page": "index"})
     assert status == 200 and "Sunrise Bakery" in body
 
 
@@ -91,7 +96,8 @@ def test_the_owner_sees_their_own_draft(monkeypatch):
 
 
 def test_names_outside_the_pattern_never_reach_a_lookup(monkeypatch):
-    for request in ({"site": "../etc"}, {"site": "bakery", "page": "a/b"}, {"site": ""}, {"site": "Bakery!"}):
+    for request in ({"site": "../etc", "page": "index"}, {"site": "bakery", "page": "a/b"},
+                    {"site": ""}, {"site": "Bakery!"}):
         assert _get(monkeypatch, request)[0] == 404
 
 
@@ -102,7 +108,7 @@ def test_without_the_collection_nothing_is_published(monkeypatch):
         raise FileNotFoundError("no collection")
 
     monkeypatch.setattr(object_records, "read_collection_records", missing)
-    assert page.GET({"site": "bakery"})[0] == 404
+    assert page.GET({"site": "bakery", "page": "index"})[0] == 404
 
 
 def test_rules_let_owners_write_their_own_and_everyone_read_only_public():
