@@ -1562,6 +1562,54 @@ ambiguity) — see `object_reader.py`. Requires `DBBASIC_ENABLE_READER=true`
 and a signed-in session. Also offered as the `read_page` MCP tool for
 `/api/ai/chat` — see `docs/shell-and-ai.md`'s "Reading the Web" section.
 
+## Files as a Folder (WebDAV)
+
+Your own files (the `files` collection, the same ones `/api/files` serves)
+as a folder any desktop can mount: Linux (davfs2, or the file manager's
+"Connect to Server"), macOS Finder, Windows.
+
+```text
+/dav/              the root: holds one folder, files/
+/dav/files/        your files, one entry per file record
+/dav/files/{name}  one file
+```
+
+Sign in with **any user name and one of your API keys** (`dbk_...`, from
+`/identity/users/{user_id}/api-keys`) as the password, over HTTP Basic;
+`Authorization: Bearer dbk_...` works too. Account passwords and session
+tokens are refused (a password here would be a login without the login's
+rate limits), and cookies are ignored, so a browser session cannot write
+here from another site.
+
+| Method | Does |
+|---|---|
+| `OPTIONS` | `DAV: 1`, no sign-in needed |
+| `PROPFIND` | lists (Depth 0, 1 or infinity; the tree is two levels) |
+| `GET`, `HEAD` | a file (single byte ranges, ETag, `If-None-Match`); a folder URL gives an HTML index |
+| `PUT` | creates a file, or replaces the bytes of the one with that name (same record) |
+| `DELETE` | removes the record and its bytes |
+| `MOVE` | renames (`Overwrite: F` refuses to replace; a case-only rename is a rename) |
+| `COPY` | a new file with the same bytes |
+| `PROPPATCH` | 207 with 403 for every property: none are writable |
+| `MKCOL`, `LOCK`, `UNLOCK` | 405: there are no folders and no locks |
+
+Writes pass the same gates as `/api/files` and the collection routes
+(quota, permission policy, before-write hooks). `If-Match` and
+`If-None-Match: *` make a PUT, DELETE or MOVE conditional (412 when they do
+not hold). Only the caller's own files are listed, even ones others can read.
+Duplicate filenames show as `name (2).ext`, oldest first; the records are
+not renamed. Files are served with `Content-Security-Policy: sandbox`, and
+as attachments unless they are a safe inline type.
+
+Without locks the server is WebDAV class 1: davfs2 needs `use_locks 0`, and
+Finder mounts it read-only.
+
+Requires `DBBASIC_ENABLE_WEBDAV=true` and `DBBASIC_ENABLE_USER_FILES=true`.
+A PUT may be larger than `DBBASIC_MAX_REQUEST_BYTES`, up to
+`DBBASIC_WEBDAV_MAX_FILE_BYTES` (default 50MB, read into memory whole),
+and the user files quota still applies (507 when a replacement would
+exceed it, 413 for a new file).
+
 ## Backups
 
 Runtime backups are tar/gzip archives of the whole data directory. They

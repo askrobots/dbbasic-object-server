@@ -36,6 +36,7 @@ import object_activity
 import object_backup
 import object_analytics
 import object_api_keys
+import object_webdav
 import object_collections
 import object_correlation
 import object_credentials
@@ -707,7 +708,9 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
 
     try:
         try:
-            body = await _read_body(receive, headers=headers)
+            body = await _read_body(
+                receive, headers=headers, max_bytes=_webdav_body_limit(method, path)
+            )
         except RequestBodyTooLargeError as exc:
             await _send_request_too_large(send, exc)
             return
@@ -784,6 +787,10 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
         prefs_prefix = http_api_contract.PREFS_PATH + "/"
         if path.startswith(prefs_prefix):
             await _handle_pref(send, method, path[len(prefs_prefix):], body, headers)
+            return
+
+        if path == http_api_contract.WEBDAV_PATH or path.startswith(http_api_contract.WEBDAV_PATH + "/"):
+            await _handle_webdav(send, method, path, body, headers)
             return
 
         if path == http_api_contract.USER_FILES_PATH:
@@ -6648,39 +6655,82 @@ async def _handle_user_file_upload(
         return
 
     content = base64.b64decode(upload.get("content_base64", ""))
-    quota = _env_int(USER_FILES_QUOTA_ENV, DEFAULT_USER_FILES_QUOTA)
-    used = object_user_files.usage_bytes(session.user_id, base_dir=_data_dir())
-    if used + len(content) > quota:
-        await _send_json(
-            send,
-            {
-                "status": "error",
-                "error": f"Storage quota exceeded: {used + len(content)} of {quota} bytes.",
-                "code": "quota_exceeded",
-            },
-            status=413,
-        )
-        return
-
-    file_id = object_ids.new_uuid4()
-    record = {
-        "id": file_id,
-        "filename": (upload.get("filename") or "unnamed")[:255],
-        "content_type": upload.get("content_type") or "application/octet-stream",
-        "size": str(len(content)),
+    fields = {
         "description": str(payload.get("description") or "")[:300],
         "is_public": str(payload.get("is_public") or "false"),
-        "owner_id": session.user_id,
     }
     if payload.get("project_id"):
-        record["project_id"] = str(payload["project_id"])
+        fields["project_id"] = str(payload["project_id"])
     # Polymorphic attachment: a file uploaded from a record's detail carries
     # the (parent_collection, parent_id) pair the attachments capability uses,
     # so any collection can hold files without a dedicated FK column. Set from
     # the upload form (the widget supplies them); owner_id stays session-set.
     for _pk in ("parent_collection", "parent_id"):
         if payload.get(_pk):
-            record[_pk] = str(payload[_pk])[:120]
+            fields[_pk] = str(payload[_pk])[:120]
+
+    stored = await _create_user_file(
+        send,
+        headers,
+        owner_id=session.user_id,
+        filename=upload.get("filename") or "unnamed",
+        content=content,
+        content_type=upload.get("content_type") or "application/octet-stream",
+        fields=fields,
+    )
+    if stored is None:
+        return
+    await _send_json(send, {"status": "ok", "file": stored, "url": f"/api/files/{stored['id']}"}, status=201)
+
+
+def _user_files_quota_error(owner_id: str, adding: int, freeing: int = 0) -> str | None:
+    """The quota refusal for storing ``adding`` bytes (after ``freeing`` the
+    bytes being replaced), or None when it fits. Counts bytes on disk."""
+    quota = _env_int(USER_FILES_QUOTA_ENV, DEFAULT_USER_FILES_QUOTA)
+    used = object_user_files.usage_bytes(owner_id, base_dir=_data_dir())
+    total = used - freeing + adding
+    if total > quota:
+        return f"Storage quota exceeded: {total} of {quota} bytes."
+    return None
+
+
+async def _create_user_file(
+    send,
+    headers: dict[str, str],
+    *,
+    owner_id: str,
+    filename: str,
+    content: bytes,
+    content_type: str,
+    fields: dict[str, str] | None = None,
+) -> dict[str, Any] | None:
+    """Store one new file: quota, the metadata record (permission-checked
+    and hooked like any create), then the bytes.
+
+    Returns the stored record, or None when a response has already been
+    sent. Shared by the multipart upload and WebDAV PUT/COPY, so the two
+    ways in cannot drift apart on quota, gates or what a record holds.
+    """
+    quota_error = _user_files_quota_error(owner_id, len(content))
+    if quota_error is not None:
+        await _send_json(
+            send,
+            {"status": "error", "error": quota_error, "code": "quota_exceeded"},
+            status=413,
+        )
+        return None
+
+    file_id = object_ids.new_uuid4()
+    record = {
+        "id": file_id,
+        "filename": filename[:255],
+        "content_type": content_type or "application/octet-stream",
+        "size": str(len(content)),
+        "description": "",
+        "is_public": "false",
+        "owner_id": owner_id,
+    }
+    record.update(fields or {})
 
     permission_check = await _authorize_collection_write(
         send,
@@ -6692,7 +6742,7 @@ async def _handle_user_file_upload(
         gate_message=f"Collection record writes require {ADMIN_TOKEN_ENV}.",
     )
     if permission_check is None:
-        return
+        return None
 
     hooked = await _apply_before_write_hook(
         send,
@@ -6704,7 +6754,7 @@ async def _handle_user_file_upload(
         changes=record,
     )
     if hooked is None:
-        return
+        return None
     record = hooked
 
     try:
@@ -6717,13 +6767,13 @@ async def _handle_user_file_upload(
             {"status": "error", "error": "The files collection is not installed (app-files package)."},
             status=404,
         )
-        return
+        return None
     except ValueError as exc:
         await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
-        return
+        return None
 
-    object_user_files.save_file(session.user_id, file_id, content, base_dir=_data_dir())
-    await _send_json(send, {"status": "ok", "file": stored, "url": f"/api/files/{file_id}"}, status=201)
+    object_user_files.save_file(owner_id, file_id, content, base_dir=_data_dir())
+    return stored
 
 
 def _share_target_record(collection: str, record_id: str) -> dict[str, str] | None:
@@ -6886,23 +6936,8 @@ async def _handle_user_file(
         record = None
 
     action = object_permissions.READ if method == "GET" else object_permissions.DELETE
-    if _permission_checks_enabled():
-        permission_check = await _collection_permission_check(
-            send,
-            headers,
-            action,
-            collection=USER_FILES_COLLECTION,
-            method=method,
-            record=record,
-        )
-        if permission_check is None:
-            return
-    else:
-        gate_error = _admin_token_gate_error(headers, f"Files require {ADMIN_TOKEN_ENV}.")
-        if gate_error is not None:
-            status, message = gate_error
-            await _send_json(send, {"status": "error", "error": message}, status=status)
-            return
+    if not await _user_file_allowed(send, headers, action, record=record, method=method):
+        return
 
     if record is None:
         await _send_json(send, {"status": "error", "error": "File not found"}, status=404)
@@ -6941,21 +6976,496 @@ async def _handle_user_file(
                 status=403,
             )
             return
-        try:
-            object_records.delete_collection_record(
-                USER_FILES_COLLECTION, file_id, base_dir=_data_dir(), actor=_record_change_actor(headers)
-            )
-        except (LookupError, ValueError) as exc:
-            await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        if not await _remove_user_file(send, headers, record):
             return
-        try:
-            object_user_files.delete_file(owner_id, file_id, base_dir=_data_dir())
-        except object_user_files.InvalidUserFileError:
-            pass
         await _send_json(send, {"status": "ok", "deleted": True, "file_id": file_id})
         return
 
     await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+
+
+async def _user_file_allowed(
+    send,
+    headers: dict[str, str],
+    action: str,
+    *,
+    record: dict[str, Any] | None,
+    method: str,
+) -> bool:
+    """The permission decision for one file (a policy check, or the admin
+    token when permission checks are off). Sends the refusal and returns
+    False when not allowed."""
+    if _permission_checks_enabled():
+        permission_check = await _collection_permission_check(
+            send,
+            headers,
+            action,
+            collection=USER_FILES_COLLECTION,
+            method=method,
+            record=record,
+        )
+        return permission_check is not None
+    gate_error = _admin_token_gate_error(headers, f"Files require {ADMIN_TOKEN_ENV}.")
+    if gate_error is not None:
+        status, message = gate_error
+        await _send_json(send, {"status": "error", "error": message}, status=status)
+        return False
+    return True
+
+
+async def _remove_user_file(send, headers: dict[str, str], record: dict[str, Any]) -> bool:
+    """Delete a file's record, then its bytes (already authorized). Sends
+    the error and returns False when the record is gone or unreadable."""
+    file_id = str(record.get("id") or "")
+    try:
+        object_records.delete_collection_record(
+            USER_FILES_COLLECTION, file_id, base_dir=_data_dir(), actor=_record_change_actor(headers)
+        )
+    except (LookupError, ValueError) as exc:
+        await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
+        return False
+    try:
+        object_user_files.delete_file(str(record.get("owner_id") or ""), file_id, base_dir=_data_dir())
+    except object_user_files.InvalidUserFileError:
+        pass
+    return True
+
+
+# ---------------------------------------------------------------------------
+# WebDAV: a person's files as a folder any desktop can mount (/dav/files/).
+# The pure half (names, paths, XML, ranges) and the decisions behind it are in
+# object_webdav.py. Every write goes through the same helpers as /api/files and
+# the collection routes, so a file stored or renamed here passes the same
+# quota, permission and hook gates.
+# ---------------------------------------------------------------------------
+
+WEBDAV_ENABLED_ENV = "DBBASIC_ENABLE_WEBDAV"
+WEBDAV_MAX_FILE_BYTES_ENV = "DBBASIC_WEBDAV_MAX_FILE_BYTES"
+# One PUT is read into memory whole, like every request here: this bounds it.
+DEFAULT_WEBDAV_MAX_FILE_BYTES = 52_428_800
+_WEBDAV_ALLOW = "OPTIONS, PROPFIND, PROPPATCH, GET, HEAD, PUT, DELETE, MOVE, COPY"
+_WEBDAV_REALM = 'Basic realm="DBBASIC files", charset="UTF-8"'
+
+
+def _webdav_enabled() -> bool:
+    return _env_enabled(WEBDAV_ENABLED_ENV) and _env_enabled(USER_FILES_ENABLED_ENV)
+
+
+def _webdav_body_limit(method: str, path: str) -> int | None:
+    """A PUT under /dav/ is a whole file, so it may be bigger than the
+    general request cap; everything else keeps that cap."""
+    if method != "PUT" or not path.startswith(http_api_contract.WEBDAV_PATH + "/") or not _webdav_enabled():
+        return None
+    return max(_max_request_bytes(), _env_int(WEBDAV_MAX_FILE_BYTES_ENV, DEFAULT_WEBDAV_MAX_FILE_BYTES))
+
+
+def _webdav_identity(headers: dict[str, str]) -> tuple[dict[str, str], str] | None:
+    """(headers to authorize with, user id) for a request carrying an API key.
+
+    Desktops speak HTTP Basic, so the key comes as the password (any user
+    name). Only API keys are accepted, never an account password: a password
+    here would be a second login with none of /identity/login's rate limits,
+    and a key can be revoked alone. Cookies are dropped, not just ignored: a
+    folder mounted by a desktop has none, and a browser's session cookie must
+    not turn a cross-site PUT or DELETE into the signed-in user's.
+    """
+    authorization = headers.get("authorization", "")
+    scheme, _, value = authorization.partition(" ")
+    token = None
+    if scheme.lower() == "basic":
+        try:
+            decoded = base64.b64decode(value.strip(), validate=True).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            return None
+        token = decoded.partition(":")[2]
+    elif scheme.lower() in {"bearer", "token"}:
+        token = value.strip()
+    if not token or not token.startswith(object_api_keys.TOKEN_PREFIX):
+        return None
+    user_id = object_api_keys.resolve_api_key(token, base_dir=_data_dir())
+    if not user_id:
+        return None
+    dav_headers = {k: v for k, v in headers.items() if k not in {"authorization", "cookie"}}
+    dav_headers["authorization"] = f"Bearer {token}"
+    return dav_headers, user_id
+
+
+def _webdav_timestamp(value: Any) -> float | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def _webdav_folder(dav_headers: dict[str, str], user_id: str) -> dict[str, object_webdav.DavFile]:
+    """The caller's own files, as the folder shows them (name -> file).
+
+    Own files only: a public file or one shared through a project belongs to
+    someone else's folder, and listing it here would let a rename or delete
+    from a desktop reach it. With enforcement on, each is also checked for
+    read like any GET.
+    """
+    subject = _permission_subject(dav_headers)
+    enforced = _permission_checks_enabled() and _permission_enforcement_enabled()
+    policy = None
+    if enforced:
+        try:
+            policy = object_permission_store.load_policy(_data_dir())
+        except ValueError:
+            return {}
+    mine = []
+    for record in _read_records_or_empty(USER_FILES_COLLECTION):
+        if record.get("owner_id") != user_id:
+            continue
+        if enforced and not object_permissions.check_permission(
+            subject, object_permissions.READ, policy=policy,
+            collection=USER_FILES_COLLECTION, record=record,
+        ).allowed:
+            continue
+        mine.append(record)
+
+    folder: dict[str, object_webdav.DavFile] = {}
+    for name, record in object_webdav.folder_names(mine).items():
+        created = _webdav_timestamp(record.get("created_at"))
+        try:
+            stat = object_user_files.file_path(
+                user_id, str(record.get("id") or ""), base_dir=_data_dir()
+            ).stat()
+            size, modified = stat.st_size, stat.st_mtime
+        except (OSError, object_user_files.InvalidUserFileError):
+            # the bytes are missing: still listed (the record exists), and
+            # a GET says so with a 404 rather than the file vanishing
+            try:
+                size = int(record.get("size") or 0)
+            except ValueError:
+                size = 0
+            modified = created or 0.0
+        folder[name] = object_webdav.DavFile(
+            name=name, record=record, size=size, modified=modified, created=created or modified
+        )
+    return folder
+
+
+def _webdav_folder_modified(folder: dict[str, object_webdav.DavFile]) -> float:
+    """When the folder last changed: the files collection's own file moves
+    on every create, rename and delete, which the files' times alone miss."""
+    records = Path(_data_dir()) / "collections" / USER_FILES_COLLECTION / "records.tsv"
+    try:
+        return records.stat().st_mtime
+    except OSError:
+        return max((f.modified for f in folder.values()), default=0.0)
+
+
+async def _send_webdav_error(send, status: int, message: str, extra: list[tuple[str, str]] | None = None) -> None:
+    await _send_response(
+        send,
+        status=status,
+        headers=[("content-type", "text/plain; charset=utf-8")] + (extra or []),
+        body=(message + "\n").encode("utf-8"),
+    )
+
+
+async def _handle_webdav(send, method: str, path: str, body: bytes, headers: dict[str, str]) -> None:
+    """Serve /dav/: a person's files as a folder (WebDAV class 1)."""
+    if not _webdav_enabled():
+        await _send_json(
+            send,
+            {
+                "status": "error",
+                "error": f"WebDAV is disabled. Set {WEBDAV_ENABLED_ENV}=true and {USER_FILES_ENABLED_ENV}=true.",
+            },
+            status=404,
+        )
+        return
+    if method == "OPTIONS":
+        await _send_response(
+            send,
+            status=200,
+            headers=[("dav", "1"), ("allow", _WEBDAV_ALLOW), ("ms-author-via", "DAV"), ("content-length", "0")],
+            body=b"",
+        )
+        return
+    identity = _webdav_identity(headers)
+    if identity is None:
+        await _send_webdav_error(
+            send, 401,
+            "Sign in with any user name and one of your API keys (dbk_...) as the password.",
+            [("www-authenticate", _WEBDAV_REALM)],
+        )
+        return
+    dav_headers, user_id = identity
+    try:
+        kind, name = object_webdav.split_path(path)
+        if method == "PROPFIND":
+            await _webdav_propfind(send, dav_headers, user_id, kind, name, body)
+        elif method in {"GET", "HEAD"}:
+            await _webdav_get(send, dav_headers, user_id, kind, name, head=method == "HEAD")
+        elif method == "PUT":
+            await _webdav_put(send, dav_headers, user_id, kind, name, body)
+        elif method == "DELETE":
+            await _webdav_delete(send, dav_headers, user_id, kind, name)
+        elif method in {"MOVE", "COPY"}:
+            await _webdav_move_or_copy(send, dav_headers, user_id, kind, name, copy=method == "COPY")
+        elif method == "PROPPATCH":
+            await _webdav_proppatch(send, dav_headers, user_id, kind, name, body)
+        elif method == "MKCOL":
+            await _send_webdav_error(
+                send, 405, "Folders are not supported here: your files are one list.",
+                [("allow", _WEBDAV_ALLOW)],
+            )
+        else:
+            # LOCK/UNLOCK included: see object_webdav on why there is no fake lock
+            await _send_webdav_error(send, 405, f"{method} is not supported.", [("allow", _WEBDAV_ALLOW)])
+    except object_webdav.DavRequestError as exc:
+        await _send_webdav_error(send, exc.status, str(exc))
+
+
+def _webdav_file(folder: dict[str, object_webdav.DavFile], name: str | None) -> object_webdav.DavFile:
+    found = object_webdav.lookup(folder, name or "")
+    if found is None:
+        raise object_webdav.DavRequestError(404, "No such file.")
+    return folder[found]
+
+
+async def _webdav_propfind(send, dav_headers, user_id, kind, name, body) -> None:
+    depth = object_webdav.parse_depth(dav_headers.get("depth"))
+    wanted = object_webdav.parse_propfind(body)
+    folder = _webdav_folder(dav_headers, user_id)
+    folder_time = _webdav_folder_modified(folder)
+    files_entry = (
+        object_webdav.href(object_webdav.FILES_FOLDER, folder=True),
+        object_webdav.folder_props(object_webdav.FILES_FOLDER, folder_time),
+    )
+    file_entries = [
+        (object_webdav.href(object_webdav.FILES_FOLDER, f.name), object_webdav.file_props(f))
+        for f in folder.values()
+    ]
+    # The tree is two levels deep, so Depth: infinity is answered in full
+    # rather than refused: it costs no more than Depth: 1 on the files folder.
+    if kind == "root":
+        responses = [(object_webdav.href(folder=True), object_webdav.folder_props("dav", folder_time))]
+        if depth != "0":
+            responses.append(files_entry)
+        if depth == "infinity":
+            responses.extend(file_entries)
+    elif kind == "files":
+        responses = [files_entry] + (file_entries if depth != "0" else [])
+    else:
+        f = _webdav_file(folder, name)
+        responses = [(object_webdav.href(object_webdav.FILES_FOLDER, f.name), object_webdav.file_props(f))]
+    await _send_response(
+        send,
+        status=207,
+        headers=[("content-type", "application/xml; charset=utf-8")],
+        body=object_webdav.multistatus(responses, wanted),
+    )
+
+
+async def _webdav_get(send, dav_headers, user_id, kind, name, *, head: bool) -> None:
+    folder = _webdav_folder(dav_headers, user_id)
+    if kind != "file":
+        entries = (
+            [(object_webdav.href(object_webdav.FILES_FOLDER, folder=True), object_webdav.FILES_FOLDER + "/")]
+            if kind == "root"
+            else [(object_webdav.href(object_webdav.FILES_FOLDER, n), n) for n in sorted(folder, key=str.lower)]
+        )
+        page = object_webdav.folder_html("Files" if kind == "files" else "dav", entries)
+        await _send_response(
+            send, status=200,
+            headers=[("content-type", "text/html; charset=utf-8"), ("content-length", str(len(page)))],
+            body=b"" if head else page,
+        )
+        return
+    f = _webdav_file(folder, name)
+    if not await _user_file_allowed(send, dav_headers, object_permissions.READ, record=f.record, method="GET"):
+        return
+    common = [
+        ("etag", f.etag),
+        ("last-modified", object_webdav.http_date(f.modified)),
+        ("accept-ranges", "bytes"),
+        ("x-content-type-options", "nosniff"),
+        # served from the server's own origin: an uploaded page must not run
+        ("content-security-policy", "sandbox"),
+    ]
+    if object_webdav.etag_matches(dav_headers.get("if-none-match"), f.etag):
+        await _send_response(send, status=304, headers=common, body=b"")
+        return
+    try:
+        content = object_user_files.read_file(user_id, f.record_id, base_dir=_data_dir())
+    except (object_user_files.UserFileNotFoundError, object_user_files.InvalidUserFileError):
+        raise object_webdav.DavRequestError(404, "File bytes missing.") from None
+    content_type = f.content_type
+    disposition = "inline" if content_type in _INLINE_CONTENT_TYPES else "attachment"
+    headers = [("content-type", content_type), ("content-disposition", disposition)] + common
+    try:
+        wanted = object_webdav.parse_range(dav_headers.get("range"), len(content))
+    except object_webdav.DavRequestError:
+        await _send_response(
+            send, status=416, headers=[("content-range", f"bytes */{len(content)}")], body=b""
+        )
+        return
+    status = 200
+    if wanted is not None:
+        start, end = wanted
+        content = content[start:end + 1]
+        status = 206
+        headers.append(("content-range", f"bytes {start}-{end}/{f.size}"))
+    headers.append(("content-length", str(len(content))))
+    await _send_response(send, status=status, headers=headers, body=b"" if head else content)
+
+
+def _webdav_preconditions(dav_headers, existing: object_webdav.DavFile | None) -> None:
+    """If-Match / If-None-Match against the file a write would touch: how a
+    client that read a file makes sure it is not overwriting someone else's
+    newer copy, and how "create, but only if new" is asked."""
+    etag = existing.etag if existing else None
+    if_match = dav_headers.get("if-match")
+    if if_match and not object_webdav.etag_matches(if_match, etag):
+        raise object_webdav.DavRequestError(412, "The file changed (If-Match).")
+    if_none_match = dav_headers.get("if-none-match")
+    if if_none_match and object_webdav.etag_matches(if_none_match, etag):
+        raise object_webdav.DavRequestError(412, "The file exists (If-None-Match).")
+
+
+def _webdav_content_type(name: str, sent: str | None) -> str:
+    guessed = object_webdav.guess_type(name)
+    sent = (sent or "").split(";")[0].strip().lower()
+    if guessed == "application/octet-stream" and sent:
+        return sent
+    return guessed
+
+
+async def _webdav_put(send, dav_headers, user_id, kind, name, body) -> None:
+    if kind != "file":
+        raise object_webdav.DavRequestError(405, "A folder cannot be written; PUT a file inside /dav/files/.")
+    name = object_webdav.check_new_name(name or "")
+    folder = _webdav_folder(dav_headers, user_id)
+    found = object_webdav.lookup(folder, name)
+    existing = folder[found] if found else None
+    _webdav_preconditions(dav_headers, existing)
+    content_type = _webdav_content_type(name, dav_headers.get("content-type"))
+    if existing is None:
+        stored = await _create_user_file(
+            send, dav_headers, owner_id=user_id, filename=name, content=body, content_type=content_type
+        )
+        if stored is not None:
+            await _send_response(send, status=201, headers=[("content-length", "0")], body=b"")
+        return
+    quota_error = _user_files_quota_error(user_id, len(body), freeing=existing.size)
+    if quota_error is not None:
+        raise object_webdav.DavRequestError(507, quota_error)
+    if await _record_write_denied_before_lookup(
+        send, dav_headers, object_permissions.UPDATE, collection=USER_FILES_COLLECTION
+    ):
+        return
+    updated = await _gated_record_update(
+        send,
+        dav_headers,
+        collection=USER_FILES_COLLECTION,
+        record_id=existing.record_id,
+        existing=existing.record,
+        changes={"size": str(len(body)), "content_type": content_type},
+        expected_rev=None,
+    )
+    if updated is None:
+        return
+    object_user_files.save_file(user_id, existing.record_id, body, base_dir=_data_dir())
+    await _send_response(send, status=204, headers=[], body=b"")
+
+
+async def _webdav_delete(send, dav_headers, user_id, kind, name) -> None:
+    if kind != "file":
+        raise object_webdav.DavRequestError(403, "The folder itself cannot be deleted.")
+    f = _webdav_file(_webdav_folder(dav_headers, user_id), name)
+    _webdav_preconditions(dav_headers, f)
+    if not await _user_file_allowed(send, dav_headers, object_permissions.DELETE, record=f.record, method="DELETE"):
+        return
+    if await _remove_user_file(send, dav_headers, f.record):
+        await _send_response(send, status=204, headers=[], body=b"")
+
+
+async def _webdav_move_or_copy(send, dav_headers, user_id, kind, name, *, copy: bool) -> None:
+    if kind != "file":
+        raise object_webdav.DavRequestError(403, "Folders cannot be moved or copied.")
+    dest_kind, dest_name = object_webdav.split_path(
+        object_webdav.destination_path(dav_headers.get("destination"))
+    )
+    if dest_kind != "file":
+        raise object_webdav.DavRequestError(403, "Files can only move or copy within /dav/files/.")
+    dest_name = object_webdav.check_new_name(dest_name or "")
+    overwrite = object_webdav.parse_overwrite(dav_headers.get("overwrite"))
+    folder = _webdav_folder(dav_headers, user_id)
+    source = _webdav_file(folder, name)
+    found = object_webdav.lookup(folder, dest_name)
+    target = folder[found] if found else None
+    if target is not None and target.record_id == source.record_id:
+        if copy or dest_name == source.name:
+            raise object_webdav.DavRequestError(403, "Source and destination are the same file.")
+        target = None  # a rename that only changes case
+    if target is not None:
+        if not overwrite:
+            raise object_webdav.DavRequestError(412, "The destination exists (Overwrite: F).")
+        if not await _user_file_allowed(send, dav_headers, object_permissions.DELETE, record=target.record, method="DELETE"):
+            return
+    content_type = _webdav_content_type(dest_name, source.content_type)
+
+    if copy:
+        if not await _user_file_allowed(send, dav_headers, object_permissions.READ, record=source.record, method="GET"):
+            return
+        try:
+            content = object_user_files.read_file(user_id, source.record_id, base_dir=_data_dir())
+        except (object_user_files.UserFileNotFoundError, object_user_files.InvalidUserFileError):
+            raise object_webdav.DavRequestError(404, "File bytes missing.") from None
+        if target is not None and not await _remove_user_file(send, dav_headers, target.record):
+            return
+        stored = await _create_user_file(
+            send, dav_headers, owner_id=user_id, filename=dest_name, content=content, content_type=content_type
+        )
+        if stored is not None:
+            await _send_response(send, status=204 if target else 201, headers=[], body=b"")
+        return
+
+    if await _record_write_denied_before_lookup(
+        send, dav_headers, object_permissions.UPDATE, collection=USER_FILES_COLLECTION
+    ):
+        return
+    if target is not None and not await _remove_user_file(send, dav_headers, target.record):
+        return
+    updated = await _gated_record_update(
+        send,
+        dav_headers,
+        collection=USER_FILES_COLLECTION,
+        record_id=source.record_id,
+        existing=source.record,
+        changes={"filename": dest_name, "content_type": content_type},
+        expected_rev=None,
+    )
+    if updated is not None:
+        await _send_response(send, status=204 if target else 201, headers=[], body=b"")
+
+
+async def _webdav_proppatch(send, dav_headers, user_id, kind, name, body) -> None:
+    """No property here is writable (sizes and times are the file's own);
+    each one a client tries to set is refused with 403, which clients that
+    set times after an upload (Windows, Finder) accept and carry on."""
+    names = object_webdav.parse_proppatch(body)
+    if kind == "file":
+        f = _webdav_file(_webdav_folder(dav_headers, user_id), name)
+        target = object_webdav.href(object_webdav.FILES_FOLDER, f.name)
+    else:
+        target = object_webdav.href(*( [object_webdav.FILES_FOLDER] if kind == "files" else []), folder=True)
+    await _send_response(
+        send,
+        status=207,
+        headers=[("content-type", "application/xml; charset=utf-8")],
+        body=object_webdav.proppatch_refused(target, names),
+    )
 
 
 async def _send_bytes(
@@ -8603,6 +9113,50 @@ async def _handle_collection_record_update(
     if not _concurrency_enabled():
         expected_rev = None  # flag off: precondition ignored, last-write-wins
 
+    record = await _gated_record_update(
+        send,
+        headers,
+        collection=collection,
+        record_id=record_id,
+        existing=existing,
+        changes=changes,
+        expected_rev=expected_rev,
+    )
+    if record is None:
+        return
+
+    await _send_json(
+        send,
+        {
+            "status": "ok",
+            "collection": collection,
+            "record": record,
+            # 63: the new fingerprint after this write -- a caller doing a
+            # read-modify-write loop uses it as the If-Match for its next PUT
+            # without a separate GET round-trip.
+            object_records.REV_FIELD: object_records.compute_record_rev(record),
+        },
+    )
+
+
+async def _gated_record_update(
+    send,
+    headers: dict[str, str],
+    *,
+    collection: str,
+    record_id: str,
+    existing: dict[str, Any],
+    changes: dict[str, Any],
+    expected_rev: str | None,
+) -> dict[str, Any] | None:
+    """Every gate an update passes, then the write and its publish.
+
+    Returns the stored record, or None when a response has already been
+    sent (a gate refused, the hook rejected, the write failed). Extracted
+    from _handle_collection_record_update so another surface that updates a
+    record (WebDAV overwriting or renaming a file) cannot skip a gate by
+    writing its own copy of them.
+    """
     candidate = dict(existing)
     candidate.update(changes)
     candidate["id"] = record_id
@@ -8617,7 +9171,7 @@ async def _handle_collection_record_update(
         gate_message=f"Collection record writes require {ADMIN_TOKEN_ENV}.",
     )
     if permission_check is None:
-        return
+        return None
 
     if _permission_enforcement_enabled():
         permission_check = await _authorize_collection_write(
@@ -8630,7 +9184,7 @@ async def _handle_collection_record_update(
             gate_message=f"Collection record writes require {ADMIN_TOKEN_ENV}.",
         )
         if permission_check is None:
-            return
+            return None
 
     if permission_check["enforced"]:
         try:
@@ -8643,7 +9197,7 @@ async def _handle_collection_record_update(
             )
         except ValueError as exc:
             await _send_json(send, {"status": "error", "error": str(exc)}, status=500)
-            return
+            return None
         if denied_fields:
             await _send_json(
                 send,
@@ -8655,7 +9209,7 @@ async def _handle_collection_record_update(
                 },
                 status=403,
             )
-            return
+            return None
 
     hooked = await _apply_before_write_hook(
         send,
@@ -8667,7 +9221,7 @@ async def _handle_collection_record_update(
         changes=changes,
     )
     if hooked is None:
-        return
+        return None
     if hooked is not candidate:
         # Persist only the delta the hook produced on top of the caller's own
         # changes: update_collection_record treats every submitted key as a
@@ -8694,7 +9248,7 @@ async def _handle_collection_record_update(
         )
     except object_records.RecordNotFoundError as exc:
         await _send_json(send, {"status": "error", "error": str(exc)}, status=404)
-        return
+        return None
     except object_records.VersionConflictError as exc:
         # 63: the record changed since the caller read it -- no write, no
         # side effects. The caller re-GETs to see current state (and its new
@@ -8704,27 +9258,27 @@ async def _handle_collection_record_update(
             {"status": "error", "error": str(exc), "code": "conflict"},
             status=409,
         )
-        return
+        return None
     except object_records.TransitionNotAllowedError as exc:
         await _send_json(
             send,
             {"status": "error", "error": str(exc), "code": "forbidden"},
             status=403,
         )
-        return
+        return None
     except (object_records.InvalidRecordIdError, object_records.InvalidRecordPayloadError) as exc:
         await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
-        return
+        return None
     except ValueError as exc:
         await _send_json(send, {"status": "error", "error": str(exc)}, status=400)
-        return
+        return None
     except OSError as exc:
         await _send_json(
             send,
             {"status": "error", "error": f"Could not save collection record: {exc}"},
             status=500,
         )
-        return
+        return None
 
     # See the matching comment in _handle_collection_record_create: the
     # attributed change is already durably appended by
@@ -8733,19 +9287,7 @@ async def _handle_collection_record_update(
     change = _record_change_for_publish(collection, record_id)
     if change is not None:
         _publish_record_change_event(change, record=record)
-
-    await _send_json(
-        send,
-        {
-            "status": "ok",
-            "collection": collection,
-            "record": record,
-            # 63: the new fingerprint after this write -- a caller doing a
-            # read-modify-write loop uses it as the If-Match for its next PUT
-            # without a separate GET round-trip.
-            object_records.REV_FIELD: object_records.compute_record_rev(record),
-        },
-    )
+    return record
 
 
 async def _handle_collection_record_delete(
@@ -12334,8 +12876,9 @@ def _content_length(headers: dict[str, str]) -> int | None:
     return length
 
 
-async def _read_body(receive, *, headers: dict[str, str]) -> bytes:
-    max_bytes = _max_request_bytes()
+async def _read_body(receive, *, headers: dict[str, str], max_bytes: int | None = None) -> bytes:
+    if max_bytes is None:
+        max_bytes = _max_request_bytes()
     content_length = _content_length(headers)
     if content_length is not None and content_length > max_bytes:
         raise RequestBodyTooLargeError(max_bytes=max_bytes, actual_bytes=content_length)
