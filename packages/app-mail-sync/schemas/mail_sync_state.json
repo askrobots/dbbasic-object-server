@@ -1,0 +1,22 @@
+{
+  "name": "mail_sync_state",
+  "title": "Mail Sync Folders",
+  "version": 1,
+  "description": "Where the sync has got to in one folder of one account: the server's UIDVALIDITY for the folder and the highest UID already copied. A message is imported when its UID is above last_uid, whatever its flags, which is why mail already read in another program is still copied (the predecessor searched UNSEEN and missed it). last_uid moves only after the rows for those messages are written, so a pass that dies half way repeats a little work and loses none; the repeat is harmless because every row id is derived from the message, not from the attempt. When the server reports a different UIDVALIDITY every stored UID is meaningless, and the folder starts again from a recent window, relying on the same dedupe. Written only by system_mail_sync; the owner may read it.",
+  "fields": [
+    {"name": "id"},
+    {"name": "account_id", "type": "relation", "required": true,
+     "relation": {"collection": "mail_accounts", "display_field": "email_address"}, "label": "Account"},
+    {"name": "folder", "type": "text", "required": true, "label": "Folder", "validation": {"max_length": 1000}},
+    {"name": "role", "type": "enum", "default": "other", "enum": ["inbox", "sent", "other"], "label": "Role",
+     "help": "sent means messages here were sent by the account's owner."},
+    {"name": "uidvalidity", "type": "text", "label": "UIDVALIDITY", "validation": {"max_length": 20}},
+    {"name": "last_uid", "type": "integer", "default": "0", "label": "Last UID copied"},
+    {"name": "owner_id", "type": "text", "label": "Owner"},
+    {"name": "created_at", "type": "datetime", "label": "Created", "read_only": true}
+  ],
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["account_id", "folder", "role", "last_uid"]
+  }
+}

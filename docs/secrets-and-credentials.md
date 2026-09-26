@@ -62,6 +62,11 @@ rather than deployment-wide: `DBBASIC_ENABLE_AI_CHAT`/`_TTS`/`_STT` in the
 env file only unlock the *capability*; each user still needs their own
 stored key before any of it does anything for them.
 
+A second example with one entry per record: mail sync (`app-mail-sync`)
+keeps each IMAP account's password as `imap-<account id>`, resolved by the
+**account row's** `owner_id`. The account record has no password field,
+and its page shows only whether the entry is set.
+
 ## How a secret gets written (it is not a record write)
 
 The vault has its own door, deliberately separate from the generic record API:

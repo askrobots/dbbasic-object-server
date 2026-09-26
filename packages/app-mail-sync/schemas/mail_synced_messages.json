@@ -1,0 +1,29 @@
+{
+  "name": "mail_synced_messages",
+  "title": "Synced Mail",
+  "version": 1,
+  "storage": "append",
+  "description": "The transport facts about one copied message that app-messaging deliberately does not carry: which account, folder and IMAP UID it came from, the key it was deduplicated on, its References chain, and the list headers (List-Unsubscribe, List-Unsubscribe-Post, List-Id, Precedence). Kept here so the messages schema stays a mailbox and not an IMAP client, the scope line app-messaging's own tests hold. The list headers are STORED, never acted on: this server does not open URLs it finds in mail, because a server that fetches links out of messages can be made to issue requests by anyone who can send it an email. dedupe_key is the Message-ID (or, without one, a hash of sender, date, subject and body start); it is only ever compared inside one owner's one account, so the same message in two people's mailboxes is two rows. Append storage because each row is written once. Written only by system_mail_sync; the owner may read it.",
+  "fields": [
+    {"name": "id"},
+    {"name": "account_id", "type": "relation", "required": true,
+     "relation": {"collection": "mail_accounts", "display_field": "email_address"}, "label": "Account"},
+    {"name": "folder", "type": "text", "label": "Folder", "validation": {"max_length": 1000}},
+    {"name": "uid", "type": "integer", "label": "UID"},
+    {"name": "uidvalidity", "type": "text", "label": "UIDVALIDITY", "validation": {"max_length": 20}},
+    {"name": "message_id", "type": "relation", "required": true,
+     "relation": {"collection": "messages", "display_field": "subject"}, "label": "Message"},
+    {"name": "dedupe_key", "type": "text", "required": true, "label": "Dedupe key", "validation": {"max_length": 1100}},
+    {"name": "references", "type": "textarea", "label": "References", "validation": {"max_length": 8000}},
+    {"name": "list_unsubscribe", "type": "text", "label": "List-Unsubscribe", "validation": {"max_length": 2000}},
+    {"name": "list_unsubscribe_post", "type": "text", "label": "List-Unsubscribe-Post", "validation": {"max_length": 2000}},
+    {"name": "list_id", "type": "text", "label": "List-Id", "validation": {"max_length": 2000}},
+    {"name": "precedence", "type": "text", "label": "Precedence", "validation": {"max_length": 100}},
+    {"name": "owner_id", "type": "text", "label": "Owner"},
+    {"name": "created_at", "type": "datetime", "label": "Created", "read_only": true}
+  ],
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["account_id", "folder", "uid", "message_id", "list_id"]
+  }
+}

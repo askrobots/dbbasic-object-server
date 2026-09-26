@@ -1610,6 +1610,69 @@ A PUT may be larger than `DBBASIC_MAX_REQUEST_BYTES`, up to
 and the user files quota still applies (507 when a replacement would
 exceed it, 413 for a new file).
 
+## Mail Sync (IMAP, Inbound)
+
+New mail in a person's own IMAP mailboxes, copied into their inbox
+(app-messaging's `message_threads`, `messages`, `message_recipients`).
+Package `app-mail-sync`; pure logic in `object_mail.py`, the I/O in the
+scheduled object `system_mail_sync`.
+
+Turning it on:
+
+1. The operator sets `DBBASIC_ENABLE_MAIL_SYNC=true`. Off otherwise; the
+   pass then does nothing and its report names the variable. A
+   `feature_flags` row `mail_sync_enabled` = `off` stops it again without a
+   redeploy.
+2. Install `app-messaging`, then `app-mail-sync` (it declares its schedule,
+   every two minutes, and its home-page count).
+3. The person opens `/mail/accounts`, adds the account (server, port, `ssl`
+   or `starttls`, user name, optional folders) and saves its password
+   there. The password goes to their identity vault as the service
+   `imap-<account id>` (`PUT /identity/users/{user_id}/service-keys`); it is
+   never a record field, and the page only shows whether it is set.
+
+What it does and does not do:
+
+- Folders are opened read-only (EXAMINE) and messages fetched with
+  `BODY.PEEK[]`, so nothing is marked read on the server. `is_read` is the
+  server's `\Seen` flag when the message was copied. Messages are chosen by
+  UID, so mail already read in another program is still copied.
+- The first sync of a folder takes the newest 200 messages of the last 30
+  days. Each pass then copies at most 50 messages and 25 MB per account;
+  a message over 10 MB is copied as headers with a line saying so. Every
+  connection has a 30 second timeout.
+- Blank folders means INBOX plus the Sent folder (found by its `\Sent`
+  attribute), written back to the account. Mail in Sent, or from the
+  account's own address, is `outbound`.
+- Replies are threaded by `In-Reply-To` and `References`, only among the
+  same person's messages, never by subject. The same message in two
+  people's mailboxes is two rows.
+- Folder, UID, `References` and the list headers (`List-Unsubscribe`,
+  `List-Unsubscribe-Post`, `List-Id`, `Precedence`) are kept in
+  `mail_synced_messages`. They are stored, not acted on: the server opens no
+  URL from a message and sends no mail.
+- A failure (refused login, unreachable server, missing folder) is written
+  on the account as `sync_attempts` and `sync_error`; the account then waits
+  longer between tries (2 minutes doubling to 30), and after three failures
+  in a row it is counted on the home page. Setting `sync_attempts` to 0, or
+  saving the password again, tries at once.
+- The server connects only to public addresses unless
+  `DBBASIC_MAIL_SYNC_ALLOW_PRIVATE_HOSTS=true`, so a member cannot use an
+  account to probe the server's own network. `security: plain` (no TLS) is
+  allowed only to this machine itself.
+
+How big it gets: one `messages` row, its recipient rows and one
+`mail_synced_messages` row per message that arrives after the first
+window, and nothing twice (every id is derived from the owner, the account
+and the Message-ID). Nothing is trimmed, so the inbox grows as the mailbox
+does, and so does the change log for those collections unless
+`DBBASIC_CHANGE_LOG_RETENTION_DAYS` is set. An account with nothing new
+writes nothing; its `last_synced_at` is refreshed at most hourly.
+
+Not built: sending, AI triage, unsubscribing, attachments (named at the end
+of the body, not copied), and following flag changes after a message was
+copied.
+
 ## Backups
 
 Runtime backups are tar/gzip archives of the whole data directory. They

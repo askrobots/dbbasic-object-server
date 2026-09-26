@@ -215,6 +215,11 @@ DBBASIC_ENABLE_FEED=false
 DBBASIC_ENABLE_FILTERING=false
 DBBASIC_ENABLE_CONCURRENCY=false
 DBBASIC_ENABLE_SESSION_ADMIN_GATES=false
+# Copy new mail from members' own IMAP mailboxes into their inbox
+# (app-mail-sync; see docs/http-api-contract.md#mail-sync-imap-inbound).
+# The second line lets it reach mail servers on private addresses.
+DBBASIC_ENABLE_MAIL_SYNC=false
+DBBASIC_MAIL_SYNC_ALLOW_PRIVATE_HOSTS=false
 ```
 
 Generate a local token on the VM:

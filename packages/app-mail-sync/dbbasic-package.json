@@ -1,0 +1,88 @@
+{
+  "id": "app-mail-sync",
+  "name": "Mail Sync",
+  "version": "0.1.0",
+  "description": "Copies new mail from a person's own IMAP mailboxes into their app-messaging inbox, and nothing else: it never sends, never deletes, never marks anything read on the server, and never opens a link it finds in a message. Off unless the operator sets DBBASIC_ENABLE_MAIL_SYNC=true; a feature_flags row mail_sync_enabled=off stops it without a redeploy. A person adds an account at /mail/accounts (server, port, ssl or starttls, user name) and stores its password there too -- the password goes into their own write-only identity vault as imap-<account id>, never into a record, and the page only ever shows whether it is set. system_mail_sync runs every two minutes. It opens folders read-only (EXAMINE) and fetches with BODY.PEEK, so is_read on each copied message is the server's own \\Seen flag and the person's mail program sees no difference; messages are picked by UID, not by UNSEEN, so mail already read elsewhere is still copied. The first sync of a folder takes the newest 200 messages of the last 30 days, not the whole history; after that each pass copies at most 50 messages and 25 MB per account, messages over 10 MB arrive as headers with a sentence saying so, and every connection has a 30 second timeout, because the pass runs inside the daemon's loop. Every row id is derived from the owner, the account and the message (its Message-ID, or a hash when it has none), so a pass that dies half way and repeats writes nothing twice, the same message in two people's mailboxes is two rows, and a reply only ever joins a thread belonging to the same person, found by In-Reply-To and References, never by subject. Transport facts app-messaging does not carry (folder, UID, References, List-Unsubscribe, List-Id, Precedence) live in mail_synced_messages; the cursor per folder lives in mail_sync_state and moves only after the rows are written. Failures are written on the account (sync_attempts, sync_error), the account waits longer between tries so a wrong password is not retried until the provider locks it, and after three failures in a row it is counted on the home page. How the inbox grows: one messages row (plus its recipients and one mail_synced_messages row) per message that arrives, no more, because nothing is copied twice; nothing is trimmed, so the inbox is as big as the mail that arrived after the first window, and the change log for those collections grows with it unless the operator sets DBBASIC_CHANGE_LOG_RETENTION_DAYS. Not here, on purpose: sending mail, AI triage or classification, acting on unsubscribe links, attachments (named at the end of the body, not copied), and following flag changes made after a message was copied.",
+  "compatibility": {
+    "dbbasic_object_server": ">=0.1.0"
+  },
+  "dependencies": ["app-messaging"],
+  "objects": [
+    {
+      "id": "system_mail_sync",
+      "path": "objects/system/mail_sync.py"
+    },
+    {
+      "id": "system_mail_sync_attention",
+      "path": "objects/system/mail_sync_attention.py"
+    },
+    {
+      "id": "site_mail_accounts",
+      "path": "objects/site/mail_accounts.py"
+    }
+  ],
+  "schemas": [
+    {
+      "collection": "mail_accounts",
+      "path": "schemas/mail_accounts.json"
+    },
+    {
+      "collection": "mail_sync_state",
+      "path": "schemas/mail_sync_state.json"
+    },
+    {
+      "collection": "mail_synced_messages",
+      "path": "schemas/mail_synced_messages.json"
+    }
+  ],
+  "permissions": [
+    {
+      "path": "permissions/rules.json"
+    }
+  ],
+  "seed": [
+    {
+      "collection": "mail_accounts",
+      "path": "seed/mail_accounts.tsv"
+    },
+    {
+      "collection": "mail_sync_state",
+      "path": "seed/mail_sync_state.tsv"
+    },
+    {
+      "collection": "mail_synced_messages",
+      "path": "seed/mail_synced_messages.tsv"
+    }
+  ],
+  "migrations": [],
+  "schedules": [
+    {
+      "id": "mail_sync_every_two_minutes",
+      "object_id": "system_mail_sync",
+      "schedule": "*/2 * * * *",
+      "description": "Copy new mail from every enabled account into its owner's inbox. Every two minutes rather than every minute: new mail two minutes late is still new, and the pass shares the daemon's loop with the minutely template runner, so halving its frequency halves what it can delay. An account with nothing new costs one read-only IMAP check and writes nothing; with the feature off the pass returns at once and says which variable to set."
+    }
+  ],
+  "nav": [
+    {
+      "id": "mail_accounts",
+      "label": "Mail Accounts",
+      "path": "/mail/accounts",
+      "blurb": "The mailboxes whose new mail is copied into your inbox",
+      "surface": "member",
+      "group": "Work",
+      "order": 115
+    }
+  ],
+  "attention": [
+    {
+      "id": "mail_accounts_failing",
+      "object_id": "system_mail_sync_attention",
+      "label": "Mail accounts not syncing",
+      "path": "/mail/accounts",
+      "nav_id": "mail_accounts",
+      "group": "Work",
+      "severity": "warning"
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "rules": [
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["create", "read", "update", "delete"],
+      "collection": "mail_accounts",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "a person manages only their own mailboxes; no public read, and the password is not in the row at all (it is in the owner's write-only identity vault)"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["read"],
+      "collection": "mail_sync_state",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "the owner may see where the sync has got to; only system_mail_sync writes it, because a hand-edited cursor skips or repeats mail"
+    },
+    {
+      "effect": "allow",
+      "principal": "registered",
+      "actions": ["read"],
+      "collection": "mail_synced_messages",
+      "row_filter": {"owner_id": "$user_id"},
+      "reason": "the owner may read the transport facts about their own mail (list headers, folder, UID); only system_mail_sync writes them"
+    },
+    {
+      "effect": "deny",
+      "principal": "registered",
+      "actions": ["update", "delete"],
+      "collection": "mail_sync_state",
+      "reason": "explicit, because owners may otherwise update and delete their own rows by default: a hand-edited or deleted cursor makes the next pass skip or re-download mail. The sync writes it; an admin can still repair it"
+    },
+    {
+      "effect": "deny",
+      "principal": "registered",
+      "actions": ["update", "delete"],
+      "collection": "mail_synced_messages",
+      "reason": "explicit for the same reason: these rows are the dedupe record, and deleting one makes its message look new to the next pass"
+    },
+    {
+      "effect": "allow",
+      "principal": "public",
+      "actions": ["execute"],
+      "object_id": "site_mail_accounts",
+      "reason": "the page shows a sign-in prompt to visitors and only the signed-in owner's own accounts to anyone else"
+    }
+  ]
+}

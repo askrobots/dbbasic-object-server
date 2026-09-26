@@ -1,0 +1,45 @@
+{
+  "name": "mail_accounts",
+  "title": "Mail Accounts",
+  "version": 1,
+  "description": "One IMAP mailbox a person asked this server to copy into their inbox. The password is deliberately NOT a field: a record is readable, listable, exported and backed up, and a secret must be none of those (docs/secrets-and-credentials.md). It lives in the owner's identity vault under the service name imap-<this account's id>, written through PUT /identity/users/{user_id}/service-keys and never readable back; the /mail/accounts page shows only whether it is set. The sync_* fields and last_synced_at belong to system_mail_sync: last_synced_at is when the account was last found up to date (refreshed at most hourly while nothing arrives, so an idle account does not rewrite its row every pass), sync_started_at/sync_finished_at are the claim a pass holds while it writes, and sync_attempts/sync_error say how many passes in a row have failed and what the server said. sync_attempts is the one status field the owner may write: setting it to 0 skips the wait after failures and tries again on the next pass.",
+  "fields": [
+    {"name": "id"},
+    {"name": "label", "type": "text", "label": "Name", "validation": {"max_length": 100},
+     "help": "What you call this mailbox, for example Work."},
+    {"name": "email_address", "type": "text", "required": true, "label": "Email address",
+     "validation": {"max_length": 254, "pattern": "^[^\\s@]+@[^\\s@]+$"},
+     "help": "Mail sent from this address is shown as sent by you."},
+    {"name": "host", "type": "text", "required": true, "label": "IMAP server",
+     "validation": {"max_length": 253, "pattern": "^[A-Za-z0-9.-]+$"},
+     "help": "A host name such as imap.example.com, no https:// and no port."},
+    {"name": "port", "type": "integer", "label": "Port",
+     "help": "Blank means 993 for ssl and 143 for starttls."},
+    {"name": "security", "type": "enum", "default": "ssl", "enum": ["ssl", "starttls", "plain"],
+     "label": "Security",
+     "help": "ssl (port 993) or starttls (port 143). plain sends the password unencrypted and is refused for anything but this machine itself."},
+    {"name": "username", "type": "text", "label": "User name",
+     "validation": {"max_length": 254, "pattern": "^[^\\r\\n]*$"},
+     "help": "Blank means the email address."},
+    {"name": "folders", "type": "text", "label": "Folders",
+     "validation": {"max_length": 1000, "pattern": "^[^\\r\\n]*$"},
+     "help": "Comma-separated. Blank means INBOX plus the Sent folder, found on the first sync and written here."},
+    {"name": "enabled", "type": "boolean", "default": "true", "label": "Sync this account"},
+    {"name": "last_synced_at", "type": "datetime", "label": "Last synced", "read_only": true},
+    {"name": "sync_started_at", "type": "datetime", "label": "Sync started", "read_only": true},
+    {"name": "sync_finished_at", "type": "datetime", "label": "Sync finished", "read_only": true},
+    {"name": "sync_attempts", "type": "integer", "default": "0", "label": "Failed syncs in a row",
+     "help": "Set to 0 to try again at once instead of waiting."},
+    {"name": "sync_error", "type": "text", "label": "Last error", "read_only": true,
+     "validation": {"max_length": 500}},
+    {"name": "owner_id", "type": "text", "label": "Owner"},
+    {"name": "created_at", "type": "datetime", "label": "Created", "read_only": true}
+  ],
+  "forms": {
+    "default": {"fields": ["label", "email_address", "host", "port", "security", "username", "folders", "enabled"]}
+  },
+  "views": {
+    "list_mode": "table",
+    "list_fields": ["label", "email_address", "last_synced_at", "sync_error"]
+  }
+}
