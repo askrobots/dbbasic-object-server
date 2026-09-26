@@ -47,8 +47,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-import object_collections
-import object_records
+import object_feature_flags
 
 # --- sync lifecycle fields + statuses --------------------------------------
 
@@ -114,16 +113,7 @@ def connector_config_from_env(env: Mapping[str, str] | None = None) -> Connector
 def connectors_pass_enabled(*, base_dir: Any) -> bool:
     """Brownout kill switch -- a feature_flags row `connectors_enabled`, default
     ON. Mirrors object_email.email_pass_enabled / object_rollups exactly."""
-    try:
-        rows = object_records.read_collection_records(FEATURE_FLAGS_COLLECTION, base_dir=base_dir)
-    except (object_collections.CollectionNotFoundError,
-            object_collections.InvalidCollectionNameError, OSError, ValueError):
-        return True
-    for row in rows:
-        if row.get("flag") == CONNECTORS_ENABLED_FLAG:
-            value = (row.get("value") or "").strip().lower()
-            return True if not value else value not in {"off", "false", "0", "no"}
-    return True
+    return object_feature_flags.kill_switch_on(CONNECTORS_ENABLED_FLAG, base_dir=base_dir)
 
 
 # --- time helpers ----------------------------------------------------------

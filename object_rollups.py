@@ -59,6 +59,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Mapping
 
 import object_collections
+import object_feature_flags
 import object_records
 import object_schemas
 
@@ -127,22 +128,7 @@ def rollup_pass_enabled(*, base_dir: Any) -> bool:
     Degradation: "existing target collections keep serving their
     last-computed data").
     """
-    try:
-        rows = object_records.read_collection_records(FEATURE_FLAGS_COLLECTION, base_dir=base_dir)
-    except (
-        object_collections.CollectionNotFoundError,
-        object_collections.InvalidCollectionNameError,
-        OSError,
-        ValueError,
-    ):
-        return True
-    for row in rows:
-        if row.get("flag") == ROLLUP_ENABLED_FLAG:
-            value = (row.get("value") or "").strip().lower()
-            if not value:
-                return True
-            return value not in {"off", "false", "0", "no"}
-    return True
+    return object_feature_flags.kill_switch_on(ROLLUP_ENABLED_FLAG, base_dir=base_dir)
 
 
 def is_definition_enabled(record: Mapping[str, str]) -> bool:

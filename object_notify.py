@@ -25,9 +25,8 @@ from __future__ import annotations
 import json
 from typing import Any, Iterable, Mapping
 
-import object_collections
+import object_feature_flags
 import object_identity
-import object_records
 
 NOTIFY_RULES_COLLECTION = "notify_rules"
 NOTIFICATIONS_COLLECTION = "notifications"
@@ -69,16 +68,7 @@ def notify_pass_enabled(*, base_dir: Any) -> bool:
     row named `notify_enabled`. Default ON (brownout lever, not an adoption
     gate; with zero rules it does nothing anyway). Mirrors
     object_rollups.rollup_pass_enabled exactly."""
-    try:
-        rows = object_records.read_collection_records(FEATURE_FLAGS_COLLECTION, base_dir=base_dir)
-    except (object_collections.CollectionNotFoundError,
-            object_collections.InvalidCollectionNameError, OSError, ValueError):
-        return True
-    for row in rows:
-        if row.get("flag") == NOTIFY_ENABLED_FLAG:
-            value = (row.get("value") or "").strip().lower()
-            return True if not value else value not in {"off", "false", "0", "no"}
-    return True
+    return object_feature_flags.kill_switch_on(NOTIFY_ENABLED_FLAG, base_dir=base_dir)
 
 
 def event_pattern_matches(pattern: str, collection: str, action: str) -> bool:
