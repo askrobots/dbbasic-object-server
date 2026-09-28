@@ -83,8 +83,9 @@ identity store and one audit trail.
 - Untrusted arbitrary code execution is not offered; object writes are
   operator/admin actions, and the worker pool isolates processes without
   CPU or memory limits.
-- Open signup and password reset flows are not built; identities are
-  operator-created today.
+- Self-service signup and password reset exist, off by default; signup
+  refuses to turn on until enforcement is on and no rule gives every
+  signed-in user unscoped access. Strangers still cannot run their own code.
 - Permission enforcement is opt-in per deployment rather than the shipped
   default (staging runs with it on).
 
