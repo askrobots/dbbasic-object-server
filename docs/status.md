@@ -110,6 +110,11 @@ untrusted public users.
 - Migrating small Django/PostgreSQL data into object records and schemas
 - Package authoring and install dry-runs
 
+- Self-service signup, email verification and password reset (browser
+  forms at `/signup`, `/verify`, `/reset`), off by default and refusing to
+  turn on while any rule gives every signed-in user unscoped access, while
+  enforcement is off, or while email cannot be sent
+
 ## Not Ready Yet
 
 - Open signup where strangers can run arbitrary Python code
@@ -118,7 +123,6 @@ untrusted public users.
   has it on)
 - Policy checks for the admin-token-only surfaces (identity, permissions,
   schemas, daemon, events, packages stay admin-gated by design)
-- Self-service signup and password reset flows
 - Session admin gates are implemented, but opt-in with
   `DBBASIC_ENABLE_SESSION_ADMIN_GATES=true`
 - CPU and memory isolation for untrusted object code
@@ -166,7 +170,8 @@ The remaining work is platform capability, in rough priority order:
 2. Write-level project sharing (`$writable_projects`) and a per-family
    "builder role" so agents and collaborators can be scoped below admin.
 3. Add CPU/memory isolation and a better worker boundary for untrusted code.
-4. Self-service signup and password reset flows.
+4. A JSON API for signup and password reset (browser forms only today,
+   see Self-Service Signup in http-api-contract.md).
 5. Media generation through the runner: the engine, the async submit/poll
    loop and per-image/per-second pricing (`unit_prices`) are in place; what
    is missing is a handler for an image or video provider, and the quality

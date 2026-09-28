@@ -699,6 +699,19 @@ dbbasic.example.com {
         reverse_proxy 127.0.0.1:8001
     }
 
+    # only when signup / password reset are turned on
+    handle /signup {
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    handle /verify {
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    handle /reset* {
+        reverse_proxy 127.0.0.1:8001
+    }
+
     handle /admin/status {
         reverse_proxy 127.0.0.1:8001
     }

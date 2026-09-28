@@ -817,6 +817,67 @@ API clients should use `POST /identity/session`. `POST /logout` revokes the
 cookie session, clears the cookie, and redirects to `/login`. The login and
 logout routes never accept or mint admin tokens.
 
+### Self-Service Signup
+
+Off by default. `DBBASIC_ENABLE_SIGNUP=true` opens it, and
+`DBBASIC_ENABLE_PASSWORD_RESET=true` opens password reset (useful on its own
+for operator-created users). Both are browser forms beside `/login`:
+
+```http
+GET  /signup                  form: email, optional name, password
+POST /signup                  -> 303 /signup?sent=1
+GET  /verify?token=...        a page with a "Confirm my email" button
+POST /verify                  (token) -> signs the new user in, 303 /
+GET  /reset                   form: email
+POST /reset                   -> 303 /reset?sent=1
+GET  /reset/confirm?token=... form: new password
+POST /reset/confirm           (token, password) -> 303 /login?reset=1
+```
+
+Signup refuses to run (`403` page, reasons listed under `identity` in
+`GET /admin/capabilities` as `signup_blockers`) until all of these hold:
+
+- `DBBASIC_ENABLE_PASSWORD_LOGIN=true`, or a new user could never sign in;
+- permission enforcement is on, or a stranger's account would not be limited
+  to their own data;
+- no permission rule gives the `registered` principal anything without a
+  collection, object or row filter. The starter policy's "signed-in users can
+  read and run objects" is such a rule: right for invited users, wrong once
+  anyone with an email address is "registered";
+- email can go out: `DBBASIC_SMTP_MODE` configured, the `app-email` package
+  installed, and the `email_enabled` feature flag not off;
+- `DBBASIC_PUBLIC_URL` is this server's `https://` address. Emailed links are
+  built from it, never from the request's `Host` header, which would let
+  anyone aim a reset link at their own domain.
+
+Reset needs the same except the policy and enforcement checks.
+
+What happens:
+
+- A signup creates its own account and a user with status `pending`, which,
+  like `disabled`, cannot sign in or hold a session. The emailed link makes it
+  `active`. Signing in with the right password while still pending sends a
+  new link and says so (`/login?error=unverified`).
+- Links are single use, expire (confirmation 48 hours, reset 1 hour), and a
+  new link retires the previous one. Only their SHA-256 is stored, in
+  `data/identity/email_tokens.tsv` (owner-only). Used and expired rows are
+  dropped on every write, so the file holds at most one row per user and
+  purpose.
+- Opening a link only shows a button; the `POST` uses it. Mail scanners open
+  links by themselves and must not confirm an address or reset a password.
+- The forms never say whether an address has an account. A signup for a taken
+  address emails that address "you already have an account" with sign-in and
+  reset links; a reset for an unknown address sends nothing. Both answer the
+  form the same way as the ordinary case.
+- A reset sets the new password, revokes every session the user had, and ends
+  the login lockout's run of failures. Disabled users are never sent a link.
+- Limits, all failing closed: 5 signups and 10 reset requests per IP per hour,
+  and 3 emails per address per hour. Cross-site form posts are refused.
+
+Ops events (`GET /admin/ops?kind=auth`): `signup_created`, `signup_pending`,
+`signup_exists`, `email_verified`, `login_unverified`,
+`password_reset_requested`, `password_reset`.
+
 Session tokens normally only supply the active subject used by permission
 checks. Admin-token gates remain admin-token-only by default. When a deployment
 sets `DBBASIC_ENABLE_SESSION_ADMIN_GATES=true`, active sessions whose subject

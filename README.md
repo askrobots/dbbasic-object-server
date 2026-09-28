@@ -373,8 +373,8 @@ This repository currently contains:
 - `packages/admin-write-probe/` - narrow staging package for proving object
   state writes and admin-gated collection record writes
 
-It does not yet contain the full private prototype, the cluster runtime, a
-public signup flow, or CPU/memory quotas for untrusted user code (the worker
+It does not yet contain the full private prototype, the cluster runtime, or
+CPU/memory quotas for untrusted user code (the worker
 pool gives process isolation, not resource limits). The app suite, the
 single-VM and Docker installers, and the Scroll companion app
 (github.com/askrobots/dbbasic-scroll) all exist -- see below.

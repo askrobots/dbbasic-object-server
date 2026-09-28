@@ -16,7 +16,8 @@ DBBASIC_ENABLE_SITE_ROUTES=true
 Site routing runs only after every built-in route family has declined the
 path, so reserved surfaces (`/objects`, `/admin`, `/api`, `/identity`,
 `/login`, `/health`, `/collections`, `/schemas`, `/events`, `/packages`,
-`/daemon`, `/permissions`, `/logout`) can never be shadowed by a site page.
+`/daemon`, `/permissions`, `/logout`, `/signup`, `/verify`, `/reset`,
+`/reset/confirm`) can never be shadowed by a site page.
 
 For everything else:
 

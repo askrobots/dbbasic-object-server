@@ -36,6 +36,7 @@ import object_activity
 import object_backup
 import object_analytics
 import object_api_keys
+import object_signup
 import object_webdav
 import object_collections
 import object_correlation
@@ -126,6 +127,10 @@ LOGIN_LOCKOUT_WINDOW_SECONDS_ENV = "DBBASIC_LOGIN_LOCKOUT_WINDOW_SECONDS"
 DEFAULT_LOGIN_LOCKOUT_ATTEMPTS = 5
 DEFAULT_LOGIN_LOCKOUT_WINDOW_SECONDS = 900
 LOGIN_LOCKED_MESSAGE = "Too many failed attempts. Try again later."
+UNVERIFIED_LOGIN_MESSAGE = "Confirm your email address first: we've sent the link to it again."
+SIGNUP_ATTEMPTS_PER_HOUR_PER_IP = 5
+RESET_ATTEMPTS_PER_HOUR_PER_IP = 10
+EMAILS_PER_HOUR_PER_ADDRESS = 3
 SESSION_COOKIE_NAME = "dbbasic_session"
 COOKIE_SECURE_ENV = "DBBASIC_COOKIE_SECURE"
 SITE_ROUTES_ENV = "DBBASIC_ENABLE_SITE_ROUTES"
@@ -815,6 +820,22 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
 
         if path == http_api_contract.LOGOUT_PATH:
             await _handle_logout(send, method, headers)
+            return
+
+        if path == http_api_contract.SIGNUP_PATH:
+            await _handle_signup(scope, send, method, query, body, headers)
+            return
+
+        if path == http_api_contract.VERIFY_EMAIL_PATH:
+            await _handle_verify_email(send, method, query, body, headers)
+            return
+
+        if path == http_api_contract.PASSWORD_RESET_PATH:
+            await _handle_password_reset(scope, send, method, query, body, headers)
+            return
+
+        if path == http_api_contract.PASSWORD_RESET_CONFIRM_PATH:
+            await _handle_password_reset_confirm(send, method, query, body, headers)
             return
 
         if path == http_api_contract.IDENTITY_ACCOUNTS_PATH:
@@ -2330,11 +2351,18 @@ async def _handle_login(
             await _send_redirect(send, _safe_next_path(query.get("next")))
             return
         error = None
+        notice = None
         if query.get("error") == "locked":
             error = LOGIN_LOCKED_MESSAGE
+        elif query.get("error") == "unverified":
+            error = UNVERIFIED_LOGIN_MESSAGE
         elif query.get("error"):
             error = "Invalid email or password."
-        await _send_login_page(send, error=error, next_path=_safe_next_path(query.get("next")))
+        elif query.get("reset"):
+            notice = "Your password was changed. Sign in with the new one."
+        elif query.get("verified"):
+            notice = "Your email address is confirmed. Sign in to continue."
+        await _send_login_page(send, error=error, notice=notice, next_path=_safe_next_path(query.get("next")))
         return
 
     if method != "POST":
@@ -2388,6 +2416,17 @@ async def _handle_login(
     lookup_user_id = user["user_id"] if user is not None else "__unknown_password_login__"
     verified = object_credentials.verify_password(lookup_user_id, password, base_dir=_data_dir())
 
+    if user is None:
+        pending = _pending_user_with_password(email, password)
+        if pending is not None:
+            _append_ops_auth_event("login_unverified", identifier=email, user_id=pending["user_id"], method="password_form")
+            _send_verification_link(pending)
+            unverified_location = f"{http_api_contract.LOGIN_PATH}?error=unverified"
+            if next_path != "/":
+                unverified_location += f"&next={urllib.parse.quote(next_path)}"
+            await _send_redirect(send, unverified_location)
+            return
+
     if user is None or not verified:
         _append_ops_auth_event("login_failed", identifier=email, method="password_form")
         await asyncio.sleep(PASSWORD_LOGIN_FAILURE_DELAY_SECONDS)
@@ -2422,6 +2461,322 @@ async def _handle_login(
                 max_age=object_identity.DEFAULT_SESSION_TTL_SECONDS,
             )
         ],
+    )
+
+
+def _signup_blockers() -> list[str]:
+    try:
+        policy = object_permission_store.load_policy(_data_dir())
+    except (OSError, ValueError):
+        return ["The permission policy could not be read."]
+    return object_signup.signup_blockers(
+        policy=policy,
+        enforcement_enabled=_permission_enforcement_enabled(),
+        password_login_enabled=_env_enabled(PASSWORD_LOGIN_ENV),
+        base_dir=_data_dir(),
+    )
+
+
+def _password_reset_blockers() -> list[str]:
+    return object_signup.reset_blockers(
+        password_login_enabled=_env_enabled(PASSWORD_LOGIN_ENV),
+        base_dir=_data_dir(),
+    )
+
+
+def _signup_available() -> bool:
+    return object_signup.env_enabled(object_signup.SIGNUP_ENV) and not _signup_blockers()
+
+
+def _password_reset_available() -> bool:
+    return object_signup.env_enabled(object_signup.PASSWORD_RESET_ENV) and not _password_reset_blockers()
+
+
+def _signup_rate_limited(identity: str, limit: int) -> bool:
+    """One hourly bucket per identity; fails closed, as a public write should."""
+    result = object_rate_limit.check_rate_limit(
+        directory=_rate_limit_dir(),
+        identity=identity,
+        limit=limit,
+        window_seconds=3600,
+        fail_closed=True,
+    )
+    return not result.allowed
+
+
+def _email_address_rate_limited(email: str) -> bool:
+    return _signup_rate_limited(f"signup-email:{email.strip().casefold()}", EMAILS_PER_HOUR_PER_ADDRESS)
+
+
+def _pending_user_with_password(email: str, password: str) -> dict[str, Any] | None:
+    for user in object_identity.find_users_by_email(email, base_dir=_data_dir()):
+        if user["status"] != object_identity.PENDING_STATUS:
+            continue
+        if object_credentials.verify_password(user["user_id"], password, base_dir=_data_dir()):
+            return user
+    return None
+
+
+def _send_verification_link(user: Mapping[str, Any]) -> bool:
+    """Email a fresh confirmation link; False when email can't go out or the address hit its hourly limit."""
+    email = user.get("email") or ""
+    base_url = object_signup.public_url()
+    if not email or base_url is None or object_signup.email_blockers(base_dir=_data_dir()):
+        return False
+    if _email_address_rate_limited(email):
+        return False
+    token = object_signup.issue_token(object_signup.VERIFY_EMAIL, user["user_id"], email, base_dir=_data_dir())
+    object_signup.send(email, object_signup.verification_email(base_url, token), base_dir=_data_dir())
+    return True
+
+
+def _same_origin_form(headers: dict[str, str]) -> bool:
+    """These forms sign a browser in or change a password, so a POST from
+    another site is refused whether or not a session cookie is present."""
+    return _cookie_request_origin_allowed(headers)
+
+
+async def _send_signup_unavailable(send) -> None:
+    inner = """<div class="panel"><h1>Sign up</h1>
+<p>New accounts can't be created on this server.</p>
+<p class="links"><a href="/login">Sign in</a></p></div>"""
+    await _send_auth_page(send, "Sign up", inner, status=403)
+
+
+async def _send_signup_page(send, *, error: str | None = None, email: str = "", display_name: str = "", status: int = 200) -> None:
+    inner = f"""<form method="post" action="{html.escape(http_api_contract.SIGNUP_PATH, quote=True)}">
+<h1>Create an account</h1>
+{_message_block(error)}
+<label for="email">Email</label>
+<input id="email" name="email" type="email" autocomplete="email" required autofocus value="{html.escape(email, quote=True)}">
+<label for="display_name">Name <small>(optional)</small></label>
+<input id="display_name" name="display_name" type="text" autocomplete="name" maxlength="{object_signup.MAX_DISPLAY_NAME_LENGTH}" value="{html.escape(display_name, quote=True)}">
+<label for="password">Password</label>
+<input id="password" name="password" type="password" autocomplete="new-password" minlength="{object_credentials.MIN_PASSWORD_LENGTH}" required>
+<button type="submit">Create account</button>
+<p class="links"><a href="{html.escape(http_api_contract.LOGIN_PATH, quote=True)}">Already have an account? Sign in</a></p>
+</form>"""
+    await _send_auth_page(send, "Create an account", inner, status=status)
+
+
+async def _send_check_email_page(send, title: str, message: str) -> None:
+    inner = f"""<div class="panel"><h1>{html.escape(title)}</h1>
+<p>{html.escape(message)}</p>
+<p>Nothing there? Check your spam folder. The link works once.</p>
+<p class="links"><a href="{html.escape(http_api_contract.LOGIN_PATH, quote=True)}">Back to sign in</a></p></div>"""
+    await _send_auth_page(send, title, inner)
+
+
+async def _handle_signup(scope, send, method: str, query: dict[str, str], body: bytes, headers: dict[str, str]) -> None:
+    if method not in ("GET", "POST"):
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+    if not _signup_available():
+        await _send_signup_unavailable(send)
+        return
+    if method == "GET":
+        if query.get("sent"):
+            await _send_check_email_page(
+                send,
+                "Check your email",
+                "We've sent a link to the address you gave. Open it to confirm the address and finish creating your account.",
+            )
+            return
+        await _send_signup_page(send)
+        return
+
+    form = _parse_form_body(body, headers)
+    if form is None or not _same_origin_form(headers):
+        await _send_signup_page(send, error="That form couldn't be read. Please try again.", status=400)
+        return
+    email = (form.get("email") or "").strip()
+    display_name = (form.get("display_name") or "").strip()
+
+    if _signup_rate_limited(f"signup-ip:{_client_ip(scope, headers)}", SIGNUP_ATTEMPTS_PER_HOUR_PER_IP):
+        await _send_signup_page(send, error="Too many sign-ups from here. Try again in an hour.", email=email, display_name=display_name, status=429)
+        return
+    try:
+        result = object_signup.register(email, form.get("password"), display_name, base_dir=_data_dir())
+    except object_signup.SignupError as exc:
+        await _send_signup_page(send, error=str(exc), email=email, display_name=display_name, status=400)
+        return
+
+    user = result["user"]
+    _append_ops_auth_event(f"signup_{result['outcome']}", identifier=email, user_id=user["user_id"], method="signup_form")
+    # every outcome looks the same from here; only the mailbox learns which it was
+    if result["outcome"] in ("created", "pending"):
+        _send_verification_link(user)
+    elif not _email_address_rate_limited(email):
+        object_signup.send(
+            user["email"],
+            object_signup.already_registered_email(object_signup.public_url() or "", _password_reset_available()),
+            base_dir=_data_dir(),
+        )
+    await _send_redirect(send, f"{http_api_contract.SIGNUP_PATH}?sent=1")
+
+
+async def _send_link_problem_page(send, title: str, message: str, retry_path: str, retry_label: str) -> None:
+    inner = f"""<div class="panel"><h1>{html.escape(title)}</h1>
+<p class="error">{html.escape(message)}</p>
+<p class="links"><a href="{html.escape(retry_path, quote=True)}">{html.escape(retry_label)}</a></p></div>"""
+    await _send_auth_page(send, title, inner, status=400)
+
+
+async def _handle_verify_email(send, method: str, query: dict[str, str], body: bytes, headers: dict[str, str]) -> None:
+    if method == "GET":
+        # the link only shows a button: mail scanners open links on their own,
+        # and must not use the token up (or sign anyone in)
+        token = query.get("token") or ""
+        if object_signup.peek_token(token, object_signup.VERIFY_EMAIL, base_dir=_data_dir()) is None:
+            await _send_link_problem_page(
+                send, "Confirm your email",
+                "This link has expired or was already used. Sign in and we'll send a new one.",
+                http_api_contract.LOGIN_PATH, "Sign in",
+            )
+            return
+        inner = f"""<form method="post" action="{html.escape(http_api_contract.VERIFY_EMAIL_PATH, quote=True)}">
+<h1>Confirm your email</h1>
+<p>One more step: confirm this address to finish creating your account.</p>
+<input type="hidden" name="token" value="{html.escape(token, quote=True)}">
+<button type="submit">Confirm my email</button>
+</form>"""
+        await _send_auth_page(send, "Confirm your email", inner)
+        return
+    if method != "POST":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    form = _parse_form_body(body, headers)
+    if form is None or not _same_origin_form(headers):
+        await _send_link_problem_page(send, "Confirm your email", "That form couldn't be read. Open the link from the email again.", http_api_contract.LOGIN_PATH, "Sign in")
+        return
+    user = object_signup.verify_email(form.get("token"), base_dir=_data_dir())
+    if user is None:
+        await _send_link_problem_page(
+            send, "Confirm your email",
+            "This link has expired or was already used. Sign in and we'll send a new one.",
+            http_api_contract.LOGIN_PATH, "Sign in",
+        )
+        return
+    _append_ops_auth_event("email_verified", identifier=user.get("email"), user_id=user["user_id"], method="verify_link")
+    try:
+        result = object_identity.create_session(
+            {"user_id": user["user_id"], "label": "email verified"},
+            base_dir=_data_dir(),
+            require_known_user=True,
+        )
+    except ValueError:
+        await _send_redirect(send, f"{http_api_contract.LOGIN_PATH}?verified=1")
+        return
+    _append_ops_auth_event("session_minted", identifier=user.get("email"), user_id=user["user_id"], method="verify_link", label="email verified")
+    await _send_redirect(
+        send,
+        "/",
+        extra_headers=[_session_cookie_header(result["token"], max_age=object_identity.DEFAULT_SESSION_TTL_SECONDS)],
+    )
+
+
+async def _send_reset_request_page(send, *, error: str | None = None, email: str = "", status: int = 200) -> None:
+    inner = f"""<form method="post" action="{html.escape(http_api_contract.PASSWORD_RESET_PATH, quote=True)}">
+<h1>Reset your password</h1>
+{_message_block(error)}
+<p>Enter your account's email address and we'll send you a link to choose a new password.</p>
+<label for="email">Email</label>
+<input id="email" name="email" type="email" autocomplete="email" required autofocus value="{html.escape(email, quote=True)}">
+<button type="submit">Send the link</button>
+<p class="links"><a href="{html.escape(http_api_contract.LOGIN_PATH, quote=True)}">Back to sign in</a></p>
+</form>"""
+    await _send_auth_page(send, "Reset your password", inner, status=status)
+
+
+async def _handle_password_reset(scope, send, method: str, query: dict[str, str], body: bytes, headers: dict[str, str]) -> None:
+    if method not in ("GET", "POST"):
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+    if not _password_reset_available():
+        inner = """<div class="panel"><h1>Reset your password</h1>
+<p>Passwords can't be reset by email on this server. Ask the person who runs it.</p>
+<p class="links"><a href="/login">Sign in</a></p></div>"""
+        await _send_auth_page(send, "Reset your password", inner, status=403)
+        return
+    if method == "GET":
+        if query.get("sent"):
+            await _send_check_email_page(
+                send,
+                "Check your email",
+                "If that address has an account here, we've sent it a link to choose a new password. The link works for an hour.",
+            )
+            return
+        await _send_reset_request_page(send)
+        return
+
+    form = _parse_form_body(body, headers)
+    if form is None or not _same_origin_form(headers):
+        await _send_reset_request_page(send, error="That form couldn't be read. Please try again.", status=400)
+        return
+    email = (form.get("email") or "").strip()
+    if _signup_rate_limited(f"reset-ip:{_client_ip(scope, headers)}", RESET_ATTEMPTS_PER_HOUR_PER_IP):
+        await _send_reset_request_page(send, error="Too many requests from here. Try again in an hour.", email=email, status=429)
+        return
+    try:
+        object_signup.normalize_email(email)
+    except object_signup.SignupError as exc:
+        await _send_reset_request_page(send, error=str(exc), email=email, status=400)
+        return
+
+    user = object_signup.reset_candidate(email, base_dir=_data_dir())
+    _append_ops_auth_event("password_reset_requested", identifier=email, user_id=user["user_id"] if user else None, method="reset_form")
+    # the same answer whether or not the address has an account
+    if user is not None and not _email_address_rate_limited(email):
+        token = object_signup.issue_token(object_signup.PASSWORD_RESET, user["user_id"], user["email"], base_dir=_data_dir())
+        object_signup.send(user["email"], object_signup.reset_email(object_signup.public_url() or "", token), base_dir=_data_dir())
+    await _send_redirect(send, f"{http_api_contract.PASSWORD_RESET_PATH}?sent=1")
+
+
+async def _send_new_password_page(send, token: str, *, error: str | None = None, status: int = 200) -> None:
+    inner = f"""<form method="post" action="{html.escape(http_api_contract.PASSWORD_RESET_CONFIRM_PATH, quote=True)}">
+<h1>Choose a new password</h1>
+{_message_block(error)}
+<input type="hidden" name="token" value="{html.escape(token, quote=True)}">
+<label for="password">New password</label>
+<input id="password" name="password" type="password" autocomplete="new-password" minlength="{object_credentials.MIN_PASSWORD_LENGTH}" required autofocus>
+<button type="submit">Save the new password</button>
+<p>You'll be signed out everywhere else.</p>
+</form>"""
+    await _send_auth_page(send, "Choose a new password", inner, status=status)
+
+
+async def _handle_password_reset_confirm(send, method: str, query: dict[str, str], body: bytes, headers: dict[str, str]) -> None:
+    expired = "This link has expired or was already used. Ask for a new one."
+    if method == "GET":
+        token = query.get("token") or ""
+        if object_signup.peek_token(token, object_signup.PASSWORD_RESET, base_dir=_data_dir()) is None:
+            await _send_link_problem_page(send, "Choose a new password", expired, http_api_contract.PASSWORD_RESET_PATH, "Send a new link")
+            return
+        await _send_new_password_page(send, token)
+        return
+    if method != "POST":
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+
+    form = _parse_form_body(body, headers)
+    if form is None or not _same_origin_form(headers):
+        await _send_link_problem_page(send, "Choose a new password", "That form couldn't be read. Open the link from the email again.", http_api_contract.PASSWORD_RESET_PATH, "Send a new link")
+        return
+    token = form.get("token") or ""
+    try:
+        user = object_signup.reset_password(token, form.get("password"), base_dir=_data_dir())
+    except object_signup.SignupError as exc:
+        await _send_new_password_page(send, token, error=str(exc), status=400)
+        return
+    if user is None:
+        await _send_link_problem_page(send, "Choose a new password", expired, http_api_contract.PASSWORD_RESET_PATH, "Send a new link")
+        return
+    _append_ops_auth_event("password_reset", identifier=user.get("email"), user_id=user["user_id"], method="reset_link")
+    await _send_redirect(
+        send,
+        f"{http_api_contract.LOGIN_PATH}?reset=1",
+        extra_headers=[_session_cookie_header("", max_age=0)],
     )
 
 
@@ -2504,56 +2859,90 @@ async def _send_redirect(
     await _send_response(send, status=303, headers=headers, body=body)
 
 
-async def _send_login_page(
-    send,
-    *,
-    error: str | None = None,
-    next_path: str = "/",
-    status: int = 200,
-) -> None:
-    error_block = (
-        f'<p class="error">{html.escape(error)}</p>' if error else ""
-    )
-    page = f"""<!doctype html>
+_AUTH_PAGE_STYLE = """
+body { font-family: system-ui, sans-serif; background: #f5f5f4; margin: 0;
+       display: flex; min-height: 100vh; align-items: center; justify-content: center; }
+form, .panel { background: #fff; border: 1px solid #d6d3d1; border-radius: 8px;
+        padding: 2rem; width: 20rem; max-width: calc(100vw - 2rem); box-sizing: border-box; }
+h1 { font-size: 1.1rem; margin: 0 0 1rem; }
+label { display: block; font-size: 0.85rem; margin: 0.75rem 0 0.25rem; }
+input { width: 100%; box-sizing: border-box; padding: 0.5rem; font-size: 1rem;
+         border: 1px solid #d6d3d1; border-radius: 4px; }
+button { margin-top: 1.25rem; width: 100%; padding: 0.6rem; border: 0; font-size: 1rem;
+          border-radius: 4px; background: #1c1917; color: #fff; cursor: pointer; }
+p { font-size: 0.9rem; line-height: 1.4; }
+.error { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b;
+          border-radius: 4px; padding: 0.5rem; font-size: 0.85rem; }
+.notice { background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534;
+          border-radius: 4px; padding: 0.5rem; font-size: 0.85rem; }
+.links { margin: 1rem 0 0; font-size: 0.85rem; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.5rem 1rem; }
+.links a { white-space: nowrap; }
+a { color: #1c1917; }
+"""
+
+
+def _auth_page_html(title: str, inner: str) -> str:
+    return f"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sign in</title>
-<style>
-body {{ font-family: system-ui, sans-serif; background: #f5f5f4; margin: 0;
-       display: flex; min-height: 100vh; align-items: center; justify-content: center; }}
-form {{ background: #fff; border: 1px solid #d6d3d1; border-radius: 8px;
-        padding: 2rem; width: 20rem; }}
-h1 {{ font-size: 1.1rem; margin: 0 0 1rem; }}
-label {{ display: block; font-size: 0.85rem; margin: 0.75rem 0 0.25rem; }}
-input {{ width: 100%; box-sizing: border-box; padding: 0.5rem;
-         border: 1px solid #d6d3d1; border-radius: 4px; }}
-button {{ margin-top: 1.25rem; width: 100%; padding: 0.6rem; border: 0;
-          border-radius: 4px; background: #1c1917; color: #fff; cursor: pointer; }}
-.error {{ background: #fef2f2; border: 1px solid #fecaca; color: #991b1b;
-          border-radius: 4px; padding: 0.5rem; font-size: 0.85rem; }}
-</style>
+<meta name="referrer" content="no-referrer">
+<title>{html.escape(title)}</title>
+<style>{_AUTH_PAGE_STYLE}</style>
 </head>
 <body>
-<form method="post" action="{html.escape(http_api_contract.LOGIN_PATH, quote=True)}">
+{inner}
+</body>
+</html>"""
+
+
+async def _send_auth_page(send, title: str, inner: str, *, status: int = 200) -> None:
+    await _send_response(
+        send,
+        status=status,
+        headers=[
+            ("content-type", "text/html; charset=utf-8"),
+            ("cache-control", "no-store"),
+        ],
+        body=_auth_page_html(title, inner).encode("utf-8"),
+    )
+
+
+def _message_block(error: str | None = None, notice: str | None = None) -> str:
+    if error:
+        return f'<p class="error">{html.escape(error)}</p>'
+    if notice:
+        return f'<p class="notice">{html.escape(notice)}</p>'
+    return ""
+
+
+async def _send_login_page(
+    send,
+    *,
+    error: str | None = None,
+    notice: str | None = None,
+    next_path: str = "/",
+    status: int = 200,
+) -> None:
+    links = []
+    if _signup_available():
+        links.append(f'<a href="{html.escape(http_api_contract.SIGNUP_PATH, quote=True)}">Create an account</a>')
+    if _password_reset_available():
+        links.append(f'<a href="{html.escape(http_api_contract.PASSWORD_RESET_PATH, quote=True)}">Forgot your password?</a>')
+    links_block = f'<p class="links">{" ".join(links)}</p>' if links else ""
+    inner = f"""<form method="post" action="{html.escape(http_api_contract.LOGIN_PATH, quote=True)}">
 <h1>Sign in</h1>
-{error_block}
+{_message_block(error, notice)}
 <label for="email">Email</label>
 <input id="email" name="email" type="email" autocomplete="username" required autofocus>
 <label for="password">Password</label>
 <input id="password" name="password" type="password" autocomplete="current-password" required>
 <input type="hidden" name="next" value="{html.escape(next_path, quote=True)}">
 <button type="submit">Sign in</button>
-</form>
-</body>
-</html>"""
-    await _send_response(
-        send,
-        status=status,
-        headers=[("content-type", "text/html; charset=utf-8")],
-        body=page.encode("utf-8"),
-    )
+{links_block}
+</form>"""
+    await _send_auth_page(send, "Sign in", inner, status=status)
 
 
 def _password_login_user(login: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -4184,6 +4573,14 @@ def _admin_capabilities_payload() -> dict[str, Any]:
             "session_admin_gates_env": SESSION_ADMIN_GATES_ENV,
             "password_login_enabled": _env_enabled(PASSWORD_LOGIN_ENV),
             "password_login_env": PASSWORD_LOGIN_ENV,
+            "signup_enabled": _signup_available(),
+            "signup_env": object_signup.SIGNUP_ENV,
+            "signup_blockers": _signup_blockers(),
+            "password_reset_enabled": _password_reset_available(),
+            "password_reset_env": object_signup.PASSWORD_RESET_ENV,
+            "password_reset_blockers": _password_reset_blockers(),
+            "public_url": object_signup.public_url(),
+            "public_url_env": object_signup.PUBLIC_URL_ENV,
         },
         "limits": {
             "max_request_bytes": _max_request_bytes(),
@@ -10937,7 +11334,7 @@ def _login_locked(identifier: str) -> bool:
         if timestamp < cutoff:
             break
         event = entry.get("event")
-        if event == "login_succeeded":
+        if event in ("login_succeeded", "password_reset"):
             break
         if event == "login_failed":
             failures += 1

@@ -9,7 +9,7 @@ import json
 import re
 import secrets
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -26,7 +26,11 @@ DEFAULT_SESSION_TTL_SECONDS = 24 * 60 * 60
 MAX_SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
 ACTIVE_STATUS = "active"
 DISABLED_STATUS = "disabled"
-ALLOWED_STATUSES = frozenset({ACTIVE_STATUS, DISABLED_STATUS})
+# A self-registered user who has not yet confirmed their email address. Like
+# "disabled", it is not active: no login, no session (every gate checks
+# is_active()). object_signup moves it to "active" when the emailed link is used.
+PENDING_STATUS = "pending"
+ALLOWED_STATUSES = frozenset({ACTIVE_STATUS, DISABLED_STATUS, PENDING_STATUS})
 ACCOUNT_FIELDS = (
     "account_id",
     "name",
@@ -302,6 +306,47 @@ def get_user(
     return _find_user(user_id, base_dir=base_dir).public_payload()
 
 
+def find_users_by_email(
+    email: str,
+    *,
+    base_dir: Path | str = DEFAULT_DATA_DIR,
+) -> list[dict[str, Any]]:
+    """Return every user whose email matches, ignoring case (any status)."""
+    wanted = (email or "").strip().casefold()
+    if not wanted:
+        return []
+    return [
+        user.public_payload()
+        for user in _read_users(users_path(base_dir))
+        if (user.email or "").strip().casefold() == wanted
+    ]
+
+
+def set_user_status(
+    user_id: str,
+    status: str,
+    *,
+    base_dir: Path | str = DEFAULT_DATA_DIR,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Change one user's status and return its public payload."""
+    new_status = _status(status)
+    path = users_path(base_dir)
+    updated_at = _format_timestamp(now or _now())
+    with _file_lock(path):
+        users = _read_users(path)
+        found: IdentityUser | None = None
+        for index, user in enumerate(users):
+            if user.user_id == user_id:
+                found = replace(user, status=new_status, updated_at=updated_at)
+                users[index] = found
+                break
+        if found is None:
+            raise UserNotFoundError(f"User not found: {user_id}")
+        _write_users(path, users)
+    return found.public_payload()
+
+
 def create_session(
     payload: Mapping[str, Any],
     *,
@@ -412,6 +457,29 @@ def revoke_session(
 
         _write_sessions(path, updated)
         return found.public_payload()
+
+
+def revoke_user_sessions(
+    user_id: str,
+    *,
+    base_dir: Path | str = DEFAULT_DATA_DIR,
+    now: datetime | None = None,
+) -> int:
+    """Revoke every unrevoked session of one user; return how many."""
+    path = sessions_path(base_dir)
+    revoked_at = _format_timestamp(now or _now())
+    count = 0
+    with _file_lock(path):
+        sessions = _read_sessions(path)
+        updated: list[IdentitySession] = []
+        for session in sessions:
+            if session.user_id == user_id and not session.revoked_at:
+                session = replace(session, revoked_at=revoked_at)
+                count += 1
+            updated.append(session)
+        if count:
+            _write_sessions(path, updated)
+    return count
 
 
 def resolve_session_token(
