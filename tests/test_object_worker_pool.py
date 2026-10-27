@@ -408,3 +408,117 @@ def test_worker_pool_rejects_nonpositive_size():
         object_worker_pool.WorkerPool(size=0)
     with pytest.raises(ValueError):
         object_worker_pool.WorkerPool(size=-1)
+
+
+# ---------------------------------------------------------------------------
+# The pool never shrinks: 2026-10-24 two requests with bytes in the payload
+# raised out of execute() holding both workers, and every request after
+# that waited on the empty queue forever (dbbasic.com down for two days).
+# ---------------------------------------------------------------------------
+
+
+def test_pool_unencodable_payload_errors_and_keeps_the_worker(tmp_path):
+    root = tmp_path / "objects"
+    write_object(
+        root / "basics" / "fine.py",
+        "def GET(request):\n    return {'fine': True}\n",
+    )
+
+    async def scenario():
+        pool = object_worker_pool.WorkerPool(size=1)
+        try:
+            results = []
+            for _ in range(3):
+                results.append(
+                    await pool.execute(
+                        ObjectExecutionRequest("basics_fine", payload={"blob": b"\x00\x01"}),
+                        timeout_seconds=5,
+                        roots=[root],
+                    )
+                )
+            recovered = await asyncio.wait_for(
+                pool.execute(
+                    ObjectExecutionRequest("basics_fine"),
+                    timeout_seconds=5,
+                    roots=[root],
+                ),
+                timeout=10,
+            )
+            return results, recovered
+        finally:
+            await pool.shutdown()
+
+    results, recovered = asyncio.run(scenario())
+
+    for result in results:
+        assert not result.ok
+        assert result.error.type == object_execution.WORKER_ERROR_TYPE
+        assert "TypeError" in result.error.message
+    assert recovered.ok
+    assert recovered.result == {"fine": True}
+
+
+def test_pool_waiting_for_a_busy_worker_times_out(tmp_path):
+    root = tmp_path / "objects"
+    write_object(
+        root / "basics" / "slow.py",
+        "import time\n\ndef GET(request):\n    time.sleep(1.0)\n    return {'slow': True}\n",
+    )
+
+    async def scenario():
+        pool = object_worker_pool.WorkerPool(size=1)
+        try:
+            slow = asyncio.ensure_future(
+                pool.execute(ObjectExecutionRequest("basics_slow"), timeout_seconds=5, roots=[root])
+            )
+            await asyncio.sleep(0.2)
+            started = time.perf_counter()
+            waited = await pool.execute(
+                ObjectExecutionRequest("basics_slow"), timeout_seconds=0.3, roots=[root]
+            )
+            elapsed = time.perf_counter() - started
+            return await slow, waited, elapsed
+        finally:
+            await pool.shutdown()
+
+    slow, waited, elapsed = asyncio.run(scenario())
+
+    assert slow.ok
+    assert not waited.ok
+    assert waited.error.type == object_execution.TIMEOUT_ERROR_TYPE
+    assert "No object worker came free" in waited.error.message
+    assert elapsed < 0.9
+
+
+def test_pool_cancelled_request_gives_the_slot_back(tmp_path):
+    root = tmp_path / "objects"
+    write_object(
+        root / "basics" / "slow.py",
+        "import time\n\ndef GET(request):\n    time.sleep(2.0)\n    return {'slow': True}\n",
+    )
+    write_object(
+        root / "basics" / "fine.py",
+        "def GET(request):\n    return {'fine': True}\n",
+    )
+
+    async def scenario():
+        pool = object_worker_pool.WorkerPool(size=1)
+        try:
+            slow = asyncio.ensure_future(
+                pool.execute(ObjectExecutionRequest("basics_slow"), timeout_seconds=5, roots=[root])
+            )
+            await asyncio.sleep(0.3)
+            slow.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await slow
+            return await asyncio.wait_for(
+                pool.execute(ObjectExecutionRequest("basics_fine"), timeout_seconds=5, roots=[root]),
+                timeout=10,
+            )
+        finally:
+            await pool.shutdown()
+
+    recovered = asyncio.run(scenario())
+
+    assert recovered.ok
+    assert recovered.result == {"fine": True}

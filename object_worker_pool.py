@@ -391,15 +391,52 @@ class WorkerPool:
         method = request.normalized_method()
         resolved_request = _request_with_resolved_path(request, roots)
 
+        message = {
+            "object_id": resolved_request.object_id,
+            "method": method,
+            "payload": resolved_request.normalized_payload(),
+            "correlation_id": resolved_request.correlation_id,
+            "path": str(resolved_request.path) if resolved_request.path is not None else None,
+        }
+        # Encode before taking a worker: a payload JSON can't carry (bytes,
+        # say) used to raise out of here holding the worker, and once every
+        # worker had leaked that way each request waited forever.
+        try:
+            encoded = _encode_message(message)
+        except (TypeError, ValueError) as exc:
+            return _error_result(
+                resolved_request,
+                method,
+                object_execution.WORKER_ERROR_TYPE,
+                f"Request can't be sent to an object worker: {type(exc).__name__}: {exc}",
+                started_at,
+                started_perf,
+            )
+
         queue = self._queue_for_current_loop()
-        slot = await queue.get()
+        try:
+            slot = await asyncio.wait_for(queue.get(), timeout=timeout_seconds)
+        except asyncio.TimeoutError:
+            return _error_result(
+                resolved_request,
+                method,
+                object_execution.TIMEOUT_ERROR_TYPE,
+                (
+                    f"No object worker came free for {resolved_request.object_id} "
+                    f"within {_format_seconds(timeout_seconds)} seconds"
+                ),
+                started_at,
+                started_perf,
+            )
         worker = slot if isinstance(slot, _Worker) else None
 
         if worker is None:
             try:
                 worker = await self._spawn_worker()
-            except Exception as exc:
+            except BaseException as exc:
                 queue.put_nowait(_LAZY)
+                if not isinstance(exc, Exception):
+                    raise
                 return _error_result(
                     resolved_request,
                     method,
@@ -409,18 +446,10 @@ class WorkerPool:
                     started_perf,
                 )
 
-        message = {
-            "object_id": resolved_request.object_id,
-            "method": method,
-            "payload": resolved_request.normalized_payload(),
-            "correlation_id": resolved_request.correlation_id,
-            "path": str(resolved_request.path) if resolved_request.path is not None else None,
-        }
-
         worker_died = False
         try:
             response = await asyncio.wait_for(
-                _talk_to_worker(worker, message),
+                _talk_to_worker(worker, encoded),
                 timeout=timeout_seconds,
             )
         except asyncio.TimeoutError:
@@ -449,13 +478,31 @@ class WorkerPool:
                 started_at,
                 started_perf,
             )
+        except Exception as exc:
+            # A reply we can't read (too large, not JSON) leaves the worker's
+            # stream in an unknown state: replace the worker.
+            worker_died = True
+            self._known_pids.discard(worker.pid)
+            _hard_kill(worker.pid)
+            result = _error_result(
+                resolved_request,
+                method,
+                object_execution.WORKER_ERROR_TYPE,
+                f"Object worker sent a reply that couldn't be read: {type(exc).__name__}: {exc}",
+                started_at,
+                started_perf,
+            )
+        except BaseException:
+            # Cancelled mid-conversation: same, and the slot still goes back
+            # (finally) so the pool never shrinks.
+            worker_died = True
+            self._known_pids.discard(worker.pid)
+            _hard_kill(worker.pid)
+            raise
         else:
             result = _result_from_dict(response)
-
-        if worker_died:
-            queue.put_nowait(_LAZY)
-        else:
-            queue.put_nowait(worker)
+        finally:
+            queue.put_nowait(_LAZY if worker_died else worker)
 
         return result
 
@@ -487,10 +534,10 @@ class WorkerPool:
         self._known_pids.clear()
 
 
-async def _talk_to_worker(worker: _Worker, message: dict[str, Any]) -> dict[str, Any]:
+async def _talk_to_worker(worker: _Worker, encoded: bytes) -> dict[str, Any]:
     process = worker.process
     assert process.stdin is not None and process.stdout is not None
-    process.stdin.write(_encode_message(message))
+    process.stdin.write(encoded)
     await process.stdin.drain()
     return await _read_message_async(process.stdout)
 
