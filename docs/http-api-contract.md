@@ -824,10 +824,11 @@ Off by default. `DBBASIC_ENABLE_SIGNUP=true` opens it, and
 for operator-created users). Both are browser forms beside `/login`:
 
 ```http
-GET  /signup                  form: email, optional name, password
+GET  /signup                  form: email (no password, no name)
 POST /signup                  -> 303 /signup?sent=1
-GET  /verify?token=...        a page with a "Confirm my email" button
-POST /verify                  (token) -> signs the new user in, 303 /
+GET  /verify?token=...        form: optional name, password, "Confirm my email"
+POST /verify                  (token, password, name) -> sets them, signs the new user in, 303 to
+                              DBBASIC_AUTH_LANDING_PATH (default /)
 GET  /reset                   form: email
 POST /reset                   -> 303 /reset?sent=1
 GET  /reset/confirm?token=... form: new password
@@ -854,17 +855,32 @@ Reset needs the same except the policy and enforcement checks.
 
 What happens:
 
-- A signup creates its own account and a user with status `pending`, which,
-  like `disabled`, cannot sign in or hold a session. The emailed link makes it
-  `active`. Signing in with the right password while still pending sends a
-  new link and says so (`/login?error=unverified`).
+- A signup creates its own account and a user with status `pending`, with no
+  password and no name, which, like `disabled`, cannot sign in or hold a
+  session. The form takes neither because a stranger could type someone
+  else's address with a password or name of their own: the owner who clicked
+  the link would have confirmed the stranger's login. The mailbox holder
+  chooses both on the page the emailed link opens, and only then is the user
+  `active`. A confirm link only ever completes a pending user: it never
+  changes the password of an account already in use. Signing up again for an
+  address that has not confirmed sends a fresh link (and retires the old one).
+  A password posted to `/signup` anyway is ignored. Signing in to a pending
+  user fails like any wrong password; the login page points at the emailed link.
 - Links are single use, expire (confirmation 48 hours, reset 1 hour), and a
   new link retires the previous one. Only their SHA-256 is stored, in
   `data/identity/email_tokens.tsv` (owner-only). Used and expired rows are
   dropped on every write, so the file holds at most one row per user and
   purpose.
-- Opening a link only shows a button; the `POST` uses it. Mail scanners open
+- Opening a link only shows a form; the `POST` uses it. Mail scanners open
   links by themselves and must not confirm an address or reset a password.
+- The server's own pages send `<meta name="referrer" content="strict-origin">`:
+  only the origin ever goes in a `Referer`, so the `?token=` in `/verify` and
+  `/reset/confirm` links never leaks. (`no-referrer` made browsers send
+  `Origin: null` with a form post, which the same-origin check refuses.)
+- `DBBASIC_AUTH_LANDING_PATH` sets where a browser goes after confirming an
+  address, and after a password sign-in that had no `next`: a path on this
+  site starting with a single `/`, default `/`. A value that is not such a path
+  is ignored and listed in `signup_blockers`.
 - The forms never say whether an address has an account. A signup for a taken
   address emails that address "you already have an account" with sign-in and
   reset links; a reset for an unknown address sends nothing. Both answer the
@@ -875,7 +891,7 @@ What happens:
   and 3 emails per address per hour. Cross-site form posts are refused.
 
 Ops events (`GET /admin/ops?kind=auth`): `signup_created`, `signup_pending`,
-`signup_exists`, `email_verified`, `login_unverified`,
+`signup_exists`, `email_verified`,
 `password_reset_requested`, `password_reset`.
 
 Session tokens normally only supply the active subject used by permission

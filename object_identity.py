@@ -326,10 +326,11 @@ def set_user_status(
     user_id: str,
     status: str,
     *,
+    display_name: str | None = None,
     base_dir: Path | str = DEFAULT_DATA_DIR,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Change one user's status and return its public payload."""
+    """Change one user's status (and, when given, display name) and return its public payload."""
     new_status = _status(status)
     path = users_path(base_dir)
     updated_at = _format_timestamp(now or _now())
@@ -339,6 +340,8 @@ def set_user_status(
         for index, user in enumerate(users):
             if user.user_id == user_id:
                 found = replace(user, status=new_status, updated_at=updated_at)
+                if display_name is not None:
+                    found = replace(found, display_name=display_name)
                 users[index] = found
                 break
         if found is None:

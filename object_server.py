@@ -127,7 +127,7 @@ LOGIN_LOCKOUT_WINDOW_SECONDS_ENV = "DBBASIC_LOGIN_LOCKOUT_WINDOW_SECONDS"
 DEFAULT_LOGIN_LOCKOUT_ATTEMPTS = 5
 DEFAULT_LOGIN_LOCKOUT_WINDOW_SECONDS = 900
 LOGIN_LOCKED_MESSAGE = "Too many failed attempts. Try again later."
-UNVERIFIED_LOGIN_MESSAGE = "Confirm your email address first: we've sent the link to it again."
+LANDING_PATH_ENV = "DBBASIC_AUTH_LANDING_PATH"
 SIGNUP_ATTEMPTS_PER_HOUR_PER_IP = 5
 RESET_ATTEMPTS_PER_HOUR_PER_IP = 10
 EMAILS_PER_HOUR_PER_ADDRESS = 3
@@ -2354,8 +2354,6 @@ async def _handle_login(
         notice = None
         if query.get("error") == "locked":
             error = LOGIN_LOCKED_MESSAGE
-        elif query.get("error") == "unverified":
-            error = UNVERIFIED_LOGIN_MESSAGE
         elif query.get("error"):
             error = "Invalid email or password."
         elif query.get("reset"):
@@ -2416,17 +2414,6 @@ async def _handle_login(
     lookup_user_id = user["user_id"] if user is not None else "__unknown_password_login__"
     verified = object_credentials.verify_password(lookup_user_id, password, base_dir=_data_dir())
 
-    if user is None:
-        pending = _pending_user_with_password(email, password)
-        if pending is not None:
-            _append_ops_auth_event("login_unverified", identifier=email, user_id=pending["user_id"], method="password_form")
-            _send_verification_link(pending)
-            unverified_location = f"{http_api_contract.LOGIN_PATH}?error=unverified"
-            if next_path != "/":
-                unverified_location += f"&next={urllib.parse.quote(next_path)}"
-            await _send_redirect(send, unverified_location)
-            return
-
     if user is None or not verified:
         _append_ops_auth_event("login_failed", identifier=email, method="password_form")
         await asyncio.sleep(PASSWORD_LOGIN_FAILURE_DELAY_SECONDS)
@@ -2454,7 +2441,7 @@ async def _handle_login(
     )
     await _send_redirect(
         send,
-        next_path,
+        next_path if next_path != "/" else _landing_path(),
         extra_headers=[
             _session_cookie_header(
                 result["token"],
@@ -2464,12 +2451,19 @@ async def _handle_login(
     )
 
 
+def _landing_path_blockers() -> list[str]:
+    value = (os.environ.get(LANDING_PATH_ENV) or "").strip()
+    if value and _safe_next_path(value) != value:
+        return [f"{LANDING_PATH_ENV} must be a path on this site, starting with a single /; it is ignored and the homepage is used."]
+    return []
+
+
 def _signup_blockers() -> list[str]:
     try:
         policy = object_permission_store.load_policy(_data_dir())
     except (OSError, ValueError):
         return ["The permission policy could not be read."]
-    return object_signup.signup_blockers(
+    return _landing_path_blockers() + object_signup.signup_blockers(
         policy=policy,
         enforcement_enabled=_permission_enforcement_enabled(),
         password_login_enabled=_env_enabled(PASSWORD_LOGIN_ENV),
@@ -2508,15 +2502,6 @@ def _email_address_rate_limited(email: str) -> bool:
     return _signup_rate_limited(f"signup-email:{email.strip().casefold()}", EMAILS_PER_HOUR_PER_ADDRESS)
 
 
-def _pending_user_with_password(email: str, password: str) -> dict[str, Any] | None:
-    for user in object_identity.find_users_by_email(email, base_dir=_data_dir()):
-        if user["status"] != object_identity.PENDING_STATUS:
-            continue
-        if object_credentials.verify_password(user["user_id"], password, base_dir=_data_dir()):
-            return user
-    return None
-
-
 def _send_verification_link(user: Mapping[str, Any]) -> bool:
     """Email a fresh confirmation link; False when email can't go out or the address hit its hourly limit."""
     email = user.get("email") or ""
@@ -2543,16 +2528,13 @@ async def _send_signup_unavailable(send) -> None:
     await _send_auth_page(send, "Sign up", inner, status=403)
 
 
-async def _send_signup_page(send, *, error: str | None = None, email: str = "", display_name: str = "", status: int = 200) -> None:
+async def _send_signup_page(send, *, error: str | None = None, email: str = "", status: int = 200) -> None:
     inner = f"""<form method="post" action="{html.escape(http_api_contract.SIGNUP_PATH, quote=True)}">
 <h1>Create an account</h1>
 {_message_block(error)}
 <label for="email">Email</label>
 <input id="email" name="email" type="email" autocomplete="email" required autofocus value="{html.escape(email, quote=True)}">
-<label for="display_name">Name <small>(optional)</small></label>
-<input id="display_name" name="display_name" type="text" autocomplete="name" maxlength="{object_signup.MAX_DISPLAY_NAME_LENGTH}" value="{html.escape(display_name, quote=True)}">
-<label for="password">Password</label>
-<input id="password" name="password" type="password" autocomplete="new-password" minlength="{object_credentials.MIN_PASSWORD_LENGTH}" required>
+<p>We'll email you a link. You choose your password there, once the link shows the address is yours.</p>
 <button type="submit">Create account</button>
 <p class="links"><a href="{html.escape(http_api_contract.LOGIN_PATH, quote=True)}">Already have an account? Sign in</a></p>
 </form>"""
@@ -2579,7 +2561,7 @@ async def _handle_signup(scope, send, method: str, query: dict[str, str], body: 
             await _send_check_email_page(
                 send,
                 "Check your email",
-                "We've sent a link to the address you gave. Open it to confirm the address and finish creating your account.",
+                "We've sent a link to the address you gave. Open it to confirm the address and choose your password.",
             )
             return
         await _send_signup_page(send)
@@ -2590,15 +2572,14 @@ async def _handle_signup(scope, send, method: str, query: dict[str, str], body: 
         await _send_signup_page(send, error="That form couldn't be read. Please try again.", status=400)
         return
     email = (form.get("email") or "").strip()
-    display_name = (form.get("display_name") or "").strip()
 
     if _signup_rate_limited(f"signup-ip:{_client_ip(scope, headers)}", SIGNUP_ATTEMPTS_PER_HOUR_PER_IP):
-        await _send_signup_page(send, error="Too many sign-ups from here. Try again in an hour.", email=email, display_name=display_name, status=429)
+        await _send_signup_page(send, error="Too many sign-ups from here. Try again in an hour.", email=email, status=429)
         return
     try:
-        result = object_signup.register(email, form.get("password"), display_name, base_dir=_data_dir())
+        result = object_signup.register(email, base_dir=_data_dir())
     except object_signup.SignupError as exc:
-        await _send_signup_page(send, error=str(exc), email=email, display_name=display_name, status=400)
+        await _send_signup_page(send, error=str(exc), email=email, status=400)
         return
 
     user = result["user"]
@@ -2615,32 +2596,49 @@ async def _handle_signup(scope, send, method: str, query: dict[str, str], body: 
     await _send_redirect(send, f"{http_api_contract.SIGNUP_PATH}?sent=1")
 
 
-async def _send_link_problem_page(send, title: str, message: str, retry_path: str, retry_label: str) -> None:
+async def _send_link_problem_page(
+    send, title: str, message: str, retry_path: str, retry_label: str, *, also: tuple[str, str] | None = None
+) -> None:
+    also_link = f' <a href="{html.escape(also[0], quote=True)}">{html.escape(also[1])}</a>' if also else ""
     inner = f"""<div class="panel"><h1>{html.escape(title)}</h1>
 <p class="error">{html.escape(message)}</p>
-<p class="links"><a href="{html.escape(retry_path, quote=True)}">{html.escape(retry_label)}</a></p></div>"""
+<p class="links"><a href="{html.escape(retry_path, quote=True)}">{html.escape(retry_label)}</a>{also_link}</p></div>"""
     await _send_auth_page(send, title, inner, status=400)
 
 
+async def _send_confirm_page(send, token: str, *, error: str | None = None, display_name: str = "", status: int = 200) -> None:
+    inner = f"""<form method="post" action="{html.escape(http_api_contract.VERIFY_EMAIL_PATH, quote=True)}">
+<h1>Confirm your email</h1>
+{_message_block(error)}
+<p>One more step: choose a password to finish creating your account.</p>
+<input type="hidden" name="token" value="{html.escape(token, quote=True)}">
+<label for="display_name">Name <small>(optional)</small></label>
+<input id="display_name" name="display_name" type="text" autocomplete="name" maxlength="{object_signup.MAX_DISPLAY_NAME_LENGTH}" value="{html.escape(display_name, quote=True)}">
+<label for="password">Password</label>
+<input id="password" name="password" type="password" autocomplete="new-password" minlength="{object_credentials.MIN_PASSWORD_LENGTH}" required autofocus>
+<button type="submit">Confirm my email</button>
+</form>"""
+    await _send_auth_page(send, "Confirm your email", inner, status=status)
+
+
+async def _send_confirm_link_problem(send, message: str) -> None:
+    await _send_link_problem_page(
+        send, "Confirm your email", message,
+        http_api_contract.SIGNUP_PATH, "Sign up again for a new link",
+        also=(http_api_contract.LOGIN_PATH, "Sign in"),
+    )
+
+
 async def _handle_verify_email(send, method: str, query: dict[str, str], body: bytes, headers: dict[str, str]) -> None:
+    expired = "This link has expired or was already used. If you haven't finished creating your account, sign up again and we'll send a new link."
     if method == "GET":
-        # the link only shows a button: mail scanners open links on their own,
+        # the link only shows the form: mail scanners open links on their own,
         # and must not use the token up (or sign anyone in)
         token = query.get("token") or ""
         if object_signup.peek_token(token, object_signup.VERIFY_EMAIL, base_dir=_data_dir()) is None:
-            await _send_link_problem_page(
-                send, "Confirm your email",
-                "This link has expired or was already used. Sign in and we'll send a new one.",
-                http_api_contract.LOGIN_PATH, "Sign in",
-            )
+            await _send_confirm_link_problem(send, expired)
             return
-        inner = f"""<form method="post" action="{html.escape(http_api_contract.VERIFY_EMAIL_PATH, quote=True)}">
-<h1>Confirm your email</h1>
-<p>One more step: confirm this address to finish creating your account.</p>
-<input type="hidden" name="token" value="{html.escape(token, quote=True)}">
-<button type="submit">Confirm my email</button>
-</form>"""
-        await _send_auth_page(send, "Confirm your email", inner)
+        await _send_confirm_page(send, token)
         return
     if method != "POST":
         await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
@@ -2648,15 +2646,16 @@ async def _handle_verify_email(send, method: str, query: dict[str, str], body: b
 
     form = _parse_form_body(body, headers)
     if form is None or not _same_origin_form(headers):
-        await _send_link_problem_page(send, "Confirm your email", "That form couldn't be read. Open the link from the email again.", http_api_contract.LOGIN_PATH, "Sign in")
+        await _send_confirm_link_problem(send, "That form couldn't be read. Open the link from the email again.")
         return
-    user = object_signup.verify_email(form.get("token"), base_dir=_data_dir())
+    token = form.get("token") or ""
+    try:
+        user = object_signup.confirm_signup(token, form.get("password"), form.get("display_name"), base_dir=_data_dir())
+    except object_signup.SignupError as exc:
+        await _send_confirm_page(send, token, error=str(exc), display_name=form.get("display_name") or "", status=400)
+        return
     if user is None:
-        await _send_link_problem_page(
-            send, "Confirm your email",
-            "This link has expired or was already used. Sign in and we'll send a new one.",
-            http_api_contract.LOGIN_PATH, "Sign in",
-        )
+        await _send_confirm_link_problem(send, expired)
         return
     _append_ops_auth_event("email_verified", identifier=user.get("email"), user_id=user["user_id"], method="verify_link")
     try:
@@ -2671,7 +2670,7 @@ async def _handle_verify_email(send, method: str, query: dict[str, str], body: b
     _append_ops_auth_event("session_minted", identifier=user.get("email"), user_id=user["user_id"], method="verify_link", label="email verified")
     await _send_redirect(
         send,
-        "/",
+        _landing_path(),
         extra_headers=[_session_cookie_header(result["token"], max_age=object_identity.DEFAULT_SESSION_TTL_SECONDS)],
     )
 
@@ -2823,6 +2822,12 @@ def _safe_next_path(value: str | None) -> str:
     return candidate
 
 
+def _landing_path() -> str:
+    """Where a browser goes after confirming an email address: the site's own page for new accounts
+    (DBBASIC_AUTH_LANDING_PATH, a local path), else the homepage."""
+    return _safe_next_path(os.environ.get(LANDING_PATH_ENV))
+
+
 def _session_cookie_header(token: str, *, max_age: int) -> tuple[str, str]:
     attributes = [
         f"{SESSION_COOKIE_NAME}={token}",
@@ -2887,7 +2892,7 @@ def _auth_page_html(title: str, inner: str) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="referrer" content="no-referrer">
+<meta name="referrer" content="strict-origin">
 <title>{html.escape(title)}</title>
 <style>{_AUTH_PAGE_STYLE}</style>
 </head>
@@ -2931,6 +2936,8 @@ async def _send_login_page(
     if _password_reset_available():
         links.append(f'<a href="{html.escape(http_api_contract.PASSWORD_RESET_PATH, quote=True)}">Forgot your password?</a>')
     links_block = f'<p class="links">{" ".join(links)}</p>' if links else ""
+    if _signup_available():
+        links_block += "<p>Just signed up? Open the link we emailed you: you choose your password there.</p>"
     inner = f"""<form method="post" action="{html.escape(http_api_contract.LOGIN_PATH, quote=True)}">
 <h1>Sign in</h1>
 {_message_block(error, notice)}

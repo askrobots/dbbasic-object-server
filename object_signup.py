@@ -22,7 +22,13 @@ This module owns three things; object_server wires the browser routes
 
 3. The account itself. A signup creates its own account and a user in the
    ``pending`` status, which cannot log in or hold a session until the
-   emailed link is used (object_identity.PENDING_STATUS).
+   emailed link is used (object_identity.PENDING_STATUS). The signup form
+   takes no password: a stranger could type someone else's address with a
+   password of their own, and the owner who clicked the link would then
+   have confirmed the stranger's login. Nor does it take a name, which the
+   stranger could make an impersonation. The password and the name are
+   chosen on the confirmation page, by whoever holds the mailbox
+   (``confirm_signup``).
 
 No enumeration: a signup for an address that already has an account, and a
 reset for an address that has none, answer the person at the form exactly as
@@ -331,21 +337,17 @@ def check_password(password: str | None) -> str:
 
 def register(
     email: str,
-    password: str,
-    display_name: str = "",
     *,
     base_dir: Path | str = DEFAULT_DATA_DIR,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Create a pending user in a new account, unless the address already has one.
+    """Create a pending user, with no password and no name, in a new account, unless the address already has one.
 
     Returns ``{"outcome": "created" | "pending" | "exists", "user": {...}}``.
     "pending": the address signed up before and never confirmed (send the
     link again). "exists": it has an account (tell the mailbox, not the form).
     """
     email = normalize_email(email)
-    password = check_password(password)
-    display_name = (display_name or "").strip()[:MAX_DISPLAY_NAME_LENGTH]
     with _REGISTER_LOCK:
         existing = object_identity.find_users_by_email(email, base_dir=base_dir)
         if existing:
@@ -362,28 +364,51 @@ def register(
             {
                 "account_id": account["account_id"],
                 "email": email,
-                "display_name": display_name,
+                "display_name": "",
                 "status": object_identity.PENDING_STATUS,
                 "roles": [],
             },
             base_dir=base_dir,
             now=now,
         )
-        object_credentials.set_password(user["user_id"], password, base_dir=base_dir)
     return {"outcome": "created", "user": user}
 
 
-def verify_email(
+def confirm_signup(
     token: str | None,
+    password: str | None,
+    display_name: str | None = "",
     *,
     base_dir: Path | str = DEFAULT_DATA_DIR,
     now: datetime | None = None,
 ) -> dict[str, Any] | None:
-    """Use a verification link: the pending user becomes active. None if the link is no good."""
+    """Use a verification link: the pending user gets this password (and name) and becomes active.
+
+    None if the link is no good, or the user is not pending any more (a link
+    must never change the password of an account that is already in use).
+    Raises SignupError for a password that won't do, before the link is used,
+    so the person can try again with the same link."""
+    password = check_password(password)
+    display_name = (display_name or "").strip()[:MAX_DISPLAY_NAME_LENGTH]
+    if peek_token(token, VERIFY_EMAIL, base_dir=base_dir, now=now) is None:
+        return None
     row = consume_token(token, VERIFY_EMAIL, base_dir=base_dir, now=now)
     if row is None:
         return None
-    return _activate_if_pending(row, base_dir=base_dir, now=now)
+    try:
+        user = object_identity.get_user(row["user_id"], base_dir=base_dir)
+    except (LookupError, ValueError):
+        return None
+    if user["status"] != object_identity.PENDING_STATUS:
+        return None
+    # the link was sent to one address; if the user's address has changed
+    # since, it no longer proves anything about this user
+    if (user.get("email") or "").strip().casefold() != (row.get("email") or "").strip().casefold():
+        return None
+    object_credentials.set_password(user["user_id"], password, base_dir=base_dir)
+    return object_identity.set_user_status(
+        user["user_id"], object_identity.ACTIVE_STATUS, display_name=display_name, base_dir=base_dir, now=now,
+    )
 
 
 def reset_password(
@@ -461,9 +486,9 @@ def verification_email(base_url: str, token: str) -> tuple[str, str]:
     return (
         "Confirm your email address",
         "Someone (hopefully you) created an account with this email address.\n\n"
-        f"To confirm it, open this link within {hours} hours:\n\n"
+        f"To confirm it and choose your password, open this link within {hours} hours:\n\n"
         f"{link(base_url, '/verify', token)}\n\n"
-        "If it wasn't you, ignore this email: the account stays unconfirmed and can't be used.\n",
+        "If it wasn't you, ignore this email: nobody can sign in to the account without a link sent to this address.\n",
     )
 
 
