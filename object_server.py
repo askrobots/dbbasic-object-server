@@ -37,6 +37,7 @@ import object_backup
 import object_analytics
 import object_api_keys
 import object_signup
+import object_setup
 import object_webdav
 import object_collections
 import object_correlation
@@ -130,6 +131,9 @@ LOGIN_LOCKED_MESSAGE = "Too many failed attempts. Try again later."
 LANDING_PATH_ENV = "DBBASIC_AUTH_LANDING_PATH"
 SIGNUP_ATTEMPTS_PER_HOUR_PER_IP = 5
 RESET_ATTEMPTS_PER_HOUR_PER_IP = 10
+# A wrong setup code is a guess at 100 bits, so these only keep the form from being a free hash oracle.
+SETUP_ATTEMPTS_PER_HOUR_PER_IP = 10
+SETUP_ATTEMPTS_PER_HOUR = 100
 EMAILS_PER_HOUR_PER_ADDRESS = 3
 SESSION_COOKIE_NAME = "dbbasic_session"
 COOKIE_SECURE_ENV = "DBBASIC_COOKIE_SECURE"
@@ -692,6 +696,16 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
     if await _send_rate_limit_if_needed(scope, headers, send):
         return
 
+    # A one-click box with no owner yet answers nothing but /health and /setup (object_setup). The admin
+    # token still works: whoever holds it already has root on the box.
+    if (
+        path != object_setup.SETUP_PATH
+        and object_setup.waiting(_data_dir())
+        and _admin_token_gate_error(headers, "") is not None
+    ):
+        await _send_setup_waiting(send, method, headers)
+        return
+
     if (
         method not in {"GET", "HEAD", "OPTIONS"}
         and _authorization_token(headers) is None
@@ -824,6 +838,10 @@ async def _handle_http(scope: dict[str, Any], receive, send) -> None:
 
         if path == http_api_contract.SIGNUP_PATH:
             await _handle_signup(scope, send, method, query, body, headers)
+            return
+
+        if path == object_setup.SETUP_PATH:
+            await _handle_setup(scope, send, method, body, headers)
             return
 
         if path == http_api_contract.VERIFY_EMAIL_PATH:
@@ -1316,7 +1334,7 @@ async def _handle_health(
     headers: dict[str, str],
 ) -> None:
     if not _is_detailed_health(query):
-        await _send_json(send, {"status": "ok"})
+        await _send_json(send, {"status": "ok", **_installed_facts()})
         return
 
     gate_error = _admin_token_gate_error(
@@ -2594,6 +2612,130 @@ async def _handle_signup(scope, send, method: str, query: dict[str, str], body: 
             base_dir=_data_dir(),
         )
     await _send_redirect(send, f"{http_api_contract.SIGNUP_PATH}?sent=1")
+
+
+def _installed_facts() -> dict[str, str]:
+    """What /health adds for an installer checking its work: the release and commit that
+    scripts/install.sh wrote (data/installed.json), and whether setup is still waiting. Nothing
+    when the server wasn't installed that way."""
+    facts: dict[str, str] = {}
+    try:
+        with open(os.path.join(_data_dir(), "installed.json"), encoding="utf-8") as handle:
+            installed = json.load(handle)
+    except (OSError, ValueError):
+        installed = {}
+    if isinstance(installed, dict):
+        for key, pattern in (("release", r"[0-9A-Za-z._-]{1,64}"), ("commit", r"[0-9a-f]{40}")):
+            value = installed.get(key)
+            if isinstance(value, str) and re.fullmatch(pattern, value):
+                facts[key] = value
+    if object_setup.waiting(_data_dir()):
+        facts["setup"] = "waiting"
+    return facts
+
+
+async def _send_setup_waiting(send, method: str, headers: dict[str, str]) -> None:
+    if method in ("GET", "HEAD") and "text/html" in headers.get("accept", ""):
+        await _send_redirect(send, object_setup.SETUP_PATH)
+        return
+    await _send_json(
+        send,
+        {"status": "error", "error": "This server is waiting for its owner to finish setup.",
+         "setup": object_setup.SETUP_PATH},
+        status=503,
+    )
+
+
+# Fills the code in from the address the installer gave (/setup#code=...), then takes it out of the
+# address bar and history. The part after # is never sent to any server, so the code stays out of logs.
+_SETUP_PAGE_SCRIPT = """<script>
+(function () {
+  var m = /(?:^#|&)code=([0-9A-Za-z-]+)/.exec(location.hash || "");
+  if (m) {
+    var box = document.getElementById("code");
+    if (box && !box.value) box.value = m[1];
+    history.replaceState(null, "", location.pathname);
+    var next = document.getElementById("email");
+    if (next) next.focus();
+  }
+})();
+</script>"""
+
+
+async def _send_setup_page(send, *, error: str | None = None, code: str = "", email: str = "",
+                           display_name: str = "", status: int = 200) -> None:
+    inner = f"""<form method="post" action="{html.escape(object_setup.SETUP_PATH, quote=True)}" autocomplete="off">
+<h1>Set up your server</h1>
+{_message_block(error)}
+<p>You'll be its first admin. Choose the email and password you'll sign in with.</p>
+<label for="code">Setup code</label>
+<input id="code" name="code" type="text" required spellcheck="false" autocapitalize="characters" maxlength="40" value="{html.escape(code, quote=True)}">
+<label for="email">Email</label>
+<input id="email" name="email" type="email" autocomplete="username" required value="{html.escape(email, quote=True)}">
+<label for="display_name">Name <small>(optional)</small></label>
+<input id="display_name" name="display_name" type="text" autocomplete="name" maxlength="100" value="{html.escape(display_name, quote=True)}">
+<label for="password">Password</label>
+<input id="password" name="password" type="password" autocomplete="new-password" minlength="{object_credentials.MIN_PASSWORD_LENGTH}" required>
+<button type="submit">Make me the admin</button>
+<p>The setup code came with your install. It works once.</p>
+</form>{_SETUP_PAGE_SCRIPT}"""
+    await _send_auth_page(send, "Set up your server", inner, status=status)
+
+
+async def _handle_setup(scope, send, method: str, body: bytes, headers: dict[str, str]) -> None:
+    """The first admin of a one-click box (object_setup has the why)."""
+    if method not in ("GET", "POST"):
+        await _send_json(send, {"status": "error", "error": "Method not allowed"}, status=405)
+        return
+    if not object_setup.waiting(_data_dir()):
+        inner = """<div class="panel"><h1>Set up your server</h1>
+<p>This server is already set up.</p>
+<p class="links"><a href="/login">Sign in</a></p></div>"""
+        await _send_auth_page(send, "Set up your server", inner, status=404)
+        return
+    if not _env_enabled(PASSWORD_LOGIN_ENV):
+        inner = f"""<div class="panel"><h1>Set up your server</h1>
+<p class="error">Setup makes a password login, and password login is off here. Set {html.escape(PASSWORD_LOGIN_ENV)}=true and restart the server.</p></div>"""
+        await _send_auth_page(send, "Set up your server", inner, status=409)
+        return
+    if method == "GET":
+        await _send_setup_page(send)
+        return
+
+    form = _parse_form_body(body, headers)
+    if form is None or not _same_origin_form(headers):
+        await _send_setup_page(send, error="That form couldn't be read. Please try again.", status=400)
+        return
+    code, email = form.get("code") or "", (form.get("email") or "").strip()
+    display_name = form.get("display_name") or ""
+    if (_signup_rate_limited(f"setup-ip:{_client_ip(scope, headers)}", SETUP_ATTEMPTS_PER_HOUR_PER_IP)
+            or _signup_rate_limited("setup-all", SETUP_ATTEMPTS_PER_HOUR)):
+        await _send_setup_page(send, error="Too many tries. Wait an hour and try again.", code=code,
+                               email=email, display_name=display_name, status=429)
+        return
+    try:
+        user = object_setup.complete(code, email, form.get("password"), display_name, base_dir=_data_dir())
+    except object_setup.SetupError as exc:
+        await _send_setup_page(send, error=str(exc), code=code, email=email, display_name=display_name, status=400)
+        return
+    if user is None:
+        _append_ops_auth_event("setup_refused", identifier=email, method="setup_form")
+        await asyncio.sleep(PASSWORD_LOGIN_FAILURE_DELAY_SECONDS)
+        await _send_setup_page(send, error="That setup code isn't right.", email=email,
+                               display_name=display_name, status=400)
+        return
+    _append_ops_auth_event("setup_completed", identifier=email, user_id=user["user_id"], method="setup_form")
+    try:
+        result = object_identity.create_session(
+            {"user_id": user["user_id"], "label": "setup"}, base_dir=_data_dir(), require_known_user=True)
+    except ValueError:
+        await _send_redirect(send, http_api_contract.LOGIN_PATH)
+        return
+    await _send_redirect(
+        send,
+        _landing_path(),
+        extra_headers=[_session_cookie_header(result["token"], max_age=object_identity.DEFAULT_SESSION_TTL_SECONDS)],
+    )
 
 
 async def _send_link_problem_page(

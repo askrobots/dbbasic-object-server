@@ -1,0 +1,8 @@
+#cloud-config
+# What a one-click installer hands the cloud as the new server's user data (GitStable's "Install on
+# DigitalOcean" reads this file at the release being installed). The installer adds one thing of its own:
+# /etc/dbbasic-setup-code.sha256, the hash of the setup code it shows the person who installed it.
+# Nothing secret goes in here.
+runcmd:
+  - git clone --quiet https://gitstable.com/git/askrobots/dbbasic-object-server.git /opt/dbbasic-object-server
+  - bash /opt/dbbasic-object-server/scripts/one-click-install.sh 2026.11v1

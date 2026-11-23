@@ -20,7 +20,21 @@
 #
 # Read it before you run it. Then:  sudo bash scripts/install.sh
 #
+#   --version 2026.11v1   install that release (a tag) instead of the newest main, and say so in
+#                         /health (data/installed.json). Running again with another release moves to it.
+#
+# For a box on the public internet with nobody signed up yet, scripts/one-click-install.sh runs this
+# and then closes it up (login, permissions, a setup code, HTTPS).
+#
 set -euo pipefail
+
+VERSION=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --version) VERSION="${2:?--version needs a release, such as 2026.11v1}"; shift 2 ;;
+    *) echo "Unknown option: $1" >&2; exit 2 ;;
+  esac
+done
 
 REPO_URL="${DBBASIC_REPO_URL:-https://github.com/askrobots/dbbasic-object-server.git}"
 CODE_DIR="${DBBASIC_CODE_DIR:-/opt/dbbasic-object-server}"
@@ -52,9 +66,21 @@ chmod 750 "${STATE_DIR}" "${STATE_DIR}/objects" "${STATE_DIR}/data"
 
 say "Fetching server code into ${CODE_DIR}"
 if [[ -d "${CODE_DIR}/.git" ]]; then
-  sudo -u "${SERVICE_USER}" git -C "${CODE_DIR}" pull --ff-only
+  if [[ -n "${VERSION}" ]]; then
+    sudo -u "${SERVICE_USER}" git -C "${CODE_DIR}" fetch -q --tags origin
+  else
+    sudo -u "${SERVICE_USER}" git -C "${CODE_DIR}" pull --ff-only
+  fi
 else
   sudo -u "${SERVICE_USER}" git clone "${REPO_URL}" "${CODE_DIR}"
+fi
+if [[ -n "${VERSION}" ]]; then
+  # a release is a tag: a branch of the same name must not stand in for it
+  if ! sudo -u "${SERVICE_USER}" git -C "${CODE_DIR}" rev-parse -q --verify "refs/tags/${VERSION}^{commit}" >/dev/null; then
+    echo "No release named ${VERSION} in ${REPO_URL}" >&2
+    exit 1
+  fi
+  sudo -u "${SERVICE_USER}" git -C "${CODE_DIR}" -c advice.detachedHead=false checkout -q --detach "refs/tags/${VERSION}"
 fi
 
 say "Building virtualenv and installing the server"
@@ -63,6 +89,12 @@ if [[ ! -x "${CODE_DIR}/.venv/bin/python" ]]; then
 fi
 sudo -u "${SERVICE_USER}" "${CODE_DIR}/.venv/bin/python" -m pip install -q --upgrade pip
 sudo -u "${SERVICE_USER}" "${CODE_DIR}/.venv/bin/python" -m pip install -q -e "${CODE_DIR}[server]"
+
+say "Recording what was installed (${STATE_DIR}/data/installed.json, shown by /health)"
+COMMIT="$(sudo -u "${SERVICE_USER}" git -C "${CODE_DIR}" rev-parse HEAD)"
+printf '{"release": "%s", "commit": "%s", "installed_at": "%s"}\n' \
+  "${VERSION}" "${COMMIT}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "${STATE_DIR}/data/installed.json"
+chown "${SERVICE_USER}:${SERVICE_USER}" "${STATE_DIR}/data/installed.json"
 
 if [[ -f "${ENV_FILE}" ]]; then
   warn "${ENV_FILE} already exists — keeping it (admin token unchanged)"
@@ -141,7 +173,9 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now dbbasic-object-server
+systemctl enable -q dbbasic-object-server
+# restart, not start: a second run has new code (another release, or a newer main) to load
+systemctl restart dbbasic-object-server
 
 say "Running filesystem checks"
 set -a; . "${ENV_FILE}"; set +a

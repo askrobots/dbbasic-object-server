@@ -26,7 +26,24 @@ flowchart LR
 - Optional but recommended: a domain name with an `A` record pointing at
   the VM's IP, so Caddy can get you automatic HTTPS.
 
+## One-click installs
+
+An installer such as GitStable's "Install on DigitalOcean" runs
+`scripts/one-click-install.sh <release>` through the server's cloud-init
+(`cloud-init.yaml`, `DBBASIC.md`). It does steps 1 to 3 below for you, installs
+four apps to start with (home and menu, projects, notes, tasks), with two
+differences: HTTPS comes on the server's bare IP address (a Let's
+Encrypt IP certificate) until you add a domain, and no admin is created.
+The server answers only `/health` and `/setup` until you open `/setup` with
+the one-time setup code the installer showed you and choose your own email
+and password (`object_setup.py` says why it works that way). Lost the code?
+SSH in and do step 2: once an admin exists, setup is over.
+
 ## 1. Run the installer
+
+`--version 2026.11v1` installs that release instead of the newest `main`,
+and `/health` then names the release and commit.
+
 
 The installer is a readable script — download it, read it, run it. It
 installs dependencies, creates the service user and layout, builds a
