@@ -106,6 +106,20 @@ def _admin_exists(base_dir: Path | str) -> bool:
     return any(ADMIN_ROLES.intersection(user.get("roles") or ()) for user in users)
 
 
+def _readable_id(email: str, base_dir: Path | str) -> str:
+    """The email's name part ("owner" for owner@example.org) when it makes a valid, unused id, so pages say
+    "signed in as owner" rather than a long random id (seen on the first test box). Else a random one."""
+    name = re.sub(r"[^a-z0-9_.-]", "", email.split("@", 1)[0].lower())[:40]
+    if name and name[0].isalnum():
+        try:
+            object_identity.get_user(name, base_dir=base_dir)
+        except LookupError:
+            return name
+        except ValueError:
+            pass
+    return object_ids.new_uuid4()
+
+
 def waiting(base_dir: Path | str = DEFAULT_DATA_DIR) -> bool:
     """True while this box has a setup code and no admin: only /health and /setup may answer."""
     if not code_path(base_dir).exists():
@@ -152,7 +166,7 @@ def complete(
         return None
     # The password first, then the user: an admin that exists is what ends "waiting", so it must never
     # exist without the password that lets its owner in.
-    user_id = object_ids.new_uuid4()
+    user_id = _readable_id(email, base_dir)
     try:
         object_credentials.set_password(user_id, password, base_dir=base_dir)
         try:

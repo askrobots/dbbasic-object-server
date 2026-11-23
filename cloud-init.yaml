@@ -3,6 +3,10 @@
 # DigitalOcean" reads this file at the release being installed). The installer adds one thing of its own:
 # /etc/dbbasic-setup-code.sha256, the hash of the setup code it shows the person who installed it.
 # Nothing secret goes in here.
+#
+# Both lines name this release, and each new release changes them (a test checks they agree). The clone is
+# at the release itself, not main: the script must not run from files that install.sh then checks out from
+# under it.
 runcmd:
-  - git clone --quiet https://gitstable.com/git/askrobots/dbbasic-object-server.git /opt/dbbasic-object-server
-  - bash /opt/dbbasic-object-server/scripts/one-click-install.sh 2026.11v1
+  - git clone --quiet --branch 2026.11v2 https://gitstable.com/git/askrobots/dbbasic-object-server.git /opt/dbbasic-object-server
+  - bash /opt/dbbasic-object-server/scripts/one-click-install.sh 2026.11v2

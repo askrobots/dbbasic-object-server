@@ -31,7 +31,8 @@ flowchart LR
 An installer such as GitStable's "Install on DigitalOcean" runs
 `scripts/one-click-install.sh <release>` through the server's cloud-init
 (`cloud-init.yaml`, `DBBASIC.md`). It does steps 1 to 3 below for you, installs
-four apps to start with (home and menu, projects, notes, tasks), with two
+the apps to start with (home and menu, projects, notes, tasks,
+files), with two
 differences: HTTPS comes on the server's bare IP address (a Let's
 Encrypt IP certificate) until you add a domain, and no admin is created.
 The server answers only `/health` and `/setup` until you open `/setup` with

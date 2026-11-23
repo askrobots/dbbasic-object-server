@@ -2650,14 +2650,18 @@ async def _send_setup_waiting(send, method: str, headers: dict[str, str]) -> Non
 # address bar and history. The part after # is never sent to any server, so the code stays out of logs.
 _SETUP_PAGE_SCRIPT = """<script>
 (function () {
-  var m = /(?:^#|&)code=([0-9A-Za-z-]+)/.exec(location.hash || "");
-  if (m) {
+  function take() {
+    var m = /(?:^#|&)code=([0-9A-Za-z-]+)/.exec(location.hash || "");
+    if (!m) return;
     var box = document.getElementById("code");
     if (box && !box.value) box.value = m[1];
     history.replaceState(null, "", location.pathname);
     var next = document.getElementById("email");
     if (next) next.focus();
   }
+  take();
+  // the link opened on this same page (only the part after # changed) loads nothing new: read it then too
+  window.addEventListener("hashchange", take);
 })();
 </script>"""
 

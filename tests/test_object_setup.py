@@ -268,3 +268,51 @@ def test_health_names_the_installed_release_and_commit(tmp_path, monkeypatch):
     (tmp_path / "installed.json").write_text(json.dumps({"release": "bad value!", "commit": "nope"}))
     _, _, body = raw_request("/health")
     assert json.loads(body) == {"status": "ok"}
+
+
+def test_the_owner_gets_a_readable_id_from_their_email_unless_it_is_taken(tmp_path):
+    """Pages say "signed in as <id>"; a random id there was the first thing the first test box showed."""
+    code = object_setup.new_code()
+    _place_code(tmp_path, code)
+    object_identity.create_user({"user_id": "owner", "roles": []}, base_dir=tmp_path)
+
+    user = object_setup.complete(code, "Owner@example.org", PASSWORD, base_dir=tmp_path)
+    assert user["user_id"] != "owner"            # taken: a random id, never someone else's
+
+    other = tmp_path / "other"
+    _place_code(other, code)
+    assert object_setup.complete(code, "Ann.Lee+x@example.org", PASSWORD, base_dir=other)["user_id"] == "ann.leex"
+
+
+def test_the_setup_page_also_reads_a_code_link_opened_on_the_same_page(waiting_box):
+    """Changing only the part after # loads nothing new, so the page must listen for it (seen on a test box)."""
+    _, _, body = raw_request("/setup", headers=[("accept", "text/html")])
+    assert b'addEventListener("hashchange"' in body
+
+
+def test_the_one_click_starting_apps_come_after_what_they_depend_on():
+    """object_packages.install_package doesn't install dependencies, and 2026.11v1 installed notes without
+    app-views: its notes page said "Object not found: site_view_render"."""
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "scripts" / "one-click-install.sh").read_text()
+    block = re.search(r'for app in \(([^)]*)\):', script).group(1)
+    apps = re.findall(r'"(app-[a-z-]+)"', block)
+    assert "app-notes" in apps and "app-views" in apps
+    for position, app in enumerate(apps):
+        manifest = json.loads((root / "packages" / app / "dbbasic-package.json").read_text())
+        for needed in manifest.get("dependencies") or []:
+            assert needed in apps[:position], f"{app} needs {needed} installed before it"
+
+
+def test_the_cloud_init_installs_one_release_and_clones_at_it():
+    """A release whose cloud-init still names the one before installs the one before. And a clone of main runs
+    the script from files install.sh then checks out from under it."""
+    import re
+    from pathlib import Path
+    text = (Path(__file__).resolve().parents[1] / "cloud-init.yaml").read_text()
+    clone = re.search(r"git clone --quiet --branch (\S+) https://\S+ /opt/dbbasic-object-server", text)
+    run = re.search(r"one-click-install\.sh (\S+)\s*$", text, re.M)
+    assert clone and run and clone.group(1) == run.group(1)
+    assert re.fullmatch(r"20\d{2}\.(0[1-9]|1[0-2])v[1-9]\d*", run.group(1))

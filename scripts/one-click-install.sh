@@ -72,14 +72,17 @@ fi
 
 if [[ "${FRESH:-0}" == 1 ]]; then
   # A new box with no apps has no home page: the owner finished setup and landed on "Not found" (seen on the
-  # first test droplet, 2026-11-23). A few apps to start with; more from the packages page. Only on a fresh
-  # box, so a re-run never replaces apps the owner may have changed.
-  say "Starting apps: home and menu, projects, notes, tasks"
+  # first test droplet, 2026-11-23). The apps to start with are the desk's set (nc-object-bootstrap) without
+  # the ones that need keys or more setup (shell, notify, sites). Order matters: install_package doesn't pull
+  # in dependencies, and notes without app-views was "Object not found: site_view_render" (2026.11v1).
+  # Only on a fresh box, so a re-run never replaces apps the owner may have changed.
+  say "Starting apps: home and menu, projects, notes, tasks, files"
   ( cd "${CODE_DIR}" && sudo -u "${SERVICE_USER}" .venv/bin/python -c '
 import sys
 from pathlib import Path
 import object_packages
-for app in ("app-nav", "app-projects", "app-notes", "app-tasks"):
+for app in ("app-theme", "app-views", "app-nav", "app-projects", "app-files", "app-tasks", "app-collab",
+            "app-notes", "app-settings"):
     object_packages.install_package(app, root=Path("packages"), base_dir=Path(sys.argv[1]),
                                     object_roots=[Path(sys.argv[2])], allow_replace=True)
     print("   " + app)
